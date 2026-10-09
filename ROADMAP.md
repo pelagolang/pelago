@@ -26,7 +26,9 @@ A serious, self-hosting systems language:
 | Compile-time code | `meta` | decided |
 | Modules | `mod` for modules, `pkg` reserved for bundles | decided |
 | Null | None. Absence is `none` in `option<T>` | decided |
-| Ternary and `++`/`--` | Included | decided |
+| Ternary | Included, chains right, spaces around `?` and `:`; error-propagation `?` is attached | decided |
+| `++` / `--` | Included as statements only; `+= 1` stays | decided |
+| Loops | `for x of items` (values), `for k in map` (keys, ranges), `for i, x of items` | decided |
 | Operators | Symbols only (`&&` `\|\|` `!` `^` `%`), no word forms | decided |
 | Access modes | `let` / `inout` / `sink` apply everywhere a name is bound | decided |
 | Visibility | `pub` and `priv`; private is the default | decided |

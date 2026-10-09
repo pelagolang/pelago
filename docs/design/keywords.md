@@ -12,7 +12,8 @@ choice. Write renames in the last column.
 - `mod` is a module (usually one file). `pkg` is reserved for bundles of modules.
 - `meta` is the compile-time keyword.
 - `class` is in from the start (its name may change, see the open list).
-- `++` and `--` are kept. The ternary `a ? b : c` is included.
+- `++` and `--` are kept, as statements only (never inside a bigger expression). `+= 1` stays too.
+- The ternary `a ? b : c` is included and chains to the right. It needs spaces around `?` and `:`. Error propagation is attached: `parse(s)?`.
 - `for x of items` iterates values, `for i in 0..10` counts or walks keys. See Loops.
 - No `null`, only `none`.
 - Documentation comments: `///` for a line, `///* ... *///` for many lines.
@@ -113,15 +114,15 @@ because TS/JS programmers expect it and it can step in odd ways.
 | `&&` `\|\|` `!` | Logical and, or, not | 1 |
 | `&` `\|` `^` `~` `<<` `>>` | Bitwise and, or, xor, not, shift left, shift right. `^` is also xor on booleans | 2 |
 | `=` `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | Assign, and assign after a calculation | 1 |
-| `++` `--` | Add or subtract one. Kept. Open: usable inside bigger expressions, or as statements only | 2 |
+| `++` `--` | Add or subtract one. Statements only: `i++` on its own, never inside a bigger expression | 2 |
 | `..` `..=` | Range, end excluded / included | 1 |
 | `.` | Reach inside a value or call a method | 1 |
-| `?` | If this is an error or `none`, return it from the function now | 2 |
+| `?` | If this is an error or `none`, return it from the function now. Attached, no space: `parse(s)?` | 2 |
 | `??` | "Use this default if there's no value" | 3 |
 | `->` | Return type of a function | 1 |
 | `to` | Convert: `x to float`. A word, because the symbol was taken | 1 |
 | `#` | Value marker inside strings | 1 |
-| `a ? b : c` | Ternary: pick one of two values. Included, and shorter than `if` in tokens. Open: it shares `?` with error propagation | 2 |
+| `a ? b : c` | Ternary: pick one of two values. Chains to the right. Spaces around `?` and `:` | 2 |
 
 ## Access modes (the new part)
 
@@ -232,7 +233,8 @@ Decided: lowercase, and sized integers from 8 to 64 bits. `int` is always 64 bit
 | `[T]` | A growable list of `T` | 2 |
 | `[T; N]` | A fixed-size array of exactly `N` items of `T` | 2 |
 | `(A, B)` | A tuple | 2 |
-| `(A, B; N)` | Your fixed-size tuple primitive. Meaning to confirm, see chat | 3 |
+| `(A, B; N)` | Fixed-size tuple of exactly N slots whose types alternate: `(int, string; 3)` is an int, a string, an int | 3 |
+| `[(A, B); N]` | A fixed array of N pairs. Same memory layout as `(A, B; 2N)`, counted in pairs | 2 |
 | `map<K, V>` | Key to value lookup | 2 |
 | `set<T>` | A collection of unique items | 2 |
 | `range` | What `0..10` is | 2 |
@@ -247,12 +249,27 @@ Decided: lowercase, and sized integers from 8 to 64 bits. `int` is always 64 bit
 
 ---
 
+## Compression ideas (shorter ways to say common things)
+
+Candidates for saying long things in few tokens. None are decided except the
+ternary. **Lean** is mine; mark yours.
+
+| Idea | Looks like | Replaces | Seen in | Lean |
+|---|---|---|---|---|
+| Chained ternary | `s > 90 ? "A" : s > 80 ? "B" : "C"` | an `if / else if / else` chain | C, JS | Include |
+| Chained comparison | `0 < x < 10` | `x > 0 && x < 10` | Python | Include |
+| Membership test | `x in 1..10`, `x in [1, 2, 3]` | a range check or a row of `==` | Python, Kotlin | Include |
+| Several values per case | `case 1, 2, 3:` | repeated cases | Swift, Kotlin | Include |
+| Default for missing value | `a ?? b` | `if a is none { b } else { a }` | JS, Swift | Include |
+| Destructuring | `const (x, y) = point` | two declarations | JS, Rust | Include |
+| Optional chaining | `user?.name` | nested `none` checks | JS, Swift | Maybe |
+| Short-circuit assign | `x ??= 5` | `if x is none { x = 5 }` | JS, Ruby | Maybe |
+| Statement modifiers | `break if done`, `skip() unless ready` | `if done { break }` | Ruby, Perl | Maybe |
+| Pipeline | `x \|> trim \|> parse` | `parse(trim(x))` | F#, Elixir | Maybe |
+| Implicit parameter | `items.map(it * 2)` | a closure with a named parameter | Kotlin | Maybe (closure design) |
+
 ## Still open
 
-1. **The name `class`.** Candidates: `obj`, `kind`, `proto`, or keep `class`.
+1. **The name of the heap/inheritance type:** `class`, `obj`, `kind`. If a keyword is a common identifier (`kind`, `type`), it can be a contextual keyword, special only at the start of a declaration.
 2. **The inherit keyword:** `extends`, `inherit`, `from`, `:`.
-3. **`for x of` vs `for x in`:** confirm the JS-style split.
-4. **The ternary and error-propagation `?`.** How to tell `a ? b : c` from `parse(s)?`.
-5. **`++` and `--`:** allowed inside expressions, or statements only?
-6. **`(A, B; N)`:** which of the three meanings.
-7. **Samples:** `match` in `samples.md` becomes `switch` and `case`, arm syntax to design.
+3. **Which compression ideas to take.**
