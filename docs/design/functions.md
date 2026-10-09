@@ -1,4 +1,4 @@
-# Functions (draft 3)
+# Functions (draft 4)
 
 One idea at a time, like the basics page. Syntax is a sketch to react to.
 
@@ -11,7 +11,7 @@ One idea at a time, like the basics page. Syntax is a sketch to react to.
 
 - **F1** The one-line form `fn double(x: int) -> int = x * 2` stays.
 - **F2** Named arguments are optional. Any parameter can be named, and named ones can be reordered.
-- **F3** A method call that changes `self` is marked with `!` on the name: `c.bump!()`. A call that consumes `self` (`sink self`) is marked differently, with `!!`: `c.close!!()`. (Provisional, see the end.)
+- **F3** A method call that changes `self` is marked with `!` on the name: `c.bump!()`. A call that consumes `self` (`sink self`) is marked differently, with `!!`: `c.close!!()`. 
 - **F4** No overloading.
 - **F5** `ok(5)` and `err(e)`, lowercase.
 - **F6** `fn main()`, `fn main(args: [string])` and `fn main() -> result<void, error>` are all allowed.
@@ -319,11 +319,7 @@ const p = point.polar(1.0, 0.5)
 - **G6** Several ways to create a value are associated functions (`point.polar(...)`).
 - **G7** Consuming a value looks different from changing it.
 
-## One thing to confirm
+## Decided since
 
-**Consume mark.** Changing is `c.bump!()`. For consuming I provisionally chose `!!`:
-`c.close!!()` ("a bigger effect, so a bigger mark"). Alternatives: a prefix word, `sink c.close()`,
-consistent with `sink` arguments; or a `~` suffix, `c.close~()`.
-
-As assumed earlier, `sink` arguments are repeated at the call site like `inout` ones:
-`finish(sink scores)`.
+- **Consuming a value is marked `!!`:** `c.close!!()`. Changing stays `c.bump!()`.
+- `sink` arguments are repeated at the call site like `inout` ones: `finish(sink scores)`.

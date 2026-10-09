@@ -128,7 +128,7 @@ because TS/JS programmers expect it and it can step in odd ways.
 | `?` | If this is an error or `none`, return it from the function now. Attached, no space: `parse(s)?` | 2 |
 | `??` | "Use this default if there's no value" | 3 |
 | `!` after a method name | The call changes the value it is called on: `c.bump!()` | 2 |
-| `!!` after a method name | The call consumes the value it is called on: `c.close!!()` (provisional) | 2 |
+| `!!` after a method name | The call consumes the value it is called on: `c.close!!()` | 2 |
 | `...` | Variadic parameter and spread: `fn sum(...nums: int)`, `sum(...xs)` | 2 |
 | `T?` | Shorthand for `option<T>` in types | 2 |
 | `T ! E` | Shorthand for `result<T, E>` in types | 2 |
