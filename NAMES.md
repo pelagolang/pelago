@@ -159,6 +159,9 @@ name plus `c` (`rustc`, `javac`, `kotlinc`, `scalac`, `swiftc`, `tsc`, `gcc`). Q
 | **Lugha** | Swahili for "language". No programming language found. |
 | **Clangor** | Free, but it sits right beside Clang, the LLVM compiler. Confusing. |
 | **Lango** | A toy interpreter exists, and it is also the name of an ethnic group in Uganda. Avoid. |
+| **Lex** | Collides with `lex`, the classic Unix lexer generator (and `flex`), so the command name is taken on most machines. |
+| **Lexlang** | Nothing by that exact name, but close neighbours exist: [LxLang](https://crystaldoc.info/github/SleepingInsomniac/LxLang), LuxLang, Lexemn. It also reads as "lexer language". |
+| **Langex** | A hobby script language called [langX](https://github.com/Aincvy/langX) exists, and so does a language-exchange app called LangX. |
 | **Langue** | French for "language" or "tongue". Not searched yet. |
 | **Lingua** | Latin for "tongue". Not searched yet; probably crowded. |
 

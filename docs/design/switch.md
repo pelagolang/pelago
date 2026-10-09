@@ -1,4 +1,4 @@
-# switch (draft 1)
+# switch (draft 2)
 
 One construct for choosing by value and by shape. It replaces `match`.
 
@@ -167,10 +167,71 @@ if pet is dog { ... }                        // test only
 const maybe_dog = pet to? dog                // option<dog>
 ```
 
-## Not yet
+## 10. Struct patterns
 
-Struct patterns (`case point { x: 0, y }`), names that bind inside several comma-separated
-alternatives, open ranges (`case 100..:`), and `name @ pattern`.
+```
+switch p {
+    case point { x: 0, y: 0 }: "origin"
+    case point { x: 0, y }: "on the y axis at #y"
+    case point { x, .. }: "x is #x"
+}
+```
+
+- `field: pattern` matches one field. A lone name binds that field under its own name.
+- `..` means "ignore the other fields". It is **required** when a field is left out, so a pattern
+  never silently ignores a field that was added later without saying so.
+- Enum payloads with labels can be matched by label: `case .rect(w: width)`, or by position.
+- Access modes work as everywhere: `point { inout x, y }`.
+- The same shapes destructure in declarations: `const point { x, y } = p`, `const (a, b) = pair`.
+
+## 11. Alternatives that bind names
+
+```
+switch s {
+    case .circle(r), .square(r): print("one measure: #r")
+    case .rect(w, h): print("#w by #h")
+}
+```
+
+Allowed when **every alternative binds the same names, with the same types and the same access
+modes**. Otherwise the compiler says which name is missing. (The first version of the parser
+rejects any binding in a comma list, as agreed; this is the rule that switches it on.)
+
+## 12. Open ranges
+
+```
+switch n {
+    case ..0: "negative"          // below 0
+    case 0: "zero"
+    case 1..=9: "a digit"
+    case 10..: "ten or more"      // 10 and up
+}
+```
+
+The full set: `a..b`, `a..=b`, `a..`, `..b`, `..=b`, and `..` (everything). They work outside
+patterns too: `xs[2..]`, `xs[..3]`, `x in 100..`.
+
+## 13. Naming the whole value while matching
+
+`name is pattern` binds the whole value and also requires it to match.
+
+```
+switch n {
+    case big is 100..=999: "three digits (#big)"
+}
+
+switch s {
+    case whole is .circle(r): grow(whole, r)
+}
+```
+
+This is the same `is` as `case d is dog:`, so a type test is just one more pattern, and no
+`@` symbol is needed.
+
+## Later still
+
+Patterns over lists (`[first, ..rest]`): under value semantics `rest` must be a view of the list,
+which depends on how collections are designed. Revisit with collections.
 
 ## What is already our own
 
@@ -181,21 +242,18 @@ alternatives, open ranges (`case 100..:`), and `name @ pattern`.
 
 ---
 
-## Questions for you
+## Decisions from draft 1
 
-**[S1] Arm bodies.** An arm is all statements up to the next case (shown above, C-like, my
-recommendation), or exactly one expression, with braces for several statements?
+- **S1** An arm is all statements up to the next `case`, `default` or the closing brace.
+- **S2** A bare name always binds. Enum cases take a leading dot or the type name.
+- **S3** `break` leaves the enclosing loop, never the switch.
+- **S4** `default:` is the spelling. `case _:` also works and the formatter writes `default:`.
+- **S5** `is` carries type patterns and tests (`case d is dog:`, `x is .circle(r)`).
+- **S6** No names bound inside comma-separated alternatives in the first version (rule for later in section 11).
+- **S7** `0..10` excludes the end, `0..=10` includes it, in patterns too.
 
-**[S2] Bare names bind, enum cases take a dot.** Keep?
+## Quick confirms for sections 10 to 13
 
-**[S3] `break` leaves the loop, not the switch.** Keep?
-
-**[S4] The catch-all.** `default:` is the spelling; `case _:` also works and the formatter writes it
-as `default:`. Fine?
-
-**[S5] Type patterns.** `case d is dog:` and `x is .circle(r)`. Right, or a different word than `is`?
-
-**[S6] Alternatives with names.** Disallow names bound inside comma-separated alternatives for now
-(`case .a(x), .b(x):` is an error), allowing it later?
-
-**[S7] Ranges.** `0..10` excludes the end and `0..=10` includes it, in patterns too. Keep?
+- **N1** `..` is required in a struct pattern that leaves fields out.
+- **N2** `name is pattern` instead of an `@` symbol.
+- **N3** The open range forms above.
