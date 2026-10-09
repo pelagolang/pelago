@@ -253,8 +253,8 @@ Decided: lowercase, and sized integers from 8 to 64 bits. `int` is always 64 bit
 
 ## Compression ideas (shorter ways to say common things)
 
-Candidates for saying long things in few tokens. None are decided except the
-ternary. **Lean** is mine; mark yours.
+Shorter ways to say common things, which fits the token-efficiency goal. All
+accepted. The closure-related ones wait for the closure design.
 
 | Idea | Looks like | Replaces | Seen in | Decision |
 |---|---|---|---|---|
