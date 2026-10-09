@@ -25,6 +25,18 @@ choice. Write renames in the last column.
 
 ---
 
+## Hard and soft keywords
+
+The code (`compiler/src/keyword.rs`) splits keywords in two. A **hard** keyword is reserved
+everywhere. A **soft** keyword is special in one position only and is an ordinary name everywhere
+else, because words like `from`, `to`, `step`, `init`, `type`, `union` and `ext` are common names
+for variables and methods. Run `cargo run -- keywords` to see the current lists.
+
+Words from other languages (`class`, `null`, `try`, `this`, `function`, ...) are not keywords here,
+but the compiler recognises them and can suggest the right word.
+
+---
+
 ## Declarations
 
 | Working | Meaning | Seen in | Phase | Your rename |

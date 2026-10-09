@@ -91,8 +91,10 @@ No compiler code yet. Everything here is cheap to change.
 
 ## Phase 1: Stage 0 front end (Rust)
 
-- [ ] Cargo workspace, CI (build, test, format, lint), benchmark harness for compile time
-- [ ] Source files, spans, and a diagnostics system (clear errors with line, column and a source snippet)
+- [x] Cargo workspace and CI (build, test, format, lint)
+- [ ] Benchmark harness for compile time
+- [x] Keyword table, token kinds and spans (`compiler/src/{keyword,token,span}.rs`)
+- [ ] Source files and a diagnostics system (clear errors with line, column and a source snippet)
 - [ ] **Lexer**
 - [ ] **Parser** (recursive descent with Pratt parsing for expressions) producing the AST
 - [ ] AST printer and a golden-file test suite (`.lang` input, expected output)
