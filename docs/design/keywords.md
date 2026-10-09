@@ -73,6 +73,7 @@ choice. Write renames in the last column.
 | `break value` | Leave a `loop` and give back a value | Rust | 3 | |
 | `outer: for ...` and `break outer` | Name a loop so an inner loop can leave the outer one | Java, Rust | 3 | |
 | `defer` | Run this when the current block ends, however it ends | Go, Zig, Swift | 3 | |
+| `become f(x)` | A guaranteed tail call: replace the current call with this one | Rust (proposed) | 3 | |
 | `else` on a loop | Python's "ran without `break`" | Python | - | Leave out: confusing |
 | `repeat ... until` | Loop that tests at the end, in a Pascal spelling | Pascal, Lua | - | Leave out: `do ... while` covers it |
 | `return` | Leave the function now, optionally giving back a value | Fortran, C | 1 | |
@@ -126,7 +127,9 @@ because TS/JS programmers expect it and it can step in odd ways.
 | `.` | Reach inside a value or call a method | 1 |
 | `?` | If this is an error or `none`, return it from the function now. Attached, no space: `parse(s)?` | 2 |
 | `??` | "Use this default if there's no value" | 3 |
-| `!` after a method name | The call changes or consumes the value it is called on: `c.bump!()` | 2 |
+| `!` after a method name | The call changes the value it is called on: `c.bump!()` | 2 |
+| `!!` after a method name | The call consumes the value it is called on: `c.close!!()` (provisional) | 2 |
+| `...` | Variadic parameter and spread: `fn sum(...nums: int)`, `sum(...xs)` | 2 |
 | `T?` | Shorthand for `option<T>` in types | 2 |
 | `T ! E` | Shorthand for `result<T, E>` in types | 2 |
 | `->` | Return type of a function | 1 |
@@ -208,7 +211,7 @@ interfaces, and a class can only be extended if marked `open`.
 | `todo` | Placeholder that crashes if reached | Rust | 2 | |
 | `unchecked` | Skip bounds or overflow checks for speed, only inside `unsafe` | Rust (`get_unchecked`) | 3 | |
 | `wrapping` / `saturating` / `checked` | Arithmetic that wraps around / stops at the limit / returns `none` on overflow. Library functions or operators | Rust | 2 | |
-| `when` | Compile this only for certain targets or modes (debug, release, OS, CPU) | Rust (`cfg`) | 3 | |
+| `meta if` | Compile this only for certain targets or modes (debug, release, OS, CPU). Replaces the `when` keyword | Zig | 3 | |
 | `deprecated` | Mark something as going away | Java, Rust | 3 | |
 | `@name` | Attribute syntax that attaches notes to a declaration, such as `@inline` | Java, Python decorators | 3 | |
 | `must_use` | Warn if a result is ignored | Rust | 3 | |
@@ -222,7 +225,7 @@ interfaces, and a class can only be extended if marked `open`.
 | `chan` | A channel: a pipe that one task puts values into and another takes values out of | Go | 3 | |
 | `select` | Wait on several channels at once and act on whichever is ready first | Go | 3 | |
 | `asm` | Inline assembly | C, Rust | 3 | |
-| `inline` / `noinline` | Hints to the optimizer | C, Rust | 3 | |
+| `@inline` `@noinline` `@cold` | Hints to the optimizer, written as attributes, not keywords | C, Rust | 3 | |
 | `align` / `packed` | Control memory layout | C, Zig | 3 | |
 
 ## Type names

@@ -26,6 +26,10 @@ A serious, self-hosting systems language:
 | Compile-time code | `meta` | decided |
 | Modules | `mod` for modules, `pkg` reserved for bundles | decided |
 | Functions | Optional named arguments; no overloading; `c.bump!()` marks calls that change or consume the receiver; shorthand types `T?` and `T ! E`; `main` in three forms | decided |
+| Compile-time code | `meta`: expression, `meta fn`, `meta N: int`, `meta if` | decided |
+| Tail calls | Explicit and guaranteed: `become f(x)` | decided |
+| Async | Deferred; threads and channels first; `async` / `await` reserved | decided |
+| Optimizer hints | Attributes: `@inline`, `@noinline`, `@cold` | decided |
 | Maps | `map { "a": 1 }`, empty map `{:}` | decided |
 | Closures | `x ~> x * 2` and `~> it * 2` | decided |
 | Null | None. Absence is `none` in `option<T>` | decided |

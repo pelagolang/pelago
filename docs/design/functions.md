@@ -1,4 +1,4 @@
-# Functions (draft 2)
+# Functions (draft 3)
 
 One idea at a time, like the basics page. Syntax is a sketch to react to.
 
@@ -11,7 +11,7 @@ One idea at a time, like the basics page. Syntax is a sketch to react to.
 
 - **F1** The one-line form `fn double(x: int) -> int = x * 2` stays.
 - **F2** Named arguments are optional. Any parameter can be named, and named ones can be reordered.
-- **F3** A method call that changes `self` is marked with `!` on the name: `c.bump!()`. A call that consumes `self` (`sink self`) is marked too: `c.close!()`.
+- **F3** A method call that changes `self` is marked with `!` on the name: `c.bump!()`. A call that consumes `self` (`sink self`) is marked differently, with `!!`: `c.close!!()`. (Provisional, see the end.)
 - **F4** No overloading.
 - **F5** `ok(5)` and `err(e)`, lowercase.
 - **F6** `fn main()`, `fn main(args: [string])` and `fn main() -> result<void, error>` are all allowed.
@@ -170,7 +170,7 @@ struct counter {
 var c = counter { count: 0 }
 c.bump!()              // `!` shows that this call changes c
 c.show()               // read-only: no mark
-const n = c.close!()   // `!` also shows c is consumed: it can't be used afterwards
+const n = c.close!!()  // `!!` shows c is consumed: it can't be used afterwards
 ```
 
 A method is a function inside a `struct`, `enum` or `obj` whose first parameter
@@ -309,27 +309,21 @@ const p = point.polar(1.0, 0.5)
 
 ---
 
-## Questions for you
+## Decisions from draft 2
 
-**[G1] Variadic spelling.** `fn sum(...nums: int)` with `sum(...xs)` to spread (TS-like, my
-recommendation), or `fn sum(nums: int...)`.
+- **G1** Variadic parameters are written `...nums: int`, spread with `sum(...xs)`.
+- **G2** Tail calls are explicit and guaranteed: `become f(x)`.
+- **G3** `meta` has four uses: `meta expr`, `meta fn`, `meta N: int` as a generic value parameter, and `meta if`. The `when` keyword is dropped.
+- **G4** Optimizer hints are attributes (`@inline`, `@noinline`, `@cold`), not keywords.
+- **G5** Async is deferred. `async` and `await` are reserved. Threads and channels come first.
+- **G6** Several ways to create a value are associated functions (`point.polar(...)`).
+- **G7** Consuming a value looks different from changing it.
 
-**[G2] Tail calls.** `become f(x)` as an explicit, guaranteed tail call (my recommendation),
-or best-effort only, or always guaranteed (hard with `deinit`).
+## One thing to confirm
 
-**[G3] Compile-time code.** Confirm the three uses of `meta` (expression, `meta fn`,
-`meta N: int` as a generic value parameter) plus `meta if`. And: drop the `when` keyword,
-since `meta if` replaces it?
+**Consume mark.** Changing is `c.bump!()`. For consuming I provisionally chose `!!`:
+`c.close!!()` ("a bigger effect, so a bigger mark"). Alternatives: a prefix word, `sink c.close()`,
+consistent with `sink` arguments; or a `~` suffix, `c.close~()`.
 
-**[G4] Optimizer hints.** Attributes `@inline`, `@noinline`, `@cold` as requests, and
-drop `inline` / `noinline` as keywords?
-
-**[G5] Async.** Defer it, reserve `async` and `await`, and do threads plus channels first?
-
-**[G6] Associated functions.** `point.polar(...)` as the way to have several constructors, with
-`init` kept for the one standard way to create a value. Or may `init` also be written several
-times, told apart by argument names (Swift-like)?
-
-**[G7] Marking at the call site.** I assumed `sink` arguments are repeated at the call
-site like `inout` ones (`finish(sink scores)`), and that `!` on a method name covers both
-changing and consuming `self`. Right, or should consuming look different from mutating?
+As assumed earlier, `sink` arguments are repeated at the call site like `inout` ones:
+`finish(sink scores)`.
