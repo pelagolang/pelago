@@ -122,7 +122,8 @@ taking. **Lean:** Include / Maybe / Leave out.
 
 | Word | Meaning | Seen in | Lean | Why |
 |---|---|---|---|---|
-| `let` / `val` / `mut` | Other spellings for the `const`/`var` pair | Rust, Swift, Scala | Rename option | |
+| `let` | Reserved. No job yet (see basics.md, B7). Was the immutable declaration in my first draft | Rust, Swift, JS, Lisp, ML | Reserve | `const`/`var` do its old job |
+| `val` / `mut` | Other spellings for the `const`/`var` pair | Scala, Kotlin / Rust | Rename option | |
 | `ref` | A reference stored as a value | C#, Rust | Leave out | References are temporary under value semantics |
 | `null` / `nil` / `undefined` | "No value here" | everywhere | Leave out | `none` in `option<T>` instead, so absence is visible in the type |
 | `void` | A function that gives back nothing | C, Java | Maybe | Could be an empty value type instead |

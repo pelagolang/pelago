@@ -130,14 +130,23 @@ what the language *does*. Everything here is a deliberate choice, not a copy.
 - **[B3]** Type names are lowercase. (Open: your own types too?)
 - **[B4]** Conversions are written `x to float`.
 
+- **[B6]** Both lowercase and capitalized names are allowed for your own types. The compiler
+  accepts either, like variable names (B1). The formatter and standard library use a capital
+  for types you define, so they stand out. A type and a value in the same scope can't share a name.
+
 ## Still open
 
-**[B5] Strings with values inside.** The always-on `"Score: {score}"` proposal felt
-lacking. What is missing? Candidates:
-- Control over how a value is shown (decimal places, width, padding, hex)
-- Multi-line strings
-- Raw strings where nothing is special (paths, regular expressions)
-- Something more distinctive than a brace pair
-- Something else
+**[B5] Strings with values inside.** The brace form is familiar, which is exactly the
+problem: it looks like a copy. The marker is the part that can be ours. Options:
 
-**[B6] Your own types.** Lowercase (`point`) or capitalized (`Point`)?
+- A. Braces: `"Score: {score}"` (Python f-strings, C#, Kotlin close)
+- B. A sigil of our own: `"Score: #score"`, and `"Next: #(score + 1)"` for anything bigger
+  than a name. `#` is free because comments use `//`. Short, one token, unusual.
+- C. A join operator instead of a template: `"Score: " ~ score ~ " points"`, where `~`
+  joins text and turns printable values into text. D uses `~` to join; nobody else mainstream does.
+- D. A template marker word: `"Score: " with score`... (needs more thought)
+
+Formatting control (decimals, width, hex), multi-line strings and raw strings
+do not depend on the marker. They can come later.
+
+**[B7] The `let` keyword.** Currently unused and reserved. See chat for the options.
