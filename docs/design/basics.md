@@ -95,17 +95,20 @@ The compiler only allows `to` when nothing can be lost. Conversions that can
 lose information or fail will need a different, visible spelling. We work that
 out when we reach errors.
 
-## 7. Strings with values inside (proposal, custom)
+## 7. Strings with values inside (decided: our own `#` marker)
 
-Braces always mean "put the value here", with no prefix needed.
+A `#` followed by a name puts that value into the text. For anything bigger than
+a name, wrap it in brackets.
 
 ```
-print("Score: {score}")             // Score: 10
-print("A literal brace: \{")        // A literal brace: {
+print("Score: #score")              // Score: 10
+print("Next: #(score + 1)")         // Next: 11
+print("A literal hash: \#")         // A literal hash: #
 ```
 
-The thing inside the braces is checked when the program is compiled, so a
-mistake is an error before the program runs.
+The expression is checked when the program is compiled, so a mistake is an
+error before the program runs. Formatting control (decimals, width), multi-line
+strings and raw strings come later and don't change this marker.
 
 ---
 
@@ -119,7 +122,7 @@ what the language *does*. Everything here is a deliberate choice, not a copy.
 - **`const` that is truly immutable**, all the way down.
 - **No null.** Absence is a type (`option<T>`), never a surprise.
 - **Conversions written as `to`**, and only when nothing can be lost (proposal).
-- **Strings that interpolate by default** (proposal).
+- **Strings that interpolate with `#`**, a marker we haven't seen elsewhere.
 - **One `switch`/`case` that is also pattern matching.**
 - **Token efficiency as a design goal**, measured against real tokenizers.
 
@@ -130,23 +133,11 @@ what the language *does*. Everything here is a deliberate choice, not a copy.
 - **[B3]** Type names are lowercase. (Open: your own types too?)
 - **[B4]** Conversions are written `x to float`.
 
+- **[B5]** String interpolation uses `#name` and `#(expression)`.
 - **[B6]** Both lowercase and capitalized names are allowed for your own types. The compiler
   accepts either, like variable names (B1). The formatter and standard library use a capital
   for types you define, so they stand out. A type and a value in the same scope can't share a name.
 
 ## Still open
-
-**[B5] Strings with values inside.** The brace form is familiar, which is exactly the
-problem: it looks like a copy. The marker is the part that can be ours. Options:
-
-- A. Braces: `"Score: {score}"` (Python f-strings, C#, Kotlin close)
-- B. A sigil of our own: `"Score: #score"`, and `"Next: #(score + 1)"` for anything bigger
-  than a name. `#` is free because comments use `//`. Short, one token, unusual.
-- C. A join operator instead of a template: `"Score: " ~ score ~ " points"`, where `~`
-  joins text and turns printable values into text. D uses `~` to join; nobody else mainstream does.
-- D. A template marker word: `"Score: " with score`... (needs more thought)
-
-Formatting control (decimals, width, hex), multi-line strings and raw strings
-do not depend on the marker. They can come later.
 
 **[B7] The `let` keyword.** Currently unused and reserved. See chat for the options.
