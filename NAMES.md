@@ -107,10 +107,30 @@ programming language found, ⚠️ means a clash or something to watch.
 | Flint | **Pyrite** | "Fire stone" | Not checked |
 | Flint | **Agate** | Hard, banded stone | Not checked |
 | Flint | ~~Spark~~, ~~Kindle~~, ~~Cinder~~, ~~Quartz~~ | Fire and stone | ❌ Apache Spark, Amazon Kindle, Cinder (C++ library and Python fork), Quartz scheduler. |
-| Arc | **Arca** / **Arcus** | Latin "arch" / "bow" | Not checked |
+| Arc | ~~Arca~~ / ~~Arcus~~ | Latin "arch" / "bow" | ❌ Arcus is a known software name. |
 | Arc | **Span** | The width of an arch | Not checked (hard to search) |
 | Tala | **Tali** / **Taal** | Close to Tala; *taal* is Hindi for "rhythm" | Not checked |
 | Tala | **Metre** | Rhythm in poetry | Not checked |
+
+## Round 4: names with character
+
+The aim: be as distinctive as **Python** (an unexpected reference), **Rust**
+(an odd everyday word) or **TypeScript** (a coined compound). Plain "nice"
+words like Arc and Sol are always taken. Quick web check, October 2026.
+
+| Name | Style | Why it works | Check |
+|------|-------|--------------|-------|
+| **Verdigris** | Rust-like | The green patina on copper, copper's version of rust. Odd, vivid, memorable. Nickname "Verdi", extension `.vg`. | ✅ No language found. The only near match is a Smalltalk project called *Verdigrist*. ⭐ |
+| **Tardigrade** | Python-like | The near-indestructible "water bear". Suits a robust, reliable language. Nickname "Tardi". | ✅ Only a tiny hobby console uses the name. ⭐ |
+| **Pumice** | Rust-like | Volcanic rock that floats: light but solid. | ⚠️ A dead 2011 Lisp dialect with 11 stars. Effectively free. |
+| ~~Lichen~~ | Rust-like | | ❌ An existing Python-like language. |
+| ~~Lintel~~ | Rust-like | | ❌ Two linters use it (it puns on "lint"). |
+| ~~Okapi~~ | Python-like | | ❌ The Okapi localization framework. |
+
+### More to check (not searched yet)
+- **Odd everyday words (like Rust):** Ochre, Umber, Patina, Burlap, Putty, Gristle, Sorrel, Marrow, Brine
+- **Unexpected animals (like Python):** Axolotl, Pangolin, Shoebill, Kakapo, Numbat
+- **Coined compounds (like TypeScript):** Kitestring, Flintlock, Inkwell, Sunforge
 
 ## Picking criteria
 - [ ] Sounds good said out loud ("I wrote it in ___")
