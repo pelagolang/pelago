@@ -126,6 +126,9 @@ because TS/JS programmers expect it and it can step in odd ways.
 | `.` | Reach inside a value or call a method | 1 |
 | `?` | If this is an error or `none`, return it from the function now. Attached, no space: `parse(s)?` | 2 |
 | `??` | "Use this default if there's no value" | 3 |
+| `!` after a method name | The call changes or consumes the value it is called on: `c.bump!()` | 2 |
+| `T?` | Shorthand for `option<T>` in types | 2 |
+| `T ! E` | Shorthand for `result<T, E>` in types | 2 |
 | `->` | Return type of a function | 1 |
 | `~>` | Closure: parameters on the left, body on the right (`x ~> x * 2`, or `~> it * 2`). One token | 2 |
 | `to` | Convert: `x to float`. A word, because the symbol was taken | 1 |
