@@ -146,6 +146,27 @@ Nim or Kotlin. Quick web check, October 2026.
 | ~~Vexa~~ | | ❌ VexaScript, an active language. |
 | ~~Draxl~~ | | ❌ A Rust "agent-native source language". |
 
+## Round 6: around `langc`
+
+The compiler is called `langc` for now. Most compilers follow the same habit: the language
+name plus `c` (`rustc`, `javac`, `kotlinc`, `scalac`, `swiftc`, `tsc`, `gcc`). Quick web check, October 2026.
+
+| Name | Check |
+|------|-------|
+| **Lang** | Works as a codename, but generic. Several hobby projects are already called `lang`, including a compiler ([ehrlich-b/lang](https://github.com/ehrlich-b/lang)). Hard to search for. |
+| **Langc** | Not found as a language, but close to `langcc` (a compiler-compiler) and `lllc` (Langlanglang). |
+| **Lanc** | Only the old PLANC (Norsk Data, discontinued) turns up. Compiler would be `lancc`, which is awkward. |
+| **Lugha** | Swahili for "language". No programming language found. |
+| **Clangor** | Free, but it sits right beside Clang, the LLVM compiler. Confusing. |
+| **Lango** | A toy interpreter exists, and it is also the name of an ethnic group in Uganda. Avoid. |
+| **Langue** | French for "language" or "tongue". Not searched yet. |
+| **Lingua** | Latin for "tongue". Not searched yet; probably crowded. |
+
+A habit worth deciding on now: the newer languages ship **one tool** named after the language
+(`cargo`, `go`, `zig`, `deno`), with `build`, `run`, `test` and `fmt` inside, and keep the compiler
+as an internal part. If we do that, the `c` suffix goes away and the name only needs to work as a
+command. Until a name is chosen, `langc` is a single line in `compiler/Cargo.toml`, so renaming is cheap.
+
 ## Picking criteria
 - [ ] Sounds good said out loud ("I wrote it in ___")
 - [ ] Not an existing popular language/framework

@@ -30,6 +30,8 @@ A serious, self-hosting systems language:
 | Tail calls | Explicit and guaranteed: `become f(x)` | decided |
 | Async | Deferred; threads and channels first; `async` / `await` reserved | decided |
 | Optimizer hints | Attributes: `@inline`, `@noinline`, `@cold` | decided |
+| `switch` | One pattern-matching construct (`docs/design/switch.md`); `break` leaves the loop; bare names bind; `is` tests in conditions | draft |
+| Types | `docs/design/types.md` decisions T1 to T9 recorded | decided |
 | Maps | `map { "a": 1 }`, empty map `{:}` | decided |
 | Closures | `x ~> x * 2` and `~> it * 2` | decided |
 | Null | None. Absence is `none` in `option<T>` | decided |

@@ -65,7 +65,7 @@ but the compiler recognises them and can suggest the right word.
 | `unless` | Runs the block when the condition is *false*. Replaces `if !` | Ruby | 1 | |
 | `switch` / `case` / `default` | Choose by matching a value against patterns | C, Swift | 1 | |
 | `guard` | "Leave early unless this is true" | Swift | 2 | |
-| `is` | Test whether a value is a particular enum case or type | Python, C#, Kotlin | 3 | |
+| `is` | Test whether a value is a particular enum case or type, binding names on the way: `shape is .circle(r)` | Python, C#, Kotlin | 2 | |
 
 ## Loops
 

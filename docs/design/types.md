@@ -1,10 +1,22 @@
-# Types: struct, enum, obj, interface (draft 1)
+# Types: struct, enum, obj, interface (draft 2)
 
 One idea at a time. Syntax is a sketch to react to.
 
 **Already decided and used here:** lowercase built-in types, `struct` is a value and
 `obj` is a heap object with inheritance written `:`, `interface` with `impl`, `<T>` generics,
 `pub` / `priv` (private by default), `init` / `deinit`, `copy`, `option` / `result`, `self`.
+
+## Decisions from draft 1
+
+- **T1** Plain types copy implicitly whatever their size. The compiler warns above a size limit (64 bytes by default, configurable). Owning types need `copy`.
+- **T2** Enum cases can be written `shape.circle(...)` or with a leading dot, `.circle(...)`, where the type is known.
+- **T3** The type name is the call: `range(lo: 1, hi: 5)` runs `init`. A failing `init` is `-> Self ! bad_range`.
+- **T4** Fields are private by default, `pub` per field. This is also why `priv` exists: to say it out loud.
+- **T5** Plain data gets `eq` and `copy` automatically. `order`, `hash` and `show` are opt-in with `@derive`.
+- **T6** `copy` on an `obj` works only if it provides `clone`; otherwise it's a compile error.
+- **T7** Downcasting is `a to? dog`, returning `option<dog>`.
+- **T8** Default field values are allowed.
+- **T9** Interfaces have no associated types or generic methods in version 1.
 
 ## 1. A struct bundles named values
 
@@ -112,9 +124,9 @@ const t: shape = .rect(w: 3.0, h: 4.0)      // the leading dot works when the ty
 
 fn area(s: shape) -> float {
     switch s {
-        case circle(let r): PI * r * r         // arm syntax is still to be designed
-        case rect(let w, let h): w * h
-        case empty: 0.0
+        case .circle(r): PI * r * r             // see switch.md
+        case .rect(w, h): w * h
+        case .empty: 0.0
     }
 }
 ```
@@ -222,33 +234,3 @@ For a type that must not be mixed up with its base (metres vs seconds), use a on
 - `init` that can fail through the type system, and a literal that respects privacy.
 - Inheritance that cannot slice, because objects are owned on the heap.
 - Operators, equality and printing come from interfaces and `@derive`.
-
----
-
-## Questions for you
-
-**[T1] The copy rule.** Plain types copy implicitly whatever their size (my recommendation,
-with a compiler warning above a size limit), or only up to a size, or only when opted in
-(Rust's `Copy`)? A size cutoff has a nasty side effect: adding one field could silently change
-what every use of the type does.
-
-**[T2] Enum case spelling.** `shape.circle(radius: 2.0)` always, plus the leading-dot
-`.circle(radius: 2.0)` where the type is known. Keep both?
-
-**[T3] Calling `init`.** `range(lo: 1, hi: 5)` (the type name is the call), or `range.new(...)`?
-And is `-> Self ! bad_range` the right spelling for a failing `init`?
-
-**[T4] Field privacy.** Private by default, `pub` per field (shown above), or public by default?
-
-**[T5] `@derive`.** Which behaviours come for free on plain data? I suggest `eq` and `copy`
-only, with `order`, `hash` and `show` opt-in.
-
-**[T6] Cloning an obj.** `copy o` works only if the obj provides `clone`, otherwise it is a
-compile error. Right?
-
-**[T7] Downcasting.** `a to? dog` returning `option<dog>`, or something else?
-
-**[T8] Default field values.** Allowed (shown in section 5)?
-
-**[T9] Interface depth.** Interfaces with associated types and generic methods are powerful
-but complex. Leave them out of version 1?

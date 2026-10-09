@@ -92,9 +92,17 @@ do { score++ } while score < 3
 loop { break }
 
 switch shape {
-    case circle(let r): PI * r * r
+    case .circle(r): PI * r * r
+    case .rect(inout w, h): w += 1.0
+    case 1, 2, 3: 0.0
+    case n if n > 100: 1.0
+    case d is dog: d.fetch()
     default: 0.0
 }
+
+if shape is .circle(r) { print("radius #r") }
+guard shape is .circle(r) else { return }
+const maybe_dog = pet to? dog
 
 if 0 < x && x < 10 || !done { }
 const inside = x in 1..10
