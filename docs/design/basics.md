@@ -140,4 +140,8 @@ what the language *does*. Everything here is a deliberate choice, not a copy.
 
 ## Still open
 
-**[B7] The `let` keyword.** Currently unused and reserved. See chat for the options.
+**[B7] The `let` keyword.** Currently reserved and unused. Leading candidate for later:
+the read-only member of the access-mode trio (`let` / `inout` / `sink`), possibly optional
+because it is the silent default. Places the trio could appear: function parameters
+(including `self`), loop variables (`for inout x in xs` to change elements in place),
+pattern bindings in `switch`, and closure captures. Decide when we reach functions.
