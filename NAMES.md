@@ -10,11 +10,11 @@ Mark favourites with ⭐ and strike out rejects with ~~tildes~~.
 ## Short & punchy
 | Name | Ext | Notes |
 |------|-----|-------|
-| **Kite** | `.kite` | Light, fast, flies high. (avoid `.kt` — that is Kotlin) |
+| ~~Kite~~ (taken) | `.kite` | Light, fast, flies high. (avoid `.kt` — that is Kotlin) |
 | **Ember** | `.em` | Small spark that grows. |
-| **Flint** | `.fl` | Strikes sparks; hard and simple. |
+| ~~Flint~~ (taken) | `.fl` | Strikes sparks; hard and simple. |
 | **Quill** | `.ql` | Writing code like writing prose. |
-| **Arc** | `.arc` | Clean, minimal; also an electrical spark. |
+| ~~Arc~~ (taken) | `.arc` | Clean, minimal; also an electrical spark. |
 | **Vale** | `.vl` | Calm, elegant. (an existing research language uses this — check) |
 | **Lumen** | `.lm` | Unit of light; "clarity". |
 | **Tusk** | `.tk` | Strong, distinctive. |
@@ -37,8 +37,8 @@ Mark favourites with ⭐ and strike out rejects with ~~tildes~~.
 | **Kito** | Swahili | Precious / jewel |
 | **Nuru** | Swahili | Light |
 | **Imara** | Swahili | Strong, firm, stable |
-| **Tala** | Tagalog / Sanskrit | Star / rhythm |
-| **Sol** | Latin | Sun |
+| ~~Tala~~ (taken) | Tagalog / Sanskrit | Star / rhythm |
+| ~~Sol~~ (taken) | Latin | Sun |
 | **Ryu** | Japanese | Dragon |
 | **Hira** | Urdu/Hindi | Diamond |
 
@@ -51,6 +51,40 @@ Mark favourites with ⭐ and strike out rejects with ~~tildes~~.
 | **Glyph** | A written symbol. |
 | **Zest** | Fun, energetic. |
 | **Pith** | The essential core — great for a minimal language. |
+
+## Round 2: the Astra family (stars and space)
+
+**About Astra itself:** a language called **ASTRA** already exists. It's an
+agent-oriented language from University College Dublin, it's on Maven, and it
+owns **astralanguage.com**, so "Astralang" would clash directly. There's also a
+small Rust hobby interpreter called `astra` on GitHub, and Astro (the web
+framework) is close in sound. Use Astra only as inspiration, not as the name.
+
+### "Star" in other languages
+| Name | Origin | Notes |
+|------|--------|-------|
+| **Nyota** | Swahili | "Star". Distinctive and easy to say. ⭐ |
+| **Sitara** | Urdu / Hindi | "Star". Flows well. |
+| **Seren** | Welsh | "Star". Short and soft. |
+| **Hoshi** | Japanese | "Star". |
+| **Najm** | Arabic | "Star". Very short. |
+| **Aster** | Greek | "Star" (also a flower). Closest to Astra. |
+| **Estra** | (coined) | An Astra variant. Check availability. |
+
+### Astronomy words
+| Name | Notes |
+|------|-------|
+| **Asterism** | A recognizable star pattern, a good fit for a language of patterns. Long, but `.ast` is a natural extension. |
+| **Parallax** | Seeing the same thing from different angles. |
+| **Meridian** | The highest point of the sky's arc. |
+| **Zenith** | The point straight overhead. Probably used by projects already. |
+| **Sextant** / **Astrolabe** | Navigation instruments: "tools for finding your way". |
+| **Corvus**, **Lyra**, **Vega**, **Rigel**, **Deneb** | Constellation and star names. Short and pretty, but check each one; several are popular project names. |
+| **Perihelion** | Closest approach to the sun. Long, but memorable. |
+
+### Probably taken or crowded (skip)
+Nova, Orion, Nebula, Pulsar (Apache), Aurora (AWS), Polaris (Shopify), Kepler,
+Halo, Comet, Quasar.
 
 ## Picking criteria
 - [ ] Sounds good said out loud ("I wrote it in ___")
