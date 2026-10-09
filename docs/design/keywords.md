@@ -147,7 +147,7 @@ interfaces, and a class can only be extended if marked `open`.
 | `obj` | A heap-allocated, singly-owned type with inheritance. Its instances are objects | Java, C++, Python, TS (`class`) | Include | `struct` stays the simple value type |
 | `open` | This class may be extended, or this method overridden | Kotlin, Swift | Include | Closed by default |
 | `interface` | Promise of functions | Java, Go, TS | Keep | `trait` and `protocol` are other names for the same thing; not needed |
-| `:` | Inheritance: `obj dog : animal`. Said "inherits from" in words, there is no `inherit` keyword | C++, C#, Swift, Kotlin | Include | Inheritance |
+| `:` | Inheritance and interfaces: `obj dog : animal, shape`. A parent obj, if any, comes first, then interfaces. `impl X for Y` still works. Said "inherits from" in words, there is no `inherit` keyword | C++, C#, Swift, Kotlin | Include | Inheritance |
 | `implements` | A class promises an interface | Java, TS | Leave out | `impl` does this |
 | `abstract` `override` `final` | Inheritance machinery. `virtual` is not needed, `open` replaces it | Java, C++, C# | Include | Inheritance |
 | `union` | One memory slot holding one of several layouts | C | Include | C interop and low-level work; `enum` covers the safe case |
@@ -272,7 +272,13 @@ accepted. The closure-related ones wait for the closure design.
 
 ## Still open
 
-1. **Does the `:` list on an `obj` also name interfaces** (`obj dog : animal, shape`), or do interfaces always go through `impl`?
-2. **Closure syntax** (custom), now including the implicit `it` parameter.
-3. **Map literals.** A bare `{ }` is a block, so maps need their own shape.
-4. **Lexing the `?` family:** `?`, `??`, `?.`, `??=`. A `?` with spaces is the ternary. `x ?.5 : 1` must be written `x ? .5 : 1`.
+1. **Map literal shape.** A bare `{ }` is a block, so maps need their own shape:
+   - `["a": 1, "b": 2]`, empty `[:]` (Swift-like, shortest)
+   - `map { "a": 1, "b": 2 }` (parallels struct literals)
+   - `#{ "a": 1 }` (own sigil, but `#` already means something in strings)
+   - `%{ "a": 1 }` (Elixir-like)
+2. **Closure shape (custom).** Candidates:
+   - `fn(x) x * 2` and `fn { it * 2 }`, with captures as `fn[inout total](x) { total += x }`
+   - `x ~> x * 2` and `~> it * 2`
+   - `\x -> x * 2`
+3. **Should `struct` and `enum` also use `:` to list the interfaces they provide** (`struct circle : shape`)?
