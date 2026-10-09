@@ -25,6 +25,8 @@ A serious, self-hosting systems language:
 | OO | Structs and interfaces, plus an `obj` kind with single inheritance (written with `:`) from the start (heap-allocated, singly owned, closed unless `open`). First feature to cut if compile speed or the safety model suffers | decided |
 | Compile-time code | `meta` | decided |
 | Modules | `mod` for modules, `pkg` reserved for bundles | decided |
+| Maps | `map { "a": 1 }`, empty map `{:}` | decided |
+| Closures | `x ~> x * 2` and `~> it * 2` | decided |
 | Null | None. Absence is `none` in `option<T>` | decided |
 | Ternary | Included, chains right, spaces around `?` and `:`; error-propagation `?` is attached | decided |
 | `++` / `--` | Included as statements only; `+= 1` stays | decided |

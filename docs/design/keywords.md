@@ -18,6 +18,9 @@ choice. Write renames in the last column.
 - All eleven compression ideas below are accepted.
 - `for x of items` iterates values, `for i in 0..10` counts or walks keys. See Loops.
 - No `null`, only `none`.
+- Maps are written `map { "a": 1 }`, with `{:}` as a shorthand for the empty map (`map {}` also works).
+- Closures use `~>`: `x ~> x * 2`, and `~> it * 2` with the implicit parameter.
+- `struct` and `enum` list their interfaces with `:` too, like `obj`.
 - Documentation comments: `///` for a line, `///* ... *///` for many lines.
 
 ---
@@ -94,6 +97,8 @@ because TS/JS programmers expect it and it can step in odd ways.
 | `"text"` | A string. Escapes: `\n` `\t` `\\` `\"` and `\#` for a literal hash | everywhere | 1 | |
 | `#name`, `#(expression)` | Puts a value into a string | new | 1 | |
 | `[1, 2, 3]` | A list | JS, Python | 2 | |
+| `map { "a": 1 }` | A map from keys to values | Go (`map`) | 2 | |
+| `{:}` | An empty map | new | 2 | |
 | `(1, "a")` | A tuple: a few values of different types | Python, Rust | 2 | |
 | `0..10`, `0..=10` | A range | Rust | 1 | |
 | `_` | "I don't care about this value" | Rust, Python | 2 | |
@@ -122,6 +127,7 @@ because TS/JS programmers expect it and it can step in odd ways.
 | `?` | If this is an error or `none`, return it from the function now. Attached, no space: `parse(s)?` | 2 |
 | `??` | "Use this default if there's no value" | 3 |
 | `->` | Return type of a function | 1 |
+| `~>` | Closure: parameters on the left, body on the right (`x ~> x * 2`, or `~> it * 2`). One token | 2 |
 | `to` | Convert: `x to float`. A word, because the symbol was taken | 1 |
 | `#` | Value marker inside strings | 1 |
 | `a ? b : c` | Ternary: pick one of two values. Chains to the right. Spaces around `?` and `:` | 2 |
@@ -147,7 +153,7 @@ interfaces, and a class can only be extended if marked `open`.
 | `obj` | A heap-allocated, singly-owned type with inheritance. Its instances are objects | Java, C++, Python, TS (`class`) | Include | `struct` stays the simple value type |
 | `open` | This class may be extended, or this method overridden | Kotlin, Swift | Include | Closed by default |
 | `interface` | Promise of functions | Java, Go, TS | Keep | `trait` and `protocol` are other names for the same thing; not needed |
-| `:` | Inheritance and interfaces: `obj dog : animal, shape`. A parent obj, if any, comes first, then interfaces. `impl X for Y` still works. Said "inherits from" in words, there is no `inherit` keyword | C++, C#, Swift, Kotlin | Include | Inheritance |
+| `:` | Inheritance and interfaces: `obj dog : animal, shape`. A parent obj, if any, comes first, then interfaces. `struct circle : shape` works the same way. `impl X for Y` still works. Said "inherits from" in words, there is no `inherit` keyword | C++, C#, Swift, Kotlin | Include | Inheritance |
 | `implements` | A class promises an interface | Java, TS | Leave out | `impl` does this |
 | `abstract` `override` `final` | Inheritance machinery. `virtual` is not needed, `open` replaces it | Java, C++, C# | Include | Inheritance |
 | `union` | One memory slot holding one of several layouts | C | Include | C interop and low-level work; `enum` covers the safe case |
@@ -272,13 +278,5 @@ accepted. The closure-related ones wait for the closure design.
 
 ## Still open
 
-1. **Map literal shape.** A bare `{ }` is a block, so maps need their own shape:
-   - `["a": 1, "b": 2]`, empty `[:]` (Swift-like, shortest)
-   - `map { "a": 1, "b": 2 }` (parallels struct literals)
-   - `#{ "a": 1 }` (own sigil, but `#` already means something in strings)
-   - `%{ "a": 1 }` (Elixir-like)
-2. **Closure shape (custom).** Candidates:
-   - `fn(x) x * 2` and `fn { it * 2 }`, with captures as `fn[inout total](x) { total += x }`
-   - `x ~> x * 2` and `~> it * 2`
-   - `\x -> x * 2`
-3. **Should `struct` and `enum` also use `:` to list the interfaces they provide** (`struct circle : shape`)?
+1. **Closure details.** Proposal: parameters before `~>` (`(a, b) ~> a + b`, parentheses optional for one parameter), a block body for several statements (`x ~> { ... }`), and a capture list in brackets in front for access modes (`[inout total] x ~> total += x`). By default a closure copies or moves what it uses.
+2. **Should a bare `{ "a": 1 }` also be a map?** It is parseable, but fragile next to labels and ternaries. I recommend no: `map` stays required except for `{:}`.
