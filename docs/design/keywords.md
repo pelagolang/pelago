@@ -11,9 +11,11 @@ choice. Write renames in the last column.
 - `ext` replaces `extern`. `priv` joins `pub`. `fn` is final.
 - `mod` is a module (usually one file). `pkg` is reserved for bundles of modules.
 - `meta` is the compile-time keyword.
-- `class` is in from the start (its name may change, see the open list).
+- `obj` (formerly `class`) is in from the start: heap-allocated, singly owned, single inheritance. Instances of an `obj` are called objects; a `struct` instance is just a value.
+- Inheritance is written with `:` (`obj dog : animal`) and spoken as "inherit".
 - `++` and `--` are kept, as statements only (never inside a bigger expression). `+= 1` stays too.
-- The ternary `a ? b : c` is included and chains to the right. It needs spaces around `?` and `:`. Error propagation is attached: `parse(s)?`.
+- The ternary `a ? b : c` is included and chains to the right. It needs spaces around `?` and `:`. Error propagation is attached: `parse(s)?`. A chained ternary is written inside braces: `{i > n ? "x" : i > m ? "y" : "z"}` (a block with one expression is just that expression, so this needs no new grammar).
+- All eleven compression ideas below are accepted.
 - `for x of items` iterates values, `for i in 0..10` counts or walks keys. See Loops.
 - No `null`, only `none`.
 - Documentation comments: `///` for a line, `///* ... *///` for many lines.
@@ -136,16 +138,16 @@ because TS/JS programmers expect it and it can step in odd ways.
 
 ## Types and structure
 
-**Inheritance is in, as a `class` kind** next to `struct`. The plan: instances live on the heap
+**Inheritance is in, as an `obj` kind** next to `struct`. The plan: instances live on the heap
 and have one owner (moved, never silently shared), single inheritance, any number of
 interfaces, and a class can only be extended if marked `open`.
 
 | Word | Meaning | Seen in | Decision | Why |
 |---|---|---|---|---|
-| `class` | A heap-allocated, singly-owned type with inheritance. Name may change | Java, C++, Python, TS | Include | `struct` stays the simple value type |
+| `obj` | A heap-allocated, singly-owned type with inheritance. Its instances are objects | Java, C++, Python, TS (`class`) | Include | `struct` stays the simple value type |
 | `open` | This class may be extended, or this method overridden | Kotlin, Swift | Include | Closed by default |
 | `interface` | Promise of functions | Java, Go, TS | Keep | `trait` and `protocol` are other names for the same thing; not needed |
-| `extends` | Class builds on another class (open: `from`, `inherit`, `:`) | Java, TS, JS | Include | Inheritance |
+| `:` | Inheritance: `obj dog : animal`. Said "inherits from" in words, there is no `inherit` keyword | C++, C#, Swift, Kotlin | Include | Inheritance |
 | `implements` | A class promises an interface | Java, TS | Leave out | `impl` does this |
 | `abstract` `override` `final` | Inheritance machinery. `virtual` is not needed, `open` replaces it | Java, C++, C# | Include | Inheritance |
 | `union` | One memory slot holding one of several layouts | C | Include | C interop and low-level work; `enum` covers the safe case |
@@ -254,22 +256,23 @@ Decided: lowercase, and sized integers from 8 to 64 bits. `int` is always 64 bit
 Candidates for saying long things in few tokens. None are decided except the
 ternary. **Lean** is mine; mark yours.
 
-| Idea | Looks like | Replaces | Seen in | Lean |
+| Idea | Looks like | Replaces | Seen in | Decision |
 |---|---|---|---|---|
-| Chained ternary | `s > 90 ? "A" : s > 80 ? "B" : "C"` | an `if / else if / else` chain | C, JS | Include |
+| Chained ternary | `{s > 90 ? "A" : s > 80 ? "B" : "C"}` | an `if / else if / else` chain | C, JS | Include |
 | Chained comparison | `0 < x < 10` | `x > 0 && x < 10` | Python | Include |
 | Membership test | `x in 1..10`, `x in [1, 2, 3]` | a range check or a row of `==` | Python, Kotlin | Include |
 | Several values per case | `case 1, 2, 3:` | repeated cases | Swift, Kotlin | Include |
 | Default for missing value | `a ?? b` | `if a is none { b } else { a }` | JS, Swift | Include |
 | Destructuring | `const (x, y) = point` | two declarations | JS, Rust | Include |
-| Optional chaining | `user?.name` | nested `none` checks | JS, Swift | Maybe |
-| Short-circuit assign | `x ??= 5` | `if x is none { x = 5 }` | JS, Ruby | Maybe |
-| Statement modifiers | `break if done`, `skip() unless ready` | `if done { break }` | Ruby, Perl | Maybe |
-| Pipeline | `x \|> trim \|> parse` | `parse(trim(x))` | F#, Elixir | Maybe |
-| Implicit parameter | `items.map(it * 2)` | a closure with a named parameter | Kotlin | Maybe (closure design) |
+| Optional chaining | `user?.name` | nested `none` checks | JS, Swift | Include |
+| Short-circuit assign | `x ??= 5` | `if x is none { x = 5 }` | JS, Ruby | Include |
+| Statement modifiers | `break if done`, `skip() unless ready` | `if done { break }` | Ruby, Perl | Include |
+| Pipeline | `x \|> trim \|> parse` | `parse(trim(x))` | F#, Elixir | Include |
+| Implicit parameter | `items.map(it * 2)` | a closure with a named parameter | Kotlin | Include |
 
 ## Still open
 
-1. **The name of the heap/inheritance type:** `class`, `obj`, `kind`. If a keyword is a common identifier (`kind`, `type`), it can be a contextual keyword, special only at the start of a declaration.
-2. **The inherit keyword:** `extends`, `inherit`, `from`, `:`.
-3. **Which compression ideas to take.**
+1. **Does the `:` list on an `obj` also name interfaces** (`obj dog : animal, shape`), or do interfaces always go through `impl`?
+2. **Closure syntax** (custom), now including the implicit `it` parameter.
+3. **Map literals.** A bare `{ }` is a block, so maps need their own shape.
+4. **Lexing the `?` family:** `?`, `??`, `?.`, `??=`. A `?` with spaces is the ternary. `x ?.5 : 1` must be written `x ? .5 : 1`.
