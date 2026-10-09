@@ -1,118 +1,171 @@
 # Roadmap
 
-Working title: **lang** (until we pick a name — see [NAMES.md](NAMES.md)).
+Working title: **lang** (see [NAMES.md](NAMES.md) for the name shortlist).
 
-This is a checklist of objectives, grouped by phase. Phase 0 is mostly
-**questions to answer** — the answers shape everything after it, so do them first.
-Tick boxes as decisions get made or work gets done, and record decisions in
-`docs/decisions/` (one short file per decision).
+## Vision
 
----
+A serious, self-hosting systems language:
 
-## Phase 0 — Vision & core decisions
+- Compiled to native code by **our own backend**. No interpreter, no VM, no GC, no runtime.
+- Static types with local inference. Readable like TypeScript, with the low-level feel of Rust.
+- Memory safe through **value semantics**, not a borrow checker with lifetimes.
+- Multi-paradigm from a small set of building blocks: procedural, functional, object-oriented (interfaces and composition), and generic/compile-time programming.
+- Ends with a compiler written in the language itself.
 
-### Purpose
-- [ ] **Why does this language exist?** Write a one-paragraph pitch.
-- [ ] **Who is it for?** (beginners, systems programmers, data/scripting, game dev, web, education, yourself)
-- [ ] **What problem does it solve better than existing languages?** Name 2–3 languages it competes with or borrows from.
-- [ ] **Is this a learning project or something meant for real users?** (affects how much polish/tooling matters)
-- [ ] Define 3–5 **design principles** to settle future arguments (e.g. "readability over brevity", "no hidden allocations").
+## Decisions so far
 
-### Execution model
-- [ ] **Interpreted, compiled, or both?**
-  - Tree-walking interpreter (simplest, slowest)
-  - Bytecode VM (good middle ground)
-  - Compile to native (via LLVM, Cranelift, QBE, or C)
-  - Transpile to another language (JS, C, Go…)
-  - Target WebAssembly
-- [ ] **What language is the implementation written in?** (Rust, Go, C, Zig, OCaml, Python, TypeScript…)
-- [ ] Long term: should it become **self-hosting** (compiler written in itself)?
+| Area | Decision | Status |
+|------|----------|--------|
+| Execution | Ahead-of-time compiled, no GC, no runtime | decided |
+| Typing | Static, with local type inference | decided |
+| Syntax family | Braces, TS/Rust-like, no significant indentation | decided |
+| Memory safety | Value semantics (read-only by default, plus `inout` / `sink` access modes; second-class references) | decided, pending the paper test below |
+| Backend | One backend, our own, from day one | decided |
+| Bootstrap | Stage 0 compiler in Rust, then rewritten in the language itself | decided |
+| OO | Structs and interfaces, plus an `obj` kind with single inheritance (written with `:`) from the start (heap-allocated, singly owned, closed unless `open`). First feature to cut if compile speed or the safety model suffers | decided |
+| Compile-time code | `meta` | decided |
+| Modules | `mod` for modules, `pkg` reserved for bundles | decided |
+| Functions | Optional named arguments; no overloading; `c.bump!()` marks calls that change or consume the receiver; shorthand types `T?` and `T ! E`; `main` in three forms | decided |
+| Compile-time code | `meta`: expression, `meta fn`, `meta N: int`, `meta if` | decided |
+| Tail calls | Explicit and guaranteed: `become f(x)` | decided |
+| Async | Deferred; threads and channels first; `async` / `await` reserved | decided |
+| Optimizer hints | Attributes: `@inline`, `@noinline`, `@cold` | decided |
+| `switch` | One pattern-matching construct (`docs/design/switch.md`); `break` leaves the loop; bare names bind; `is` tests in conditions | draft |
+| Types | `docs/design/types.md` decisions T1 to T9 recorded | decided |
+| Maps | `map { "a": 1 }`, empty map `{:}` | decided |
+| Closures | `x ~> x * 2` and `~> it * 2` | decided |
+| Null | None. Absence is `none` in `option<T>` | decided |
+| Ternary | Included, chains right, spaces around `?` and `:`; error-propagation `?` is attached | decided |
+| `++` / `--` | Included as statements only; `+= 1` stays | decided |
+| Loops | `for x of items` (values), `for k in map` (keys, ranges), `for i, x of items` | decided |
+| Operators | Symbols only (`&&` `\|\|` `!` `^` `%`), no word forms | decided |
+| Access modes | `let` / `inout` / `sink` apply everywhere a name is bound | decided |
+| Visibility | `pub` and `priv`; private is the default | decided |
+| Functional | Closures, enums with pattern matching, higher-order functions | decided |
+| Functions | `fn` (chosen because `fnc` splits into two tokens in most tokenizers) | decided |
+| Variables | `var` (changeable) and `const` (truly immutable) | decided |
+| Types | Lowercase names; sized ints `int8` to `int64`, `uint8` to `uint64` | decided |
+| Naming | The compiler accepts any identifier style; the standard library and formatter pick one | decided |
+| `int` | Always exactly 64 bits; sized types for dense data | decided |
+| Conversions | Written `x to float`, allowed only when nothing can be lost; lossy ones get a different spelling | decided in principle |
+| Generics | `<T>` | decided |
+| Statements | Newlines end statements, no semicolons | decided |
+| Call sites | `inout` repeated at the call site; `copy` explicit for owning types | decided |
+| Kernel / OS use | Parked for now | parked |
+| Name | Undecided | open |
 
-### Type system
-- [ ] **Static or dynamic typing?** (or gradual)
-- [ ] **Type inference?** None / local / full (Hindley–Milner style)
-- [ ] **Null handling:** nulls allowed, or `Option`/`Maybe` types?
-- [ ] **Generics?** If yes, how (monomorphization, erasure)?
-- [ ] **Algebraic data types / pattern matching?**
-- [ ] Interfaces, traits, typeclasses, or classes with inheritance?
+## Targets (measured, not felt)
 
-### Paradigm & semantics
-- [ ] **Primary paradigm:** imperative, functional, object-oriented, multi-paradigm?
-- [ ] **Mutability default:** immutable by default or mutable by default?
-- [ ] **Error handling:** exceptions, result types, error values (Go-style), or effects?
-- [ ] **Memory management:** garbage collection, reference counting, ownership/borrowing, manual, or arenas?
-- [ ] **Concurrency model:** threads, async/await, green threads/coroutines, actors, channels — or none at first?
-- [ ] Expressions vs statements: is everything an expression?
+| Goal | How we measure it | Target |
+|------|-------------------|--------|
+| Compile speed | Same project in equivalent Rust / C / C++, wall-clock | Faster than `rustc` and `g++`; chase `tcc`/Go-class speeds |
+| Runtime speed | A fixed benchmark set against Rust and C | Parity first, then a few percent ahead via no-alias optimization |
+| Token efficiency | The same programs through real LLM tokenizers | Fewer tokens than Rust and TS for equivalent programs |
+| Safety | Programs that would be use-after-free or data races elsewhere | Rejected at compile time |
 
-### Syntax & feel
-- [ ] **Syntax family:** C-like braces, Python-like indentation, Lisp-like, ML-like, something new?
-- [ ] Semicolons: required, optional, or none?
-- [ ] Write 5 **example programs** in the imagined syntax: hello world, FizzBuzz, a struct/record, error handling, a small generic function.
-- [ ] Decide naming conventions and keyword list (keep it small).
-- [ ] Source file extension (e.g. `.lang` for now).
-
----
-
-## Phase 1 — Minimal working language
-
-- [ ] Set up repo structure, build system, and CI (build + tests on every push)
-- [ ] Choose a license (MIT / Apache-2.0 / dual)
-- [ ] Write an informal **grammar** (EBNF) for a tiny subset
-- [ ] **Lexer** — turn source text into tokens (with line/column info)
-- [ ] **Parser** — tokens → AST (recursive descent or Pratt parsing recommended)
-- [ ] AST pretty-printer (debugging aid)
-- [ ] **Evaluator / interpreter** for: integers, booleans, strings, arithmetic, variables, `if`, loops, functions
-- [ ] **REPL**
-- [ ] Run a file from the command line: `lang run hello.lang`
-- [ ] Clear **error messages** with line/column and source snippet
-- [ ] Test suite: golden-file tests (`.lang` input → expected output)
-
-**Milestone:** FizzBuzz and recursive Fibonacci run.
+Compile speed and token counts are tracked from the first compiler, in CI.
 
 ---
 
-## Phase 2 — A real language
+## Phase 0: Design on paper (current phase)
 
-- [ ] Semantic analysis pass (name resolution, scoping)
-- [ ] **Type checker** (if static)
-- [ ] Data structures: arrays/lists, maps, structs/records
-- [ ] Closures and first-class functions
-- [ ] Enums / sum types and pattern matching (if chosen)
-- [ ] Error handling mechanism from Phase 0
-- [ ] Modules and imports
-- [ ] Minimal **standard library**: printing, strings, math, collections, file I/O
-- [ ] Switch to bytecode VM or native backend (if planned)
+No compiler code yet. Everything here is cheap to change.
 
-**Milestone:** write a small non-trivial program (e.g. a JSON parser, a to-do CLI, or a text adventure) in the language.
+- [ ] **Sample programs.** Write 8 to 10 programs in the imagined syntax. Draft in [docs/design/samples.md](docs/design/samples.md)
+- [ ] **Settle the open syntax questions** listed at the bottom of that file
+- [ ] **Informal grammar.** Extract keywords, operators and constructs from the samples into a short EBNF
+- [ ] **Semantics notes.** One short page each, in `docs/design/`:
+  - [ ] Value semantics: copy vs move, read-only / `inout` / `sink`, what a reference may and may not do
+  - [ ] Closures: what they capture and how they are owned
+  - [ ] Generics and interfaces: static dispatch by default, dynamic dispatch opt-in
+  - [ ] Error handling (`Result` plus `?`, or an alternative)
+  - [ ] Compile-time evaluation (the `comptime` idea from Zig)
+  - [ ] Concurrency: out of scope for v0, but write down the intended direction
+- [ ] **Paper test.** Sketch the compiler's own core data (tokens, syntax tree, symbol table, type checker state) under value semantics. If something does not fit, revisit the safety model before writing any compiler code
+- [ ] **Token benchmark.** Run the samples and equivalent Rust and TS programs through real tokenizers. Record the numbers
+- [ ] **First target CPU** for the backend (x86-64 is the usual start) and first OS / object format (ELF on Linux)
+- [ ] Pick the final name, then rename the repo
+- [ ] Choose a license
 
----
-
-## Phase 3 — Tooling & ecosystem
-
-- [ ] Formatter (`lang fmt`)
-- [ ] Language Server (LSP) for editor support: diagnostics, go-to-definition, completion
-- [ ] Syntax highlighting (TextMate grammar / tree-sitter) for VS Code etc.
-- [ ] Package manager / build tool
-- [ ] Debugger support or at least good stack traces
-- [ ] Benchmarks and performance tracking
-- [ ] Fuzzing the lexer/parser
+**Milestone:** the samples read well, the paper test passes, and the grammar fits on a couple of pages.
 
 ---
 
-## Phase 4 — Docs & community
+## Phase 1: Stage 0 front end (Rust)
 
-- [ ] Pick the final **name** and rename the repo
-- [ ] Language reference / spec
-- [ ] Tutorial ("Learn X in Y minutes" style)
-- [ ] Website + online playground (WASM build makes this easy)
-- [ ] Logo
-- [ ] CONTRIBUTING.md, code of conduct, issue templates
-- [ ] Versioning policy and first tagged release (`v0.1.0`)
+- [x] Cargo workspace and CI (build, test, format, lint)
+- [ ] Benchmark harness for compile time
+- [x] Keyword table, token kinds and spans (`compiler/src/{keyword,token,span}.rs`)
+- [ ] Source files and a diagnostics system (clear errors with line, column and a source snippet)
+- [x] **Lexer** (`compiler/src/lexer.rs`): about 214 MB/s, 59 M tokens/s in a release build on the first benchmark (`langc lex-bench`)
+- [ ] **Parser** (recursive descent with Pratt parsing for expressions) producing the AST
+- [ ] AST printer and a golden-file test suite (`.lang` input, expected output)
+- [ ] Parse every sample program
+
+**Milestone:** all samples parse, with good errors for bad input.
+
+## Phase 2: Meaning
+
+- [ ] Name resolution and modules
+- [ ] **Type checker** with local inference, structs, enums, generics and interfaces
+- [ ] **Value-semantics checker:** exclusivity of `inout` access, moves vs copies, `sink`
+- [ ] Pattern-match exhaustiveness
+- [ ] Generics via monomorphization
+- [ ] A first IR (SSA-based) and an IR printer
+
+**Milestone:** programs are type-checked and lowered to IR, and the checker rejects the unsafe examples.
+
+## Phase 3: Own backend
+
+- [ ] x86-64 instruction selection
+- [ ] Register allocation (linear scan first, because it is fast to compile)
+- [ ] Emit object files / ELF directly
+- [ ] Decide the linking story: system linker first, our own later
+- [ ] Minimal startup code and system-call layer, no libc dependency if possible
+- [ ] Hello world and FizzBuzz run as native binaries
+
+**Milestone:** the language produces real executables with no third-party backend.
+
+## Phase 4: A usable core library
+
+- [ ] Allocators, arrays, strings, hash maps, with no GC
+- [ ] File and console I/O
+- [ ] Compile-time evaluation
+- [ ] Enough language and library to write a compiler
+
+## Phase 5: Self-hosting
+
+- [ ] Rewrite the compiler in the language (stage 1), compiled by the Rust stage 0
+- [ ] Compile the compiler with itself (stage 2), then again (stage 3)
+- [ ] Stage 2 and stage 3 produce identical output, so we are self-hosting
+- [ ] Keep a pinned stage-0 seed so the chain can always be rebuilt
+
+## Phase 6: Beat the baselines
+
+- [ ] Optimizer that uses no-alias facts from value semantics (inlining, loop optimizations, vectorization)
+- [ ] Benchmarks against Rust and C, published and tracked
+- [ ] More targets: AArch64, then RISC-V
+- [ ] Compile-time profiling and speedups
+
+## Phase 7: Tooling and community
+
+- [ ] Formatter, language server, editor syntax highlighting
+- [ ] Package manager and build tool
+- [ ] Language reference, tutorial, website and playground
+- [ ] CONTRIBUTING.md, issue templates, first tagged release
 
 ---
+
+## Parked ideas
+
+- Using the language for an operating system kernel (freestanding mode)
+- Machine-learning-guided optimization heuristics
+- Automatic cache-friendly data layouts
+- More CPU targets (PowerPC, MIPS)
 
 ## Recommended reading
-- *Crafting Interpreters* — Robert Nystrom (free online; the best starting point)
-- *Writing an Interpreter in Go* / *Writing a Compiler in Go* — Thorsten Ball
-- *Engineering a Compiler* — Cooper & Torczon
-- *Types and Programming Languages* — Benjamin Pierce (for type-system depth)
+
+- *Crafting Interpreters*, Robert Nystrom (free online). Covers lexing, parsing and semantics even though it builds interpreters.
+- *Engineering a Compiler*, Cooper and Torczon, for IR, optimization and backends.
+- The Hylo language documents, the closest design to our safety model.
+- Zig's `comptime` documentation, for compile-time evaluation.
