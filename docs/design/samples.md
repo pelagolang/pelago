@@ -186,7 +186,7 @@ enum ParseError {
 fn parse_int(s: string) -> result<int, ParseError> {
     if s.is_empty() { return Err(ParseError.Empty) }
     var n = 0
-    for (i, ch) in s.chars().enumerate() {
+    for i, ch of s.chars() {
         if !ch.is_digit() { return Err(ParseError.BadDigit(at: i)) }
         n = n * 10 + ch.digit_value()
     }
