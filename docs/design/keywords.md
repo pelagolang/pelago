@@ -9,8 +9,13 @@ choice. Write renames in the last column.
 - Operators are **symbols only**, for token efficiency: `&&` `||` `!` `^` `%`. No `and`, `or`, `not`, `xor`, `mod`.
 - Access modes (`let`, `inout`, `sink`) apply **everywhere a name is bound**: parameters, loop variables, `switch` patterns, closure captures.
 - `ext` replaces `extern`. `priv` joins `pub`. `fn` is final.
-- `module` vs `pkg`, and a new name for `comptime`, are still open.
-- Inheritance is being reconsidered, see "Types and structure".
+- `mod` is a module (usually one file). `pkg` is reserved for bundles of modules.
+- `meta` is the compile-time keyword.
+- `class` is in from the start (its name may change, see the open list).
+- `++` and `--` are kept. The ternary `a ? b : c` is included.
+- `for x of items` iterates values, `for i in 0..10` counts or walks keys. See Loops.
+- No `null`, only `none`.
+- Documentation comments: `///` for a line, `///* ... *///` for many lines.
 
 ---
 
@@ -26,12 +31,13 @@ choice. Write renames in the last column.
 | `interface` | A list of functions a type promises to provide | Java, Go, TS | 2 | |
 | `impl` | States that a type provides an interface | Rust | 2 | |
 | `type` | Gives a new name to an existing type | TS, Go, Rust | 2 | |
-| `module` | A named group of declarations, usually one file (open: `mod`, `pkg`, `unit`) | Python, Rust (`mod`) | 2 | |
+| `mod` | A named group of declarations, usually one file | Rust | 2 | |
+| `pkg` | Reserved. A bundle of modules that is built and shared together | Java, Go, npm | 3 | |
 | `import` | Brings names from another module into scope | JS, Python, Java | 2 | |
 | `pub` | Visible outside its module | Rust | 2 | |
 | `priv` | Private to its module. This is the default, so writing it is optional | Swift (`private`) | 2 | |
 | `ext` | Declares something defined outside the language, for example a C function | C (`extern`) | 3 | |
-| *(name open)* | Runs code while the program is being compiled. Candidates: `bake`, `meta`, `pre`, `eval`, `build` | Zig (`comptime`) | 3 | |
+| `meta` | Runs code while the program is being compiled | Zig (`comptime`) | 3 | |
 
 ## Conditionals
 
@@ -47,12 +53,13 @@ choice. Write renames in the last column.
 
 | Form | Meaning | Seen in | Phase | Your rename |
 |---|---|---|---|---|
-| `for x in items { }` | Once for each item of a collection | Python, Rust, Swift | 1 | |
+| `for x of items { }` | Once for each value of a collection | JS (`for...of`) | 1 | |
+| `for k in map { }` | Once for each key or index of a collection | JS (`for...in`) | 1 | |
 | `for i in 0..10 { }` | Count from 0 up to but not including 10. `0..=10` includes 10 | Rust, Swift | 1 | |
 | `for i in 0..10 step 2 { }` | Count in jumps | Kotlin, BASIC | 2 | |
 | `for (var i = 0; i < n; i += 1) { }` | The three-part loop from C, Java and JS: setup; test; step | C, Java, JS, TS | 2 | |
-| `for i, x in items { }` | Index and item together | Python (`enumerate`) | 2 | |
-| `for inout x in items { }` | Change each item in place (access modes) | new | 2 | |
+| `for i, x of items { }` | Index and value together | Python (`enumerate`) | 2 | |
+| `for inout x of items { }` | Change each value in place (access modes) | new | 2 | |
 | `while cond { }` | Repeat while a condition is true | C, Python | 1 | |
 | `do { } while cond` | Run once, then repeat while true | C, Java, JS | 2 | |
 | `loop { }` | Repeat forever until `break` | Rust | 2 | |
@@ -64,11 +71,11 @@ choice. Write renames in the last column.
 | `repeat ... until` | Loop that tests at the end, in a Pascal spelling | Pascal, Lua | - | Leave out: `do ... while` covers it |
 | `return` | Leave the function now, optionally giving back a value | Fortran, C | 1 | |
 
-Why `for x in items` is the main form: no index to get wrong (no off-by-one),
-fewer tokens, and it works with access modes. `for (i = 0; i < n; i++)` is
-here too, because TS/JS programmers expect it and it can step in odd ways.
-(JS also has `for...in` and `for...of`, and its `for...in` means something
-different. Ours means "each item", like Python.)
+`of` and `in` split the way JS intended: `of` gives values, `in` gives keys,
+indexes or a counting range. Ours are typed, with none of JS's `for...in`
+surprises (string keys, inherited properties). `for x of items` has no index to
+get wrong and works with access modes. The three-part `for` is here too,
+because TS/JS programmers expect it and it can step in odd ways.
 
 ## Values, literals and names
 
@@ -92,7 +99,8 @@ different. Ours means "each item", like Python.)
 | `super` | The parent type's version, if inheritance is added | Java, Python | 3 | |
 | `// ...` | A comment to the end of the line | C++, Java | 1 | |
 | `/* ... */` | A comment over many lines | C | 1 | |
-| `/// ...` | A documentation comment | Rust | 2 | |
+| `/// ...` | A documentation comment for one line | Rust | 2 | |
+| `///* ... *///` | A documentation comment over many lines | new | 2 | |
 
 ## Operators and symbols (symbols only, no word forms)
 
@@ -105,7 +113,7 @@ different. Ours means "each item", like Python.)
 | `&&` `\|\|` `!` | Logical and, or, not | 1 |
 | `&` `\|` `^` `~` `<<` `>>` | Bitwise and, or, xor, not, shift left, shift right. `^` is also xor on booleans | 2 |
 | `=` `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | Assign, and assign after a calculation | 1 |
-| `++` `--` | Add or subtract one. Open: Rust, Python and Swift dropped them | 2 |
+| `++` `--` | Add or subtract one. Kept. Open: usable inside bigger expressions, or as statements only | 2 |
 | `..` `..=` | Range, end excluded / included | 1 |
 | `.` | Reach inside a value or call a method | 1 |
 | `?` | If this is an error or `none`, return it from the function now | 2 |
@@ -113,7 +121,7 @@ different. Ours means "each item", like Python.)
 | `->` | Return type of a function | 1 |
 | `to` | Convert: `x to float`. A word, because the symbol was taken | 1 |
 | `#` | Value marker inside strings | 1 |
-| `a ? b : c` | Ternary. Not included: `if` already gives a value | - |
+| `a ? b : c` | Ternary: pick one of two values. Included, and shorter than `if` in tokens. Open: it shares `?` with error propagation | 2 |
 
 ## Access modes (the new part)
 
@@ -127,20 +135,22 @@ different. Ours means "each item", like Python.)
 
 ## Types and structure
 
-**Inheritance is being reconsidered** (see the chat, and the open list at the end).
-The `Decision` column reflects what you said, where it depends on inheritance.
+**Inheritance is in, as a `class` kind** next to `struct`. The plan: instances live on the heap
+and have one owner (moved, never silently shared), single inheritance, any number of
+interfaces, and a class can only be extended if marked `open`.
 
 | Word | Meaning | Seen in | Decision | Why |
 |---|---|---|---|---|
-| `class` | A reference-like type with inheritance. A staged, opt-in feature | Java, C++, Python, TS | Reserved, decide path | Keeps `struct` simple; adds a second kind of type |
+| `class` | A heap-allocated, singly-owned type with inheritance. Name may change | Java, C++, Python, TS | Include | `struct` stays the simple value type |
+| `open` | This class may be extended, or this method overridden | Kotlin, Swift | Include | Closed by default |
 | `interface` | Promise of functions | Java, Go, TS | Keep | `trait` and `protocol` are other names for the same thing; not needed |
-| `extends` | Class builds on another class (open: `from`, `inherit`, `:`) | Java, TS, JS | Reserved with `class` | Inheritance |
+| `extends` | Class builds on another class (open: `from`, `inherit`, `:`) | Java, TS, JS | Include | Inheritance |
 | `implements` | A class promises an interface | Java, TS | Leave out | `impl` does this |
-| `abstract` `virtual` `override` `final` `sealed` | Inheritance machinery | Java, C++, C# | Reserved with `class` | Inheritance |
+| `abstract` `override` `final` | Inheritance machinery. `virtual` is not needed, `open` replaces it | Java, C++, C# | Include | Inheritance |
 | `union` | One memory slot holding one of several layouts | C | Include | C interop and low-level work; `enum` covers the safe case |
 | `export` / `from` / `use` | Other spellings of `pub` and `import` | JS, Python, Rust | Include | |
 | `static` | A value that lives for the whole program, or belongs to a type | C, Java | Include | Sort the awkward cases later |
-| `public` `private` `protected` | Visibility. We write `pub` and `priv`; `protected` only matters with inheritance | Java, C++ | `protected` reserved | Short forms in use |
+| `public` `private` `protected` | Visibility. We write `pub` and `priv`; subclass-only visibility needs a short word too (`prot`?) | Java, C++ | Include | Needed with inheritance |
 | `macro` | Code that writes code | Rust, C | Maybe | Overlaps with the compile-time word; keep only one |
 | `operator` | Define how `+`, `==` and so on work for your type | C++, Swift | Include | |
 | `init` | Runs when a value is first created: checks, defaults, computed fields | Swift, Zig | Include | See chat |
@@ -222,6 +232,7 @@ Decided: lowercase, and sized integers from 8 to 64 bits. `int` is always 64 bit
 | `[T]` | A growable list of `T` | 2 |
 | `[T; N]` | A fixed-size array of exactly `N` items of `T` | 2 |
 | `(A, B)` | A tuple | 2 |
+| `(A, B; N)` | Your fixed-size tuple primitive. Meaning to confirm, see chat | 3 |
 | `map<K, V>` | Key to value lookup | 2 |
 | `set<T>` | A collection of unique items | 2 |
 | `range` | What `0..10` is | 2 |
@@ -238,9 +249,10 @@ Decided: lowercase, and sized integers from 8 to 64 bits. `int` is always 64 bit
 
 ## Still open
 
-1. **A new name for the compile-time keyword.** `bake`, `meta`, `pre`, `eval`, `build`.
-2. **`module`, `mod`, `pkg`, `unit`?** `pkg` fits best as the name for a distributable bundle of modules, later.
-3. **Inheritance path:** staged (interfaces with default methods and composition now, `class` later) or `class` from the start.
-4. **The inheritance keyword:** `extends`, `inherit`, `from`, `:`.
-5. **The three-part `for`** is in, and so is `++` and `--` (open).
-6. **Is `null` meant to exist at all,** or only `none`?
+1. **The name `class`.** Candidates: `obj`, `kind`, `proto`, or keep `class`.
+2. **The inherit keyword:** `extends`, `inherit`, `from`, `:`.
+3. **`for x of` vs `for x in`:** confirm the JS-style split.
+4. **The ternary and error-propagation `?`.** How to tell `a ? b : c` from `parse(s)?`.
+5. **`++` and `--`:** allowed inside expressions, or statements only?
+6. **`(A, B; N)`:** which of the three meanings.
+7. **Samples:** `match` in `samples.md` becomes `switch` and `case`, arm syntax to design.

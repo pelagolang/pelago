@@ -3,7 +3,8 @@
 Decided since the first draft: `const`/`var` (not `let`), lowercase type names,
 `fn`, newlines with no semicolons, `inout` repeated at the call site, explicit
 `copy`, and `<T>` generics. Closure syntax is still open and will be revisited
-after the basics.
+after the basics. `match` below will become `switch` and `case` (arm syntax to
+design), and `for x of items` iterates values.
 
 Nothing here is final. These are written in the syntax we *wish* existed, so we
 can react to it. Where a choice is arguable it is marked **[Q1]**, **[Q2]** and
@@ -133,7 +134,7 @@ fn print_area<S: Shape>(s: S) {
 // Dynamic dispatch (opt-in): one function for mixed shapes.
 fn total_area(shapes: [any Shape]) -> float {
     var sum = 0.0
-    for s in shapes { sum += s.area() }
+    for s of shapes { sum += s.area() }
     sum
 }
 ```
@@ -143,7 +144,7 @@ fn total_area(shapes: [any Shape]) -> float {
 ```
 fn sum(xs: [int]) -> int {              // read-only access, nothing copied
     var total = 0
-    for x in xs { total += x }
+    for x of xs { total += x }
     total
 }
 
@@ -283,7 +284,7 @@ than pointer-chasing trees, so we lose nothing.
 - B. `[T]` (Go, Scala) frees up `<` and `>` as plain comparison operators and makes parsing simpler.
 
 **[Q7] Keywords**
-- `fn`, `const`, `var`, `struct`, `enum`, `interface`, `impl`, `match`, `for`, `in`, `if`, `else`, `return` are used above. Any you would rename? (`func`, `function`, `trait`, `protocol`, `switch`?)
+- `fn`, `const`, `var`, `struct`, `enum`, `interface`, `impl`, `match`, `for`, `in`, `of`, `if`, `else`, `return` are used above. Any you would rename? (`func`, `function`, `trait`, `protocol`, `switch`?)
 
 **[Q8] Method calls and `self`**
 - Methods live inside `struct` blocks (used above) vs in separate `impl` blocks as in Rust.

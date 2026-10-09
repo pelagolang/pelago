@@ -22,7 +22,11 @@ A serious, self-hosting systems language:
 | Memory safety | Value semantics (read-only by default, plus `inout` / `sink` access modes; second-class references) | decided, pending the paper test below |
 | Backend | One backend, our own, from day one | decided |
 | Bootstrap | Stage 0 compiler in Rust, then rewritten in the language itself | decided |
-| OO | Structs, methods, interfaces, composition now. Opt-in single inheritance via `class` is wanted, path pending | pending |
+| OO | Structs and interfaces, plus a `class` kind with single inheritance from the start (heap-allocated, singly owned, closed unless `open`). First feature to cut if compile speed or the safety model suffers | decided |
+| Compile-time code | `meta` | decided |
+| Modules | `mod` for modules, `pkg` reserved for bundles | decided |
+| Null | None. Absence is `none` in `option<T>` | decided |
+| Ternary and `++`/`--` | Included | decided |
 | Operators | Symbols only (`&&` `\|\|` `!` `^` `%`), no word forms | decided |
 | Access modes | `let` / `inout` / `sink` apply everywhere a name is bound | decided |
 | Visibility | `pub` and `priv`; private is the default | decided |
