@@ -168,6 +168,12 @@ impl Token {
     pub const fn new(kind: TokenKind, span: Span) -> Token {
         Token { kind, span }
     }
+
+    /// The source text of the token.
+    pub fn text<'a>(&self, src: &'a str) -> &'a str {
+        src.get(self.span.start as usize..self.span.end as usize)
+            .unwrap_or("")
+    }
 }
 
 #[cfg(test)]

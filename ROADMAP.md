@@ -95,7 +95,7 @@ No compiler code yet. Everything here is cheap to change.
 - [ ] Benchmark harness for compile time
 - [x] Keyword table, token kinds and spans (`compiler/src/{keyword,token,span}.rs`)
 - [ ] Source files and a diagnostics system (clear errors with line, column and a source snippet)
-- [ ] **Lexer**
+- [x] **Lexer** (`compiler/src/lexer.rs`): about 214 MB/s, 59 M tokens/s in a release build on the first benchmark (`langc lex-bench`)
 - [ ] **Parser** (recursive descent with Pratt parsing for expressions) producing the AST
 - [ ] AST printer and a golden-file test suite (`.lang` input, expected output)
 - [ ] Parse every sample program

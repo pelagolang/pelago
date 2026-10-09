@@ -1,0 +1,148 @@
+/// A tour of the syntax decided so far. Not a program anyone can run yet:
+/// it exists so the lexer (and later the parser) has something real to read.
+
+///* Documentation can also
+    span many lines. *///
+
+mod tour
+
+import std
+
+// ---- Variables and types --------------------------------------------------
+const name = "Dennis"
+var score: int = 10
+score += 5
+score++
+
+const big = 1_000_000
+const mask = 0xFF
+const bits = 0b1010
+const ratio = 3.14
+const tiny = 1e-3
+const letter = 'a'
+const tab = '\t'
+
+print("Score: #score, next: #(score + 1), name: #(name), hash: \#")
+const whole = 7
+const decimal = whole to float
+
+// ---- Functions --------------------------------------------------------------
+fn add(a: int, b: int) -> int {
+    a + b
+}
+
+fn double(x: int) -> int = x * 2
+
+fn greet(name: string, greeting: string = "Hello") {
+    print("#greeting, #name")
+}
+
+greet("Dennis", greeting: "Hi")
+
+fn sum(...nums: int) -> int {
+    var total = 0
+    for n of nums { total += n }
+    total
+}
+
+sum(...[1, 2, 3])
+
+fn clear(inout xs: [int]) { xs.clear!() }
+fn finish(sink xs: [int]) -> int = xs.len()
+
+clear(inout scores)
+finish(sink scores)
+
+fn sum_to(n: int, acc: int = 0) -> int {
+    if n == 0 { return acc }
+    become sum_to(n - 1, acc + n)
+}
+
+fn parse_int(s: string) -> int ! parse_error {
+    const n = digits(s)?
+    ok(n)
+}
+
+fn find(xs: [string], name: string) -> int? { none }
+const index = find(names, "Dennis") ?? -1
+
+@inline fn square(x: int) -> int = x * x
+
+meta fn build_table() -> [int; 256] { table }
+const table = meta build_table()
+
+fn max<T: ordered>(a: T, b: T) -> T {
+    a > b ? a : b
+}
+
+// ---- Control flow -------------------------------------------------------------
+const grade = {score > 90 ? "A" : score > 80 ? "B" : "C"}
+
+for i in 0..=10 {
+    if i % 2 == 0 { continue }
+    unless i < 5 { break }
+}
+
+for (var i = 0; i < 10; i += 1) { }
+for i, x of items { print("#i: #x") }
+for inout x of items { x++ }
+
+while score > 0 { score-- }
+do { score++ } while score < 3
+loop { break }
+
+switch shape {
+    case circle(let r): PI * r * r
+    default: 0.0
+}
+
+if 0 < x && x < 10 || !done { }
+const inside = x in 1..10
+const mixed = a & b | c ^ d << 2 >> 1
+
+// ---- Types -----------------------------------------------------------------------
+struct point {
+    x: float
+    y: float
+
+    fn length(self) -> float = sqrt(self.x * self.x + self.y * self.y)
+    fn shift(inout self, dx: float, dy: float) { self.x += dx; self.y += dy }
+}
+
+var p = point { x: 3.0, y: 4.0 }
+p.shift!(1.0, 1.0)
+const n = c.close!!()
+
+enum shape {
+    circle(radius: float)
+    rect(w: float, h: float)
+    empty
+}
+
+interface shape_like {
+    fn area(self) -> float
+}
+
+struct circle : shape_like { radius: float }
+impl shape_like for rect { }
+
+open obj animal {
+    name: string
+    init(name: string) { self.name = name }
+    open fn speak(self) -> string = "..."
+}
+
+obj dog : animal {
+    override fn speak(self) -> string = "Woof"
+}
+
+struct stack<T> { items: [T] }
+const lookup: map<string, [int]> = map { "a": [1, 2], "b": [] }
+const empty = {:}
+
+// ---- Closures ---------------------------------------------------------------------
+const doubled = numbers.map(x ~> x * 2)
+const tripled = numbers.map(~> it * 3)
+numbers.each([inout total] x ~> total += x)
+const cleaned = raw |> trim |> parse
+const user_name = user?.name ?? "anonymous"

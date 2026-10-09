@@ -4,5 +4,6 @@
 //! compile speed should start with a compiler that builds fast.
 
 pub mod keyword;
+pub mod lexer;
 pub mod span;
 pub mod token;
