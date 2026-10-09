@@ -79,12 +79,38 @@ framework) is close in sound. Use Astra only as inspiration, not as the name.
 | **Meridian** | The highest point of the sky's arc. |
 | **Zenith** | The point straight overhead. Probably used by projects already. |
 | **Sextant** / **Astrolabe** | Navigation instruments: "tools for finding your way". |
-| **Corvus**, **Lyra**, **Vega**, **Rigel**, **Deneb** | Constellation and star names. Short and pretty, but check each one; several are popular project names. |
+| ~~Corvus, Lyra, Vega, Rigel, Deneb~~ | Too crowded: all are common project names. |
 | **Perihelion** | Closest approach to the sun. Long, but memorable. |
 
 ### Probably taken or crowded (skip)
 Nova, Orion, Nebula, Pulsar (Apache), Aurora (AWS), Polaris (Shopify), Kepler,
 Halo, Comet, Quasar.
+
+## Round 3: relatives of the favourites
+
+The favourites that were taken (Kite, Flint, Arc, Sol, Tala) share a style: one or
+two syllables, 3 to 5 letters, and a natural image of flight, fire, light or rhythm.
+These names follow the same pattern. Quick web check, October 2026: ✅ means no
+programming language found, ⚠️ means a clash or something to watch.
+
+| Inspired by | Name | Meaning | Check |
+|-------------|------|---------|-------|
+| Sol | **Inti** | Inca sun god | ✅ None found. ⭐ |
+| Sol | **Sunna** | Norse sun goddess | Not checked |
+| Sol | **Helio** | Greek "sun" | Not checked |
+| Kite | **Aloft** | Up in the air | ⚠️ A 1971 NASA test language, long dead. Effectively free. ⭐ |
+| Kite | **Updraft** | Rising air that lifts a kite | Not checked |
+| Kite | **Tether** | The kite's string | Not checked |
+| Kite | ~~Tern~~ | A seabird | ❌ At least two languages already use it. |
+| Kite | ~~Wren~~, ~~Lark~~, ~~Swift~~, ~~Kestrel~~ | Birds | ❌ Wren and Swift are languages, Lark is a parser, Kestrel is the ASP.NET server. |
+| Flint | **Chert** | The rock flint is a kind of | ⚠️ No language, but an AI-agent product uses the name. |
+| Flint | **Pyrite** | "Fire stone" | Not checked |
+| Flint | **Agate** | Hard, banded stone | Not checked |
+| Flint | ~~Spark~~, ~~Kindle~~, ~~Cinder~~, ~~Quartz~~ | Fire and stone | ❌ Apache Spark, Amazon Kindle, Cinder (C++ library and Python fork), Quartz scheduler. |
+| Arc | **Arca** / **Arcus** | Latin "arch" / "bow" | Not checked |
+| Arc | **Span** | The width of an arch | Not checked (hard to search) |
+| Tala | **Tali** / **Taal** | Close to Tala; *taal* is Hindi for "rhythm" | Not checked |
+| Tala | **Metre** | Rhythm in poetry | Not checked |
 
 ## Picking criteria
 - [ ] Sounds good said out loud ("I wrote it in ___")
