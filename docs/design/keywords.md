@@ -19,7 +19,7 @@ choice. Write renames in the last column.
 - `for x of items` iterates values, `for i in 0..10` counts or walks keys. See Loops.
 - No `null`, only `none`.
 - Maps are written `map { "a": 1 }`, with `{:}` as a shorthand for the empty map (`map {}` also works).
-- Closures use `~>`: `x ~> x * 2`, and `~> it * 2` with the implicit parameter.
+- Closures use `~>`: `x ~> x * 2`, and `~> it * 2` with the implicit parameter. A capture list in brackets sets access modes: `[inout total] x ~> total += x`. A bare `{ "a": 1 }` is not a map.
 - `struct` and `enum` list their interfaces with `:` too, like `obj`.
 - Documentation comments: `///` for a line, `///* ... *///` for many lines.
 
@@ -278,5 +278,5 @@ accepted. The closure-related ones wait for the closure design.
 
 ## Still open
 
-1. **Closure details.** Proposal: parameters before `~>` (`(a, b) ~> a + b`, parentheses optional for one parameter), a block body for several statements (`x ~> { ... }`), and a capture list in brackets in front for access modes (`[inout total] x ~> total += x`). By default a closure copies or moves what it uses.
-2. **Should a bare `{ "a": 1 }` also be a map?** It is parseable, but fragile next to labels and ternaries. I recommend no: `map` stays required except for `{:}`.
+Nothing in the keyword table right now. Design questions about functions are in
+`functions.md`.
