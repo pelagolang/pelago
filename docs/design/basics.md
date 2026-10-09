@@ -123,19 +123,21 @@ what the language *does*. Everything here is a deliberate choice, not a copy.
 - **One `switch`/`case` that is also pattern matching.**
 - **Token efficiency as a design goal**, measured against real tokenizers.
 
-## Questions for you
+## Decisions from draft 2
 
-**[B1] Naming style.** Options:
-- A. The language lets you use any style. The standard library and formatter pick one.
-- B. The compiler enforces one style (as an error).
-- C. The language treats `my_score` and `myScore` as the same name (Nim does this).
-  Every library works in your favourite style, but you can't have both names at once
-  and searching the code gets harder.
+- **[B1]** The compiler accepts any naming style. The standard library and formatter pick one.
+- **[B2]** `int` is always exactly 64 bits.
+- **[B3]** Type names are lowercase. (Open: your own types too?)
+- **[B4]** Conversions are written `x to float`.
 
-**[B2] Size of `int`.** Always 64 bits, or 32 bits by default? Pros and cons are in the chat.
+## Still open
 
-**[B3] Your own types.** Lowercase (`point`) or capitalized (`Point`)?
+**[B5] Strings with values inside.** The always-on `"Score: {score}"` proposal felt
+lacking. What is missing? Candidates:
+- Control over how a value is shown (decimal places, width, padding, hex)
+- Multi-line strings
+- Raw strings where nothing is special (paths, regular expressions)
+- Something more distinctive than a brace pair
+- Something else
 
-**[B4] Conversions.** Is `x to float` the right feel, or something else?
-
-**[B5] Strings.** Is always-on `"Score: {score}"` the right feel?
+**[B6] Your own types.** Lowercase (`point`) or capitalized (`Point`)?

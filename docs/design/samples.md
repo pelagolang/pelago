@@ -1,4 +1,9 @@
-# Sample programs (draft 1)
+# Sample programs (draft 1, updated for decisions)
+
+Decided since the first draft: `const`/`var` (not `let`), lowercase type names,
+`fn`, newlines with no semicolons, `inout` repeated at the call site, explicit
+`copy`, and `<T>` generics. Closure syntax is still open and will be revisited
+after the basics.
 
 Nothing here is final. These are written in the syntax we *wish* existed, so we
 can react to it. Where a choice is arguable it is marked **[Q1]**, **[Q2]** and
@@ -6,9 +11,9 @@ so on, and the alternatives are listed at the bottom.
 
 Defaults used throughout:
 
-- `fn` declares functions, `let` is immutable, `var` is mutable.
+- `fn` declares functions, `const` is immutable, `var` is mutable.
 - Newlines end statements; no semicolons needed. **[Q1]**
-- Types follow the name: `x: Int`. **[Q2]**
+- Types follow the name: `x: int`.
 - Parameters are read-only by default. `inout` means exclusive mutable access for the call. `sink` takes the value away from the caller.
 - `if` and `match` are expressions.
 - Files use the placeholder extension `.lang`.
@@ -42,14 +47,14 @@ fn main() {
 
 ```
 struct Point {
-    x: Float
-    y: Float
+    x: float
+    y: float
 
-    fn length(self) -> Float {
+    fn length(self) -> float {
         sqrt(self.x * self.x + self.y * self.y)
     }
 
-    fn translate(inout self, dx: Float, dy: Float) {
+    fn translate(inout self, dx: float, dy: float) {
         self.x += dx
         self.y += dy
     }
@@ -66,11 +71,11 @@ fn main() {
 
 ```
 enum Shape {
-    Circle(radius: Float)
-    Rect(w: Float, h: Float)
+    Circle(radius: float)
+    Rect(w: float, h: float)
 }
 
-fn area(s: Shape) -> Float {
+fn area(s: Shape) -> float {
     match s {
         Circle(r)  => PI * r * r
         Rect(w, h) => w * h
@@ -89,35 +94,35 @@ fn max<T: Ordered>(a: T, b: T) -> T {
 ## 6. Closures and functional style
 
 ```
-fn apply_twice(f: fn(Int) -> Int, x: Int) -> Int {
+fn apply_twice(f: fn(int) -> int, x: int) -> int {
     f(f(x))
 }
 
 fn main() {
-    let numbers = [1, 2, 3, 4]
-    let doubled = numbers.map(|x| x * 2)     // [2, 4, 6, 8]
+    const numbers = [1, 2, 3, 4]
+    const doubled = numbers.map(|x| x * 2)     // [2, 4, 6, 8]
     print(apply_twice(|x| x + 3, 10))        // 16
 }
 ```
 
 Closures capture by value (copy or move), never by reference. **[Q4]**
 
-## 7. Interfaces: the OO style, no inheritance
+## 7. interfaces: the OO style, no inheritance
 
 ```
 interface Shape {
-    fn area(self) -> Float
+    fn area(self) -> float
 }
 
-struct Circle { radius: Float }
-struct Square { side: Float }
+struct Circle { radius: float }
+struct Square { side: float }
 
 impl Shape for Circle {
-    fn area(self) -> Float { PI * self.radius * self.radius }
+    fn area(self) -> float { PI * self.radius * self.radius }
 }
 
 impl Shape for Square {
-    fn area(self) -> Float { self.side * self.side }
+    fn area(self) -> float { self.side * self.side }
 }
 
 // Static dispatch (default): compiled once per type, no runtime cost.
@@ -126,7 +131,7 @@ fn print_area<S: Shape>(s: S) {
 }
 
 // Dynamic dispatch (opt-in): one function for mixed shapes.
-fn total_area(shapes: [any Shape]) -> Float {
+fn total_area(shapes: [any Shape]) -> float {
     var sum = 0.0
     for s in shapes { sum += s.area() }
     sum
@@ -136,24 +141,24 @@ fn total_area(shapes: [any Shape]) -> Float {
 ## 8. Value semantics in action
 
 ```
-fn sum(xs: [Int]) -> Int {              // read-only access, nothing copied
+fn sum(xs: [int]) -> int {              // read-only access, nothing copied
     var total = 0
     for x in xs { total += x }
     total
 }
 
-fn push_zero(inout xs: [Int]) {         // exclusive mutable access
+fn push_zero(inout xs: [int]) {         // exclusive mutable access
     xs.push(0)
 }
 
-fn consume(sink xs: [Int]) -> Int {     // caller gives the array away
+fn consume(sink xs: [int]) -> int {     // caller gives the array away
     xs.len()
 }
 
 fn main() {
     var a = [1, 2, 3]
     push_zero(inout a)                  // call site repeats `inout`  **[Q3]**
-    let b = copy a                      // b is an independent array  **[Q5]**
+    const b = copy a                      // b is an independent array  **[Q5]**
     a.push(9)
     print(b)                            // [1, 2, 3, 0]
     print(sum(a))                       // 15
@@ -165,7 +170,7 @@ Two things the compiler rejects:
 
 ```
 push_zero(inout a, inout a)             // error: two exclusive accesses to `a` at once
-let c = a                               // allowed only if `a` is never used again (a move)
+const c = a                               // allowed only if `a` is never used again (a move)
 a.push(1)                               // error: `a` was moved to `c`
 ```
 
@@ -174,10 +179,10 @@ a.push(1)                               // error: `a` was moved to `c`
 ```
 enum ParseError {
     Empty
-    BadDigit(at: Int)
+    BadDigit(at: int)
 }
 
-fn parse_int(s: String) -> Result<Int, ParseError> {
+fn parse_int(s: string) -> result<int, ParseError> {
     if s.is_empty() { return Err(ParseError.Empty) }
     var n = 0
     for (i, ch) in s.chars().enumerate() {
@@ -187,8 +192,8 @@ fn parse_int(s: String) -> Result<Int, ParseError> {
     Ok(n)
 }
 
-fn double_input(s: String) -> Result<Int, ParseError> {
-    let n = parse_int(s)?                 // `?` returns early on Err
+fn double_input(s: string) -> result<int, ParseError> {
+    const n = parse_int(s)?                 // `?` returns early on Err
     Ok(n * 2)
 }
 ```
@@ -199,12 +204,12 @@ Value semantics forbids storing references in structs, so a syntax tree uses an
 arena and integer ids instead of pointers between nodes.
 
 ```
-struct ExprId { index: Int }
+struct ExprId { index: int }
 
 enum Op { Add, Sub, Mul }
 
 enum Expr {
-    Num(value: Int)
+    Num(value: int)
     Binary(op: Op, lhs: ExprId, rhs: ExprId)
 }
 
@@ -216,12 +221,12 @@ struct Ast {
         ExprId { index: self.exprs.len() - 1 }
     }
 
-    fn eval(self, id: ExprId) -> Int {
+    fn eval(self, id: ExprId) -> int {
         match self.exprs[id.index] {
             Num(v) => v
             Binary(op, l, r) => {
-                let a = self.eval(l)
-                let b = self.eval(r)
+                const a = self.eval(l)
+                const b = self.eval(r)
                 match op {
                     Add => a + b
                     Sub => a - b
@@ -234,9 +239,9 @@ struct Ast {
 
 fn main() {
     var ast = Ast { exprs: [] }
-    let two   = ast.add(Expr.Num(2))
-    let three = ast.add(Expr.Num(3))
-    let sum   = ast.add(Expr.Binary(Op.Add, two, three))
+    const two   = ast.add(Expr.Num(2))
+    const three = ast.add(Expr.Num(3))
+    const sum   = ast.add(Expr.Binary(Op.Add, two, three))
     print(ast.eval(sum))                  // 5
 }
 ```
@@ -254,9 +259,9 @@ than pointer-chasing trees, so we lose nothing.
 - C. Semicolons optional, like JS (known to cause edge-case bugs)
 
 **[Q2] Type annotations**
-- A. `x: Int` (TS and Rust, used above)
-- B. `Int x` (C style)
-- C. `x Int` (Go style, shortest in tokens)
+- A. `x: int` (TS and Rust, used above)
+- B. `int x` (C style)
+- C. `x int` (Go style, shortest in tokens)
 
 **[Q3] Marking `inout` at the call site**
 - A. Repeat it: `push_zero(inout a)`. Mutation is visible at a glance, which helps readers and AI.
@@ -270,7 +275,7 @@ than pointer-chasing trees, so we lose nothing.
 - Capture: by value only (used above). To let a closure change outer state, you pass `inout` explicitly or use a returned value.
 
 **[Q5] Copying big values**
-- A. Explicit `copy a` for anything that owns heap memory (used above). Costs are visible. Small types like `Int` and `Point` copy implicitly.
+- A. Explicit `copy a` for anything that owns heap memory (used above). Costs are visible. Small types like `int` and `Point` copy implicitly.
 - B. Implicit copies everywhere, with the compiler turning them into moves when it can. Fewer tokens, but silent expensive copies.
 
 **[Q6] Generics**
@@ -278,7 +283,7 @@ than pointer-chasing trees, so we lose nothing.
 - B. `[T]` (Go, Scala) frees up `<` and `>` as plain comparison operators and makes parsing simpler.
 
 **[Q7] Keywords**
-- `fn`, `let`, `var`, `struct`, `enum`, `interface`, `impl`, `match`, `for`, `in`, `if`, `else`, `return` are used above. Any you would rename? (`func`, `function`, `trait`, `protocol`, `switch`?)
+- `fn`, `const`, `var`, `struct`, `enum`, `interface`, `impl`, `match`, `for`, `in`, `if`, `else`, `return` are used above. Any you would rename? (`func`, `function`, `trait`, `protocol`, `switch`?)
 
 **[Q8] Method calls and `self`**
 - Methods live inside `struct` blocks (used above) vs in separate `impl` blocks as in Rust.

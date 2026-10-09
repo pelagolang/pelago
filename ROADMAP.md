@@ -19,7 +19,7 @@ A serious, self-hosting systems language:
 | Execution | Ahead-of-time compiled, no GC, no runtime | decided |
 | Typing | Static, with local type inference | decided |
 | Syntax family | Braces, TS/Rust-like, no significant indentation | decided |
-| Memory safety | Value semantics (`let` / `inout` / `sink` access modes, second-class references) | decided, pending the paper test below |
+| Memory safety | Value semantics (read-only by default, plus `inout` / `sink` access modes; second-class references) | decided, pending the paper test below |
 | Backend | One backend, our own, from day one | decided |
 | Bootstrap | Stage 0 compiler in Rust, then rewritten in the language itself | decided |
 | OO | Structs, methods, interfaces, composition. No implementation inheritance | decided |
@@ -27,6 +27,9 @@ A serious, self-hosting systems language:
 | Functions | `fn` (chosen because `fnc` splits into two tokens in most tokenizers) | decided |
 | Variables | `var` (changeable) and `const` (truly immutable) | decided |
 | Types | Lowercase names; sized ints `int8` to `int64`, `uint8` to `uint64` | decided |
+| Naming | The compiler accepts any identifier style; the standard library and formatter pick one | decided |
+| `int` | Always exactly 64 bits; sized types for dense data | decided |
+| Conversions | Written `x to float`, allowed only when nothing can be lost; lossy ones get a different spelling | decided in principle |
 | Generics | `<T>` | decided |
 | Statements | Newlines end statements, no semicolons | decided |
 | Call sites | `inout` repeated at the call site; `copy` explicit for owning types | decided |
@@ -54,7 +57,7 @@ No compiler code yet. Everything here is cheap to change.
 - [ ] **Settle the open syntax questions** listed at the bottom of that file
 - [ ] **Informal grammar.** Extract keywords, operators and constructs from the samples into a short EBNF
 - [ ] **Semantics notes.** One short page each, in `docs/design/`:
-  - [ ] Value semantics: copy vs move, `let` / `inout` / `sink`, what a reference may and may not do
+  - [ ] Value semantics: copy vs move, read-only / `inout` / `sink`, what a reference may and may not do
   - [ ] Closures: what they capture and how they are owned
   - [ ] Generics and interfaces: static dispatch by default, dynamic dispatch opt-in
   - [ ] Error handling (`Result` plus `?`, or an alternative)
