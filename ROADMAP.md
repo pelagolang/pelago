@@ -24,6 +24,12 @@ A serious, self-hosting systems language:
 | Bootstrap | Stage 0 compiler in Rust, then rewritten in the language itself | decided |
 | OO | Structs, methods, interfaces, composition. No implementation inheritance | decided |
 | Functional | Closures, enums with pattern matching, higher-order functions | decided |
+| Functions | `fn` (chosen because `fnc` splits into two tokens in most tokenizers) | decided |
+| Variables | `var` (changeable) and `const` (truly immutable) | decided |
+| Types | Lowercase names; sized ints `int8` to `int64`, `uint8` to `uint64` | decided |
+| Generics | `<T>` | decided |
+| Statements | Newlines end statements, no semicolons | decided |
+| Call sites | `inout` repeated at the call site; `copy` explicit for owning types | decided |
 | Kernel / OS use | Parked for now | parked |
 | Name | Undecided | open |
 

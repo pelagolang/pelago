@@ -73,19 +73,104 @@ Every word the language might reserve, what it means, and where it comes from.
 
 ## Type names (not keywords, but reserved in the standard library)
 
-| Working | Meaning | Phase |
+Decided: type names are lowercase, and sized integers run from 8 to 64 bits.
+
+| Name | Meaning | Phase |
 |---|---|---|
-| `Int` | Whole number, signed, the size of a machine word (64 bits on a 64-bit CPU) | 1 |
-| `Int8` `Int16` `Int32` `Int64` | Signed whole numbers of an exact size | 2 |
-| `UInt` `UInt8` ... `UInt64` | Unsigned whole numbers (zero and up) | 2 |
-| `Float` | Decimal number, 64-bit | 1 |
-| `Float32` `Float64` | Decimal numbers of an exact size | 2 |
-| `Bool` | `true` or `false` | 1 |
-| `Char` | One character | 1 |
-| `String` | Text | 1 |
+| `int` | Whole number, signed. Size still being decided (see basics.md, B2) | 1 |
+| `int8` `int16` `int32` `int64` | Signed whole numbers of an exact size | 2 |
+| `uint` `uint8` `uint16` `uint32` `uint64` | Unsigned whole numbers (zero and up) | 2 |
+| `float` | Decimal number, 64-bit | 1 |
+| `float32` `float64` | Decimal numbers of an exact size | 2 |
+| `bool` | `true` or `false` | 1 |
+| `char` | One character | 1 |
+| `string` | Text | 1 |
 | `[T]` | A growable list of `T` | 2 |
-| `Option<T>` | Either a `T` or `none` | 2 |
-| `Result<T, E>` | Either a success `T` or an error `E` | 2 |
+| `option<T>` | Either a `T` or `none` | 2 |
+| `result<T, E>` | Either a success `T` or an error `E` | 2 |
+
+Open: do types you define yourself also start lowercase, or with a capital
+(like Python, where built-ins are lowercase and your own classes are `CapWords`)?
+
+## More candidates
+
+Everything else I can think of, including the words we are deliberately *not*
+taking. **Lean:** Include / Maybe / Leave out.
+
+### Types and structure
+
+| Word | Meaning | Seen in | Lean | Why |
+|---|---|---|---|---|
+| `class` | Blueprint for objects, with inheritance and shared references | Java, C++, Python, TS | Leave out | `struct` plus interfaces covers it without inheritance or sharing |
+| `trait` / `protocol` | Other names for `interface` | Rust / Swift | Rename option | Pick one name for the concept |
+| `extends` / `inherits` | One class builds on another | Java, TS, Python | Leave out | No implementation inheritance |
+| `implements` | A class promises an interface | Java, TS | Leave out | `impl` does this |
+| `abstract` `virtual` `override` `final` `sealed` | Inheritance machinery | Java, C++, C# | Leave out | Only needed with inheritance |
+| `union` | One memory slot that can hold one of several layouts | C | Maybe, phase 3 | Needed for C interop and low-level work; `enum` covers the safe case |
+| `namespace` / `package` | Groups of declarations | C++, Java | Leave out | `module` covers it |
+| `export` / `from` / `use` | Other spellings of `pub` and `import` | JS, Python, Rust | Rename option | |
+| `static` | A value that lives for the whole program, or belongs to a type | C, Java | Maybe | Global state is awkward under value semantics, but sometimes needed |
+| `public` `private` `protected` | Visibility levels | Java, C++ | Leave out | `pub` with private by default is enough; `protected` only matters with inheritance |
+| `macro` | Code that writes code | Rust, C | Leave out | `comptime` covers the useful cases |
+| `operator` | Define how `+`, `==` and so on work for your type | C++, Swift | Maybe | Probably through interfaces rather than a keyword |
+| `init` | Constructor: how a value is first created | Swift, Python (`__init__`) | Maybe | Struct literals may be enough |
+| `deinit` | Cleanup that runs when a value goes away (frees memory, closes files) | Swift, C++ destructors | Include, phase 3 | With no GC, this is how owning types clean up |
+| `this` | Another name for `self` | Java, C++, JS | Rename option | |
+| `new` / `delete` | Allocate and free memory by hand | C++, Java | Leave out | Allocation goes through the standard library |
+
+### Variables and types
+
+| Word | Meaning | Seen in | Lean | Why |
+|---|---|---|---|---|
+| `let` / `val` / `mut` | Other spellings for the `const`/`var` pair | Rust, Swift, Scala | Rename option | |
+| `ref` | A reference stored as a value | C#, Rust | Leave out | References are temporary under value semantics |
+| `null` / `nil` / `undefined` | "No value here" | everywhere | Leave out | `none` in `option<T>` instead, so absence is visible in the type |
+| `void` | A function that gives back nothing | C, Java | Maybe | Could be an empty value type instead |
+| `never` | A function that never returns (crash, infinite loop) | TS, Rust | Maybe, phase 3 | |
+| `typeof` `sizeof` `alignof` | Ask for a type, its size, its alignment | JS, C | Maybe | Likely `comptime` functions rather than keywords |
+| `volatile` `atomic` | Memory the hardware or other threads can change | C, C++ | Maybe, phase 3 | Needed for low-level and concurrent code |
+
+### Control flow
+
+| Word | Meaning | Seen in | Lean | Why |
+|---|---|---|---|---|
+| `else if` / `elif` | Chain conditions | C / Python | Use `else if` | No extra keyword |
+| `then` / `do` / `end` | Block delimiters without braces | Pascal, Lua, Ruby | Leave out | We chose braces |
+| `repeat` ... `until` | Loop that tests at the end | Pascal, Lua | Leave out | `loop` with `break` covers it |
+| `goto` | Jump to a label | C | Leave out | Hard to read and to optimize |
+| `try` / `catch` / `throw` / `finally` | Exceptions | Java, JS, Python | Leave out | Hidden control flow; harder to compile well. `result` and `?` instead |
+| `guard` | "Leave early unless this is true" | Swift | Maybe | Reads very well for beginners |
+| `fallthrough` | Continue into the next `case` | C, Swift | Leave out | No silent fallthrough; each case stands alone |
+| `yield` | Produce values one at a time from a function | Python, JS | Maybe, later | |
+| `with` | Scoped resource handling | Python | Leave out | `deinit` and `defer` do this |
+| `unless` | Opposite of `if` | Ruby | Leave out | `if not` is enough |
+
+### Operators written as words
+
+| Word | Meaning | Seen in | Lean | Why |
+|---|---|---|---|---|
+| `xor` | Exclusive or | Python (`^`) | Maybe | |
+| `mod` / `rem` | Remainder after division | Pascal | Leave out | `%` |
+| `instanceof` | Is this value of that class | Java, JS | Leave out | `is` covers it |
+
+### Low level and concurrency
+
+| Word | Meaning | Seen in | Lean | Why |
+|---|---|---|---|---|
+| `spawn` / `go` | Start a concurrent task | Go, Rust | Maybe, later | Concurrency is out of scope for v0 |
+| `select` / `chan` | Wait on several channels / the channel type | Go | Maybe, later | |
+| `asm` | Inline assembly | C, Rust | Maybe, later | Needed for a runtime or kernel work |
+| `inline` / `noinline` | Hints to the optimizer | C, Rust | Maybe, later | |
+| `align` / `packed` | Control memory layout | C, Zig | Maybe, later | |
+
+### Diagnostics
+
+| Word | Meaning | Seen in | Lean | Why |
+|---|---|---|---|---|
+| `assert` | Crash if this condition is false | C, Python | Include | Probably a built-in function |
+| `panic` | Crash now with a message | Rust, Go | Include | Probably a built-in function |
+| `unreachable` | Tell the compiler this point can never be reached | Rust, Zig | Maybe | Lets the optimizer assume more |
+| `todo` | Placeholder that crashes if reached | Rust | Maybe | Handy while writing |
 
 ## Decisions that affect the table
 

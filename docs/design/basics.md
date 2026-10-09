@@ -1,7 +1,10 @@
-# Basics: variables and types (draft 1)
+# Basics: variables and types (draft 2)
 
 Written the way a first Python lesson would go, one idea at a time. Syntax is a
 sketch to react to, not a final decision.
+
+**Decided so far:** `fn` for functions, `var` and `const`, lowercase type names,
+sized integers from 8 to 64 bits, `<T>` generics, newlines end statements.
 
 ## 1. A variable is a name for a value
 
@@ -13,7 +16,7 @@ const name = "Dennis"
 - `var` makes a variable you can change later.
 - `const` makes one you cannot. Because of value semantics, "cannot change" really
   means it: nothing reachable through that name can change either.
-- Names are written before values. No type is written, because the compiler works it out.
+- The name comes first. No type is written, because the compiler works it out.
 
 ## 2. Changing a variable
 
@@ -33,18 +36,27 @@ difference from Python.
 
 ```
 var score = 10
-score = "ten"       // error: score is an Int, "ten" is a String
+score = "ten"       // error: score is an int, "ten" is a string
 ```
-
-The basic types:
 
 | Type | Holds | Example |
 |---|---|---|
-| `Int` | whole numbers | `42`, `-7` |
-| `Float` | decimal numbers | `3.14` |
-| `Bool` | true or false | `true` |
-| `Char` | one character | `'a'` |
-| `String` | text | `"hello"` |
+| `int` | whole numbers | `42`, `-7` |
+| `float` | decimal numbers | `3.14` |
+| `bool` | true or false | `true` |
+| `char` | one character | `'a'` |
+| `string` | text | `"hello"` |
+
+Exact sizes for when you care about memory:
+
+| Signed | Unsigned | Range of the signed one |
+|---|---|---|
+| `int8` | `uint8` | -128 to 127 |
+| `int16` | `uint16` | about -32 thousand to 32 thousand |
+| `int32` | `uint32` | about -2.1 billion to 2.1 billion |
+| `int64` | `uint64` | about -9.2 quintillion to 9.2 quintillion |
+
+and `float32`, `float64` for decimals.
 
 ## 4. Writing the type yourself
 
@@ -52,9 +64,10 @@ The type goes after the name, like TS. You only need it when the compiler can't
 work it out, or when you want to be explicit.
 
 ```
-var score: Int = 10
-const ratio: Float = 0.5
-var count: Int            // error: a variable must be given a value
+var score: int = 10
+const ratio: float = 0.5
+var small: int8 = 100
+var count: int            // error: a variable must be given a value
 ```
 
 A variable must always be given a value when it is created. There is no
@@ -68,31 +81,61 @@ print(score)
 // this is a comment
 ```
 
-## 6. Converting between types
+## 6. Converting between types (proposal, custom)
 
-Conversions are always written out, never silent.
+Conversions are always written out, never silent. Proposal: a plain word, `to`.
 
 ```
 const whole = 7
-const decimal = Float(whole)     // 7.0
-const back = Int(3.9)            // 3 (the decimal part is dropped)
+const decimal = whole to float      // 7.0
+const text = whole to string        // "7"
 ```
+
+The compiler only allows `to` when nothing can be lost. Conversions that can
+lose information or fail will need a different, visible spelling. We work that
+out when we reach errors.
+
+## 7. Strings with values inside (proposal, custom)
+
+Braces always mean "put the value here", with no prefix needed.
+
+```
+print("Score: {score}")             // Score: 10
+print("A literal brace: \{")        // A literal brace: {
+```
+
+The thing inside the braces is checked when the program is compiled, so a
+mistake is an error before the program runs.
 
 ---
 
+## What is already our own
+
+Syntax is the cheapest place to be different, so the list below is mostly about
+what the language *does*. Everything here is a deliberate choice, not a copy.
+
+- A TS-looking language with **no GC and no references you store**, only value semantics.
+- **`inout` repeated at the call site**, so you see every mutation where it happens.
+- **`const` that is truly immutable**, all the way down.
+- **No null.** Absence is a type (`option<T>`), never a surprise.
+- **Conversions written as `to`**, and only when nothing can be lost (proposal).
+- **Strings that interpolate by default** (proposal).
+- **One `switch`/`case` that is also pattern matching.**
+- **Token efficiency as a design goal**, measured against real tokenizers.
+
 ## Questions for you
 
-**[B1] Variable names:** `snake_case` (Python, Rust) or `camelCase` (JS, TS, Swift)?
-Type names stay `Capitalized` either way.
+**[B1] Naming style.** Options:
+- A. The language lets you use any style. The standard library and formatter pick one.
+- B. The compiler enforces one style (as an error).
+- C. The language treats `my_score` and `myScore` as the same name (Nim does this).
+  Every library works in your favourite style, but you can't have both names at once
+  and searching the code gets harder.
 
-**[B2] Size of `Int`:** a 64-bit whole number everywhere (simple, like Go and Swift),
-or 32-bit by default (like Rust's `i32`)? Exact sizes (`Int8` ... `Int64`) exist either way.
+**[B2] Size of `int`.** Always 64 bits, or 32 bits by default? Pros and cons are in the chat.
 
-**[B3] Type names:** `Int`, `Float`, `Bool` capitalized (Swift), or lowercase `int`,
-`float`, `bool` (Python, TS), or Rust's `i32`, `f64`?
+**[B3] Your own types.** Lowercase (`point`) or capitalized (`Point`)?
 
-**[B4] Conversions:** `Float(whole)` like a function call (Python, Swift), or
-`whole as Float` (Rust, TS)?
+**[B4] Conversions.** Is `x to float` the right feel, or something else?
 
-**[B5] Strings with values inside:** how to write "Score: 10" using a variable.
-Options: `"Score: ${score}"` (JS), `f"Score: {score}"` (Python), or `"Score: \(score)"` (Swift).
+**[B5] Strings.** Is always-on `"Score: {score}"` the right feel?
