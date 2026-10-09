@@ -132,6 +132,20 @@ words like Arc and Sol are always taken. Quick web check, October 2026.
 - **Unexpected animals (like Python):** Axolotl, Pangolin, Shoebill, Kakapo, Numbat
 - **Coined compounds (like TypeScript):** Kitestring, Flintlock, Inkwell, Sunforge
 
+## Round 5: invented words
+
+No meanings and no nature: names made up purely for how they sound, like Zig,
+Nim or Kotlin. Quick web check, October 2026.
+
+| Name | Ext | Check |
+|------|-----|-------|
+| **Zorvo** | `.zv` | ✅ No hits at all. ⭐ |
+| **Tyvo** | `.ty` | ✅ No hits at all. ⭐ |
+| **Ovra** | `.ov` | ✅ No exact hits. Near: Ovum (a small language), SOVRA (software). |
+| ~~Qiro~~ | | ❌ An AI IDE. |
+| ~~Vexa~~ | | ❌ VexaScript, an active language. |
+| ~~Draxl~~ | | ❌ A Rust "agent-native source language". |
+
 ## Picking criteria
 - [ ] Sounds good said out loud ("I wrote it in ___")
 - [ ] Not an existing popular language/framework
