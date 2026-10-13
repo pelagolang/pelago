@@ -1,4 +1,4 @@
-# Collections and strings (draft 2)
+# Collections and strings (draft 3)
 
 One idea at a time. Syntax is a sketch to react to.
 
@@ -123,9 +123,43 @@ xs.map!(~> it + 1)                  // the same, as a call
 - An iterator is a temporary view, so it cannot be stored or returned. Return a list (`.to_list()`) or, later, use a
   generator (`yield`).
 - Collect with `.to_list()`, `.to_set()`, `.to_map()`.
-- There are no list comprehensions: `map`, `filter` and `~>` already do that job.
+- Building a collection from a loop and a filter in one expression has its own shape, the *builder* (section 9).
 
-## 9. Building with spread
+## 9. Builders: collections from a loop, in our own shape
+
+Python writes `[x * 2 for x in xs if x > 0]` with the result first. Ours starts with **where the items come from**
+and ends with **what each one becomes**, joined by the same `~>` ("maps to") that closures use:
+
+```
+[x of xs if x > 0 ~> x * 2]
+```
+
+Read it left to right: "x of xs, if x is positive, maps to x times two". The source comes first, so names are
+known before they are used (good for editors and for readers), and the result sits last where the eye lands.
+
+```
+[x of xs if x > 0]                       // no `~>`: keep the item itself (a pure filter)
+[i, x of xs ~> "#i: #x"]                 // index and item, like `for i, x of`
+[x of xs, y of ys if x != y ~> (x, y)]   // a comma starts a nested loop; `if` filters the one before it
+[sink x of xs ~> consume(x)]             // access modes work: take the items out of xs
+set { x of xs ~> x % 10 }                // a set of remainders
+map { u of users ~> u.name : u.age }     // a map; the result is `key : value`
+sum(x of xs if x > 0 ~> x * x)           // in a call, no brackets: a lazy stream, nothing is built
+```
+
+- `[ ... ]` builds a list, `set { ... }` a set, `map { ... }` a map: the same literal shapes as before.
+- Without brackets, as the only argument of a call, a builder is a **lazy stream** (it is fused into the loop and no list
+  is made). That replaces Python's generator expression.
+- The clauses run left to right. A name bound earlier can be used later.
+- The arrow `~>` at the top of a builder always means "maps to". A closure inside a clause is wrapped in the
+  parentheses of its call (`x of xs.map(y ~> y + 1)`), so it never clashes.
+- For one simple step the chain is shorter (`xs.map(~> it * 2)`); builders win when there is a filter, two loops or
+  an index. Both stay.
+- Parsing note: the parser reads `[i, x of xs ...]` as a list until it meets `of`, then re-reads the items before it
+  as the pattern, the way JS reads arrow-function parameters.
+- No new keyword or symbol: `of`, `if` and `~>` already exist.
+
+## 9b. Building with spread
 
 ```
 const all = [0, ...xs, 99]
@@ -169,9 +203,12 @@ a later page; nothing here blocks them.
 - **C7** Spread works in list, map and set literals.
 - **C8** `sort!()` changes in place, `sorted()` returns a new list.
 
-## Still open
+- **C9** List comprehensions are in, in our own shape: *builders* (section 9).
 
-- **C9** List comprehensions. Python's `[x * 2 for x in xs if x > 0]` builds a list from a loop and a filter in one
-  expression. Our equivalent is `xs.filter(~> it > 0).map(~> it * 2).to_list()`. Draft 1 leaves the extra syntax out
-  because the chain already does the job and two ways to say it adds weight; the owner has asked what it means and
-  has not decided.
+## Quick confirms for builders
+
+- **B1** The shape `[x of xs if x > 0 ~> x * 2]`: source first, result last, joined by `~>`.
+- **B2** A builder without brackets as a call's only argument is a lazy stream.
+- **B3** A comma starts a nested loop, and `if` filters the loop before it.
+- **B4** Maps and sets use `map { ... ~> key : value }` and `set { ... ~> value }`.
+- **B5** Refutable patterns (skip items that don't match) wait for list patterns.

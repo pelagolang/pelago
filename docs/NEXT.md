@@ -19,7 +19,7 @@
    - Ternary vs error-propagation `?`: spaces around the ternary `?`, none before the postfix one.
    - `!` / `!!` after a method name need to be adjacent to the name (compare token spans).
    - Parse everything in `examples/tour.lang`, then add golden-file tests.
-2. **Collections**: decided in `docs/design/collections.md` apart from C9 (comprehensions). List patterns come next.
+2. **Collections**: decided in `docs/design/collections.md`, including builders. List patterns come next.
 3. **Errors in depth, then concurrency.**
 4. **Name resolution and the type checker.**
 

@@ -18,6 +18,7 @@ choice. Write renames in the last column.
 - All eleven compression ideas below are accepted.
 - `for x of items` iterates values, `for i in 0..10` counts or walks keys. See Loops.
 - No `null`, only `none`.
+- Builders (comprehensions) are `[x of xs if x > 0 ~> x * 2]`: `of`, `if` and `~>` reused, nothing new reserved.
 - Maps are written `map { "a": 1 }`, with `{:}` as a shorthand for the empty map (`map {}` also works).
 - Closures use `~>`: `x ~> x * 2`, and `~> it * 2` with the implicit parameter. A capture list in brackets sets access modes: `[inout total] x ~> total += x`. A bare `{ "a": 1 }` is not a map.
 - `struct` and `enum` list their interfaces with `:` too, like `obj`.
