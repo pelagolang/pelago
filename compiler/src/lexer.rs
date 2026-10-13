@@ -630,8 +630,14 @@ impl<'a> Lexer<'a> {
             (b'<', b'<', b'=') => (ShlEq, 3),
             (b'>', b'>', b'=') => (ShrEq, 3),
             (b'?', b'?', b'=') => (QuestionQuestionEq, 3),
+            (b'+', b'%', b'=') => (PlusPercentEq, 3),
+            (b'-', b'%', b'=') => (MinusPercentEq, 3),
+            (b'*', b'%', b'=') => (StarPercentEq, 3),
             // Two characters
             (b'*', b'*', _) => (StarStar, 2),
+            (b'+', b'%', _) => (PlusPercent, 2),
+            (b'-', b'%', _) => (MinusPercent, 2),
+            (b'*', b'%', _) => (StarPercent, 2),
             (b'=', b'=', _) => (EqEq, 2),
             (b'!', b'=', _) => (NotEq, 2),
             (b'!', b'!', _) => (BangBang, 2),
@@ -1054,6 +1060,17 @@ mod tests {
                 punct(Shr)
             ]
         );
+    }
+
+    #[test]
+    fn wrapping_operators() {
+        use Punct::*;
+        assert_eq!(kinds("a +% b"), vec![Ident, punct(PlusPercent), Ident]);
+        assert_eq!(kinds("a-%b"), vec![Ident, punct(MinusPercent), Ident]);
+        assert_eq!(kinds("h *%= 31"), vec![Ident, punct(StarPercentEq), Int]);
+        // The plain remainder operator is unaffected.
+        assert_eq!(kinds("a % b"), vec![Ident, punct(Percent), Ident]);
+        assert_eq!(kinds("a %= b"), vec![Ident, punct(PercentEq), Ident]);
     }
 
     #[test]

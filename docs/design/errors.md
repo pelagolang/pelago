@@ -1,4 +1,4 @@
-# Errors and stops (draft 1)
+# Errors and stops (draft 2)
 
 One idea at a time. Syntax is a sketch to react to.
 
@@ -127,6 +127,7 @@ const big = a * b                 // stops if it doesn't fit
 const hash = a *% 31 +% b         // wraps around on purpose (hashes, checksums)
 const safe = a.checked_add(b)     // option<int>: none on overflow
 const capped = a.saturating_add(b)
+const wrapped = a.wrapping_add(b)   // the same wrap as `+%`, as a method
 ```
 
 The compiler removes checks it can prove unnecessary (loop counters, values it knows are small). `*%`, `+%` and `-%`
@@ -158,22 +159,14 @@ If `main` returns an error, its message (with context) goes to standard error an
 
 ---
 
-## Questions for you
+## Decisions from draft 1
 
-**[E1] Combining errors.** The catch-all `error` plus your own enums joined by a `converts` impl, used by `?` and `to`. The word
-`converts` is a placeholder. Keep it?
-
-**[E2] Context.** `.context("...")` stacking into a message chain. Keep?
-
-**[E3] Stops.** Abort the process with no unwinding, `@on_stop` for a last word, tests in separate processes. Keep?
-
-**[E4] Overflow.** Stops in every build, with `+%`, `-%`, `*%` as wrapping operators (three new tokens for the lexer) and `checked_` /
-`saturating_` methods. Or only methods, no new operators?
-
-**[E5] `main` may return `void ! error`.** Keep?
-
-**[E6] `??` stays for `option` only,** with `.or(...)` and `.ok()` for results. Keep?
-
-**[E7] `?` returns from the nearest function or closure,** and iterators of results collect into a `result`. Keep?
-
-**[E8] `deinit` cannot fail,** and fallible cleanup is an explicit `close!!()` returning a `result`. Keep?
+- **E1** The catch-all `error` plus your own enums joined by a `converts` impl, used by `?` and `to`. (`converts` is a placeholder name.)
+- **E2** `.context("...")` stacks into a message chain.
+- **E3** A stop aborts the process with no unwinding; `@on_stop` for a last word; tests run in separate processes.
+- **E4** Overflow stops in every build. Wrapping has both forms: the operators `+%`, `-%`, `*%` (and `+%=`, `-%=`, `*%=`) and the methods
+  `wrapping_add` and friends, plus `checked_` and `saturating_` methods. Six new tokens in the lexer.
+- **E5** `main` may return `void ! error`.
+- **E6** `??` is for `option` only; results use `.or(...)` and `.ok()`.
+- **E7** `?` returns from the nearest function or closure; iterators of results collect into a `result`.
+- **E8** `deinit` cannot fail; fallible cleanup is an explicit `close!!()` returning a `result`.

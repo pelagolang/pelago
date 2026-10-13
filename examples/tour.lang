@@ -163,3 +163,11 @@ const remainders = set { x of xs ~> x % 10 }
 const ages = map { u of users ~> u.name : u.age }
 const total = sum(x of xs if x > 0 ~> x * x)
 const tail = xs[-3..]
+
+// ---- Overflow ---------------------------------------------------------------------
+const hash = a *% 31 +% b
+h *%= 31
+h +%= c
+const safe = a.checked_add(b)
+const capped = a.saturating_add(b)
+const wrapped = a.wrapping_add(b)
