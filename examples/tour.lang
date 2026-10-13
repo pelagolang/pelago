@@ -154,3 +154,12 @@ const tripled = numbers.map(~> it * 3)
 numbers.each([inout total] x ~> total += x)
 const cleaned = raw |> trim |> parse
 const user_name = user?.name ?? "anonymous"
+
+// ---- Builders -----------------------------------------------------------------------
+const doubled_pos = [x of xs if x > 0 ~> x * 2]
+const labels = [i, x of xs ~> "#i: #x"]
+const pairs = [x of xs, y of ys if x != y ~> (x, y)]
+const remainders = set { x of xs ~> x % 10 }
+const ages = map { u of users ~> u.name : u.age }
+const total = sum(x of xs if x > 0 ~> x * x)
+const tail = xs[-3..]

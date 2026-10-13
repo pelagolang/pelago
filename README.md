@@ -5,7 +5,7 @@ A self-hosting systems language, name to be decided. Compiled natively with its 
 - [ROADMAP.md](ROADMAP.md): vision, decisions and phases
 - [docs/design/samples.md](docs/design/samples.md): sample programs in the imagined syntax
 - [docs/design/basics.md](docs/design/basics.md), [keywords.md](docs/design/keywords.md), [functions.md](docs/design/functions.md), [types.md](docs/design/types.md): language design drafts
-- [docs/design/switch.md](docs/design/switch.md), [lexer.md](docs/design/lexer.md): more design notes
+- [docs/design/switch.md](docs/design/switch.md), [collections.md](docs/design/collections.md), [memory.md](docs/design/memory.md), [lexer.md](docs/design/lexer.md): more design notes
 - [docs/NEXT.md](docs/NEXT.md): where we stopped and what comes next
 - [NAMES.md](NAMES.md): name brainstorm
 

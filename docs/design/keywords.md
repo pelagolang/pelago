@@ -18,6 +18,7 @@ choice. Write renames in the last column.
 - All eleven compression ideas below are accepted.
 - `for x of items` iterates values, `for i in 0..10` counts or walks keys. See Loops.
 - No `null`, only `none`.
+- Builders (comprehensions) are `[x of xs if x > 0 ~> x * 2]`: `of`, `if` and `~>` reused, nothing new reserved.
 - Maps are written `map { "a": 1 }`, with `{:}` as a shorthand for the empty map (`map {}` also works).
 - Closures use `~>`: `x ~> x * 2`, and `~> it * 2` with the implicit parameter. A capture list in brackets sets access modes: `[inout total] x ~> total += x`. A bare `{ "a": 1 }` is not a map.
 - `struct` and `enum` list their interfaces with `:` too, like `obj`.
@@ -215,6 +216,7 @@ interfaces, and a class can only be extended if marked `open`.
 | Working | Meaning | Seen in | Phase | Your rename |
 |---|---|---|---|---|
 | `unsafe` | A block where the compiler's safety checks are switched off | Rust, C# | 3 | |
+| `linear` | Marks a type whose values must be consumed exactly once. Reserved (soft); arrives after the type checker | Austral, Hylo | 3 | |
 | `async` / `await` | Concurrency without blocking a thread | JS, Rust, C# | 3 | |
 | `test` | A built-in test block that only compiles in test mode | Zig | 3 | |
 | `assert` | Crash if this condition is false | C, Python | 1 | |
@@ -267,6 +269,7 @@ Decided: lowercase, and sized integers from 8 to 64 bits. `int` is always 64 bit
 | `option<T>` | Either a `T` or `none` | 2 |
 | `result<T, E>` | Either a success `T` or an error `E` | 2 |
 | `box<T>` | An owned value on the heap (what `new` gives you) | 2 |
+| `soa<T>` | A list of `T` stored as one array per field (struct of arrays). `soa<T, 8>` is the blocked variant | 3 |
 | `rc<T>` | Optional shared ownership with counting, for the rare case you need it | 3 |
 | `ptr<T>` | A raw pointer, only inside `unsafe` | 3 |
 | `fn(A) -> B` | The type of a function | 2 |
