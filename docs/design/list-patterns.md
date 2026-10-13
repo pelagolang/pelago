@@ -1,4 +1,4 @@
-# List patterns (draft 1)
+# List patterns (draft 2)
 
 Patterns that look inside a list, array or slice. They plug into everything in `switch.md`: `switch`
 arms, `is` in conditions, `guard ... else`, guards with `if`, alternatives, and `name is pattern`.
@@ -93,8 +93,10 @@ switch line.split(" ").to_list() {
   with that length (`[int; 2]`). For a list, use `guard xs is [a, b] else { ... }` or `if xs is`.
 - Alternatives work when they bind the same names: `case [x], [x, _]:`.
 - `name is pattern` works: `case whole is [first, ...]:` keeps the list and its first element.
-- Strings are not lists: no `[c, ...]` over text. Literal patterns (`case "add":`) work, and
-  prefix tests stay as methods (`s.starts_with("add ")`).
+- **Text supports both** literal cases and list patterns (LP7). Over a `string` or `str` the elements are
+  `char`s and the rest is a `str` view: `case ['a', ...rest]:` or `case [c, ...]:`. Literals stay
+  the simple way to test a whole value (`case "add":`). Lengths are counted in characters, so a length
+  test walks the text once; matching from the front never decodes more than the pattern needs.
 
 ## 5. Closing the builder question (B5)
 
@@ -107,8 +109,7 @@ const firsts = [x of rows if x is [first, ...] ~> first]             // rows tha
 const values = [o of opts if o is some(v) ~> v * 2]                  // some options only
 ```
 
-(The docs name `none`, `ok(p)` and `err(p)` as library patterns but never say how the present case of an
-`option` is written. `some(v)` above is a placeholder; see LP6.)
+(The present case of an `option` is `some(v)`; see the decisions below.)
 
 ## 6. Why not other designs
 
@@ -118,24 +119,21 @@ const values = [o of opts if o is some(v) ~> v * 2]                  // some opt
   "the rest" is a view, and the middle and end cases (`[...init, last]`) are as cheap as the front.
 - **A separate `match`-for-lists:** one `switch` for everything was the decision.
 
-## 7. Left for later
+## 7. Left for later (revisit after the checker exists)
 
-- **Consuming list patterns** (`switch sink xs { case [a, ...rest]: ... }`, where `a` and `rest` become
+- **Remember for later versions: `sink` in list patterns.** Consuming list patterns (`switch sink xs { case [a, ...rest]: ... }`, where `a` and `rest` become
   owned). Possible once `sink` on an owning list can hand back pieces safely; needs the checker first.
 - **Patterns on maps and sets.** Look-ups stay `map.get(k)` returning an `option`, matched normally.
 - **Patterns on iterators**, which cannot be stored and have no length.
 
-## Questions
+## Decisions from draft 1
 
-**LP1.** The rest marker is `...` (bare to ignore, `...name` to bind). Keep it?
-**LP2.** `rest` is a temporary view, `copy rest` to own it?
-**LP3.** Modes lead the binding: `[inout first, ...inout rest]`. Keep that order?
-**LP4.** `sink` on elements is not allowed in v1?
-**LP5.** Fixed arrays may be destructured in plain declarations; lists must use `guard` / `if is`?
-**LP6.** (a) B5 is closed by `if x is pattern` bringing its names into the builder's result, with no new syntax. Fine?
-(b) A gap I found while writing this: `switch.md` has `none` as a pattern but no name for the *present* case of an `option`.
-I suggest `some(v)`, mirroring `ok(v)` and `err(e)`; then `some` is a pattern-only word, not a constructor (you still write the bare value).
-Alternatives: a bare `v` binding after `case none` (works in `switch`, not in `is`), or `.some(v)` like an enum case.
-
-**LP7.** No list patterns over strings (literals only)?
-**LP8.** Rest in the middle (`[first, ...mid, last]`) allowed? It costs a little in exhaustiveness code, nothing at run time.
+- **LP1** `...` is the rest marker (bare to ignore, `...name` to bind), at most one per pattern.
+- **LP2** `rest` is a temporary slice view; `copy rest` makes an owned list.
+- **LP3** Access modes lead the binding: `[inout first, ...inout rest]`.
+- **LP4** `sink` on list-pattern elements is not allowed in v1. Kept on the list of things to revisit (section 7).
+- **LP5** Fixed arrays can be destructured in plain declarations; lists use `guard ... is` or `if ... is`.
+- **LP6** (a) `if x is pattern` in a builder brings its names into the result (closes B5). (b) The present case of an
+  `option` is matched as `some(v)`, a pattern-only word like `ok` and `err`; values are still written bare.
+- **LP7** Text gets both: literal cases and list patterns over `char`s with a `str` rest.
+- **LP8** The rest marker may sit in the middle.

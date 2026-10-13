@@ -19,7 +19,7 @@
    - Ternary vs error-propagation `?`: spaces around the ternary `?`, none before the postfix one.
    - `!` / `!!` after a method name need to be adjacent to the name (compare token spans).
    - Parse everything in `examples/tour.lang`, then add golden-file tests.
-2. **Collections**: decided in `docs/design/collections.md`, including builders. List patterns come next.
+2. **Collections** (including builders) and **list patterns** are decided (`collections.md`, `list-patterns.md`). Revisit `sink` list patterns once the checker exists.
 3. **Errors** are decided (`docs/design/errors.md`). **Concurrency** is decided (`docs/design/concurrency.md`, CC1 to CC9).
 4. **Name resolution and the type checker.**
 

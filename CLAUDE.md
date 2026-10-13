@@ -28,7 +28,7 @@ CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pus
 - `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `main.rs`).
 - `compiler/tests/`: integration tests. Every file in `examples/*.lang` must lex without errors.
 - `examples/`: sample source files. Keep `tour.lang` in step with the syntax decisions.
-- `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `lexer`, `memory`, `samples`).
+- `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `lexer`, `memory`, `samples`).
 - `ROADMAP.md`: the decisions table and the phases. `NAMES.md`: name brainstorm.
 
 ## Keeping things in step
