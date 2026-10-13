@@ -1,4 +1,4 @@
-# switch (draft 2)
+# switch (draft 3)
 
 One construct for choosing by value and by shape. It replaces `match`.
 
@@ -252,8 +252,8 @@ which depends on how collections are designed. Revisit with collections.
 - **S6** No names bound inside comma-separated alternatives in the first version (rule for later in section 11).
 - **S7** `0..10` excludes the end, `0..=10` includes it, in patterns too.
 
-## Quick confirms for sections 10 to 13
+## Decisions from sections 10 to 13
 
 - **N1** `..` is required in a struct pattern that leaves fields out.
-- **N2** `name is pattern` instead of an `@` symbol.
-- **N3** The open range forms above.
+- **N2** `name is pattern` binds the whole value; there is no `@` symbol.
+- **N3** The open range forms (`a..`, `..b`, `..=b`, `..`) are in.
