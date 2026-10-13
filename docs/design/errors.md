@@ -96,7 +96,6 @@ into one result, collect them:
 
 ```
 const nums: [int] ! parse_error = texts.map(~> parse_int(it)).to_list()   // stops at the first error
-const total = (sum(x of xs ~> x))                                            // no errors here, plain
 ```
 
 An iterator of results collects into a `result` of a list: the first error wins and the rest are not run.
