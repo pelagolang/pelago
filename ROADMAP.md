@@ -36,6 +36,7 @@ A serious, self-hosting systems language:
 | Linear types | Opt-in `linear` modifier, staged after the type checker; `linear` reserved as a soft keyword | decided |
 | Collections | `docs/design/collections.md` decisions C1 to C8 recorded (must-exist indexing, negative indexes, insertion-ordered maps, `string`/`str`, `+` and spread); builders (own comprehension shape: `[x of xs if x > 0 ~> x * 2]`) added | decided |
 | Errors | `docs/design/errors.md` decisions E1 to E8: expected failures are `result`/`option`, bugs stop the program (no unwinding), overflow stops in every build with `+% -% *%` for wrapping, `converts` for `?` and `to` | decided |
+| Concurrency | `docs/design/concurrency.md` draft 1: threads with `sink`/copy capture, scopes, `chan<T>` pairs, `select`, `shared`/`lock`/`atomic`; async still deferred | draft |
 | Maps | `map { "a": 1 }`, empty map `{:}` | decided |
 | Closures | `x ~> x * 2` and `~> it * 2` | decided |
 | Null | None. Absence is `none` in `option<T>` | decided |
@@ -84,7 +85,7 @@ No compiler code yet. Everything here is cheap to change.
   - [ ] Generics and interfaces: static dispatch by default, dynamic dispatch opt-in
   - [ ] Error handling (`Result` plus `?`, or an alternative)
   - [ ] Compile-time evaluation (the `comptime` idea from Zig)
-  - [ ] Concurrency: out of scope for v0, but write down the intended direction
+  - [x] Concurrency: draft 1 in `docs/design/concurrency.md`, awaiting answers CC1 to CC9
 - [ ] **Paper test.** Sketch the compiler's own core data (tokens, syntax tree, symbol table, type checker state) under value semantics. If something does not fit, revisit the safety model before writing any compiler code
 - [ ] **Token benchmark.** Run the samples and equivalent Rust and TS programs through real tokenizers. Record the numbers
 - [ ] **First target CPU** for the backend (x86-64 is the usual start) and first OS / object format (ELF on Linux)
