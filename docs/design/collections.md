@@ -1,4 +1,4 @@
-# Collections and strings (draft 1)
+# Collections and strings (draft 2)
 
 One idea at a time. Syntax is a sketch to react to.
 
@@ -22,7 +22,11 @@ xs[1] = 9                           // assign through an index
 
 - `xs[i]` must exist. Out of range **stops the program** with a clear message (it is a bug, not a normal case).
   `xs.get(i)` returns `option<T>` when absence is normal.
-- No negative indexes: `xs[-1]` is an error. Use `xs.last()`, which is an `option`.
+- **Negative indexes count from the end:** `xs[-1]` is the last element, `xs[-2]` the one before, and `xs[-3..]`
+  the last three. `xs.last()` also exists and returns an `option`, for when the list may be empty. An index below
+  `-len` stops the program like any other out-of-range index.
+  One trap to know about: `xs[i - 1]` with `i` equal to 0 reads the last element instead of stopping, the classic
+  Python surprise. A lint can flag computed indexes that can go negative.
 - Methods that change the list end in `!`: `push!`, `pop!`, `insert!`, `remove!`, `clear!`, `sort!`, `swap!`.
   Their non-changing partners read like nouns or participles and return a new value: `sorted()`, `reversed()`.
 - Lists own their memory and free it when they go away (`deinit`). Passing a list read-only copies nothing.
@@ -154,23 +158,20 @@ a later page; nothing here blocks them.
 
 ---
 
-## Questions for you
+## Decisions from draft 1
 
-**[C1] Index rule.** `xs[i]` and `m[key]` stop the program when missing, `.get` returns an `option` (my recommendation),
-or should map lookup return an `option` by default?
+- **C1** `xs[i]` and `m[key]` must exist and stop the program when they don't. `.get` returns an `option`.
+- **C2** Negative indexes count from the end. `xs.last()` stays as an added option.
+- **C3** Maps iterate in insertion order by default.
+- **C4** Strings use the static-data representation with copy on first change, and have no `s[i]`.
+- **C5** `+` joins strings, alongside interpolation.
+- **C6** Set literals are `set { 1, 2, 3 }`.
+- **C7** Spread works in list, map and set literals.
+- **C8** `sort!()` changes in place, `sorted()` returns a new list.
 
-**[C2] Negative indexes.** Not allowed (use `.last()`). Keep?
+## Still open
 
-**[C3] Map order.** Insertion order by default. Keep?
-
-**[C4] Strings.** The static-data representation with copy on first change, and no `s[i]`. Right?
-
-**[C5] `+` on strings.** Allowed alongside interpolation?
-
-**[C6] Set literals.** `set { 1, 2, 3 }`, matching `map { ... }`. Fine?
-
-**[C7] Spread in literals.** `[0, ...xs]` and `map { ...d, "k": 1 }`. Keep?
-
-**[C8] Method naming.** `sort!()` changes in place, `sorted()` returns a new list. Keep?
-
-**[C9] No comprehensions.** Agreed?
+- **C9** List comprehensions. Python's `[x * 2 for x in xs if x > 0]` builds a list from a loop and a filter in one
+  expression. Our equivalent is `xs.filter(~> it > 0).map(~> it * 2).to_list()`. Draft 1 leaves the extra syntax out
+  because the chain already does the job and two ways to say it adds weight; the owner has asked what it means and
+  has not decided.
