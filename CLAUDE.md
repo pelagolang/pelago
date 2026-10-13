@@ -19,16 +19,19 @@ cargo run -- keywords            # list keywords (hard and soft)
 cargo run -- tokens              # list operators
 cargo run -- lex <file>          # print tokens, report lexer errors (`-` reads stdin)
 cargo run -- lex-bench <file>    # time the lexer alone
+cargo run -- parse <file>        # print the syntax tree, report errors
+cargo run -- parse-bench <file>  # time lexing plus parsing
+BLESS=1 cargo test               # rewrite compiler/tests/golden/*.ast after an intended syntax change
 ```
 
 CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pushing.
 
 ## Layout
 
-- `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `main.rs`).
-- `compiler/tests/`: integration tests. Every file in `examples/*.lang` must lex without errors.
+- `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `ast.rs`, `ast_print.rs`, `parser/`, `main.rs`).
+- `compiler/tests/`: integration tests. Every file in `examples/*.lang` must lex and parse without errors and match its golden tree.
 - `examples/`: sample source files. Keep `tour.lang` in step with the syntax decisions.
-- `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `lexer`, `memory`, `samples`).
+- `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `lexer`, `parser`, `memory`, `samples`).
 - `ROADMAP.md`: the decisions table and the phases. `NAMES.md`: name brainstorm.
 
 ## Keeping things in step
@@ -36,6 +39,8 @@ CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pus
 - `docs/design/keywords.md` and `compiler/src/keyword.rs` describe the same list. Change both together.
 - A new operator needs an entry in the `puncts!` table in `token.rs` **and** the match in `Lexer::punct`
   in `lexer.rs`. The test `every_punctuation_lexes_alone` enforces this.
+- New syntax needs: the parser (`parser/`), the printer (`ast_print.rs`), a line in `examples/tour.lang`, a test in
+  `parser/tests.rs`, and `BLESS=1 cargo test` to refresh the golden trees (review the diff).
 - When a decision is made, record it in the relevant design doc and in the `ROADMAP.md` decisions table
   in the same commit.
 - Words we dropped must not come back (`class`, `match`, `when`, `extern`, `comptime`, `inline`, word

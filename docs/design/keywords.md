@@ -237,6 +237,7 @@ interfaces, and a class can only be extended if marked `open`.
 
 | Working | Meaning | Seen in | Phase | Your rename |
 |---|---|---|---|---|
+| `scope` | A block whose threads all finish before it ends: `scope s { ... }` | Rust (`thread::scope`) | 3 | |
 | `spawn` / `go` | Start a task that runs at the same time | Go, Rust | 3 | |
 | `chan` | A channel: a pipe that one task puts values into and another takes values out of | Go | 3 | |
 | `select` | Wait on several channels at once and act on whichever is ready first | Go | 3 | |

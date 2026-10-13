@@ -117,11 +117,11 @@ struct Lexer<'a> {
     errors: Vec<LexError>,
 }
 
-fn is_ident_start(c: char) -> bool {
+pub(crate) fn is_ident_start(c: char) -> bool {
     c == '_' || c.is_alphabetic()
 }
 
-fn is_ident_continue(c: char) -> bool {
+pub(crate) fn is_ident_continue(c: char) -> bool {
     c == '_' || c.is_alphanumeric()
 }
 

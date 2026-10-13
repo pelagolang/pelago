@@ -17,6 +17,20 @@ fn main() {
                 std::process::exit(2);
             }
         },
+        Some("parse") => match args.next() {
+            Some(path) => parse_file(&path),
+            None => {
+                eprintln!("usage: langc parse <file>");
+                std::process::exit(2);
+            }
+        },
+        Some("parse-bench") => match args.next() {
+            Some(path) => parse_bench(&path),
+            None => {
+                eprintln!("usage: langc parse-bench <file>");
+                std::process::exit(2);
+            }
+        },
         Some("lex") => match args.next() {
             Some(path) => lex_file(&path),
             None => {
@@ -40,6 +54,8 @@ fn usage() {
     eprintln!("  keywords   list every keyword, hard ones first");
     eprintln!("  tokens     list operators and punctuation");
     eprintln!("  lex-bench <file>  time the lexer alone on a file");
+    eprintln!("  parse <file>  print the syntax tree and any errors (`-` reads standard input)");
+    eprintln!("  parse-bench <file>  time lexing plus parsing on a file");
     eprintln!("  lex <file> print the tokens of a source file (`-` reads standard input)");
 }
 
@@ -66,20 +82,64 @@ fn print_punct() {
     println!("  {}", texts.join(" "));
 }
 
-fn lex_file(path: &str) {
+fn read_source(path: &str) -> String {
     let src = if path == "-" {
         let mut text = String::new();
         std::io::Read::read_to_string(&mut std::io::stdin(), &mut text).map(|_| text)
     } else {
         std::fs::read_to_string(path)
     };
-    let src = match src {
+    match src {
         Ok(text) => text,
         Err(err) => {
             eprintln!("cannot read `{path}`: {err}");
             std::process::exit(2);
         }
-    };
+    }
+}
+
+fn parse_file(path: &str) {
+    let src = read_source(path);
+    let (out, lex_errors) = langc::parser::parse_source(&src);
+    println!("{}", langc::ast_print::print_file(&out.file, &src));
+    let index = LineIndex::new(&src);
+    for error in &lex_errors {
+        let (line, col) = index.line_col(&src, error.span.start);
+        eprintln!("{path}:{line}:{col}: error: {}", error.kind.message());
+    }
+    for error in &out.errors {
+        let (line, col) = index.line_col(&src, error.span.start);
+        eprintln!("{path}:{line}:{col}: error: {}", error.message);
+    }
+    if !lex_errors.is_empty() || !out.errors.is_empty() {
+        std::process::exit(1);
+    }
+}
+
+/// Times lexing plus parsing, so compile speed is measured from the first compiler.
+fn parse_bench(path: &str) {
+    let src = read_source(path);
+    let runs = 10;
+    let mut best = std::time::Duration::MAX;
+    let mut tokens = 0;
+    for _ in 0..runs {
+        let start = std::time::Instant::now();
+        let lexed = tokenize(&src);
+        let out = langc::parser::parse(&src, &lexed.tokens);
+        best = best.min(start.elapsed());
+        tokens = lexed.tokens.len();
+        std::hint::black_box(&out);
+    }
+    let mb = src.len() as f64 / 1e6;
+    println!(
+        "{mb:.1} MB, {tokens} tokens, best of {runs}: {:.1} ms ({:.0} MB/s)",
+        best.as_secs_f64() * 1e3,
+        mb / best.as_secs_f64()
+    );
+}
+
+fn lex_file(path: &str) {
+    let src = read_source(path);
     let out = tokenize(&src);
     let index = LineIndex::new(&src);
     for token in &out.tokens {

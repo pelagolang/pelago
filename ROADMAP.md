@@ -38,6 +38,7 @@ A serious, self-hosting systems language:
 | Errors | `docs/design/errors.md` decisions E1 to E8: expected failures are `result`/`option`, bugs stop the program (no unwinding), overflow stops in every build with `+% -% *%` for wrapping, `converts` for `?` and `to` | decided |
 | Concurrency | `docs/design/concurrency.md` decisions CC1 to CC9: threads with `sink`/copy capture, scopes, `chan<T>` pairs, `select`, `shared`/`lock`/`atomic`; async still deferred; `par_for` helper; global `var` forbidden | decided |
 | List patterns | `docs/design/list-patterns.md` LP1 to LP8: `[first, ...rest]` with `...`, rest is a view, `some(v)` for options, patterns over text, `sink` elements revisited later | decided |
+| Parser | Stage 0 parser written; grammar choices P1 to P10 listed in `docs/design/parser.md` for confirmation | draft |
 | Maps | `map { "a": 1 }`, empty map `{:}` | decided |
 | Closures | `x ~> x * 2` and `~> it * 2` | decided |
 | Null | None. Absence is `none` in `option<T>` | decided |
@@ -104,9 +105,9 @@ No compiler code yet. Everything here is cheap to change.
 - [x] Keyword table, token kinds and spans (`compiler/src/{keyword,token,span}.rs`)
 - [ ] Source files and a diagnostics system (clear errors with line, column and a source snippet)
 - [x] **Lexer** (`compiler/src/lexer.rs`): about 214 MB/s, 59 M tokens/s in a release build on the first benchmark (`langc lex-bench`)
-- [ ] **Parser** (recursive descent with Pratt parsing for expressions) producing the AST
-- [ ] AST printer and a golden-file test suite (`.lang` input, expected output)
-- [ ] Parse every sample program
+- [x] **Parser** (`compiler/src/parser/`, recursive descent plus precedence climbing) producing the AST (`ast.rs`); see `docs/design/parser.md`
+- [x] AST printer (`ast_print.rs`, `langc parse`) and golden trees for the examples (`compiler/tests/golden/`)
+- [x] Parse every example program (`examples/*.lang` parse without errors)
 
 **Milestone:** all samples parse, with good errors for bad input.
 

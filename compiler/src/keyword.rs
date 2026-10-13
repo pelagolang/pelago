@@ -211,6 +211,8 @@ keywords! {
     Atomic => "atomic", Soft;
 
     // ---- Concurrency (reserved) ------------------------------------------
+    /// Only special before a name and a block: `scope s { ... }`.
+    Scope => "scope", Soft;
     Spawn => "spawn", Soft;
     Chan => "chan", Soft;
     Select => "select", Soft;

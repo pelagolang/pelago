@@ -2,26 +2,18 @@
 
 ## Done
 
-- Design drafts in `docs/design/`: `basics`, `keywords`, `functions`, `types`, `switch`, `lexer`, `samples`.
+- Design drafts in `docs/design/`: `basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `memory`, `lexer`, `parser`, `samples`.
 - `ROADMAP.md` holds the decisions table and the phases.
-- `compiler/` (Rust, no dependencies): keyword table, tokens, spans, and the lexer, with tests and CI.
+- `compiler/` (Rust, no dependencies): keyword table, tokens, spans, the lexer, the syntax tree and the parser, with tests and CI.
 - `examples/` holds source files that must lex cleanly.
 
 ## Next, in order
 
-1. **The parser.** Tokens to syntax tree.
-   - Define the syntax tree types first (one node type per construct in the design docs).
-   - Recursive descent for declarations and statements, Pratt parsing for expressions.
-   - Newline rules: ignore newlines inside brackets and where a line obviously continues.
-   - Soft keywords: check `Keyword::from_ident` where a soft keyword is meaningful.
-   - Split `>>`, `>=` and `>>=` when they close generic arguments.
-   - Split string tokens into text and `#(...)` expression parts.
-   - Ternary vs error-propagation `?`: spaces around the ternary `?`, none before the postfix one.
-   - `!` / `!!` after a method name need to be adjacent to the name (compare token spans).
-   - Parse everything in `examples/tour.lang`, then add golden-file tests.
+1. **The parser** is written (`docs/design/parser.md`, `compiler/src/parser/`). Open: the choices P1 to P10 in that page,
+   doc comments kept in the tree for the formatter, and an arena for speed.
 2. **Collections** (including builders) and **list patterns** are decided (`collections.md`, `list-patterns.md`). Revisit `sink` list patterns once the checker exists.
 3. **Errors** are decided (`docs/design/errors.md`). **Concurrency** is decided (`docs/design/concurrency.md`, CC1 to CC9).
-4. **Name resolution and the type checker.**
+4. **Name resolution and the type checker** are next: modules and scopes first, then types, then the value-semantics checker.
 
 ## Open questions for the owner
 

@@ -171,3 +171,214 @@ h +%= c
 const safe = a.checked_add(b)
 const capped = a.saturating_add(b)
 const wrapped = a.wrapping_add(b)
+
+// ---- List patterns ------------------------------------------------------------------
+fn sum_list(xs: [int]) -> int {
+    switch xs {
+        case []: 0
+        case [h, ...t]: h + sum_list(t)
+    }
+}
+
+fn describe(xs: [int]) -> string {
+    switch xs {
+        case []: "empty"
+        case [x]: "one: #x"
+        case [first, ..., last]: "from #first to #last"
+        case [0, ...rest] if rest.len() > 3: "zero then many"
+        case [a, ...mid, b]: "#a, #(mid.len()) more, #b"
+    }
+}
+
+switch inout xs {
+    case [inout first, ...inout rest]:
+        first += 1
+        rest.reverse!()
+    case []: print("nothing")
+}
+
+fn command(line: string) {
+    switch line.split(" ").to_list() {
+        case ["add", name]: add!(name)
+        case ["rename", old, new]: rename!(old, new)
+        case [cmd, ...]: print("unknown command #cmd")
+        case []: print("empty line")
+    }
+}
+
+fn starts(s: string) -> string {
+    switch s {
+        case "": "empty"
+        case ['a', ...rest]: "starts with a, then #rest"
+        case [c, ...]: "starts with #c"
+    }
+}
+
+if args is [cmd, ...rest] { run(cmd, rest) }
+guard args is [path] else { return err(usage()) }
+const radii = [s of shapes if s is .circle(r) ~> r]
+const values = [o of opts if o is some(v) ~> v * 2]
+
+switch lookup {
+    case some(n) if n > 3: "big"
+    case some(_): "small"
+    case none: "missing"
+}
+
+switch result {
+    case ok(.circle(r)): r
+    case ok(_): 0.0
+    case err(e): panic("failed: #e")
+}
+
+// ---- Concurrency ---------------------------------------------------------------------
+fn parallel_total(xs: [int]) -> int {
+    var left = 0
+    var right = 0
+    const mid = xs.len() / 2
+    scope s {
+        s.spawn([inout left] ~> left = sum(xs[..mid]))
+        s.spawn([inout right] ~> right = sum(xs[mid..]))
+    }
+    left + right
+}
+
+fn pipeline() {
+    const task = spawn(sink data ~> crunch(data))
+    const total = task.join!!()
+    const (tx, rx) = chan<int>()
+    spawn(sink tx ~> {
+        for i of 0..10 { tx.send(i)? }
+    })
+    for x of rx { print("got #x") }
+    select {
+        case v = a.recv() { print("a: #v") }
+        case v = b.recv() { print("b: #v") }
+        case tx.send(next) { sent += 1 }
+        case timeout(ms(50)) { print("slow") }
+        default { }
+    }
+    const config = shared(load_config())
+    const hits = lock(0)
+    hits.with!(n ~> n += 1)
+    par_for(inout xs, x ~> x *= 2)
+}
+
+// ---- More syntax -----------------------------------------------------------------------
+import list, map from std.collections
+use std.io
+
+type id = int64
+type pair<A, B> = (A, B)
+
+@derive(eq, order, hash, show)
+struct user {
+    pub name: string
+    pub age: int = 18
+    token: string
+}
+
+linear struct transaction { id: int }
+
+pub fn commit(sink t: transaction) -> void ! db_error { }
+
+struct range {
+    lo: int
+    hi: int
+
+    init(lo: int, hi: int) -> Self ! bad_range {
+        if lo > hi { return err(bad_range) }
+        self.lo = lo
+        self.hi = hi
+    }
+
+    deinit { }
+}
+
+impl add for vec2 {
+    fn add(self, other: vec2) -> vec2 = vec2 { x: self.x + other.x, y: self.y + other.y }
+}
+
+impl<T> show for stack<T> where T: show {
+    fn show(self) -> string = "stack"
+}
+
+fn largest<T>(xs: [T]) -> T? where T: ordered, T: eq { none }
+fn sized<meta N: int>() -> [int; N] { [0; N] }
+fn apply(f: fn(int) -> int, x: int) -> int = f(f(x))
+fn shapes_area(xs: [any shape_like]) -> float = 0.0
+fn dense(points: soa<point, 8>, grid: (int, string; 4), pair: (int, int)) { }
+ext fn puts(s: ptr) -> int
+ext "C" fn abs(x: int) -> int
+
+test "addition works" {
+    assert(add(1, 2) == 3)
+}
+
+meta if target.os == linux {
+    fn platform() -> string = "linux"
+} else {
+    fn platform() -> string = "other"
+}
+
+const widest = max<int>(3, 7)
+const s = stack<int> { items: [] }
+const tup = t.0.1
+const flag = !!ready
+var cache: int? = none
+cache ??= 3
+const first_ok = a ?? b ?? c
+const chain = items
+    .filter(~> it > 0)
+    .map(~> it * 2)
+    .to_list()
+const piped = raw
+    |> trim
+    |> parse
+const verdict = score > 90
+    ? "A"
+    : score > 80
+        ? "B"
+        : "C"
+const nested = [
+    [1, 2],
+    [3, 4],
+]
+const cfg = config {
+    port: 9090,
+    verbose,
+    ...defaults,
+}
+const scale = 2 ** 10 ** 2
+const neg = -x ** 2
+const total_len = values.map(v ~> v.len()).sum()
+const adder = (a: int, b: int) ~> a + b
+const op = [inout total, sink data] (x, y) ~> total += x * y
+const only_even = xs.filter(~> it % 2 == 0)
+const grid2 = [0; 9]
+
+fn use_defer() {
+    defer cleanup()
+    defer { close(file) }
+    unsafe { poke(ptr, 1) }
+    if a { 1 } else if b { 2 } else { 3 }
+    unless done { work() } else { rest() }
+    const r = loop { break 5 }
+}
+
+switch shape {
+    case .rect(w: width, h): width * h
+    case shape.circle(radius): radius
+    case point { x: 0, y: 0 }: "origin"
+    case point { x, .. }: "x is #x"
+    case 0..10, 20..=30: "range"
+    case ..0: "negative"
+    case 100..: "big"
+    case -1: "minus one"
+    case big is 100..=999: "three digits (#big)"
+    case (a, b): "pair"
+    case .circle(r), .square(r): "one measure #r"
+    default: "other"
+}
+
+switch day { case 1: "a" case 2: "b" default: "c" }
