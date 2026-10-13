@@ -200,6 +200,8 @@ keywords! {
 
     // ---- Safety and the edges --------------------------------------------
     Unsafe => "unsafe", Hard;
+    /// Marks a type whose values must be consumed exactly once. Reserved.
+    Linear => "linear", Soft;
     Async => "async", Hard;
     Await => "await", Hard;
     /// A test block that only compiles in test mode.
@@ -225,7 +227,7 @@ impl Keyword {
 pub const PRELUDE_TYPES: &[&str] = &[
     "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64",
     "byte", "float", "float32", "float64", "bool", "char", "string", "str", "map", "set", "range",
-    "option", "result", "box", "rc", "ptr", "void", "never", "error",
+    "option", "result", "box", "soa", "rc", "ptr", "void", "never", "error",
 ];
 
 /// Names of the built-in functions. Not keywords.

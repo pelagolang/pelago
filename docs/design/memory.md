@@ -1,4 +1,4 @@
-# Layout and ownership extras (draft 1)
+# Layout and ownership extras (draft 2)
 
 Two questions about memory that the earlier pages left open: array-of-structs versus
 struct-of-arrays, and linear types.
@@ -51,10 +51,10 @@ Austral and Hylo do.
 ```
 linear struct transaction { ... }
 
-fn commit(sink t: transaction) -> unit ! db_error { ... }
+fn commit(sink t: transaction) -> void ! db_error { ... }
 fn rollback(sink t: transaction) { ... }
 
-fn work() -> unit ! db_error {
+fn work() -> void ! db_error {
     const t = begin()?
     do_things(t)               // read-only use, fine
     t.commit!!()               // consumed. Forgetting this is a compile error.
@@ -73,12 +73,9 @@ exists, because they change the rules for generics. The word `linear` is reserve
 
 ---
 
-## Questions for you
+## Decisions from draft 1
 
-**[M1] Default layout.** AoS by default, with `soa<T>` as the opt-in collection?
-
-**[M2] Column access.** `points.x` giving the whole column as a read-only slice. Keep?
-
-**[M3] Compiler-chosen layouts** stay a later optimisation. Agreed?
-
-**[M4] Linear types.** An opt-in `linear` modifier, staged after the type checker, with `linear` reserved now?
+- **M1** AoS is the default layout. `soa<T>` is the opt-in collection, with `soa<T, 8>` as the blocked variant.
+- **M2** Column access (`points.x`, a read-only `[float]`) is in.
+- **M3** Compiler-chosen layouts stay a later optimisation.
+- **M4** `linear` is an opt-in modifier, staged after the type checker. The word is reserved now as a soft keyword.

@@ -32,6 +32,8 @@ A serious, self-hosting systems language:
 | Optimizer hints | Attributes: `@inline`, `@noinline`, `@cold` | decided |
 | `switch` | One pattern-matching construct (`docs/design/switch.md`); `break` leaves the loop; bare names bind; `is` tests in conditions | draft |
 | Types | `docs/design/types.md` decisions T1 to T9 recorded | decided |
+| Memory layout | AoS by default; `soa<T>` opt-in collection with column access (`points.x`); compiler-chosen layouts later (`docs/design/memory.md`) | decided |
+| Linear types | Opt-in `linear` modifier, staged after the type checker; `linear` reserved as a soft keyword | decided |
 | Maps | `map { "a": 1 }`, empty map `{:}` | decided |
 | Closures | `x ~> x * 2` and `~> it * 2` | decided |
 | Null | None. Absence is `none` in `option<T>` | decided |

@@ -215,6 +215,7 @@ interfaces, and a class can only be extended if marked `open`.
 | Working | Meaning | Seen in | Phase | Your rename |
 |---|---|---|---|---|
 | `unsafe` | A block where the compiler's safety checks are switched off | Rust, C# | 3 | |
+| `linear` | Marks a type whose values must be consumed exactly once. Reserved (soft); arrives after the type checker | Austral, Hylo | 3 | |
 | `async` / `await` | Concurrency without blocking a thread | JS, Rust, C# | 3 | |
 | `test` | A built-in test block that only compiles in test mode | Zig | 3 | |
 | `assert` | Crash if this condition is false | C, Python | 1 | |
@@ -267,6 +268,7 @@ Decided: lowercase, and sized integers from 8 to 64 bits. `int` is always 64 bit
 | `option<T>` | Either a `T` or `none` | 2 |
 | `result<T, E>` | Either a success `T` or an error `E` | 2 |
 | `box<T>` | An owned value on the heap (what `new` gives you) | 2 |
+| `soa<T>` | A list of `T` stored as one array per field (struct of arrays). `soa<T, 8>` is the blocked variant | 3 |
 | `rc<T>` | Optional shared ownership with counting, for the rare case you need it | 3 |
 | `ptr<T>` | A raw pointer, only inside `unsafe` | 3 |
 | `fn(A) -> B` | The type of a function | 2 |
