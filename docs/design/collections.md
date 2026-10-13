@@ -1,4 +1,4 @@
-# Collections and strings (draft 3)
+# Collections and strings (draft 4)
 
 One idea at a time. Syntax is a sketch to react to.
 
@@ -205,10 +205,10 @@ a later page; nothing here blocks them.
 
 - **C9** List comprehensions are in, in our own shape: *builders* (section 9).
 
-## Quick confirms for builders
+## Decisions on builders
 
-- **B1** The shape `[x of xs if x > 0 ~> x * 2]`: source first, result last, joined by `~>`.
+- **B1** The shape is `[x of xs if x > 0 ~> x * 2]`: source first, result last, joined by `~>`.
 - **B2** A builder without brackets as a call's only argument is a lazy stream.
 - **B3** A comma starts a nested loop, and `if` filters the loop before it.
 - **B4** Maps and sets use `map { ... ~> key : value }` and `set { ... ~> value }`.
-- **B5** Refutable patterns (skip items that don't match) wait for list patterns.
+- **B5** Patterns that can fail (skipping items that don't match) wait for list patterns.
