@@ -1,4 +1,4 @@
-# Concurrency (draft 1)
+# Concurrency (draft 2)
 
 Goal: threads that cannot have data races, with no new borrow-checker rules. The access modes we
 already have (`let` / `inout` / `sink`) and second-class references do the work. Async stays deferred (G5).
@@ -112,7 +112,7 @@ select {
     case v = a.recv()   { print("a: #v") }
     case v = b.recv()   { print("b: #v") }
     case tx.send(next)  { sent += 1 }
-    case timeout(50ms)  { print("slow") }
+    case timeout(ms(50))  { print("slow") }
     default             { }                 // optional: do not wait
 }
 ```
@@ -166,30 +166,27 @@ if done.load() { ... }
 - No async runtime, no green threads, no hidden scheduler (this fits "no runtime").
 - No `volatile` rules here; that belongs with the hardware page (Phase 3).
 
-## Questions
+## Decisions from draft 1
 
-**CC1. Plain threads first.** Is `spawn` plus `task<T>` with `join!!()` right, with a stop in a task stopping the
-program? (Alternative: `join` returns `result<T, stopped>`; that needs unwinding, so I advise against it.)
+- **CC1** `spawn` returns `task<T>`; `join!!()` consumes it; a stop in a task stops the program.
+- **CC2** `scope s { ... }` is kept (soft keyword `scope`), with disjoint `inout` captures checked by the compiler.
+- **CC3** Two channel ends from `chan<T>()`; `tx.copy()` for more senders; the receiver is moved, not copied.
+- **CC4** `send` after the receiver is gone returns `result<void, closed>`.
+- **CC5** A `recv` arm in `select` binds an `option<T>`; `none` means that channel closed.
+- **CC6** Shared state types are `shared<T>`, `lock<T>` (access through `with`) and `atomic<T>`.
+- **CC7** Global `var` is forbidden; globals are `const`, or an explicit `lock<T>` / `atomic<T>`.
+- **CC8** A parallel loop helper is part of v1 (below).
+- **CC9** Durations are plain functions: `ms(50)`, `secs(2)`. No literal suffixes.
 
-**CC2. Scopes.** Keep `scope s { ... }` as the borrowing form, with disjoint `inout` captures checked by the
-compiler? The word `scope` would become a soft keyword. (Alternative: only `spawn` with `sink` and copies. Simpler,
-but then parallel loops over borrowed data need copies.)
+## Parallel loop helper
 
-**CC3. Channel ends.** `const (tx, rx) = chan<T>()` with two ends, `tx.copy()` for more senders, `rx` not copyable.
-Good, or one `chan<T>` value usable from both sides (Go style)?
+Built on `scope`, in the standard library:
 
-**CC4. `send` after the receiver is gone.** Return `result<void, closed>` (my choice) or stop the program?
+```
+par_for(inout xs, x ~> x *= 2)                  // each element handled once, pieces never overlap
+const squares = par_map(xs, x ~> x * x)         // new list, same order
+```
 
-**CC5. `select`.** Keep it as a statement with `case` arms like `switch`? And when a channel closes, should the arm
-get `none` (and you test it), or should closed channels simply never fire (Go sends a zero value, which is a trap)?
-My advice: the arm binds the `option`, so `case v = a.recv()` has `v: option<T>`.
-
-**CC6. Shared state types.** Names `shared<T>`, `lock<T>` and `atomic<T>`, with `lock` giving access only through
-`with` (a closure gets a temporary `inout`)? (`mutex` is the usual word; `lock` is shorter and reads as a noun and a verb.)
-
-**CC7. Global variables.** Forbid global `var` entirely (my advice) so a shared mutable global is impossible?
-
-**CC8. Parallel loop.** Add a library helper like `par_for(inout xs, x ~> ...)` over `scope` now, or leave it for the
-standard library phase?
-
-**CC9. Time words.** `50ms` as a literal suffix for durations (`timeout(50ms)`), or `ms(50)` as a plain function?
+`par_for` splits the list with `chunks_inout`, runs one scope thread per chunk (count chosen from the
+CPU count, overridable by `threads: 4`), and returns after all finish. The closure may capture `let` data only
+(or `lock` / `atomic`), the same rule as any scoped thread.
