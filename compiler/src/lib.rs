@@ -14,6 +14,7 @@ pub mod lexer;
 pub mod lower;
 pub mod lsp;
 pub mod meta;
+pub mod native;
 pub mod package;
 pub mod parser;
 pub mod resolve;
