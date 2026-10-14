@@ -1,0 +1,52 @@
+// A binary search tree: recursive types go through `box`.
+
+enum tree {
+    leaf
+    node(box<tree>, int, box<tree>)
+}
+
+fn insert(t: tree, v: int) -> tree {
+    switch t {
+        case .leaf: tree.node(box(tree.leaf), v, box(tree.leaf))
+        case .node(l, x, r):
+            if v < x { tree.node(box(insert(l.get(), v)), x, copy r) }
+            else     { tree.node(copy l, x, box(insert(r.get(), v))) }
+    }
+}
+
+fn contains(t: tree, v: int) -> bool {
+    switch t {
+        case .leaf: false
+        case .node(l, x, r):
+            if v == x { true }
+            else if v < x { contains(l.get(), v) }
+            else { contains(r.get(), v) }
+    }
+}
+
+fn walk(t: tree, inout out: [int]) {
+    switch t {
+        case .leaf: {}
+        case .node(l, x, r): {
+            walk(l.get(), inout out)
+            out.push!(x)
+            walk(r.get(), inout out)
+        }
+    }
+}
+
+fn main() {
+    var t = tree.leaf
+    for v in [5, 2, 8, 1, 9, 3] { t = insert(t, v) }
+    var sorted: [int] = []
+    walk(t, inout sorted)
+    print(sorted)
+    print(contains(t, 8), contains(t, 4))
+    const copy_of_t = copy t
+    t = insert(t, 4)
+    var after: [int] = []
+    walk(t, inout after)
+    var before: [int] = []
+    walk(copy_of_t, inout before)
+    print(before, after)
+}

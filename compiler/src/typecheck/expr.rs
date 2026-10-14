@@ -823,6 +823,7 @@ impl<'p> Checker<'p> {
 
     fn index_expr(&mut self, e: &'p Expr, base: &'p Expr, index: &'p Expr) -> Ty {
         let bt = self.check_expr(base, Exp::Any);
+        let bt = self.peel_boxes(bt);
         let k = self.kind_of(bt);
         match k {
             TyKind::List(elem) | TyKind::Array(elem, _) => {
@@ -1107,6 +1108,7 @@ impl<'p> Checker<'p> {
             return self.tt.bool_;
         }
         let ordering = !matches!(op, Punct::EqEq | Punct::NotEq);
+        self.settle_literal(lt);
         let k = self.kind_of(lt);
         let against_none = matches!(rhs.kind, ExprKind::None) || matches!(lhs.kind, ExprKind::None);
         if !against_none
@@ -1158,6 +1160,7 @@ impl<'p> Checker<'p> {
                     | TyKind::Param(_)
                     | TyKind::List(_)
                     | TyKind::Tuple(_)
+                    | TyKind::Box(_)
             )
         {
             let s = self.show(lt);

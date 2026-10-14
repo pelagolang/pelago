@@ -1,6 +1,6 @@
 Id: A-02
 Title: `box<T>`: make it, read it, move out of it
-Column: Needs decision (6 numbered questions at the end)
+Column: Done (owner accepted all six recommendations)
 Order: 2
 Depends on: A-01 (small), nothing else
 Size: L

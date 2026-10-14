@@ -94,7 +94,10 @@ impl<'a> Lowerer<'a> {
             return self.unsupported(e.span, "a struct literal of this type");
         };
         if self.res.def(d).kind == DefKind::Obj {
-            return self.unsupported(e.span, "an object literal on the memory path (internal error)");
+            return self.unsupported(
+                e.span,
+                "an object literal on the memory path (internal error)",
+            );
         }
         self.fill_struct(e, inits, dst, t)
     }

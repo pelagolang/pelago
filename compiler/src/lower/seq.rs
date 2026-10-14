@@ -380,12 +380,12 @@ impl<'a> Lowerer<'a> {
     ) -> Res {
         // The right side may need converting to the left's type (a value into an option).
         let rt = self.ty_of(rhs).unwrap_or(lt);
-        let Res::Val(a) = self.expr(lhs) else {
+        let Some(a) = self.operand_addr(lhs, lt) else {
             return Res::Never;
         };
         let b = if rt == lt || self.is_text(rt) && self.is_text(lt) {
-            match self.expr(rhs) {
-                Res::Val(b) => b,
+            match self.operand_addr(rhs, rt) {
+                Some(b) => b,
                 _ => return Res::Never,
             }
         } else {
@@ -436,6 +436,20 @@ impl<'a> Lowerer<'a> {
             _ => CmpOp::Ge,
         };
         self.wrap(Op::Cmp(o, c, zero), IrTy::Bool, e.span)
+    }
+
+    /// The address of an operand's value; a scalar (a box) is first stored in a temporary.
+    fn operand_addr(&mut self, e: &'a Expr, t: Ty) -> Option<Value> {
+        if let Repr::Scalar(_) = self.repr(t) {
+            let v = self.scalar(e)?;
+            let slot = self.slot_for(t);
+            self.store_scalar_ty(slot, v);
+            return Some(slot);
+        }
+        match self.expr(e) {
+            Res::Val(p) => Some(p),
+            _ => None,
+        }
     }
 
     pub(crate) fn is_text(&self, t: Ty) -> bool {

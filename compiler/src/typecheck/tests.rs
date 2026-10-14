@@ -663,7 +663,7 @@ fn enums_and_patterns() {
 
 #[test]
 fn generic_enums_and_structs() {
-    clean("enum tree<T> { leaf(T)\n node(tree<T>, tree<T>) }\nfn t() { const a: tree<int> = .leaf(1) }");
+    clean("enum tree<T> { leaf(T)\n node(box<tree<T>>, box<tree<T>>) }\nfn t() { const a: tree<int> = .leaf(1) }");
     clean("struct stack<T> { items: [T]\n fn size(self) -> int = self.items.len() }\nfn t() { const s = stack<int> { items: [1] }\n s.size() }");
     assert_eq!(probe("const s = stack { items: [1] }\n const probe = s.items\n struct stack<T> { items: [T] }"), "[int]");
 }
@@ -1159,10 +1159,10 @@ fn irrefutable_patterns_must_always_match() {
 
 #[test]
 fn recursive_enums_do_not_blow_up() {
-    clean("enum tree { leaf\n node(tree, tree) }\nfn t(x: tree) -> int { switch x { case .leaf: 0\n case .node(.leaf, _): 1\n case .node(_, _): 2 } }");
+    clean("enum tree { leaf\n node(box<tree>, box<tree>) }\nfn t(x: tree) -> int { switch x { case .leaf: 0\n case .node(_, _): 2 } }");
     flagged(
-        "enum tree { leaf\n node(tree, tree) }\nfn t(x: tree) -> int { switch x { case .leaf: 0\n case .node(.leaf, _): 1 } }",
-        "does not handle `.node(.node(.leaf, _), _)`",
+        "enum tree { leaf\n node(box<tree>, box<tree>) }\nfn t(x: tree) -> int { switch x { case .leaf: 0 } }",
+        "does not handle `.node(_, _)`",
     );
 }
 
@@ -1267,4 +1267,44 @@ fn sink_marks_only_for_owning_values() {
 #[test]
 fn channels_can_be_looped_over() {
     clean("fn t() { const (tx, rx) = chan<int>()\n for x of rx { print(x) } }");
+}
+
+// ---- Boxes -------------------------------------------------------------------------------------
+
+#[test]
+fn box_types_and_methods() {
+    let c = run("struct pt { x: int, y: int }\nfn main() { const a = box(5)\n const b: box<int> = box(5)\n var p = box(pt { x: 1, y: 2 })\n const x = p.x\n const g = p.get()\n p.set!(pt { x: 3, y: 4 })\n const t = p.take!!() }");
+    assert_eq!(c.errors(), Vec::<String>::new());
+    assert_eq!(c.ty_of("a"), "box<int>");
+    assert_eq!(c.ty_of("b"), "box<int>");
+    assert_eq!(c.ty_of("x"), "int");
+    assert_eq!(c.ty_of("g"), "pt");
+    assert_eq!(c.ty_of("t"), "pt");
+}
+
+#[test]
+fn box_needs_one_argument() {
+    assert!(!run("fn main() { const a = box() }").errors().is_empty());
+}
+
+#[test]
+fn box_forwards_indexing_and_methods() {
+    clean("fn main() { const b = box([1, 2, 3])\n const n = b[0] + b.len() }");
+}
+
+#[test]
+fn recursive_types_need_a_box() {
+    clean("enum tree { leaf, node(box<tree>, int, box<tree>) }\nstruct list_of { next: box<list_of>?, v: int }\nstruct many { kids: [many] }\nfn main() {}");
+    for src in [
+        "struct a { x: a }\nfn main() {}",
+        "struct a { x: a? }\nfn main() {}",
+        "struct a { b: b }\nstruct b { a: a }\nfn main() {}",
+        "enum e { one(e) }\nfn main() {}",
+    ] {
+        let errs = run(src).errors();
+        assert!(
+            errs.iter().any(|m| m.contains("infinitely large")),
+            "{src}: {errs:?}"
+        );
+    }
 }

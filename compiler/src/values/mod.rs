@@ -240,6 +240,29 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// `b.get()` on a box: the base `b`. It is a place inside the box, like a field.
+    fn box_get_base<'e>(&self, e: &'e Expr) -> Option<&'e Expr> {
+        let ExprKind::Call { callee, args, .. } = &Self::strip(e).kind else {
+            return None;
+        };
+        let ExprKind::Field {
+            base,
+            name,
+            optional: false,
+        } = &Self::strip(callee).kind
+        else {
+            return None;
+        };
+        if !args.is_empty() || self.text(name.span) != "get" {
+            return None;
+        }
+        let t = self
+            .typed
+            .tys
+            .get(&(self.file, base.span.start, base.span.end))?;
+        matches!(self.typed.types.kind_of(*t), TyKind::Box(_)).then_some(&**base)
+    }
+
     /// The variable at the root of a chain of fields and indexes, and the path from it.
     fn place_of(&self, e: &Expr) -> Option<PlaceKey> {
         match &Self::strip(e).kind {
@@ -273,6 +296,11 @@ impl<'a> Walker<'a> {
             ExprKind::Index { base, .. } => {
                 let mut p = self.place_of(base)?;
                 p.segs.push(Seg::Index);
+                Some(p)
+            }
+            ExprKind::Call { .. } => {
+                let mut p = self.place_of(self.box_get_base(e)?)?;
+                p.segs.push(Seg::Field("*".to_string()));
                 Some(p)
             }
             _ => None,
@@ -747,6 +775,11 @@ impl<'a> Walker<'a> {
                 self.place_read(base);
                 self.expr(index, Ctx::Read);
             }
+            ExprKind::Call { .. } if self.box_get_base(e).is_some() => {
+                if let Some(b) = self.box_get_base(e) {
+                    self.place_read(b);
+                }
+            }
             _ => self.expr(e, Ctx::Read),
         }
     }
@@ -857,6 +890,11 @@ impl<'a> Walker<'a> {
                         }
                         StructInit::Spread(s) => self.expr(s, Ctx::Read),
                     }
+                }
+            }
+            ExprKind::Call { .. } if self.box_get_base(e).is_some() => {
+                if let Some(b) = self.box_get_base(e) {
+                    self.chain(e, b, ctx);
                 }
             }
             ExprKind::Call { callee, args, mark } => self.call(e, callee, args, *mark),

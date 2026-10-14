@@ -179,7 +179,9 @@ impl<'a> Lowerer<'a> {
             c.off = f.off;
         }
         let layout = self.fields_layout(&fields);
-        let owning = caps.iter().any(|c| matches!(c.kind, CapKind::Sink));
+        // A closure that is stored, returned or boxed outlives this function's frame: heap environment.
+        let stays = self.f.stack_env == Some((e.span.start, e.span.end));
+        let owning = !stays || caps.iter().any(|c| matches!(c.kind, CapKind::Sink));
         let env = if owning {
             let n = self.i64c(layout.size.max(ENV_HEADER) as i64);
             match self.emit(Op::Alloc(n), Some(IrTy::Ptr), e.span) {

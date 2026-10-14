@@ -134,8 +134,29 @@ fn area(s: shape) -> float {
 The compiler checks that every case is handled. `option<T>` and `result<T, E>` are
 ordinary enums in the library. An enum can have methods like a struct.
 
-A case can refer to its own type through `box<T>` or an index into a list, like the
+A case can refer to its own type through `box<T>` (see section 6a) or an index into a list, like the
 syntax tree in the first samples.
+
+## 6a. box: one value on the heap
+
+`box<T>` is a single-owner pointer to one `T` on the heap. It is the way a type contains itself (trees, linked lists,
+the compiler's own syntax tree). It adds no new ownership rule: it moves, `copy b` is a deep copy, it is freed when its
+owner ends, and under `const` the inside is read-only.
+
+| Written | Meaning |
+|---|---|
+| `box(value)` | Make a box; `value` moves in (a variable needs `sink`, like any `sink` argument). |
+| `b.get()` | A **view** of the value inside; it is a place like a field: `b.get().x`, `inout b.get()`. Taking an owning part out of it needs `copy` (VS3). |
+| `b.set!(v)` | Drop the old value and put `v` there (`inout b`). |
+| `b.take!!()` | Consume the box and give back the value. |
+| `b.field`, `b.method()`, `b[i]` | **Auto-deref**: fields, methods and indexing go through the box to the value. |
+| `copy b` | Deep copy (the inside must be copyable). |
+
+A struct or enum may contain itself only behind a pointer: `box`, a list, a map, a set or an `obj`. Anything else is
+an error: "`tree` contains itself, so it would be infinitely large; put the inner one in a `box<tree>`".
+Decisions (owner, A-02): no prefix `*` operator; `box(5)` is a call to the type name; auto-deref is on;
+`option<box<T>>` keeps a tag for now (a null-pointer layout is an optimiser job, A-04); dropping a very long chain
+recurses (the interpreter runs on a big stack; an iterative drop is a later item).
 
 ## 7. interface: a list of promises
 

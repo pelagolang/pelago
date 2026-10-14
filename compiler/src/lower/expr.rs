@@ -146,6 +146,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Field { .. } | ExprKind::TupleIndex { .. } | ExprKind::Index { .. } => {
                 self.place_expr(e)
             }
+            ExprKind::Call { .. } if self.box_get_base(e).is_some() => self.place_expr(e),
             // A call the checker could not give a type (`s.spawn(...)` in a `scope`).
             ExprKind::Call { callee, args, mark } if self.ty_of(e).is_none() => {
                 self.call(e, callee, args, *mark, None)
@@ -213,6 +214,9 @@ impl<'a> Lowerer<'a> {
                 | ExprKind::Field { .. }
                 | ExprKind::TupleIndex { .. } => self.into_from_place(e, dst, t),
                 ExprKind::Index { index, .. } if !matches!(index.kind, ExprKind::Range { .. }) => {
+                    self.into_from_place(e, dst, t)
+                }
+                ExprKind::Call { .. } if self.box_get_base(e).is_some() => {
                     self.into_from_place(e, dst, t)
                 }
                 _ => self.build_mem(e, dst, t),
@@ -435,6 +439,10 @@ impl<'a> Lowerer<'a> {
         }
         match &e.kind {
             ExprKind::Paren(i) => self.place(i),
+            ExprKind::Call { .. } => {
+                let base = self.box_get_base(e)?;
+                self.scalar(base)
+            }
             ExprKind::Name(id) => {
                 let def = self.res.use_at(self.f.file, id.span.start)?;
                 if let Some(p) = self.local_place(def) {
@@ -510,14 +518,39 @@ impl<'a> Lowerer<'a> {
             }
             return self.unsupported(e.span, "this kind of place");
         };
+        self.read_place(p, t, e.span)
+    }
+
+    /// The value at an address: loaded when it is a scalar, the address itself when it is memory.
+    pub(crate) fn read_place(&mut self, p: Value, t: Ty, span: Span) -> Res {
         match self.repr(t) {
-            Repr::Scalar(s) => match self.emit(Op::Load(s, p), Some(s), e.span) {
+            Repr::Scalar(s) => match self.emit(Op::Load(s, p), Some(s), span) {
                 Some(v) => Res::Val(v),
                 None => Res::Never,
             },
             Repr::Mem(_) => Res::Val(p),
             Repr::Zst => Res::Unit,
         }
+    }
+
+    /// `b.get()` on a box: the base `b`.
+    pub(crate) fn box_get_base(&mut self, e: &'a Expr) -> Option<&'a Expr> {
+        let ExprKind::Call { callee, args, .. } = &e.kind else {
+            return None;
+        };
+        let ExprKind::Field {
+            base,
+            name,
+            optional: false,
+        } = &strip_parens(callee).kind
+        else {
+            return None;
+        };
+        if !args.is_empty() || self.src_text(name.span) != "get" {
+            return None;
+        }
+        let bt = self.ty_of(base)?;
+        matches!(self.kind(bt), TyKind::Box(_)).then_some(&**base)
     }
 
     /// `box<T>` and `obj` values are addresses: fields are reached through them.
@@ -568,14 +601,29 @@ impl<'a> Lowerer<'a> {
     }
 
     fn index_place(&mut self, e: &'a Expr, base: &'a Expr, index: &'a Expr) -> Option<Value> {
-        let bt = self.ty_of(base)?;
+        let mut bt = self.ty_of(base)?;
+        // Indexing goes through boxes: the block holds the list, array or map itself.
+        let mut inside: Option<Value> = None;
+        if matches!(self.kind(bt), TyKind::Box(_)) {
+            let mut p = self.scalar(base)?;
+            let mut t = self.peel_box(bt);
+            while let TyKind::Box(inner) = self.kind(t) {
+                p = self.load_at(p, 0, IrTy::Ptr);
+                t = inner;
+            }
+            bt = t;
+            inside = Some(p);
+        }
         let et = self.ty_of(e)?;
         let size = self.layout(et).size;
         match self.kind(bt) {
             TyKind::List(_) | TyKind::Iter(_) => {
-                let hdr = match self.expr(base) {
-                    Res::Val(p) => p,
-                    _ => return None,
+                let hdr = match inside {
+                    Some(p) => p,
+                    None => match self.expr(base) {
+                        Res::Val(p) => p,
+                        _ => return None,
+                    },
                 };
                 let i = self.scalar(index)?;
                 let ptr_ty = IrTy::Ptr;
@@ -588,9 +636,12 @@ impl<'a> Lowerer<'a> {
                 self.emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), e.span)
             }
             TyKind::Array(_, len) => {
-                let p = match self.expr(base) {
-                    Res::Val(p) => p,
-                    _ => return None,
+                let p = match inside {
+                    Some(p) => p,
+                    None => match self.expr(base) {
+                        Res::Val(p) => p,
+                        _ => return None,
+                    },
                 };
                 let i = self.scalar(index)?;
                 let n = match len {
@@ -605,9 +656,12 @@ impl<'a> Lowerer<'a> {
                 self.emit(Op::PtrAdd(p, off), Some(IrTy::Ptr), e.span)
             }
             TyKind::Map(k, v) => {
-                let hdr = match self.expr(base) {
-                    Res::Val(p) => p,
-                    _ => return None,
+                let hdr = match inside {
+                    Some(p) => p,
+                    None => match self.expr(base) {
+                        Res::Val(p) => p,
+                        _ => return None,
+                    },
                 };
                 let ks = self.slot_for(k);
                 if let Res::Never = self.into(index, ks, k) {
@@ -799,7 +853,7 @@ impl<'a> Lowerer<'a> {
         let Some(lt) = self.ty_of(lhs) else {
             return self.unsupported(e.span, "comparing values of unknown type");
         };
-        if !self.is_scalar(lt) {
+        if !self.is_scalar(lt) || matches!(self.kind(lt), TyKind::Box(_)) {
             return self.compare_mem(e, op, lhs, rhs, lt);
         }
         let signed = self.is_signed(lt);

@@ -9,8 +9,6 @@ Last updated with the plans written after the lowering milestone (IR9 to IR20 in
 
 | Column | Card | Title | Size |
 |---|---|---|---|
-| **Needs decision** | [A-02](cards/A-02-box.md) | `box<T>`: make, read, move out (owner answers 6 questions) | L |
-| **Ready** | [A-01](cards/A-01-cleanup.md) | Remove `stubs.rs` and other leftovers | S |
 | **Ready** | [A-03](cards/A-03-temporaries-ledger.md) | The ledger: no leaked temporaries (our own ownership model) | L |
 | **Ready** | [A-04](cards/A-04-ir-optimiser.md) | IR optimiser: slots to registers, drop flags away, inlining | XL |
 | **Needs decision** | [A-05](cards/A-05-meta.md) | `meta`: compile-time code (stages M1 and M2 can start now; 4 questions gate M3) | XL |
@@ -39,6 +37,8 @@ Last updated with the plans written after the lowering milestone (IR9 to IR20 in
 
 | Card | What | Where |
 |---|---|---|
+| [A-01](cards/A-01-cleanup.md) | `stubs.rs` removed | `compiler/src/lower/` |
+| [A-02](cards/A-02-box.md) | `box<T>`: `box(v)`, `get`, `set!`, `take!!`, auto-deref, infinite-size check, heap environments for stored closures | `docs/design/types.md` 6a, IR21 |
 | [B-01](cards/B-01-name.md) | Name chosen: **Pelago** | `NAMES.md` |
 | B-02 | Extension chosen: **`.pel`** | `NAMES.md` |
 | B-04 | Rename done: crate, binary, library, examples, docs | this commit |

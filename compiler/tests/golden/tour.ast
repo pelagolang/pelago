@@ -262,6 +262,15 @@
       (const hits (call lock 0))
       (call! (. hits with) (~> (n) (+= n 1)))
       (tail (call par_for (arg inout xs) (~> (x) (*= x 2))))))
+  (enum tree (case leaf) (case node (box tree) int (box tree)))
+  (fn
+    boxes
+    ()
+    (block
+      (var b (call box 5))
+      (call! (. b set) 6)
+      (const seen (+ (call (. b get)) 1))
+      (const taken (call!! (. b take)))))
   (import (list (: map dict)) = std.collections)
   (import fmt = std.io)
   (import (...) = std.math)

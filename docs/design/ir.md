@@ -164,6 +164,9 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
   forth need real threads (a later stage).
 - **IR19** `become f(...)` on the function itself with plain number parameters is a jump to the top (no stack growth); any other `become` is a
   call followed by `return`.
-- **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa`, `async`, and `box<T>` values (the checker has no way to make or
-  open a box yet; recursive types through `box` wait for that design).
+- **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa` and `async` (see the plans in `docs/plans/`).
+- **IR21** `box<T>` is a bare pointer to a heap block that holds the `T` (no header, unlike `obj`). `box(v)` calls the library function
+  `rt_box_new<T>`; `b.get()` is a place (the pointer itself); fields, methods and indexing go through the pointer; `set` and `take` are
+  library methods. Environments of closures that are not passed straight to a call live on the heap, so a closure can be boxed or returned.
+  The interpreter runs on a thread with a large host stack so that dropping or walking a chain of ten thousand boxes works.
 

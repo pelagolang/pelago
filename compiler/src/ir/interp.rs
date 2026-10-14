@@ -63,7 +63,11 @@ fn bits_of(t: IrTy) -> u32 {
 
 /// Function addresses are numbers far outside memory, so a stray load cannot hit one.
 const FUNC_BASE: usize = 1 << 40;
-const STACK_SIZE: usize = 1 << 20;
+const STACK_SIZE: usize = 8 << 20;
+/// Deep chains (a list of ten thousand boxes) recurse once per node; the host thread that runs the
+/// machine gets a big stack for it.
+const HOST_STACK: usize = 1 << 30;
+const MAX_DEPTH: u32 = 200_000;
 
 struct Machine<'m> {
     m: &'m Module,
@@ -130,7 +134,16 @@ pub fn run_full(m: &Module, name: &str, args: &[Val]) -> Outcome {
         steps: 0,
         depth: 0,
     };
-    let result = mc.call(i, args);
+    let result = std::thread::scope(|s| {
+        std::thread::Builder::new()
+            .stack_size(HOST_STACK)
+            .spawn_scoped(s, || mc.call(i, args))
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Err("the interpreter crashed".to_string()))
+            })
+            .unwrap_or_else(|_| Err("cannot start the interpreter thread".to_string()))
+    });
     let leaked = mc
         .heap
         .values()
@@ -147,7 +160,7 @@ pub fn run_full(m: &Module, name: &str, args: &[Val]) -> Outcome {
 impl Machine<'_> {
     fn call(&mut self, fi: usize, args: &[Val]) -> Result<Val, String> {
         self.depth += 1;
-        if self.depth > 5000 {
+        if self.depth > MAX_DEPTH {
             return Err("the stack is full".to_string());
         }
         let f = &self.m.funcs[fi];

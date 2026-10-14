@@ -269,6 +269,16 @@ fn pipeline() {
     par_for(inout xs, x ~> x *= 2)
 }
 
+// ---- Boxes -----------------------------------------------------------------------------
+enum tree { leaf, node(box<tree>, int, box<tree>) }
+
+fn boxes() {
+    var b = box(5)
+    b.set!(6)
+    const seen = b.get() + 1
+    const taken = b.take!!()
+}
+
 // ---- More syntax -----------------------------------------------------------------------
 import { list, map: dict } = std.collections
 import fmt = std.io

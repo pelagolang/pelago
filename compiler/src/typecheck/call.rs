@@ -51,7 +51,11 @@ impl<'p> Checker<'p> {
                 let f = self.tt.float;
                 self.tt.unify(t, f);
             }
-            _ => {}
+            _ => {
+                if let TyKind::Box(inner) = self.kind_of(t) {
+                    self.settle_literal(inner);
+                }
+            }
         }
     }
 
@@ -200,7 +204,10 @@ impl<'p> Checker<'p> {
 
     /// The call site repeats `inout` and `sink` for places; temporaries need no `sink`.
     fn check_arg_mode(&mut self, want: Option<Mode>, a: &'p Arg, what: &str) {
-        let place = Self::is_place_expr(&a.value);
+        // `tree.leaf` names a case, not a variable: nothing to move out of.
+        let path =
+            matches!(&a.value.kind, ExprKind::Field { name, .. } if self.used(name).is_some());
+        let place = Self::is_place_expr(&a.value) && !path;
         match (want, a.mode) {
             (Some(Mode::Inout), Some(Mode::Inout)) => {
                 if !place {
@@ -257,6 +264,7 @@ impl<'p> Checker<'p> {
         } else {
             (bt, false)
         };
+        let recv = self.peel_boxes(recv);
         let n = self.text(name);
         let t = match self.kind_of(recv) {
             TyKind::Adt(def, args) => match self.find_field(def, &args, n, name.span) {
@@ -699,6 +707,7 @@ impl<'p> Checker<'p> {
             }
             DefKind::Struct | DefKind::Obj => self.construct(e, def, args, exp),
             DefKind::Variant => self.variant_call(e, def, args, exp),
+            DefKind::BuiltinType if d.name == "box" => self.box_ctor(e, args, exp),
             DefKind::BuiltinFn if d.name == "ok" || d.name == "err" => {
                 let name = d.name.clone();
                 self.result_ctor(e, &name, args, exp)
@@ -907,6 +916,37 @@ impl<'p> Checker<'p> {
             errt = target;
         }
         self.tt.result(okt, errt)
+    }
+
+    /// `box(value)`: calls the library function `rt_box_new`, which fixes the type to `box<T>`.
+    fn box_ctor(&mut self, e: &'p Expr, args: &'p [Arg], exp: Exp) -> Ty {
+        let found = (0..self.res.defs.len() as u32).map(DefId).find(|d| {
+            let def = self.def(*d);
+            def.kind == DefKind::Fn && def.name == "rt_box_new" && self.is_core_def(*d)
+        });
+        match found {
+            Some(def) => {
+                let exp = match exp.ty().map(|t| self.kind_of(t)) {
+                    Some(TyKind::Box(_)) => exp,
+                    _ => Exp::Any,
+                };
+                self.call_def(e, def, args, exp, None)
+            }
+            None => {
+                for a in args {
+                    self.check_expr(&a.value, Exp::Any);
+                }
+                self.tt.unknown
+            }
+        }
+    }
+
+    /// The type behind any number of boxes: fields, methods and indexing go through them.
+    pub(crate) fn peel_boxes(&mut self, mut t: Ty) -> Ty {
+        while let TyKind::Box(inner) = self.kind_of(t) {
+            t = inner;
+        }
+        t
     }
 
     /// `value.method(args)`

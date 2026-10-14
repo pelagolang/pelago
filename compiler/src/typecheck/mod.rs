@@ -524,6 +524,7 @@ impl<'p> Checker<'p> {
             }
             adts.insert(d, info);
         }
+        self.check_finite_sizes(&adts);
         let impls: Vec<ImplEntry> = (0..self.impls.len())
             .map(|i| {
                 let im = &self.impls[i];
@@ -567,6 +568,97 @@ impl<'p> Checker<'p> {
             names: self.res.defs.iter().map(|d| d.name.clone()).collect(),
             types: self.tt,
             diagnostics,
+        }
+    }
+
+    // ---- Recursive types ------------------------------------------------------------------
+
+    /// A struct or enum may hold itself only through a `box`, a list, a map, a set or an object:
+    /// anything else would have infinite size.
+    fn check_finite_sizes(&mut self, adts: &HashMap<DefId, AdtInfo>) {
+        let mut defs: Vec<DefId> = adts.keys().copied().collect();
+        defs.sort();
+        for d in defs {
+            if matches!(self.def(d).kind, DefKind::Obj) {
+                continue;
+            }
+            let info = &adts[&d];
+            let parts: Vec<Ty> = info
+                .fields
+                .iter()
+                .map(|(_, t)| *t)
+                .chain(
+                    info.variants
+                        .iter()
+                        .flat_map(|(_, fs)| fs.iter().map(|(_, t)| *t)),
+                )
+                .collect();
+            let mut seen = std::collections::HashSet::new();
+            if parts
+                .into_iter()
+                .any(|t| self.holds_inline(t, d, adts, &mut seen))
+            {
+                let def = self.def(d);
+                let (name, span, file) = (def.name.clone(), def.span, def.file);
+                if let Some(file) = file {
+                    self.diags.push(Diagnostic {
+                        module: file,
+                        span,
+                        message: format!(
+                            "`{name}` contains itself, so it would be infinitely large; put the inner one in a `box<{name}>`"
+                        ),
+                        warning: false,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Does a value of type `t` contain a `target` right inside it (not behind a pointer)?
+    fn holds_inline(
+        &mut self,
+        t: Ty,
+        target: DefId,
+        adts: &HashMap<DefId, AdtInfo>,
+        seen: &mut std::collections::HashSet<DefId>,
+    ) -> bool {
+        match self.kind_of(t) {
+            TyKind::Adt(d, args) => {
+                if d == target {
+                    return true;
+                }
+                if self.def(d).kind == DefKind::Obj || !seen.insert(d) {
+                    return false;
+                }
+                let Some(info) = adts.get(&d) else {
+                    return false;
+                };
+                let map: HashMap<DefId, Ty> = info.generics.iter().copied().zip(args).collect();
+                let parts: Vec<Ty> = info
+                    .fields
+                    .iter()
+                    .map(|(_, t)| *t)
+                    .chain(
+                        info.variants
+                            .iter()
+                            .flat_map(|(_, fs)| fs.iter().map(|(_, t)| *t)),
+                    )
+                    .collect();
+                parts.into_iter().any(|p| {
+                    let p = self.tt.subst(p, &map);
+                    self.holds_inline(p, target, adts, seen)
+                })
+            }
+            TyKind::Tuple(ts) | TyKind::AltTuple(ts, _) => ts
+                .into_iter()
+                .any(|x| self.holds_inline(x, target, adts, seen)),
+            TyKind::Array(e, _) | TyKind::Option(e) | TyKind::Range(e) => {
+                self.holds_inline(e, target, adts, seen)
+            }
+            TyKind::Result(a, b) => {
+                self.holds_inline(a, target, adts, seen) || self.holds_inline(b, target, adts, seen)
+            }
+            _ => false,
         }
     }
 

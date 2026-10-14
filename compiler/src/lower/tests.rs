@@ -684,7 +684,7 @@ fn program_generic() {
 #[test]
 fn example_programs_run() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/programs");
-    for name in ["shapes", "words", "stack"] {
+    for name in ["shapes", "words", "stack", "tree"] {
         let mut program = Program::with_core();
         program
             .add_package_from_path(&dir.join(format!("{name}.pel")))
@@ -742,4 +742,51 @@ fn program_f5() {
         output_of(src),
         "h\né\nl\nl\no\nh� 97 3 3 1 7\n1260 -2 16 2 7 5\n"
     );
+}
+
+// ---- Boxes -------------------------------------------------------------------------------------
+
+#[test]
+fn box_make_read_set_take() {
+    let src = "struct pt { x: int, y: int }\nfn main() {\n var n = box(1)\n n.set!(2)\n print(n.get(), n.take!!())\n var s = box(\"hi\")\n s.set!(\"there\")\n print(s.get(), s.len(), s.take!!())\n var p = box(pt { x: 1, y: 2 })\n p.get().x = 10\n print(p.x, p.y)\n const q = p.take!!()\n print(q.x + q.y) }\n";
+    assert_eq!(output_of(src), "2 2\nthere 5 there\n10 2\n12\n");
+}
+
+#[test]
+fn box_tree_insert_and_walk() {
+    let tree = "enum tree { leaf\n node(box<tree>, int, box<tree>) }\nfn insert(t: tree, v: int) -> tree { switch t {\n case .leaf: tree.node(box(tree.leaf), v, box(tree.leaf))\n case .node(l, x, r): if v < x { tree.node(box(insert(l.get(), v)), x, copy r) } else { tree.node(copy l, x, box(insert(r.get(), v))) } } }\nfn sum(t: tree) -> int { switch t { case .leaf: 0\n case .node(l, x, r): sum(l.get()) + x + sum(r.get()) } }\n";
+    let small = format!("{tree}fn main() {{ var t = tree.leaf\n for v in [2, 1, 3] {{ t = insert(t, v) }}\n print(sum(t)) }}\n");
+    assert_eq!(output_of(&small), "6\n");
+    let big = format!("{tree}fn main() {{ var t = tree.leaf\n var i = 0\n while i < 1000 {{ t = insert(t, (i * 7919) % 1000)\n i += 1 }}\n print(sum(t)) }}\n");
+    assert_eq!(output_of(&big), "499500\n");
+}
+
+#[test]
+fn box_linked_list_and_deep_chain() {
+    let src = "enum chain { nil\n cons(int, box<chain>) }\nfn len(c: chain) -> int { switch c { case .nil: 0\n case .cons(_, rest): 1 + len(rest.get()) } }\nfn len_loop(c: chain) -> int { become count(c, 0) }\nfn count(c: chain, acc: int) -> int { switch c { case .nil: acc\n case .cons(_, rest): become count(rest.get(), acc + 1) } }\nfn main() { var c = chain.nil\n for i in 0..10000 { c = chain.cons(i, box(sink c)) }\n print(len(c)) }\n";
+    assert_eq!(output_of(src), "10000\n");
+}
+
+#[test]
+fn box_copy_is_deep() {
+    let src = "fn main() { var a = box([1, 2])\n const b = copy a\n a[0] = 9\n print(a, b)\n const s = box(\"x\")\n const t = copy s\n print(s, t) }\n";
+    assert_eq!(output_of(src), "[9, 2] [1, 2]\nx x\n");
+}
+
+#[test]
+fn box_holds_a_function() {
+    let src = "fn adder(n: int) -> box<fn(int) -> int> { box((x: int) ~> x + n) }\nfn main() { const f = adder(5)\n print(f.get()(1)) }\n";
+    assert_eq!(output_of(src), "6\n");
+}
+
+#[test]
+fn box_compares_and_keys_a_map() {
+    let src = "fn main() { const a = box(2)\n const b = box(3)\n print(a == b, a < b, a == a)\n var m: map<box<int>, string> = map {}\n m.insert!(box(1), \"one\")\n const k = box(1)\n print(m.len(), k in m) }\n";
+    assert_eq!(output_of(src), "false true true\n1 true\n");
+}
+
+#[test]
+fn box_inside_an_option_field() {
+    let src = "struct pt { x: int }\nstruct holder { next: box<pt>? }\nfn main() { const h = holder { next: box(pt { x: 5 }) }\n if h.next is some(q) { print(q.x) }\n const e = holder { next: none }\n print(e.next.is_none()) }\n";
+    assert_eq!(output_of(src), "5\ntrue\n");
 }

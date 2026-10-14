@@ -1773,6 +1773,35 @@ impl<T> lock<T> {
     }
 }
 
+// ---- Boxes -------------------------------------------------------------------------------------
+
+/// `box(value)`: one value on the heap with a single owner. The block holds the bare value.
+fn rt_box_new<T>(sink value: T) -> box<T> {
+    const p = rt_alloc(rt_size_of<T>() + 1)
+    rt_write<T>(p, sink value)
+    rt_cast<ptr, box<T>>(p)
+}
+
+impl<T> box<T> {
+    /// A view of the value inside. The compiler treats a call of `get` as a place (like a field).
+    ext fn get(self) -> T
+
+    /// Drops the old value and puts a new one in.
+    fn set(inout self, sink value: T) {
+        const p = rt_load_ptr(rt_addr_of(self))
+        rt_drop_at<T>(p)
+        rt_write<T>(p, sink value)
+    }
+
+    /// Takes the value out and frees the block.
+    fn take(sink self) -> T {
+        const p = rt_cast<box<T>, ptr>(sink self)
+        const v = rt_read<T>(p)
+        rt_free(p)
+        v
+    }
+}
+
 // ---- Spreading into literals ------------------------------------------------------------------
 
 /// Appends copies of the elements of the list at `src` to the list at `h`.
