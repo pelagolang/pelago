@@ -1,6 +1,6 @@
 Id: A-05
 Title: `meta`: code that runs while compiling
-Column: Inbox (design is decided in `functions.md` section 15 and G3; this card turns it into a build plan; open questions at the end)
+Column: Doing: M1 and M2 are done (see `functions.md` section 15, "Built so far"); M3 and M4 wait for the owner's answers to the four questions below
 Order: 5
 Depends on: A-02 (box, for compile-time data structures), A-04 stage 2 or later (a faster evaluator), the lowering (done)
 Size: XL (four stages, each shippable)

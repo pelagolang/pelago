@@ -9,7 +9,7 @@ Last updated with the plans written after the lowering milestone (IR9 to IR20 in
 
 | Column | Card | Title | Size |
 |---|---|---|---|
-| **Needs decision** | [A-05](cards/A-05-meta.md) | `meta`: compile-time code (stages M1 and M2 can start now; 4 questions gate M3) | XL |
+| **Needs decision** | [A-05](cards/A-05-meta.md) | `meta`: M1 (`meta if`, `target`) and M2 (`meta N`) are done; 4 questions gate M3 (`meta expr`, `meta fn`) | XL |
 | **Ready** | [A-06](cards/A-06-soa.md) | `soa<T>`: struct-of-arrays collection (after A-05 in order; 3 small questions) | L |
 | **Shelf** | [A-07](cards/A-07-async.md) | `async` / `await` (deferred by decision G5) | XL |
 

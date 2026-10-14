@@ -248,6 +248,18 @@ is still no interpreter or runtime in the output. Compile-time code cannot do I/
 at first, and has a step limit so a runaway loop becomes an error, not a hang.
 `meta if` would do the job that the `when` keyword was reserved for.
 
+### Built so far (card A-05)
+
+- **`meta if`** (stage M1, `compiler/src/meta.rs`): the condition is evaluated while resolving names, from literals, `target.os`,
+  `target.arch`, `target.pointer_bits`, `target.endian`, `target.debug`, bare words such as `linux`, `==`, `!=`, `&&`, `||`, `!` (and
+  `<`, `>` on numbers). Only the chosen branch is resolved, checked and lowered; the other is parsed and nothing else, so it may name
+  things that exist only on another system. Works for declarations at module level and for statements and values inside functions.
+  A condition that is not known at compile time is an error. `Program.target` holds the machine; it defaults to the host.
+- **`meta N: int`** (stage M2): a value as a generic parameter on functions and types. `zeros<3>()`, or inferred from an array length
+  (`total([1, 2, 3, 4])` makes `N = 4`). Array lengths are type-level terms (`ArrayLen::Term`), `TyKind::Const` carries the number, and each
+  value gets its own instance. In the body `N` is an `int` constant. Arithmetic on parameters in types (`[int; N + 1]`) is not built yet.
+- Not built: `meta expr` and `meta fn` (stage M3, waiting for the owner's four answers on the card).
+
 ## 16. Hints to the optimizer
 
 ```
