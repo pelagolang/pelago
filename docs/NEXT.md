@@ -18,7 +18,7 @@
 
 ## The task board
 
-Work is tracked as cards in `docs/plans/` (read `README.md` there, then `BOARD.md`). Done: `A-01`, `A-02` (box). Next on track A: `A-08` checker bugs, `A-03` the ledger, `A-04` the IR optimiser. Track B: the name (`B-01`), then the highlighter (`B-03`).
+Work is tracked as cards in `docs/plans/` (read `README.md` there, then `BOARD.md`). Cards A-01 to A-08 and B-03 are done (box, the ledger, the optimiser, meta, soa, async at stage 0, the highlighter). Next: the machine-code backend, then the shelf (S-01 maps, S-02 threads, S-04 async suspension).
 
 ## Open questions for the owner
 
