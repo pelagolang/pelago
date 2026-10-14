@@ -38,6 +38,13 @@ fn main() {
                 std::process::exit(2);
             }
         },
+        Some("ir") => match args.next() {
+            Some(path) => ir_path(&path),
+            None => {
+                eprintln!("usage: langc ir <file or directory>");
+                std::process::exit(2);
+            }
+        },
         Some("parse-bench") => match args.next() {
             Some(path) => parse_bench(&path),
             None => {
@@ -69,6 +76,7 @@ fn usage() {
     eprintln!("  tokens     list operators and punctuation");
     eprintln!("  lex-bench <file>  time the lexer alone on a file");
     eprintln!("  parse [--no-docs] <file>  print the syntax tree and any errors (`-` reads standard input)");
+    eprintln!("  ir <path>  check, lower to the IR, verify and print it");
     eprintln!("  check <path>  parse and resolve names of a file or a directory of `.lang` files");
     eprintln!("  parse-bench <file>  time lexing plus parsing on a file");
     eprintln!("  lex <file> print the tokens of a source file (`-` reads standard input)");
@@ -131,6 +139,45 @@ fn check_path(path: &str) {
         println!("{warnings} warning{}", if warnings == 1 { "" } else { "s" });
     }
     if !diags.is_empty() {
+        std::process::exit(1);
+    }
+}
+
+/// Checks the program, lowers it to the IR, verifies it and prints it.
+fn ir_path(path: &str) {
+    let mut program = langc::package::Program::with_core();
+    if let Err(e) = program.add_package_from_path(std::path::Path::new(path)) {
+        eprintln!("{e}");
+        std::process::exit(2);
+    }
+    let resolved = langc::resolve::resolve(&program);
+    let typed = langc::typecheck::check(&program, &resolved);
+    let mut diags = typed.diagnostics.clone();
+    diags.extend(langc::values::check(&program, &resolved, &typed));
+    let mut failed = false;
+    for d in diags.iter().filter(|d| !d.warning) {
+        let module = program.module(d.module);
+        let index = LineIndex::new(&module.src);
+        let (line, col) = index.line_col(&module.src, d.span.start);
+        eprintln!("{}:{line}:{col}: error: {}", module.path, d.message);
+        failed = true;
+    }
+    if failed {
+        std::process::exit(1);
+    }
+    let lowered = langc::lower::lower(&program, &resolved, &typed);
+    for d in &lowered.diagnostics {
+        let module = program.module(d.module);
+        let index = LineIndex::new(&module.src);
+        let (line, col) = index.line_col(&module.src, d.span.start);
+        eprintln!("{}:{line}:{col}: note: {}", module.path, d.message);
+    }
+    for e in langc::ir::verify_module(&lowered.module) {
+        eprintln!("ir error: {e}");
+        failed = true;
+    }
+    print!("{}", langc::ir::print_module(&lowered.module));
+    if failed {
         std::process::exit(1);
     }
 }

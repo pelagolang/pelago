@@ -44,6 +44,8 @@ pub struct Typed {
     pub owning: std::collections::HashSet<DefId>,
     /// The types declared `linear`: they must be consumed exactly once.
     pub linear: std::collections::HashSet<DefId>,
+    /// The return type of each function with a body.
+    pub fn_rets: HashMap<DefId, Ty>,
     names: Vec<String>,
 }
 
@@ -377,11 +379,18 @@ impl<'p> Checker<'p> {
         }
         let owning = self.compute_owning();
         let linear = std::mem::take(&mut self.linear);
+        let rets: Vec<(DefId, Ty)> = self.fn_sigs.iter().map(|(d, s)| (*d, s.ret)).collect();
+        let mut fn_rets = HashMap::new();
+        for (d, t) in rets {
+            let z = self.tt.zonk(t);
+            fn_rets.insert(d, z);
+        }
         let mut diagnostics = self.res.diagnostics.clone();
         diagnostics.extend(self.diags);
         Typed {
             owning,
             linear,
+            fn_rets,
             tys,
             local_tys,
             names: self.res.defs.iter().map(|d| d.name.clone()).collect(),
@@ -1482,6 +1491,6 @@ pub(crate) fn holds_view(tt: &TypeTable, t: Ty) -> bool {
 }
 
 /// A literal's value as written, for range checks.
-pub(crate) fn literal_value(text: &str) -> Option<u128> {
+pub fn literal_value(text: &str) -> Option<u128> {
     int_text(text)
 }

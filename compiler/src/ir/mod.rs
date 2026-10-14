@@ -7,11 +7,13 @@
 //! This first version has scalar types and pointers; aggregates arrive with the lowering of
 //! structs and enums.
 
+mod interp;
 mod print;
 #[cfg(test)]
 mod tests;
 mod verify;
 
+pub use interp::{run, Val};
 pub use print::{print_func, print_module};
 pub use verify::{verify_func, verify_module};
 

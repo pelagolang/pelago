@@ -22,6 +22,7 @@ cargo run -- lex-bench <file>    # time the lexer alone
 cargo run -- parse <file>        # print the syntax tree, report errors
 cargo run -- parse-bench <file>  # time lexing plus parsing
 cargo run -- check <path>        # parse, resolve names and check types of a file or a directory
+cargo run -- ir <path>           # check, lower to the IR, verify and print it
 BLESS=1 cargo test               # rewrite compiler/tests/golden/*.ast after an intended syntax change
 ```
 
@@ -29,7 +30,7 @@ CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pus
 
 ## Layout
 
-- `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `ast.rs`, `ast_print.rs`, `visit.rs`, `check.rs`, `package.rs`, `parser/`, `resolve/`, `types.rs`, `typecheck/`, `values/`, `ir/`, `main.rs`; the library `compiler/core/core.lang`).
+- `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `ast.rs`, `ast_print.rs`, `visit.rs`, `check.rs`, `package.rs`, `parser/`, `resolve/`, `types.rs`, `typecheck/`, `values/`, `ir/`, `lower/`, `main.rs`; the library `compiler/core/core.lang`).
 - `compiler/tests/`: integration tests. Every file in `examples/*.lang` must lex and parse without errors and match its golden tree.
 - `examples/`: sample source files. Keep `tour.lang` in step with the syntax decisions. `examples/programs/` holds real programs that must type check cleanly.
 - `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `lexer`, `parser`, `modules`, `checker`, `ir`, `memory`, `samples`).

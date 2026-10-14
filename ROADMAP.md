@@ -121,7 +121,8 @@ No compiler code yet. Everything here is cheap to change.
 - [x] Pattern-match exhaustiveness (`typecheck/exhaust.rs`)
 - [ ] Generics via monomorphization
 - [x] IR data types, printer and verifier (`compiler/src/ir/`, `docs/design/ir.md`, IR1 to IR8 decided)
-- [ ] Lowering to IR, monomorphisation, IR interpreter
+- [x] First lowering (numbers, control flow, calls) and the IR interpreter (`compiler/src/lower/`, `langc ir`)
+- [ ] Lowering of aggregates, `switch`, ownership and drops, monomorphisation
 
 **Milestone:** programs are type-checked and lowered to IR, and the checker rejects the unsafe examples.
 

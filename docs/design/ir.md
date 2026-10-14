@@ -1,4 +1,4 @@
-# Lowering to IR (draft 2)
+# Lowering to IR (draft 3)
 
 What happens between "the checker accepted the program" and "the backend turns it into machine code", why it is shaped
 this way, and the choices that are yours. Nothing here is built yet.
@@ -119,3 +119,13 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 
 - Step 1 (IR types, printer, verifier) is built: `compiler/src/ir/` (`mod.rs` data and builder, `print.rs`, `verify.rs`). The verifier checks
   one terminator per block, single assignment, definitions that dominate their uses, and types of operands, jumps, calls and returns.
+- Step 2 (the first lowering) and the IR interpreter (IR2) are built: `compiler/src/lower/` and `compiler/src/ir/interp.rs`, with
+  `langc ir <path>` to print the IR of a program. It handles functions over integers, floats and `bool`: parameters, `const` and `var`
+  (a `var` lives in a stack slot; a later pass can turn slots into values), checked arithmetic, wrapping operators, comparisons,
+  `&&` / `||`, `if` / `unless`, `?:`, `while`, `loop` (with `break value`), `for` over a range, labels, `continue`, `return`,
+  `to` conversions and calls. Division and remainder stop on zero; shifts stop at the width; `+ - *` stop on overflow.
+  Anything else is reported as a note ("not lowered yet: ...") and the function becomes a `stop` so the module still verifies. A
+  function whose signature is not simple (lists, strings, `inout`, generics) is left out of the module for now.
+- Tests lower source, verify the IR and run it in the interpreter (recursion, loops, labels, narrow and unsigned integers, floats,
+  every kind of stop).
+- Next, step 3: aggregates (structs, tuples, enums, `option`, `result`, `?`) and `switch` as decision trees.
