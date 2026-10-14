@@ -1,6 +1,6 @@
 Id: A-09
 Title: Native backend: x86-64 machine code and ELF straight from the IR
-Column: Doing (N1 done; N2 next)
+Column: Doing (N1 to N3 done, N4 mostly; Windows next)
 Order: 1 (track A)
 Depends on: nothing open (the IR, the interpreter and the optimiser exist)
 Size: XL, in seven stages (N1 to N7), each testable on its own
@@ -82,9 +82,9 @@ the shelf items that need real machine features (S-01 measured maps, S-02 thread
 | Stage | Work | Done when |
 |---|---|---|
 | **N1** (done) | `native/x86.rs` encoder, `native/elf.rs` writer, runtime stub. Hand-built IR modules only. | A hand-built module prints `hello` and exits 0 as a real ELF; encoder bytes match golden `as` output; `objdump -d` reads the file. |
-| **N2** | Simple code generator for all 22 operations and the 5 terminators (including the semantics table above). `pelago build file.pel -o out`. | Hello world, FizzBuzz, `fib` and `loop_sum` run natively and print what the interpreter prints. |
-| **N3** | The whole suite natively: every `output_of` test and `example_programs_run` also run the native build (Linux x86-64 only, skipped elsewhere) and compare output and exit status; allocator leak counter in test builds; compile-time vs run-time agreement tests. | The 368 tests are green in all three modes (interpreter, optimised, native). |
-| **N4** | CLI: `pelago build`, `pelago run --native`, `--emit asm` (a listing for reading). Docs: `docs/design/backend.md`. | A user can build and run an example from the command line. |
+| **N2** (done) | Simple code generator for all 22 operations and the 5 terminators (including the semantics table above). `pelago build file.pel -o out`. | Hello world, FizzBuzz, `fib` and `loop_sum` run natively and print what the interpreter prints. |
+| **N3** (done) | The whole suite natively: every `output_of` test and `example_programs_run` also run the native build (Linux x86-64 only, skipped elsewhere) and compare output and exit status; allocator leak counter in test builds; compile-time vs run-time agreement tests. | The 368 tests are green in all three modes (interpreter, optimised, native). |
+| **N4** (mostly: `build`, `run --native`; `--emit asm` left) | CLI: `pelago build`, `pelago run --native`, `--emit asm` (a listing for reading). Docs: `docs/design/backend.md`. | A user can build and run an example from the command line. |
 | **N5** | Linear-scan register allocation; `--opt` on by default for `build`. | All tests green; `benches/*.pel` at least 5x faster than N2; numbers recorded in the card. |
 | **N6** | Speed work found by measuring: buffered `print`, inline `MemCopy` for small sizes, shared stop blocks, branch layout. | Benchmarks recorded; a table "ours vs the interpreter vs C (gcc -O2 on the same program)" in `docs/design/backend.md`. |
 | **N7** | Later, not part of the first milestone: DWARF line table, real threads (S-02: `clone` and atomics), AArch64, PE and Mach-O writers. | Each its own card. |

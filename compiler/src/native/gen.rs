@@ -1,0 +1,815 @@
+//! The simple code generator (stage N2): every IR value lives in its own 8-byte stack slot and
+//! each operation is a fixed template over `rax rcx rdx` and `xmm0 xmm1`. Slow, small and easy to
+//! trust; register allocation (N5) replaces it later without changing what the tests expect.
+//!
+//! Representation: an integer or boolean value is kept **zero-extended** to 64 bits in its slot
+//! ("canonical form"), a pointer is 64 bits, a float is 4 or 8 bytes in the low part of the slot.
+//! Operations that need the sign extend from the slot with `movsx`; results are cut back to their
+//! width. The rules for division, shifts, overflow and NaN are in `docs/design/backend.md`.
+
+use super::elf::{self, Blob, Symbol};
+use super::rt::{self, Runtime};
+use super::x86::*;
+use crate::ir::{
+    BinOp, CastKind, CmpOp, Const, Func, FuncId, Inst, IrTy, Module, Op, Target, Term, Value,
+};
+use std::collections::HashMap;
+
+const INT_REGS: [Reg; 6] = [RDI, RSI, RDX, RCX, R8, R9];
+const MAX_FLOAT_REGS: usize = 8;
+
+/// What to build.
+pub struct Options {
+    /// Report leaked blocks at exit (status 3): for tests.
+    pub leak_check: bool,
+}
+
+/// Compiles the module to an executable whose entry runs the function named `entry`.
+pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, String> {
+    let main_fn = m
+        .funcs
+        .iter()
+        .position(|f| f.name == entry)
+        .ok_or_else(|| format!("no function `{entry}`"))?;
+    let mut g = Gen::new(m);
+    let main_label = g.funcs[main_fn];
+    let rt = rt::emit(
+        &mut g.a,
+        &mut g.ro,
+        &mut g.data,
+        main_label,
+        opts.leak_check,
+    );
+    g.rt = Some(rt);
+    g.place_data();
+    g.stop_stubs();
+    let mut syms = Vec::new();
+    for (i, f) in m.funcs.iter().enumerate() {
+        let start = g.a.here();
+        g.function(i, f)?;
+        syms.push(Symbol {
+            name: f.name.clone(),
+            offset: start as u64,
+            size: (g.a.here() - start) as u64,
+        });
+    }
+    elf::write(&g.a, &g.ro, &g.data, 0, &syms)
+}
+
+struct Gen<'m> {
+    m: &'m Module,
+    a: Asm,
+    ro: Blob,
+    data: Blob,
+    funcs: Vec<Label>,
+    data_off: Vec<u32>,
+    rt: Option<Runtime>,
+    stop_div0: Label,
+    stop_shift: Label,
+    stop_overflow: Label,
+    stop_unreachable: Label,
+    /// Per function: frame offset of each value and of each `Slot`.
+    val_off: Vec<i32>,
+    slot_off: HashMap<usize, i32>,
+    frame: i32,
+    block_labels: Vec<Label>,
+    ret_ty: IrTy,
+}
+
+fn bits(t: IrTy) -> u32 {
+    match t {
+        IrTy::Int(b) => b as u32,
+        IrTy::Bool => 8,
+        _ => 64,
+    }
+}
+
+fn size(t: IrTy) -> u8 {
+    match t {
+        IrTy::Int(b) => (b / 8).max(1),
+        IrTy::Bool => 1,
+        IrTy::F32 => 4,
+        _ => 8,
+    }
+}
+
+fn is_float(t: IrTy) -> bool {
+    matches!(t, IrTy::F32 | IrTy::F64)
+}
+
+/// Where an argument or parameter travels.
+enum Loc {
+    Int(usize),
+    Float(usize),
+    Stack(usize),
+}
+
+fn classify(tys: &[IrTy]) -> Vec<Loc> {
+    let (mut i, mut f, mut s) = (0, 0, 0);
+    tys.iter()
+        .map(|t| {
+            if is_float(*t) {
+                if f < MAX_FLOAT_REGS {
+                    f += 1;
+                    return Loc::Float(f - 1);
+                }
+            } else if i < INT_REGS.len() {
+                i += 1;
+                return Loc::Int(i - 1);
+            }
+            s += 1;
+            Loc::Stack(s - 1)
+        })
+        .collect()
+}
+
+impl<'m> Gen<'m> {
+    fn new(m: &'m Module) -> Gen<'m> {
+        let mut a = Asm::new();
+        let funcs = m.funcs.iter().map(|_| a.new_label()).collect();
+        let (d, s, o, u) = (a.new_label(), a.new_label(), a.new_label(), a.new_label());
+        Gen {
+            m,
+            a,
+            ro: Blob::default(),
+            data: Blob::default(),
+            funcs,
+            data_off: Vec::new(),
+            rt: None,
+            stop_div0: d,
+            stop_shift: s,
+            stop_overflow: o,
+            stop_unreachable: u,
+            val_off: Vec::new(),
+            slot_off: HashMap::new(),
+            frame: 0,
+            block_labels: Vec::new(),
+            ret_ty: IrTy::Void,
+        }
+    }
+
+    fn rt(&self) -> &Runtime {
+        self.rt.as_ref().expect("the runtime is emitted first")
+    }
+
+    /// All static data goes into `.data` (the lowering writes to some tables at run time).
+    fn place_data(&mut self) {
+        for d in &self.m.data {
+            let at = self.data.add(d, 16);
+            self.data_off.push(at);
+        }
+    }
+
+    /// The shared exits for the checks that stop the program.
+    fn stop_stubs(&mut self) {
+        // Jumped over by the start code: they are only reached by `jcc`.
+        for (label, msg) in [
+            (self.stop_div0, "division by zero"),
+            (self.stop_shift, "shifted by the width or more"),
+            (self.stop_overflow, "arithmetic overflow"),
+            (self.stop_unreachable, "reached unreachable code"),
+        ] {
+            let off = self.ro.add(msg.as_bytes(), 1);
+            self.a.bind(label);
+            self.a.lea_sect(RDI, Sect::Rodata, off);
+            self.a.mov_ri(RSI, msg.len() as i64);
+            let stop = self.rt().stop;
+            self.a.call(stop);
+        }
+    }
+
+    // ---- Frames --------------------------------------------------------------------------------------
+
+    fn vmem(&self, v: Value) -> Mem {
+        mem(RBP, self.val_off[v.0 as usize])
+    }
+
+    fn layout(&mut self, f: &Func) {
+        self.val_off.clear();
+        self.slot_off.clear();
+        let mut at = 0i32;
+        for _ in 0..f.values.len() {
+            at += 8;
+            self.val_off.push(-at);
+        }
+        for b in &f.blocks {
+            for &i in &b.insts {
+                if let Op::Slot(sz, al) = f.insts[i].op {
+                    let al = (al as i32).max(1);
+                    at = (at + sz as i32 + al - 1) / al * al;
+                    self.slot_off.insert(i, -at);
+                }
+            }
+        }
+        self.frame = (at + 15) / 16 * 16;
+    }
+
+    // ---- Loads and stores of values -------------------------------------------------------------------
+
+    fn ld(&mut self, r: Reg, v: Value) {
+        let m = self.vmem(v);
+        self.a.load(r, m, 8);
+    }
+
+    /// The value widened to 64 bits with its sign or with zeros.
+    fn ld_ext(&mut self, r: Reg, v: Value, f: &Func, signed: bool) {
+        let m = self.vmem(v);
+        let t = f.ty(v);
+        self.a.load_ext(r, m, size(t), signed, true);
+    }
+
+    fn st(&mut self, v: Value, r: Reg) {
+        let m = self.vmem(v);
+        self.a.store(m, r, 8);
+    }
+
+    fn ldf(&mut self, x: Xmm, v: Value, f: &Func) {
+        let m = self.vmem(v);
+        self.a.fload(x, m, f.ty(v) == IrTy::F64);
+    }
+
+    fn stf(&mut self, v: Value, x: Xmm, f: &Func) {
+        let m = self.vmem(v);
+        self.a.fstore(m, x, f.ty(v) == IrTy::F64);
+    }
+
+    /// Cuts a 64-bit register down to `bits`, zero-extended again.
+    fn mask(&mut self, r: Reg, bits: u32) {
+        match bits {
+            8 => self.a.extend_rr(r, r, 1, false, false),
+            16 => self.a.extend_rr(r, r, 2, false, false),
+            32 => self.a.mov_rr(r, r, 4),
+            _ => {}
+        }
+    }
+
+    // ---- Functions -----------------------------------------------------------------------------------
+
+    fn function(&mut self, fi: usize, f: &Func) -> Result<(), String> {
+        self.layout(f);
+        self.ret_ty = f.ret;
+        self.block_labels = f.blocks.iter().map(|_| self.a.new_label()).collect();
+        let l = self.funcs[fi];
+        self.a.bind(l);
+        self.a.push(RBP);
+        self.a.mov_rr(RBP, RSP, 8);
+        if self.frame > 0 {
+            self.a.alu_ri(Alu::Sub, RSP, self.frame, 8);
+        }
+        // Parameters: registers or the caller's stack.
+        let entry = f.entry();
+        let params: Vec<Value> = f.block_params(entry).to_vec();
+        let tys: Vec<IrTy> = params.iter().map(|p| f.ty(*p)).collect();
+        for (p, loc) in params.iter().zip(classify(&tys)) {
+            let m = self.vmem(*p);
+            match loc {
+                Loc::Int(i) => self.a.store(m, INT_REGS[i], 8),
+                Loc::Float(i) => self.a.fstore(m, Xmm(i as u8), true),
+                Loc::Stack(k) => {
+                    self.a.load(RAX, mem(RBP, 16 + 8 * k as i32), 8);
+                    self.a.store(m, RAX, 8);
+                }
+            }
+        }
+        for (bi, b) in f.blocks.iter().enumerate() {
+            let lb = self.block_labels[bi];
+            self.a.bind(lb);
+            for &i in &b.insts {
+                self.inst(f, i, &f.insts[i])?;
+            }
+            match &b.term {
+                Some(t) => self.term(f, t)?,
+                None => return Err(format!("`{}`: a block has no terminator", f.name)),
+            }
+        }
+        Ok(())
+    }
+
+    fn epilogue(&mut self) {
+        self.a.mov_rr(RSP, RBP, 8);
+        self.a.pop(RBP);
+        self.a.ret();
+    }
+
+    // ---- Terminators ---------------------------------------------------------------------------------
+
+    fn term(&mut self, f: &Func, t: &Term) -> Result<(), String> {
+        match t {
+            Term::Return(None) => self.epilogue(),
+            Term::Return(Some(v)) => {
+                if is_float(f.ty(*v)) {
+                    self.ldf(Xmm(0), *v, f);
+                } else {
+                    self.ld(RAX, *v);
+                }
+                self.epilogue();
+            }
+            Term::Jump(tg) => self.edge(f, tg),
+            Term::Branch(c, t, e) => {
+                let then_l = self.a.new_label();
+                self.ld(RAX, *c);
+                self.a.test_rr(RAX, RAX, 1);
+                self.a.jcc(Cc::Ne, then_l);
+                self.edge(f, e);
+                self.a.bind(then_l);
+                self.edge(f, t);
+            }
+            Term::Stop(msg) => {
+                let off = self.ro.add(msg.as_bytes(), 1);
+                self.a.lea_sect(RDI, Sect::Rodata, off);
+                self.a.mov_ri(RSI, msg.len() as i64);
+                let stop = self.rt().stop;
+                self.a.call(stop);
+            }
+            Term::Unreachable => {
+                let l = self.stop_unreachable;
+                self.a.jmp(l);
+            }
+        }
+        Ok(())
+    }
+
+    /// Hands the arguments to the target's parameters and jumps. When an argument is itself a
+    /// parameter of the target (a swap), everything goes through the stack first.
+    fn edge(&mut self, f: &Func, tg: &Target) {
+        let params = f.block_params(tg.block).to_vec();
+        let conflict = tg
+            .args
+            .iter()
+            .enumerate()
+            .any(|(i, a)| params.iter().position(|p| p == a).is_some_and(|j| j != i));
+        if conflict {
+            for a in &tg.args {
+                self.ld(RAX, *a);
+                self.a.push(RAX);
+            }
+            for p in params.iter().rev() {
+                self.a.pop(RAX);
+                self.st(*p, RAX);
+            }
+        } else {
+            for (p, a) in params.iter().zip(&tg.args) {
+                if p != a {
+                    self.ld(RAX, *a);
+                    self.st(*p, RAX);
+                }
+            }
+        }
+        let l = self.block_labels[tg.block.0 as usize];
+        self.a.jmp(l);
+    }
+
+    // ---- Instructions --------------------------------------------------------------------------------
+
+    fn inst(&mut self, f: &Func, id: usize, inst: &Inst) -> Result<(), String> {
+        let res = inst.result;
+        match &inst.op {
+            Op::Const(t, c) => {
+                let bits_v: i64 = match (c, t) {
+                    (Const::Int(n), t) => {
+                        let b = bits(*t);
+                        if b >= 64 {
+                            *n as i64
+                        } else {
+                            (*n as u128 & ((1u128 << b) - 1)) as i64
+                        }
+                    }
+                    (Const::Bool(b), _) => i64::from(*b),
+                    (Const::Float(x), IrTy::F32) => (*x as f32).to_bits() as i64,
+                    (Const::Float(x), _) => x.to_bits() as i64,
+                };
+                self.a.mov_ri(RAX, bits_v);
+                self.st(res.unwrap(), RAX);
+            }
+            Op::Bin(op, a, b) => self.bin(f, *op, *a, *b, res.unwrap())?,
+            Op::Checked(op, signed, a, b) => self.checked(f, *op, *signed, *a, *b, res.unwrap()),
+            Op::Cmp(op, a, b) => self.cmp(f, *op, *a, *b, res.unwrap()),
+            Op::Neg(a) => {
+                let t = f.ty(*a);
+                if is_float(t) {
+                    self.ld(RAX, *a);
+                    if t == IrTy::F32 {
+                        self.a.alu_ri(Alu::Xor, RAX, i32::MIN, 4);
+                    } else {
+                        self.a.mov_ri(RCX, i64::MIN);
+                        self.a.alu_rr(Alu::Xor, RAX, RCX, 8);
+                    }
+                } else {
+                    self.ld(RAX, *a);
+                    self.a.neg(RAX, 8);
+                    self.mask(RAX, bits(t));
+                }
+                self.st(res.unwrap(), RAX);
+            }
+            Op::Not(a) => {
+                let t = f.ty(*a);
+                self.ld(RAX, *a);
+                if t == IrTy::Bool {
+                    self.a.alu_ri(Alu::Xor, RAX, 1, 4);
+                } else {
+                    self.a.not(RAX, 8);
+                    self.mask(RAX, bits(t));
+                }
+                self.st(res.unwrap(), RAX);
+            }
+            Op::Cast(k, a, to) => self.cast(f, *k, *a, *to, res.unwrap()),
+            Op::Call(callee, args) => {
+                let l = self.funcs[callee.0 as usize];
+                self.call(
+                    f,
+                    args,
+                    None,
+                    &mut |g| g.a.call(l),
+                    res,
+                    callee_ret(self.m, *callee),
+                );
+            }
+            Op::CallPtr(ptys, ret, fp, args) => {
+                let _ = ptys;
+                let fp = *fp;
+                self.call(f, args, Some(fp), &mut |g| g.a.call_reg(R11), res, *ret);
+            }
+            Op::Slot(sz, _) => {
+                let off = self.slot_off[&id];
+                // Memory is zero when a slot comes into use, as in the interpreter.
+                let mut at = 0i32;
+                let mut left = *sz as i32;
+                if left <= 64 {
+                    for (n, w) in [(8, 8u8), (4, 4), (2, 2), (1, 1)] {
+                        while left >= n {
+                            self.a.store_imm(mem(RBP, off + at), 0, w);
+                            at += n;
+                            left -= n;
+                        }
+                    }
+                } else {
+                    self.a.lea(RDI, mem(RBP, off));
+                    self.a.alu_rr(Alu::Xor, RAX, RAX, 4);
+                    self.a.mov_ri(RCX, *sz as i64);
+                    self.a.rep_stosb();
+                }
+                self.a.lea(RAX, mem(RBP, off));
+                self.st(res.unwrap(), RAX);
+            }
+            Op::PtrAdd(p, n) => {
+                self.ld(RAX, *p);
+                self.ld(RCX, *n);
+                self.a.alu_rr(Alu::Add, RAX, RCX, 8);
+                self.st(res.unwrap(), RAX);
+            }
+            Op::MemCopy(d, s, n) => {
+                self.ld(RDI, *d);
+                self.ld(RSI, *s);
+                self.ld(RCX, *n);
+                self.a.rep_movsb();
+            }
+            Op::DataAddr(i) => {
+                let off = self.data_off[*i as usize];
+                self.a.lea_sect(RAX, Sect::Data, off);
+                self.st(res.unwrap(), RAX);
+            }
+            Op::FuncAddr(fid) => {
+                let l = self.funcs[fid.0 as usize];
+                self.a.lea_label(RAX, l);
+                self.st(res.unwrap(), RAX);
+            }
+            Op::Print(p, n) => {
+                self.a.mov_ri(RDI, 1);
+                self.ld(RSI, *p);
+                self.ld(RDX, *n);
+                let w = self.rt().write_fd;
+                self.a.call(w);
+            }
+            Op::Load(t, p) => {
+                self.ld(RCX, *p);
+                let r = res.unwrap();
+                match t {
+                    IrTy::F32 | IrTy::F64 => {
+                        self.a.fload(Xmm(0), mem(RCX, 0), *t == IrTy::F64);
+                        self.stf(r, Xmm(0), f);
+                    }
+                    _ => {
+                        self.a.load_ext(RAX, mem(RCX, 0), size(*t), false, true);
+                        self.st(r, RAX);
+                    }
+                }
+            }
+            Op::Store(p, x) => {
+                let t = f.ty(*x);
+                self.ld(RCX, *p);
+                if is_float(t) {
+                    self.ldf(Xmm(0), *x, f);
+                    self.a.fstore(mem(RCX, 0), Xmm(0), t == IrTy::F64);
+                } else {
+                    self.ld(RAX, *x);
+                    self.a.store(mem(RCX, 0), RAX, size(t));
+                }
+            }
+            Op::Alloc(n) => {
+                self.ld(RDI, *n);
+                let al = self.rt().alloc;
+                self.a.call(al);
+                self.st(res.unwrap(), RAX);
+            }
+            Op::Free(p) => {
+                self.ld(RDI, *p);
+                let fr = self.rt().free;
+                self.a.call(fr);
+            }
+        }
+        Ok(())
+    }
+
+    /// A call: stack arguments, register arguments, the call, the result.
+    fn call(
+        &mut self,
+        f: &Func,
+        args: &[Value],
+        fptr: Option<Value>,
+        emit: &mut dyn FnMut(&mut Gen<'m>),
+        res: Option<Value>,
+        ret: IrTy,
+    ) {
+        let tys: Vec<IrTy> = args.iter().map(|a| f.ty(*a)).collect();
+        let locs = classify(&tys);
+        let stack: Vec<usize> = locs
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| matches!(l, Loc::Stack(_)))
+            .map(|(i, _)| i)
+            .collect();
+        let pad = stack.len() % 2 == 1;
+        if pad {
+            self.a.alu_ri(Alu::Sub, RSP, 8, 8);
+        }
+        for &i in stack.iter().rev() {
+            self.ld(RAX, args[i]);
+            self.a.push(RAX);
+        }
+        for (arg, loc) in args.iter().zip(&locs) {
+            match loc {
+                Loc::Int(i) => self.ld(INT_REGS[*i], *arg),
+                Loc::Float(i) => {
+                    let m = self.vmem(*arg);
+                    self.a.fload(Xmm(*i as u8), m, f.ty(*arg) == IrTy::F64);
+                }
+                Loc::Stack(_) => {}
+            }
+        }
+        if let Some(p) = fptr {
+            self.ld(R11, p);
+        }
+        emit(self);
+        let cleanup = 8 * (stack.len() + usize::from(pad)) as i32;
+        if cleanup > 0 {
+            self.a.alu_ri(Alu::Add, RSP, cleanup, 8);
+        }
+        if let Some(r) = res {
+            if is_float(ret) {
+                let m = self.vmem(r);
+                self.a.fstore(m, Xmm(0), ret == IrTy::F64);
+            } else {
+                self.st(r, RAX);
+            }
+        }
+    }
+
+    // ---- Arithmetic ----------------------------------------------------------------------------------
+
+    fn bin(&mut self, f: &Func, op: BinOp, a: Value, b: Value, r: Value) -> Result<(), String> {
+        let t = f.ty(a);
+        if is_float(t) {
+            let sse = match op {
+                BinOp::Add => Sse::Add,
+                BinOp::Sub => Sse::Sub,
+                BinOp::Mul => Sse::Mul,
+                BinOp::Div => Sse::Div,
+                _ => return Err("the native backend does not do float remainder yet".to_string()),
+            };
+            self.ldf(Xmm(0), a, f);
+            self.ldf(Xmm(1), b, f);
+            self.a.farith(sse, Xmm(0), Xmm(1), t == IrTy::F64);
+            self.stf(r, Xmm(0), f);
+            return Ok(());
+        }
+        let w = bits(t);
+        match op {
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor => {
+                self.ld(RAX, a);
+                self.ld(RCX, b);
+                match op {
+                    BinOp::Add => self.a.alu_rr(Alu::Add, RAX, RCX, 8),
+                    BinOp::Sub => self.a.alu_rr(Alu::Sub, RAX, RCX, 8),
+                    BinOp::Mul => self.a.imul_rr(RAX, RCX, 8),
+                    BinOp::And => self.a.alu_rr(Alu::And, RAX, RCX, 8),
+                    BinOp::Or => self.a.alu_rr(Alu::Or, RAX, RCX, 8),
+                    _ => self.a.alu_rr(Alu::Xor, RAX, RCX, 8),
+                }
+                self.mask(RAX, w);
+                self.st(r, RAX);
+            }
+            BinOp::Div | BinOp::Rem | BinOp::UDiv | BinOp::URem => {
+                let signed = matches!(op, BinOp::Div | BinOp::Rem);
+                let want_rem = matches!(op, BinOp::Rem | BinOp::URem);
+                self.ld_ext(RAX, a, f, signed);
+                self.ld_ext(RCX, b, f, signed);
+                self.a.test_rr(RCX, RCX, 8);
+                let z = self.stop_div0;
+                self.a.jcc(Cc::E, z);
+                if signed {
+                    let (normal, done) = (self.a.new_label(), self.a.new_label());
+                    if w == 64 {
+                        // `MIN / -1` would trap: the interpreter wraps.
+                        self.a.alu_ri(Alu::Cmp, RCX, -1, 8);
+                        self.a.jcc(Cc::Ne, normal);
+                        if want_rem {
+                            self.a.alu_rr(Alu::Xor, RDX, RDX, 4);
+                        } else {
+                            self.a.neg(RAX, 8);
+                        }
+                        self.a.jmp(done);
+                    }
+                    self.a.bind(normal);
+                    self.a.sign_extend_acc(8);
+                    self.a.idiv(RCX, 8);
+                    self.a.bind(done);
+                } else {
+                    self.a.alu_rr(Alu::Xor, RDX, RDX, 4);
+                    self.a.div(RCX, 8);
+                }
+                let out = if want_rem { RDX } else { RAX };
+                self.mask(out, w);
+                self.st(r, out);
+            }
+            BinOp::Shl | BinOp::Shr | BinOp::UShr => {
+                self.ld(RCX, b);
+                self.a.alu_ri(Alu::Cmp, RCX, w as i32, 8);
+                let s = self.stop_shift;
+                self.a.jcc(Cc::Ae, s);
+                self.ld_ext(RAX, a, f, op == BinOp::Shr);
+                let sh = match op {
+                    BinOp::Shl => Shift::Shl,
+                    BinOp::Shr => Shift::Sar,
+                    _ => Shift::Shr,
+                };
+                self.a.shift_cl(sh, RAX, 8);
+                self.mask(RAX, w);
+                self.st(r, RAX);
+            }
+        }
+        Ok(())
+    }
+
+    fn checked(&mut self, f: &Func, op: BinOp, signed: bool, a: Value, b: Value, r: Value) {
+        let w = bits(f.ty(a));
+        let ov = self.stop_overflow;
+        self.ld_ext(RAX, a, f, signed);
+        self.ld_ext(RCX, b, f, signed);
+        if w == 64 {
+            match (op, signed) {
+                (BinOp::Add, true) => {
+                    self.a.alu_rr(Alu::Add, RAX, RCX, 8);
+                    self.a.jcc(Cc::O, ov);
+                }
+                (BinOp::Sub, true) => {
+                    self.a.alu_rr(Alu::Sub, RAX, RCX, 8);
+                    self.a.jcc(Cc::O, ov);
+                }
+                (BinOp::Mul, true) => {
+                    self.a.imul_rr(RAX, RCX, 8);
+                    self.a.jcc(Cc::O, ov);
+                }
+                (BinOp::Add, false) => {
+                    self.a.alu_rr(Alu::Add, RAX, RCX, 8);
+                    self.a.jcc(Cc::B, ov);
+                }
+                (BinOp::Sub, false) => {
+                    self.a.alu_rr(Alu::Sub, RAX, RCX, 8);
+                    self.a.jcc(Cc::B, ov);
+                }
+                _ => {
+                    self.a.mul(RCX, 8);
+                    self.a.jcc(Cc::B, ov);
+                }
+            }
+        } else {
+            // Narrow: no overflow in 64 bits; the result must survive the trip through the width.
+            match op {
+                BinOp::Add => self.a.alu_rr(Alu::Add, RAX, RCX, 8),
+                BinOp::Sub => self.a.alu_rr(Alu::Sub, RAX, RCX, 8),
+                _ => self.a.imul_rr(RAX, RCX, 8),
+            }
+            self.a.extend_rr(RDX, RAX, (w / 8) as u8, signed, true);
+            self.a.alu_rr(Alu::Cmp, RDX, RAX, 8);
+            self.a.jcc(Cc::Ne, ov);
+            self.mask(RAX, w);
+        }
+        self.st(r, RAX);
+    }
+
+    fn cmp(&mut self, f: &Func, op: CmpOp, a: Value, b: Value, r: Value) {
+        let t = f.ty(a);
+        if is_float(t) {
+            self.ldf(Xmm(0), a, f);
+            self.ldf(Xmm(1), b, f);
+            let d = t == IrTy::F64;
+            match op {
+                CmpOp::Eq | CmpOp::Ne => {
+                    self.a.fcmp(Xmm(0), Xmm(1), d);
+                    if op == CmpOp::Eq {
+                        self.a.setcc(Cc::E, RAX);
+                        self.a.setcc(Cc::Np, RCX);
+                        self.a.alu_rr(Alu::And, RAX, RCX, 1);
+                    } else {
+                        self.a.setcc(Cc::Ne, RAX);
+                        self.a.setcc(Cc::P, RCX);
+                        self.a.alu_rr(Alu::Or, RAX, RCX, 1);
+                    }
+                }
+                CmpOp::Lt | CmpOp::ULt | CmpOp::Le | CmpOp::ULe => {
+                    // `a < b` is `b > a`; unordered gives "not above".
+                    self.a.fcmp(Xmm(1), Xmm(0), d);
+                    let cc = if matches!(op, CmpOp::Lt | CmpOp::ULt) {
+                        Cc::A
+                    } else {
+                        Cc::Ae
+                    };
+                    self.a.setcc(cc, RAX);
+                }
+                _ => {
+                    self.a.fcmp(Xmm(0), Xmm(1), d);
+                    let cc = if matches!(op, CmpOp::Gt | CmpOp::UGt) {
+                        Cc::A
+                    } else {
+                        Cc::Ae
+                    };
+                    self.a.setcc(cc, RAX);
+                }
+            }
+        } else {
+            let signed = matches!(t, IrTy::Int(_))
+                && matches!(op, CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge);
+            self.ld_ext(RAX, a, f, signed);
+            self.ld_ext(RCX, b, f, signed);
+            self.a.alu_rr(Alu::Cmp, RAX, RCX, 8);
+            let cc = match op {
+                CmpOp::Eq => Cc::E,
+                CmpOp::Ne => Cc::Ne,
+                CmpOp::Lt if signed => Cc::L,
+                CmpOp::Le if signed => Cc::Le,
+                CmpOp::Gt if signed => Cc::G,
+                CmpOp::Ge if signed => Cc::Ge,
+                CmpOp::Lt | CmpOp::ULt => Cc::B,
+                CmpOp::Le | CmpOp::ULe => Cc::Be,
+                CmpOp::Gt | CmpOp::UGt => Cc::A,
+                _ => Cc::Ae,
+            };
+            self.a.setcc(cc, RAX);
+        }
+        self.a.extend_rr(RAX, RAX, 1, false, false);
+        self.st(r, RAX);
+    }
+
+    fn cast(&mut self, f: &Func, k: CastKind, a: Value, to: IrTy, r: Value) {
+        let from = f.ty(a);
+        match k {
+            CastKind::ZExt | CastKind::Trunc => {
+                self.ld(RAX, a);
+                self.mask(RAX, bits(to));
+                self.st(r, RAX);
+            }
+            CastKind::SExt => {
+                self.ld_ext(RAX, a, f, true);
+                self.mask(RAX, bits(to));
+                self.st(r, RAX);
+            }
+            CastKind::PtrToInt | CastKind::IntToPtr => {
+                self.ld(RAX, a);
+                self.st(r, RAX);
+            }
+            CastKind::IntToFloat => {
+                self.ld_ext(RAX, a, f, true);
+                self.a.cvt_int_to_float(Xmm(0), RAX, true, to == IrTy::F64);
+                self.stf(r, Xmm(0), f);
+            }
+            CastKind::FloatToInt => {
+                self.ldf(Xmm(0), a, f);
+                self.a
+                    .cvt_float_to_int(RAX, Xmm(0), true, from == IrTy::F64);
+                self.mask(RAX, bits(to));
+                self.st(r, RAX);
+            }
+            CastKind::FloatResize => {
+                self.ldf(Xmm(0), a, f);
+                if from != to {
+                    self.a.cvt_float_resize(Xmm(0), Xmm(0), to == IrTy::F64);
+                }
+                self.stf(r, Xmm(0), f);
+            }
+        }
+    }
+}
+
+fn callee_ret(m: &Module, f: FuncId) -> IrTy {
+    m.funcs[f.0 as usize].ret
+}

@@ -433,6 +433,12 @@ impl Asm {
         self.int_op(size, &[op], 2, Rm::Reg(r.0), &[r], 0);
     }
 
+    /// Unsigned multiply of `rax` by `r` into `rdx:rax` (sets the carry flag when `rdx` is not zero).
+    pub fn mul(&mut self, r: Reg, size: u8) {
+        let op = if size == 1 { 0xF6 } else { 0xF7 };
+        self.int_op(size, &[op], 4, Rm::Reg(r.0), &[r], 0);
+    }
+
     /// Unsigned divide of `rdx:rax` by `r`.
     pub fn div(&mut self, r: Reg, size: u8) {
         let op = if size == 1 { 0xF6 } else { 0xF7 };

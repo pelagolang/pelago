@@ -17,6 +17,7 @@ use super::x86::*;
 
 pub const STATE_SIZE: usize = 128;
 const CHUNK: i64 = 1 << 20;
+const STACK: i64 = 1 << 30;
 /// The largest block served from the free lists: header plus payload.
 const SMALL_MAX: i32 = 64 * 1024;
 const LARGE_CLASS: i32 = 255;
@@ -63,6 +64,21 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
 
     // ---- _start ------------------------------------------------------------------------------------
     a.alu_rr(Alu::Xor, RBP, RBP, 4);
+    // A big stack of our own (1 GiB, taken lazily), so deep recursion works like it does in the
+    // interpreter; if the mapping fails, the stack the system gave us stays.
+    a.mov_ri(RAX, 9);
+    a.alu_rr(Alu::Xor, RDI, RDI, 4);
+    a.mov_ri(RSI, STACK);
+    a.mov_ri(RDX, 3);
+    a.mov_ri(R10, 0x4022); // private, anonymous, no reservation
+    a.mov_ri(R8, -1);
+    a.alu_rr(Alu::Xor, R9, R9, 4);
+    a.syscall();
+    let keep = a.new_label();
+    a.alu_ri(Alu::Cmp, RAX, -4095, 8);
+    a.jcc(Cc::Ae, keep);
+    a.lea(RSP, mem(RAX, STACK as i32));
+    a.bind(keep);
     a.alu_ri(Alu::And, RSP, -16, 8);
     a.call(main);
     let clean = a.new_label();

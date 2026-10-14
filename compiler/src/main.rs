@@ -46,17 +46,27 @@ fn main() {
                 std::process::exit(2);
             }
         },
-        Some(cmd @ ("ir" | "run")) => {
-            let rest: Vec<String> = args.collect();
+        Some(cmd @ ("ir" | "run" | "build")) => {
+            let mut rest: Vec<String> = args.collect();
+            // `-o <file>` names the output of `build`.
+            let mut out_name: Option<String> = None;
+            if let Some(i) = rest.iter().position(|a| a == "-o") {
+                if i + 1 < rest.len() {
+                    out_name = Some(rest.remove(i + 1));
+                }
+                rest.remove(i);
+            }
             let flags: Vec<&str> = rest
                 .iter()
                 .filter(|a| a.starts_with("--"))
                 .map(|a| a.as_str())
                 .collect();
             match rest.iter().find(|a| !a.starts_with("--")) {
-                Some(path) => ir_or_run(path, cmd == "run", &flags),
+                Some(path) => ir_or_run(path, cmd, &flags, out_name),
                 None => {
                     eprintln!("usage: pelago {cmd} [--opt] [--stats] <file or directory>");
+                    eprintln!("       pelago run --native <path>      build natively and run");
+                    eprintln!("       pelago build [--opt] [--leak-check] [-o out] <path>");
                     std::process::exit(2);
                 }
             }
@@ -94,7 +104,8 @@ fn usage() {
     eprintln!("  lex-bench <file>  time the lexer alone on a file");
     eprintln!("  parse [--no-docs] <file>  print the syntax tree and any errors (`-` reads standard input)");
     eprintln!("  ir <path>  check, lower to the IR, verify and print it");
-    eprintln!("  run <path>  lower to the IR and run `main` in the interpreter");
+    eprintln!("  run <path>  lower to the IR and run `main` in the interpreter (`--native` builds and runs machine code)");
+    eprintln!("  build [-o out] <path>  build a native x86-64 Linux executable");
     eprintln!("  check <path>  parse and resolve names of a file or a directory of `.pel` files");
     eprintln!("  parse-bench <file>  time lexing plus parsing on a file");
     eprintln!("  lex <file> print the tokens of a source file (`-` reads standard input)");
@@ -212,7 +223,10 @@ fn check_path(path: &str) {
 }
 
 /// Checks the program, lowers it to the IR, verifies it and prints it.
-fn ir_or_run(path: &str, run: bool, flags: &[&str]) {
+fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
+    let run = cmd == "run";
+    let build = cmd == "build";
+    let native = build || flags.contains(&"--native");
     let mut program = pelago::package::Program::with_core();
     if let Err(e) = program.add_package_from_path(std::path::Path::new(path)) {
         eprintln!("{e}");
@@ -259,6 +273,13 @@ fn ir_or_run(path: &str, run: bool, flags: &[&str]) {
         eprintln!("before: {before:?}");
         eprintln!("after:  {after:?}");
     }
+    if native {
+        if failed {
+            std::process::exit(1);
+        }
+        native_build(&module, path, build, flags, out_name);
+        return;
+    }
     if run {
         if failed {
             std::process::exit(1);
@@ -280,6 +301,59 @@ fn ir_or_run(path: &str, run: bool, flags: &[&str]) {
     print!("{}", pelago::ir::print_module(&module));
     if failed {
         std::process::exit(1);
+    }
+}
+
+/// Builds a native executable (`build`) or builds it into a temporary file and runs it (`run --native`).
+fn native_build(
+    module: &pelago::ir::Module,
+    path: &str,
+    build: bool,
+    flags: &[&str],
+    out_name: Option<String>,
+) {
+    let opts = pelago::native::gen::Options {
+        leak_check: flags.contains(&"--leak-check"),
+    };
+    let image = match pelago::native::gen::compile(module, "main", &opts) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("native build failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    let target = match (&out_name, build) {
+        (Some(o), _) => std::path::PathBuf::from(o),
+        (None, true) => {
+            let stem = std::path::Path::new(path)
+                .file_stem()
+                .map_or("a".to_string(), |s| s.to_string_lossy().into_owned());
+            std::path::PathBuf::from(stem)
+        }
+        (None, false) => std::env::temp_dir().join(format!("pelago-run-{}", std::process::id())),
+    };
+    if let Err(e) = std::fs::write(&target, &image) {
+        eprintln!("cannot write `{}`: {e}", target.display());
+        std::process::exit(2);
+    }
+    #[cfg(unix)]
+    {
+        let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755));
+    }
+    if build {
+        println!("wrote {} ({} bytes)", target.display(), image.len());
+        return;
+    }
+    let status = std::process::Command::new(&target).status();
+    let _ = std::fs::remove_file(&target);
+    match status {
+        Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+        Err(e) => {
+            eprintln!("cannot run the native program: {e} (native code runs on x86-64 Linux only for now)");
+            std::process::exit(1);
+        }
     }
 }
 

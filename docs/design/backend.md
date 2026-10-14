@@ -51,3 +51,11 @@ The interpreter (`ir/interp.rs`) is the specification. Every row is a test (card
 section headers and symbols, so `readelf`, `objdump` and `gdb` can read it) and `native/rt.rs` (start, write, stop, exit, decimal output, the allocator with its leak
 counter). Tests run real executables: hello world, `stop`, allocation reuse and zeroing, a large mapping, 100,000 small blocks across chunks, a leak report (status 3),
 decimal output. Reused blocks are cleared on allocation, because the interpreter always hands out zeroed memory. N2 (the code generator) is next.
+
+**N2 and N3 are done.** `native/gen.rs` is the simple code generator (every value in an 8-byte frame slot, zero-extended "canonical" integers, fixed templates per
+operation, a swap-safe copy for block parameters, stack arguments with padding for alignment). `pelago build [--opt] [--leak-check] [-o out] <path>` writes an
+executable and `pelago run --native <path>` builds and runs it. The test suite has a third column: every `output_of` test and the example programs also run natively
+(plain and optimised IR) and must print the same and exit cleanly with no leak; `native_agrees_on_the_edge_cases` compares the stop messages and exit statuses of about
+fifty programs on the rows of the table above (division, shifts, overflow at every width, NaN, conversions, many arguments, 100,000-deep recursion). Known differences:
+`float32` arithmetic rounds natively (the interpreter keeps `f64`); float remainder (`%`) is refused by the native build; `FloatToInt` outside the `i64` range differs.
+The benches run in about a millisecond natively (the interpreter: 20 to 60 ms).

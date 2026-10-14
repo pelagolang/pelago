@@ -6,6 +6,9 @@
 //! * [`rt`] is the small runtime the generated code needs (start, write, stop, allocator).
 
 pub mod elf;
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+pub mod exec;
+pub mod gen;
 pub mod rt;
 pub mod x86;
 

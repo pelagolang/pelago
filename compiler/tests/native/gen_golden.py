@@ -58,6 +58,7 @@ CASES = [
  ("imul r8, r9", "a.imul_rr(R8, R9, 8)"), ("imul ax, cx", "a.imul_rr(RAX, RCX, 2)"),
  ("neg rax", "a.neg(RAX, 8)"), ("neg ecx", "a.neg(RCX, 4)"), ("neg r9", "a.neg(R9, 8)"), ("neg sil", "a.neg(RSI, 1)"),
  ("not rdx", "a.not(RDX, 8)"), ("not al", "a.not(RAX, 1)"),
+ ("mul rcx", "a.mul(RCX, 8)"), ("mul ecx", "a.mul(RCX, 4)"), ("mul r9", "a.mul(R9, 8)"),
  ("div rcx", "a.div(RCX, 8)"), ("idiv rbx", "a.idiv(RBX, 8)"), ("idiv r8", "a.idiv(R8, 8)"),
  ("div ecx", "a.div(RCX, 4)"), ("idiv ecx", "a.idiv(RCX, 4)"),
  ("cqo", "a.sign_extend_acc(8)"), ("cdq", "a.sign_extend_acc(4)"),

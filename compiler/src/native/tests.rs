@@ -78,37 +78,10 @@ mod run {
         elf::write(&a, &ro, &data, 0, &[]).unwrap()
     }
 
-    pub struct Ran {
-        pub out: String,
-        pub err: String,
-        pub code: i32,
-    }
+    pub use super::super::exec::Ran;
 
     pub fn run(image: &[u8]) -> Ran {
-        use std::os::unix::fs::PermissionsExt;
-        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let path = std::env::temp_dir().join(format!("pelago-elf-{}-{n}", std::process::id()));
-        std::fs::write(&path, image).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        // The file may still be open for writing in another test's fork; retry the "text file busy" case.
-        let mut tries = 0;
-        let o = loop {
-            match std::process::Command::new(&path).output() {
-                Ok(o) => break o,
-                Err(e) if e.raw_os_error() == Some(26) && tries < 50 => {
-                    tries += 1;
-                    std::thread::sleep(std::time::Duration::from_millis(20));
-                }
-                Err(e) => panic!("cannot run the executable: {e}"),
-            }
-        };
-        let _ = std::fs::remove_file(&path);
-        Ran {
-            out: String::from_utf8_lossy(&o.stdout).into_owned(),
-            err: String::from_utf8_lossy(&o.stderr).into_owned(),
-            code: o.status.code().unwrap_or(-1),
-        }
+        super::super::exec::run_image(image).unwrap()
     }
 
     /// Code that writes `text` to standard output.
