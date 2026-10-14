@@ -30,6 +30,7 @@ mod ops;
 mod pat;
 mod select;
 mod seq;
+mod soa;
 mod ty;
 
 use crate::ast::*;

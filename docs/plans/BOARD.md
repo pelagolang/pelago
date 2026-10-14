@@ -10,7 +10,6 @@ Last updated with the plans written after the lowering milestone (IR9 to IR20 in
 | Column | Card | Title | Size |
 |---|---|---|---|
 | **Needs decision** | [A-05](cards/A-05-meta.md) | `meta`: M1 (`meta if`, `target`) and M2 (`meta N`) are done; 4 questions gate M3 (`meta expr`, `meta fn`) | XL |
-| **Ready** | [A-06](cards/A-06-soa.md) | `soa<T>`: struct-of-arrays collection (after A-05 in order; 3 small questions) | L |
 | **Shelf** | [A-07](cards/A-07-async.md) | `async` / `await` (deferred by decision G5) | XL |
 
 ## Track B: tooling and identity
@@ -35,6 +34,7 @@ Last updated with the plans written after the lowering milestone (IR9 to IR20 in
 | Card | What | Where |
 |---|---|---|
 | [A-01](cards/A-01-cleanup.md) | `stubs.rs` removed | `compiler/src/lower/` |
+| [A-06](cards/A-06-soa.md) | `soa<T>`: columns per field, element views, loops, library operations (IR24); blocked layout left for the backend | `lower/soa.rs` |
 | [A-04](cards/A-04-ir-optimiser.md) | IR optimiser: CFG, DCE, mem2reg, SROA, SCCP, inlining, `--opt`; steps down 30 to 40 percent on the samples (IR23). Remaining: default on, check removal, copies between slots | `compiler/src/ir/opt/` |
 | [A-03](cards/A-03-temporaries-ledger.md) | The ledger for owning scalar temporaries (objects, boxes); IR22. Memory temporaries already ended with their statement; removing the flags is A-04's job | `lower/func.rs`, IR22 |
 | [A-08](cards/A-08-checker-closures.md) | `inout n ~> ...` closure parameters; `scope` handle is the library type `scope_handle`; tasks finish at scope end; a detached task now runs | `core.pel`, `values/mod.rs` |

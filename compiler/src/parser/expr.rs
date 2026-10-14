@@ -797,6 +797,19 @@ impl Parser<'_> {
         if next.kind == TokenKind::Punct(Punct::TildeArrow) && !self.no_arrow {
             return self.parse_closure_from_params();
         }
+        // `soa [ ... ]`
+        if text == "soa" && next.kind == TokenKind::Punct(Punct::LBracket) {
+            self.bump();
+            let inner = self.parse_bracket();
+            let span = t.span.to(inner.span);
+            return match inner.kind {
+                ExprKind::List(items) => Expr {
+                    kind: ExprKind::Soa(items),
+                    span,
+                },
+                _ => inner,
+            };
+        }
         // `map { ... }` and `set { ... }`
         if (text == "map" || text == "set")
             && next.kind == TokenKind::Punct(Punct::LBrace)

@@ -350,6 +350,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::StructLit { fields, .. } => self.struct_lit(e, fields, dst, t),
             ExprKind::Str(parts) => self.string_lit(e, parts, dst, t),
             ExprKind::List(items) => self.list_lit(e, items, dst, t),
+            ExprKind::Soa(items) => self.soa_lit(e, items, dst, t),
             ExprKind::None => self.none_lit(e, dst, t),
             ExprKind::Field {
                 base,
@@ -614,8 +615,68 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// The index of a field in the element struct of a `soa`.
+    fn soa_field_index(&mut self, elem: Ty, name: &Ident) -> Option<usize> {
+        let TyKind::Adt(d, _) = self.kind(elem) else {
+            return None;
+        };
+        let fname = self.src_text(name.span);
+        self.typed
+            .adts
+            .get(&d)?
+            .fields
+            .iter()
+            .position(|(fd, _)| self.res.def(*fd).name == fname)
+    }
+
+    /// `points.x` (a whole column) and `points[i].x` (one value in it).
+    fn soa_field_place(&mut self, base: &'a Expr, name: &Ident) -> Option<Option<Value>> {
+        let bt = self.ty_of(base)?;
+        if let TyKind::Soa(elem, _) = self.kind(bt) {
+            let k = self.soa_field_index(elem, name)?;
+            let Res::Val(h) = self.expr(base) else {
+                return Some(None);
+            };
+            return Some(Some(self.soa_col(h, k)));
+        }
+        let ExprKind::Index { base: sb, index } = &strip_parens(base).kind else {
+            return None;
+        };
+        let st = self.ty_of(sb)?;
+        let TyKind::Soa(elem, _) = self.kind(st) else {
+            return None;
+        };
+        let k = self.soa_field_index(elem, name)?;
+        let fields = self.soa_fields(elem);
+        let ft = fields.get(k)?.1;
+        let Res::Val(h) = self.expr(sb) else {
+            return Some(None);
+        };
+        let Some(i) = self.scalar(index) else {
+            return Some(None);
+        };
+        Some(self.soa_field_addr(h, i, k, ft))
+    }
+
+    /// Is this `points[i]` on a `soa`? (Its element exists only as a copy.)
+    pub(crate) fn is_soa_index(&mut self, e: &'a Expr) -> bool {
+        let ExprKind::Index { base, index } = &strip_parens(e).kind else {
+            return false;
+        };
+        if matches!(index.kind, ExprKind::Range { .. }) {
+            return false;
+        }
+        match self.ty_of(base) {
+            Some(t) => matches!(self.kind(t), TyKind::Soa(..)),
+            None => false,
+        }
+    }
+
     fn field_place(&mut self, e: &'a Expr, base: &'a Expr, name: &Ident) -> Option<Value> {
         let _ = e;
+        if let Some(r) = self.soa_field_place(base, name) {
+            return r;
+        }
         let bt = self.ty_of(base)?;
         let p = self.base_address(base, bt)?;
         let inner = self.peel_box(bt);
@@ -688,6 +749,20 @@ impl<'a> Lowerer<'a> {
                 let sz = self.i64c(size as i64);
                 let off = self.emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), e.span)?;
                 self.emit(Op::PtrAdd(p, off), Some(IrTy::Ptr), e.span)
+            }
+            TyKind::Soa(elem, _) => {
+                // The element exists only as a copy gathered from the columns.
+                let h = match inside {
+                    Some(p) => p,
+                    None => match self.expr(base) {
+                        Res::Val(p) => p,
+                        _ => return None,
+                    },
+                };
+                let i = self.scalar(index)?;
+                let tmp = self.slot_for(elem);
+                self.soa_gather(h, i, tmp, elem)?;
+                Some(tmp)
             }
             TyKind::Map(k, v) => {
                 let hdr = match inside {
@@ -961,6 +1036,28 @@ impl<'a> Lowerer<'a> {
         let Some(lt) = self.ty_of(lhs) else {
             return self.unsupported(e.span, "assigning to a place of unknown type");
         };
+        if op == Punct::Eq && self.is_soa_index(lhs) {
+            // `points[i] = value`: the old fields are dropped and the new ones written.
+            let ExprKind::Index { base, index } = &strip_parens(lhs).kind else {
+                return Res::Never;
+            };
+            let bt = self.ty_of(base).unwrap_or(lt);
+            let TyKind::Soa(elem, _) = self.kind(bt) else {
+                return Res::Never;
+            };
+            let tmp = self.slot_for(elem);
+            if let Res::Never = self.into(rhs, tmp, elem) {
+                return Res::Never;
+            }
+            let Res::Val(h) = self.expr(base) else {
+                return Res::Never;
+            };
+            let Some(i) = self.scalar(index) else {
+                return Res::Never;
+            };
+            self.soa_set(h, i, tmp, elem);
+            return Res::Unit;
+        }
         let Some(p) = self.place(lhs) else {
             if self.failed() {
                 return Res::Never;

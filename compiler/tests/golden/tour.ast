@@ -264,6 +264,13 @@
       (tail (call par_for (arg inout xs) (~> (x) (*= x 2))))))
   (enum tree (case leaf) (case node (box tree) int (box tree)))
   (fn
+    columns
+    ()
+    (block
+      (var cloud (: (soa point)) (soa))
+      (call! (. cloud push) (new point (: x 1.0) (: y 2.0)))
+      (const xs (. cloud x))))
+  (fn
     boxes
     ()
     (block

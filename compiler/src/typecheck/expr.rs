@@ -249,6 +249,7 @@ impl<'p> Checker<'p> {
             ExprKind::Paren(inner) => self.check_expr(inner, exp),
             ExprKind::Tuple(items) => self.tuple_expr(items, exp),
             ExprKind::List(items) => self.list_expr(e, items, exp),
+            ExprKind::Soa(items) => self.soa_expr(e, items, exp),
             ExprKind::Set(items) => self.set_expr(e, items, exp),
             ExprKind::Repeat { value, count } => self.repeat_expr(value, count, exp),
             ExprKind::Map(items) => self.map_expr(e, items, exp),
@@ -594,7 +595,11 @@ impl<'p> Checker<'p> {
     fn expected_elem(&self, exp: Exp) -> Option<Ty> {
         let t = exp.ty()?;
         match self.tt.kind_of(self.peel_option(t)) {
-            TyKind::List(e) | TyKind::Array(e, _) | TyKind::Set(e) | TyKind::Iter(e) => Some(*e),
+            TyKind::List(e)
+            | TyKind::Array(e, _)
+            | TyKind::Set(e)
+            | TyKind::Iter(e)
+            | TyKind::Soa(e, _) => Some(*e),
             _ => None,
         }
     }
@@ -661,6 +666,23 @@ impl<'p> Checker<'p> {
             }
         }
         self.tt.list(elem)
+    }
+
+    /// `soa [a, b]`: the element type comes from the expected type or from the items.
+    fn soa_expr(&mut self, e: &'p Expr, items: &'p [ListItem], exp: Exp) -> Ty {
+        let want = exp
+            .ty()
+            .and_then(|t| match self.kind_of(self.peel_option(t)) {
+                TyKind::Soa(el, _) => Some(el),
+                _ => None,
+            });
+        let elem = self.elements(items, want, e.span);
+        self.soa_elem_ok(elem, e.span);
+        let len = match exp.ty().map(|t| self.kind_of(self.peel_option(t))) {
+            Some(TyKind::Soa(_, n)) => n,
+            _ => ArrayLen::Unknown,
+        };
+        self.tt.mk(TyKind::Soa(elem, len))
     }
 
     fn set_expr(&mut self, e: &'p Expr, items: &'p [ListItem], exp: Exp) -> Ty {
@@ -753,6 +775,7 @@ impl<'p> Checker<'p> {
         match k {
             TyKind::List(e)
             | TyKind::Array(e, _)
+            | TyKind::Soa(e, _)
             | TyKind::Iter(e)
             | TyKind::Set(e)
             | TyKind::Range(e) => one(self, e),
@@ -867,6 +890,10 @@ impl<'p> Checker<'p> {
                     self.check_expr(index, Exp::Is(r));
                     return self.tt.list(elem);
                 }
+                self.check_coerce(index, self.tt.int);
+                elem
+            }
+            TyKind::Soa(elem, _) => {
                 self.check_coerce(index, self.tt.int);
                 elem
             }

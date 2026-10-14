@@ -385,6 +385,13 @@ impl<'a> Lowerer<'a> {
                 }
             }
             Pass::Ptr => match mode {
+                Some(Mode::Inout) if self.is_soa_index(arg) => {
+                    self.unsupported(
+                        arg.span,
+                        "`inout` on an element of a `soa` (use a field: `points[i].x`)",
+                    );
+                    None
+                }
                 Some(Mode::Inout) => match self.place(arg) {
                     Some(p) => Some(p),
                     None => {

@@ -50,7 +50,23 @@ impl<'a> Lowerer<'a> {
         Some(id)
     }
 
+    /// `soa<T>` behaves as the tuple of its columns for drop, clone and comparison.
+    fn soa_as_tuple(&mut self, ty: Ty) -> Ty {
+        match self.kind(ty) {
+            TyKind::Soa(e, _) => {
+                let cols = self.soa_column_types(e);
+                self.types.tuple(cols)
+            }
+            _ => ty,
+        }
+    }
+
     pub(crate) fn lower_glue_job(&mut self, id: FuncId, kind: GlueKind, ty: Ty) {
+        let ty = if kind == GlueKind::Show {
+            ty
+        } else {
+            self.soa_as_tuple(ty)
+        };
         let placeholder = self.module.funcs[id.0 as usize].clone();
         let void = self.types.void;
         let mut state = FnState::empty(void);

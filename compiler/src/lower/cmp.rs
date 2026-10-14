@@ -506,6 +506,31 @@ impl<'a> Lowerer<'a> {
                 });
                 self.push_static(out, b"]");
             }
+            TyKind::Soa(e, _) => {
+                // A list of the elements, each gathered from the columns.
+                self.push_static(out, b"[");
+                let fields = self.soa_fields(e);
+                if let Some((_, ft0)) = fields.first().copied() {
+                    let len = self.soa_len(v);
+                    let data = self.load_at(v, 0, IrTy::Ptr);
+                    let esize = self.layout(ft0).size;
+                    self.each_elem(data, len, esize, |s, _p, off| {
+                        let zero = s.i64c(0);
+                        if let Some(c) = s.emit(Op::Cmp(CmpOp::Ne, off, zero), Some(IrTy::Bool), sp)
+                        {
+                            s.if_then_pub(c, |s| s.push_static(out, b", "));
+                        }
+                        let isz = s.i64c(esize as i64);
+                        if let Some(i) = s.emit(Op::Bin(BinOp::Div, off, isz), Some(IrTy::I64), sp)
+                        {
+                            let tmp = s.slot_for(e);
+                            s.soa_gather(v, i, tmp, e);
+                            s.show_at(tmp, e, out, true);
+                        }
+                    });
+                }
+                self.push_static(out, b"]");
+            }
             TyKind::Array(e, len) => {
                 self.push_static(out, b"[");
                 let n = self.array_len(len);

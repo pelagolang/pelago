@@ -165,6 +165,14 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 - **IR19** `become f(...)` on the function itself with plain number parameters is a jump to the top (no stack growth); any other `become` is a
   call followed by `return`.
 - **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa` and `async` (see the plans in `docs/plans/`).
+- **IR24** `soa<T>` (`lower/soa.rs`): one list header (24 bytes) per field of the struct `T`, one after the other, all the same length. The
+  element is never stored whole. `points[i].x` is the address `x_data + i * size` (bounds checked against the length); `points.x` is the
+  column header itself, read as a `[float]`; a whole element (`const p = points[i]`) is gathered into a temporary; `points[i] = v` drops the old
+  fields and writes the new ones; `for p of points` gathers each element, and `for inout p` scatters the turn's changes back. Drop, clone
+  and `==` are those of the tuple of columns; `show` prints a list of structs. `push`, `insert`, `remove`, `clear` loop over the columns
+  with the library functions `rt_col_*`. `soa<T, N>` is accepted (N a power of two) and behaves exactly the same; the blocked
+  memory layout waits for the backend, where it can be measured. Not supported: `inout points[i]` as a whole-element argument (use a
+  field), `soa` of enums, objects or tuples (an error), `...` in a `soa` literal.
 - **IR23** **The optimiser** (`compiler/src/ir/opt/`, `pelago run --opt`, `pelago ir --opt --stats`). Per function, repeated until nothing
   changes: simplify the CFG (fold branches, skip empty blocks, merge blocks), dead code, promote slots to values (Braun et al., block
   parameters), split slots at constant offsets (SROA), sparse conditional constant propagation. Then inlining (callees first; small

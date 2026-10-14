@@ -73,6 +73,10 @@ exists, because they change the rules for generics. The word `linear` is reserve
 
 ---
 
+## Built: soa
+
+`soa<T>` for a struct `T` works as described above (see IR24 in `ir.md`): `soa []`, `soa [a, b]`, `push!`, `pop!`, `insert!`, `remove!`, `clear!`, `len`, `points[i]`, `points[i].x`, `points.x`, `for` and `for inout` loops, `copy`, `==`, `print`. The blocked form `soa<T, N>` is accepted and behaves the same; its blocked memory layout is left for the backend.
+
 ## Temporaries
 
 A value that is made but never named (a function result you ignore, the object behind `make_dog("a").name`, an argument built on the spot) is destroyed at the **end of its statement**, in the reverse order it was made. If something takes it (a variable, a field, a `sink` parameter, `return`) the new owner destroys it later instead. The compiler keeps these books while it builds the code (the ledger, IR22); there is no run-time cost in straight-line code beyond what variables already pay.

@@ -956,3 +956,53 @@ fn value_parameters_on_a_struct() {
     let src = "struct buf<meta N: int> { data: [int; N]\n fn size(self) -> int = N }\nfn main() { const b = buf<4> { data: [1, 2, 3, 4] }\n print(b.size(), b.data[2]) }\n";
     assert_eq!(output_of(src), "4 3\n");
 }
+
+// ---- A-06: soa<T> ----------------------------------------------------------------------------------
+
+#[test]
+fn soa_works_like_a_list_of_structs() {
+    let src = r#"struct point { x: float, y: float }
+struct person { name: string, age: int }
+fn main() {
+    var ps: soa<point> = soa []
+    ps.push!(point { x: 1.0, y: 2.0 })
+    ps.push!(point { x: 3.0, y: 4.0 })
+    ps[1].x = 30.0
+    ps[0].y += 5.0
+    print(ps.len(), ps[0].x, ps[1].x, ps[0].y)
+    print(ps.x, ps.y)
+    for inout p of ps { p.x += 1.0 }
+    var total = 0.0
+    for p of ps { total += p.x + p.y }
+    print(total)
+    const q = ps[1]
+    print(q.x, q.y)
+    ps[0] = point { x: 9.0, y: 9.0 }
+    print(ps.x)
+    var people: soa<person> = soa [person { name: "ann", age: 3 }, person { name: "bo", age: 5 }]
+    people.push!(person { name: "cy", age: 7 })
+    const gone = people.remove!(1)
+    print(gone.name, people.len(), people.name, people.age)
+    people.insert!(0, person { name: "zed", age: 1 })
+    print(people.name)
+    print(people.pop!().is_some(), people.len())
+    people.clear!()
+    print(people.len())
+    const copy_of = copy ps
+    print(copy_of == ps, copy_of.len())
+}
+"#;
+    assert_eq!(
+        output_of(src),
+        "2 1 30 7\n[1, 30] [7, 4]\n44\n31 4\n[9, 31]\nbo 2 [\"ann\", \"cy\"] [3, 7]\n[\"zed\", \"ann\", \"cy\"]\ntrue 2\n0\ntrue 2\n"
+    );
+}
+
+#[test]
+fn soa_prints_as_a_list_of_structs_and_has_blocked_form() {
+    let src = "@derive(show)\nstruct point { x: int, y: int }\nfn main() { var ps: soa<point, 4> = soa []\n for i in 0..10 { ps.push!(point { x: i, y: i * i }) }\n print(ps.len(), ps[9].y, ps.x)\n var small: soa<point> = soa [point { x: 1, y: 2 }]\n print(small) }\n";
+    assert_eq!(
+        output_of(src),
+        "10 81 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]\n[point { x: 1, y: 2 }]\n"
+    );
+}

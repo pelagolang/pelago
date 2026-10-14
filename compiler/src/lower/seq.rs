@@ -747,7 +747,12 @@ impl<'a> Lowerer<'a> {
         };
         let mut val_ty = None;
         let mut array_len = None;
+        let mut soa_elem = None;
         let elem = match self.kind(it) {
+            TyKind::Soa(x, _) => {
+                soa_elem = Some(x);
+                x
+            }
             TyKind::List(x) | TyKind::Iter(x) | TyKind::Set(x) => x,
             TyKind::Array(x, len) => {
                 array_len = Some(self.array_len(len));
@@ -785,9 +790,15 @@ impl<'a> Lowerer<'a> {
         let off = self
             .emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), iter.span)
             .unwrap_or(i);
-        let ep = self
+        let mut ep = self
             .emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), iter.span)
             .unwrap_or(data);
+        // A `soa` element is gathered from the columns for the length of one turn.
+        let soa_tmp = soa_elem.map(|x| self.slot_for(x));
+        if let (Some(x), Some(tmp)) = (soa_elem, soa_tmp) {
+            self.soa_gather(h, i, tmp, x);
+            ep = tmp;
+        }
         let int = self.types.int;
         let bind_fail = self.stop_block("pattern did not match");
         let depth = self.f.scopes.len();
@@ -874,6 +885,20 @@ impl<'a> Lowerer<'a> {
         }
         self.f.loops.pop();
         self.start(step);
+        // `for inout p of points`: what the turn changed goes back into the columns.
+        if let (Some(x), Some(tmp)) = (soa_elem, soa_tmp) {
+            if pats.iter().any(|p| {
+                matches!(
+                    p.kind,
+                    PatternKind::Binding {
+                        mode: Some(Mode::Inout),
+                        ..
+                    }
+                )
+            }) {
+                self.soa_scatter(h, i, tmp, x);
+            }
+        }
         let one = self.i64c(1);
         if let Some(next) = self.emit(Op::Bin(BinOp::Add, i, one), Some(IrTy::I64), iter.span) {
             self.jump(head, vec![next]);

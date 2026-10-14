@@ -272,6 +272,12 @@ fn pipeline() {
 // ---- Boxes -----------------------------------------------------------------------------
 enum tree { leaf, node(box<tree>, int, box<tree>) }
 
+fn columns() {
+    var cloud: soa<point> = soa []
+    cloud.push!(point { x: 1.0, y: 2.0 })
+    const xs = cloud.x
+}
+
 fn boxes() {
     var b = box(5)
     b.set!(6)

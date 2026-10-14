@@ -249,6 +249,12 @@ impl<'p> Checker<'p> {
             | TyKind::Option(e)
             | TyKind::Box(e)
             | TyKind::Range(e) => vec![e],
+            TyKind::Soa(e, _) => {
+                if matches!(name, "order" | "hash") {
+                    return false;
+                }
+                vec![e]
+            }
             TyKind::Set(e) => {
                 if matches!(name, "order" | "hash") {
                     return false;
@@ -607,6 +613,7 @@ impl<'p> Checker<'p> {
             | TyKind::Map(..)
             | TyKind::Set(_)
             | TyKind::Box(_)
+            | TyKind::Soa(..)
             | TyKind::Iter(_)
             | TyKind::Any(_) => true,
             TyKind::Param(g) => self.linear.contains(g),

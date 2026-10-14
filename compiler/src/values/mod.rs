@@ -859,7 +859,7 @@ impl<'a> Walker<'a> {
                     self.expr(x, Ctx::Consume);
                 }
             }
-            ExprKind::List(items) | ExprKind::Set(items) => {
+            ExprKind::List(items) | ExprKind::Set(items) | ExprKind::Soa(items) => {
                 for i in items {
                     self.expr(&i.value, if i.spread { Ctx::Read } else { Ctx::Consume });
                 }

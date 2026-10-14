@@ -123,7 +123,7 @@ No compiler code yet. Everything here is cheap to change.
 - [x] IR data types, printer and verifier (`compiler/src/ir/`, `docs/design/ir.md`, IR1 to IR8 decided)
 - [x] First lowering (numbers, control flow, calls) and the IR interpreter (`compiler/src/lower/`, `pelago ir`)
 - [x] Lowering of aggregates, `switch`, ownership and drops, monomorphisation, closures, maps and sets, `obj` and `any`, `init`, tasks and channels; `pelago run` runs programs in the interpreter (IR9 to IR20 in `docs/design/ir.md`)
-- [ ] Still not lowered: `meta`, `soa`, `async` (`box<T>` is done: A-02)
+- [ ] Still not lowered: `meta expr` / `meta fn` (stage M3), `async` (`box`, `soa`, `meta if`, `meta N` are done)
 
 **Milestone:** programs are type-checked and lowered to IR, and the checker rejects the unsafe examples.
 

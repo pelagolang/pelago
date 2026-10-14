@@ -125,6 +125,7 @@ impl Typed {
         match self.types.kind(t) {
             TyKind::String
             | TyKind::List(_)
+            | TyKind::Soa(..)
             | TyKind::Map(..)
             | TyKind::Set(_)
             | TyKind::Box(_)
@@ -238,6 +239,7 @@ enum Head {
     Adt(DefId),
     List,
     Array,
+    Soa,
     Tuple,
     Option,
     Result,
@@ -997,6 +999,7 @@ impl<'p> Checker<'p> {
             TyKind::Adt(d, _) => Head::Adt(*d),
             TyKind::List(_) => Head::List,
             TyKind::Array(..) => Head::Array,
+            TyKind::Soa(..) => Head::Soa,
             TyKind::Tuple(_) => Head::Tuple,
             TyKind::Option(_) => Head::Option,
             TyKind::Result(..) => Head::Result,
@@ -1411,6 +1414,22 @@ impl<'p> Checker<'p> {
         self.tt.subst(t, &map)
     }
 
+    /// `soa<T>` needs a struct: one column per field.
+    pub(crate) fn soa_elem_ok(&mut self, elem: Ty, span: Span) {
+        let ok = match self.kind_of(elem) {
+            TyKind::Adt(d, _) => self.def(d).kind == DefKind::Struct,
+            TyKind::Unknown | TyKind::Var(_) | TyKind::Param(_) | TyKind::Error => true,
+            _ => false,
+        };
+        if !ok {
+            let s = self.show(elem);
+            self.err(
+                span,
+                format!("`soa<{s}>` needs a struct (one column is kept per field); enums, objects, tuples and generic parameters cannot be stored this way"),
+            );
+        }
+    }
+
     fn builtin_type(&mut self, name: &str, args: &'p [GenericArg], span: Span) -> Ty {
         let lowered = self.lower_generic_args(args);
         let want = |c: &mut Self, n: usize| -> bool {
@@ -1448,6 +1467,25 @@ impl<'p> Checker<'p> {
             "error" => tt.error,
             "ptr" => tt.mk(TyKind::Ptr),
             "list" if want(self, 1) => self.tt.list(lowered[0]),
+            "soa" if lowered.len() == 1 || lowered.len() == 2 => {
+                let len = match lowered.get(1).map(|t| self.tt.kind(*t).clone()) {
+                    None => ArrayLen::Unknown,
+                    Some(TyKind::Const(n)) if n > 0 && (n as u64).is_power_of_two() => {
+                        ArrayLen::Known(n as u64)
+                    }
+                    Some(TyKind::Const(_)) => {
+                        self.err(span, "the block size of `soa<T, N>` must be a power of two");
+                        ArrayLen::Unknown
+                    }
+                    Some(_) => ArrayLen::Term(lowered[1]),
+                };
+                self.soa_elem_ok(lowered[0], span);
+                self.tt.mk(TyKind::Soa(lowered[0], len))
+            }
+            "soa" => {
+                self.err(span, "`soa` takes an element type and an optional block size: `soa<point>`, `soa<point, 8>`");
+                self.tt.unknown
+            }
             "set" if want(self, 1) => self.tt.mk(TyKind::Set(lowered[0])),
             "range" if want(self, 1) => self.tt.mk(TyKind::Range(lowered[0])),
             "iter" if want(self, 1) => self.tt.mk(TyKind::Iter(lowered[0])),
@@ -1757,6 +1795,7 @@ pub(crate) fn linear_in(tt: &TypeTable, linear: &std::collections::HashSet<DefId
         }
         TyKind::List(e)
         | TyKind::Array(e, _)
+        | TyKind::Soa(e, _)
         | TyKind::Option(e)
         | TyKind::Box(e)
         | TyKind::Set(e) => linear_in(tt, linear, *e),
@@ -1775,6 +1814,7 @@ pub(crate) fn holds_view(tt: &TypeTable, t: Ty) -> bool {
         TyKind::Str | TyKind::Fn(..) => true,
         TyKind::List(e)
         | TyKind::Array(e, _)
+        | TyKind::Soa(e, _)
         | TyKind::Option(e)
         | TyKind::Set(e)
         | TyKind::Range(e) => holds_view(tt, *e),

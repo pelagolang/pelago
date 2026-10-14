@@ -292,6 +292,20 @@ impl<'p> Checker<'p> {
                     self.tt.unknown
                 }
             },
+            // `points.x`: the whole column of one field, as a list.
+            TyKind::Soa(elem, _) if self.lookup_method(recv, n, name.span).is_none() => {
+                match self.kind_of(elem) {
+                    TyKind::Adt(def, args) => match self.find_field(def, &args, n, name.span) {
+                        Some(ft) => self.tt.list(ft),
+                        None => {
+                            let tn = self.def(def).name.clone();
+                            self.err(name.span, format!("`{tn}` has no field `{n}`"));
+                            self.tt.unknown
+                        }
+                    },
+                    _ => self.tt.unknown,
+                }
+            }
             TyKind::Unknown | TyKind::Var(_) => self.tt.unknown,
             _ => {
                 if self.lookup_method(recv, n, name.span).is_some() {

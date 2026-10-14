@@ -557,6 +557,8 @@ pub enum ExprKind {
     Yield(Option<Box<Expr>>),
     /// `meta expr`: run now, while compiling.
     Meta(Box<Expr>),
+    /// `soa [a, b]`: a struct-of-arrays collection literal.
+    Soa(Vec<ListItem>),
     /// `meta if cond { ... } else { ... }`: include this code only when the condition holds.
     MetaIf(Box<IfExpr>),
     Error,

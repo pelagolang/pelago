@@ -848,7 +848,7 @@ impl<'p> Resolver<'p> {
                 }
                 None
             }
-            ExprKind::List(items) | ExprKind::Set(items) => {
+            ExprKind::List(items) | ExprKind::Set(items) | ExprKind::Soa(items) => {
                 for i in items {
                     self.resolve_expr(&i.value);
                 }

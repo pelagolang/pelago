@@ -1332,3 +1332,20 @@ fn value_parameters_are_checked() {
         "{e:?}"
     );
 }
+
+// ---- soa ----------------------------------------------------------------------------------------------
+
+#[test]
+fn soa_types_are_checked() {
+    clean("struct point { x: float, y: float }\nfn t() { var ps: soa<point> = soa []\n ps.push!(point { x: 1.0, y: 2.0 })\n const n = ps.len()\n const xs = ps.x\n const p = ps[0] }");
+    assert_eq!(
+        run("struct point { x: float, y: float }\nfn t() { var ps: soa<point> = soa []\n const xs = ps.x }").ty_of("xs"),
+        "[float]"
+    );
+    let e = run("enum e { a, b }\nfn t(x: soa<e>) {}").errors();
+    assert!(e.iter().any(|m| m.contains("needs a struct")), "{e:?}");
+    let e = run("struct p { x: int }\nfn t(x: soa<p, 3>) {}").errors();
+    assert!(e.iter().any(|m| m.contains("power of two")), "{e:?}");
+    let e = run("struct p { x: int }\nfn t(x: soa<p>) { const y = x.nope }").errors();
+    assert!(e.iter().any(|m| m.contains("no field")), "{e:?}");
+}

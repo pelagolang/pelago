@@ -114,6 +114,8 @@ pub enum TyKind {
     Const(i128),
     List(Ty),
     Array(Ty, ArrayLen),
+    /// `soa<T>`: one column per field of `T` (the length is the block size of `soa<T, N>`, or unknown).
+    Soa(Ty, ArrayLen),
     Tuple(Vec<Ty>),
     /// `(A, B; N)`
     AltTuple(Vec<Ty>, ArrayLen),
@@ -301,7 +303,7 @@ impl TypeTable {
             | TyKind::Range(a)
             | TyKind::Iter(a)
             | TyKind::Box(a) => self.occurs(v, *a),
-            TyKind::Array(a, n) => {
+            TyKind::Array(a, n) | TyKind::Soa(a, n) => {
                 self.occurs(v, *a) || matches!(n, ArrayLen::Term(t) if self.occurs(v, *t))
             }
             TyKind::Result(a, b) | TyKind::Map(a, b) => self.occurs(v, *a) || self.occurs(v, *b),
@@ -381,7 +383,7 @@ impl TypeTable {
             | (TyKind::Range(x), TyKind::Range(y))
             | (TyKind::Iter(x), TyKind::Iter(y))
             | (TyKind::Box(x), TyKind::Box(y)) => self.unify_inner(*x, *y),
-            (TyKind::Array(x, n), TyKind::Array(y, m)) => {
+            (TyKind::Array(x, n), TyKind::Array(y, m)) | (TyKind::Soa(x, n), TyKind::Soa(y, m)) => {
                 self.unify_len(*n, *m) && self.unify_inner(*x, *y)
             }
             (TyKind::Tuple(x), TyKind::Tuple(y)) => self.unify_all(x, y),
@@ -458,6 +460,10 @@ impl TypeTable {
                 let n = self.norm_len(n, |c, t| c.zonk(t));
                 TyKind::Array(self.zonk(a), n)
             }
+            TyKind::Soa(a, n) => {
+                let n = self.norm_len(n, |c, t| c.zonk(t));
+                TyKind::Soa(self.zonk(a), n)
+            }
             TyKind::Option(a) => TyKind::Option(self.zonk(a)),
             TyKind::Set(a) => TyKind::Set(self.zonk(a)),
             TyKind::Range(a) => TyKind::Range(self.zonk(a)),
@@ -503,6 +509,10 @@ impl TypeTable {
                 let n = self.norm_len(n, |c, t| c.subst(t, map));
                 TyKind::Array(self.subst(a, map), n)
             }
+            TyKind::Soa(a, n) => {
+                let n = self.norm_len(n, |c, t| c.subst(t, map));
+                TyKind::Soa(self.subst(a, map), n)
+            }
             TyKind::Option(a) => TyKind::Option(self.subst(a, map)),
             TyKind::Set(a) => TyKind::Set(self.subst(a, map)),
             TyKind::Range(a) => TyKind::Range(self.subst(a, map)),
@@ -538,7 +548,7 @@ impl TypeTable {
             | TyKind::Range(a)
             | TyKind::Iter(a)
             | TyKind::Box(a) => self.has_vars(*a),
-            TyKind::Array(a, n) => {
+            TyKind::Array(a, n) | TyKind::Soa(a, n) => {
                 self.has_vars(*a) || matches!(n, ArrayLen::Term(t) if self.has_vars(*t))
             }
             TyKind::Result(a, b) | TyKind::Map(a, b) => self.has_vars(*a) || self.has_vars(*b),
@@ -621,6 +631,11 @@ impl TypeTable {
                 ArrayLen::Known(n) => format!("[{}; {n}]", d(*e)),
                 ArrayLen::Term(t) => format!("[{}; {}]", d(*e), d(*t)),
                 ArrayLen::Unknown => format!("[{}; _]", d(*e)),
+            },
+            TyKind::Soa(e, n) => match n {
+                ArrayLen::Known(n) => format!("soa<{}, {n}>", d(*e)),
+                ArrayLen::Term(t) => format!("soa<{}, {}>", d(*e), d(*t)),
+                ArrayLen::Unknown => format!("soa<{}>", d(*e)),
             },
             TyKind::Tuple(ts) => format!(
                 "({})",
