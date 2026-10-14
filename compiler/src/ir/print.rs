@@ -103,7 +103,25 @@ fn inst_text(f: &Func, i: &Inst, m: Option<&Module>) -> String {
                 .unwrap_or_else(|| format!("f{}", callee.0));
             format!("call @{name}({})", vs(args))
         }
-        Op::Slot(ty) => format!("slot {}", ty.name()),
+        Op::Slot(size, align) => format!("slot {size}, {align}"),
+        Op::PtrAdd(p, n) => format!("ptradd {}, {}", v(*p), v(*n)),
+        Op::MemCopy(d, s, n) => format!("memcopy {}, {}, {}", v(*d), v(*s), v(*n)),
+        Op::DataAddr(i) => format!("data d{i}"),
+        Op::FuncAddr(f) => match m.and_then(|m| m.funcs.get(f.0 as usize)) {
+            Some(g) => format!("funcaddr @{}", g.name),
+            None => format!("funcaddr @f{}", f.0),
+        },
+        Op::CallPtr(ps, ret, f, args) => {
+            let ps: Vec<String> = ps.iter().map(|t| t.name()).collect();
+            format!(
+                "callptr ({}) -> {}, {}({})",
+                ps.join(", "),
+                ret.name(),
+                v(*f),
+                vs(args)
+            )
+        }
+        Op::Print(p, n) => format!("print {}, {}", v(*p), v(*n)),
         Op::Load(ty, p) => format!("load {}, {}", ty.name(), v(*p)),
         Op::Store(p, x) => format!("store {}, {}", v(*p), v(*x)),
         Op::Alloc(n) => format!("alloc {}", v(*n)),

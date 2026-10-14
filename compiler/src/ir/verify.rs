@@ -214,8 +214,13 @@ fn dominators(f: &Func) -> HashMap<usize, usize> {
 
 fn inputs(op: &Op) -> Vec<Value> {
     match op {
-        Op::Const(..) | Op::Slot(_) => Vec::new(),
-        Op::Bin(_, a, b) | Op::Checked(_, _, a, b) | Op::Cmp(_, a, b) | Op::Store(a, b) => {
+        Op::Const(..) | Op::Slot(..) | Op::DataAddr(_) | Op::FuncAddr(_) => Vec::new(),
+        Op::Bin(_, a, b)
+        | Op::Checked(_, _, a, b)
+        | Op::Cmp(_, a, b)
+        | Op::Store(a, b)
+        | Op::PtrAdd(a, b)
+        | Op::Print(a, b) => {
             vec![*a, *b]
         }
         Op::Neg(a)
@@ -227,6 +232,12 @@ fn inputs(op: &Op) -> Vec<Value> {
             vec![*a]
         }
         Op::Call(_, args) => args.clone(),
+        Op::MemCopy(a, b, c) => vec![*a, *b, *c],
+        Op::CallPtr(_, _, f, args) => {
+            let mut v = vec![*f];
+            v.extend(args.iter().copied());
+            v
+        }
     }
 }
 
@@ -359,9 +370,45 @@ fn check_inst(f: &Func, m: Option<&Module>, inst: &Inst) -> Vec<String> {
                 e.push("calls a function that does not exist".to_string());
             }
         }
-        Op::Slot(_) => {
+        Op::Slot(..) | Op::DataAddr(_) | Op::FuncAddr(_) => {
             if result_ty != Some(IrTy::Ptr) {
-                e.push("`slot` makes a ptr".to_string());
+                e.push("this makes a ptr".to_string());
+            }
+        }
+        Op::PtrAdd(p, n) => {
+            if t(*p) != Some(IrTy::Ptr) || t(*n) != Some(IrTy::I64) {
+                e.push("`ptradd` needs a ptr and an i64".to_string());
+            }
+            if result_ty != Some(IrTy::Ptr) {
+                e.push("`ptradd` makes a ptr".to_string());
+            }
+        }
+        Op::MemCopy(d, s, n) => {
+            if t(*d) != Some(IrTy::Ptr) || t(*s) != Some(IrTy::Ptr) || t(*n) != Some(IrTy::I64) {
+                e.push("`memcopy` needs two ptrs and an i64 size".to_string());
+            }
+        }
+        Op::CallPtr(ps, ret, f, args) => {
+            if t(*f) != Some(IrTy::Ptr) {
+                e.push("`callptr` needs a function address".to_string());
+            }
+            if ps.len() != args.len() {
+                e.push("`callptr` has the wrong number of arguments".to_string());
+            } else {
+                for (a, want) in args.iter().zip(ps.iter()) {
+                    if t(*a) != Some(*want) {
+                        e.push("an argument of `callptr` has the wrong type".to_string());
+                    }
+                }
+            }
+            let want = if *ret == IrTy::Void { None } else { Some(*ret) };
+            if result_ty != want {
+                e.push("the result type differs from the signature's".to_string());
+            }
+        }
+        Op::Print(p, n) => {
+            if t(*p) != Some(IrTy::Ptr) || t(*n) != Some(IrTy::I64) {
+                e.push("`print` needs a ptr and an i64 length".to_string());
             }
         }
         Op::Load(ty, p) => {

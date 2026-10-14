@@ -13,7 +13,7 @@ mod print;
 mod tests;
 mod verify;
 
-pub use interp::{run, Val};
+pub use interp::{run, run_full, Outcome, Val};
 pub use print::{print_func, print_module};
 pub use verify::{verify_func, verify_module};
 
@@ -47,6 +47,17 @@ impl IrTy {
 
     pub fn is_int(self) -> bool {
         matches!(self, IrTy::Int(_))
+    }
+
+    /// Size in bytes in memory.
+    pub fn size(self) -> u32 {
+        match self {
+            IrTy::Int(b) => b as u32 / 8,
+            IrTy::F32 => 4,
+            IrTy::F64 | IrTy::Ptr => 8,
+            IrTy::Bool => 1,
+            IrTy::Void => 0,
+        }
     }
 
     pub fn is_float(self) -> bool {
@@ -190,8 +201,20 @@ pub enum Op {
     Not(Value),
     Cast(CastKind, Value, IrTy),
     Call(FuncId, Vec<Value>),
-    /// Reserve stack space for one value of the type; gives its address.
-    Slot(IrTy),
+    /// Reserve stack space of this size and alignment (in bytes); gives its address.
+    Slot(u32, u32),
+    /// An address moved by a number of bytes.
+    PtrAdd(Value, Value),
+    /// Copy this many bytes from the second address to the first (the areas do not overlap).
+    MemCopy(Value, Value, Value),
+    /// The address of the n-th piece of static data (a string literal, a table).
+    DataAddr(u32),
+    /// The address of a function, for a call through a pointer.
+    FuncAddr(FuncId),
+    /// Call through a function address, with the signature the callee must have.
+    CallPtr(Vec<IrTy>, IrTy, Value, Vec<Value>),
+    /// Write bytes (address, length) to the program's output.
+    Print(Value, Value),
     Load(IrTy, Value),
     Store(Value, Value),
     /// Heap memory of the given size in bytes; gives its address.
@@ -245,9 +268,20 @@ pub struct Func {
 #[derive(Clone, Default, Debug)]
 pub struct Module {
     pub funcs: Vec<Func>,
+    /// Static data, such as string literals.
+    pub data: Vec<Vec<u8>>,
 }
 
 impl Module {
+    /// Adds static data and gives its number (equal data is shared).
+    pub fn add_data(&mut self, bytes: &[u8]) -> u32 {
+        if let Some(i) = self.data.iter().position(|d| d == bytes) {
+            return i as u32;
+        }
+        self.data.push(bytes.to_vec());
+        self.data.len() as u32 - 1
+    }
+
     pub fn add(&mut self, f: Func) -> FuncId {
         self.funcs.push(f);
         FuncId(self.funcs.len() as u32 - 1)

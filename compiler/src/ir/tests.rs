@@ -291,7 +291,7 @@ fn memory_and_casts() {
     let mut f = Func::new("f", &[IrTy::Int(32)], IrTy::I64);
     let x = f.block_params(f.entry())[0];
     let e = f.entry();
-    let slot = f.emit(e, Op::Slot(IrTy::I64), Some(IrTy::Ptr)).unwrap();
+    let slot = f.emit(e, Op::Slot(8, 8), Some(IrTy::Ptr)).unwrap();
     let wide = f
         .emit(e, Op::Cast(CastKind::SExt, x, IrTy::I64), Some(IrTy::I64))
         .unwrap();
@@ -329,4 +329,173 @@ fn stop_and_unreachable_end_blocks() {
     f.terminate(e, Term::Stop("index out of range".to_string()));
     assert_eq!(verify_func(&f), Vec::<String>::new());
     assert!(print_func(&f, None).contains("stop \"index out of range\""));
+}
+
+// ---- Memory ---------------------------------------------------------------------------------------
+
+use super::interp::{run_full, Val};
+
+fn c(f: &mut Func, b: BlockId, n: i128) -> Value {
+    f.emit(b, Op::Const(IrTy::I64, Const::Int(n)), Some(IrTy::I64))
+        .unwrap()
+}
+
+#[test]
+fn structs_live_in_slots_and_copy_with_memcopy() {
+    // struct { i64 a; i32 b } built in one slot, copied to another, read back.
+    let mut f = Func::new("f", &[], IrTy::I64);
+    let e = f.entry();
+    let a = f.emit(e, Op::Slot(16, 8), Some(IrTy::Ptr)).unwrap();
+    let b = f.emit(e, Op::Slot(16, 8), Some(IrTy::Ptr)).unwrap();
+    let ten = c(&mut f, e, 10);
+    let eight = c(&mut f, e, 8);
+    let off = f.emit(e, Op::PtrAdd(a, eight), Some(IrTy::Ptr)).unwrap();
+    let seven = f
+        .emit(e, Op::Const(IrTy::I32, Const::Int(7)), Some(IrTy::I32))
+        .unwrap();
+    f.emit(e, Op::Store(a, ten), None);
+    f.emit(e, Op::Store(off, seven), None);
+    let sixteen = c(&mut f, e, 16);
+    f.emit(e, Op::MemCopy(b, a, sixteen), None);
+    let eight2 = c(&mut f, e, 8);
+    let boff = f.emit(e, Op::PtrAdd(b, eight2), Some(IrTy::Ptr)).unwrap();
+    let x = f.emit(e, Op::Load(IrTy::I64, b), Some(IrTy::I64)).unwrap();
+    let y = f
+        .emit(e, Op::Load(IrTy::I32, boff), Some(IrTy::I32))
+        .unwrap();
+    let y64 = f
+        .emit(e, Op::Cast(CastKind::SExt, y, IrTy::I64), Some(IrTy::I64))
+        .unwrap();
+    let sum = f
+        .emit(e, Op::Bin(BinOp::Add, x, y64), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(e, Term::Return(Some(sum)));
+    let mut m = Module::default();
+    m.add(f);
+    assert_eq!(verify_module(&m), Vec::<String>::new());
+    let out = run_full(&m, "f", &[]);
+    assert_eq!(out.result, Ok(Val::int(17)));
+    assert_eq!(out.leaked, 0);
+}
+
+fn heap_fn(free_it: bool, twice: bool, use_after: bool) -> Module {
+    let mut f = Func::new("f", &[], IrTy::I64);
+    let e = f.entry();
+    let n = c(&mut f, e, 16);
+    let p = f.emit(e, Op::Alloc(n), Some(IrTy::Ptr)).unwrap();
+    let v = c(&mut f, e, 5);
+    f.emit(e, Op::Store(p, v), None);
+    if free_it {
+        f.emit(e, Op::Free(p), None);
+    }
+    if twice {
+        f.emit(e, Op::Free(p), None);
+    }
+    let r = if use_after {
+        f.emit(e, Op::Load(IrTy::I64, p), Some(IrTy::I64)).unwrap()
+    } else {
+        v
+    };
+    f.terminate(e, Term::Return(Some(r)));
+    let mut m = Module::default();
+    m.add(f);
+    m
+}
+
+#[test]
+fn the_heap_is_checked() {
+    let ok = run_full(&heap_fn(true, false, false), "f", &[]);
+    assert_eq!((ok.result, ok.leaked), (Ok(Val::int(5)), 0));
+    let leak = run_full(&heap_fn(false, false, false), "f", &[]);
+    assert_eq!((leak.result, leak.leaked), (Ok(Val::int(5)), 16));
+    let twice = run_full(&heap_fn(true, true, false), "f", &[]);
+    assert_eq!(twice.result, Err("freed memory twice".to_string()));
+    let after = run_full(&heap_fn(true, false, true), "f", &[]);
+    assert_eq!(
+        after.result,
+        Err("used memory after it was freed".to_string())
+    );
+}
+
+#[test]
+fn a_stack_address_cannot_outlive_its_function() {
+    let mut inner = Func::new("inner", &[], IrTy::Ptr);
+    let e = inner.entry();
+    let s = inner.emit(e, Op::Slot(8, 8), Some(IrTy::Ptr)).unwrap();
+    inner.terminate(e, Term::Return(Some(s)));
+    let mut m = Module::default();
+    let id = m.add(inner);
+    let mut f = Func::new("f", &[], IrTy::I64);
+    let e = f.entry();
+    let p = f.emit(e, Op::Call(id, vec![]), Some(IrTy::Ptr)).unwrap();
+    let v = f.emit(e, Op::Load(IrTy::I64, p), Some(IrTy::I64)).unwrap();
+    f.terminate(e, Term::Return(Some(v)));
+    m.add(f);
+    let out = run_full(&m, "f", &[]);
+    assert_eq!(
+        out.result,
+        Err("used the stack of a function that has returned".to_string())
+    );
+}
+
+#[test]
+fn static_data_printing_and_calls_through_pointers() {
+    let mut m = Module::default();
+    let d = m.add_data(b"hello\n");
+    assert_eq!(m.add_data(b"hello\n"), d);
+    let mut twice = Func::new("twice", &[IrTy::I64], IrTy::I64);
+    let e = twice.entry();
+    let x = twice.block_params(e)[0];
+    let r = twice
+        .emit(e, Op::Bin(BinOp::Add, x, x), Some(IrTy::I64))
+        .unwrap();
+    twice.terminate(e, Term::Return(Some(r)));
+    let tid = m.add(twice);
+    let mut f = Func::new("main", &[], IrTy::I64);
+    let e = f.entry();
+    let p = f.emit(e, Op::DataAddr(d), Some(IrTy::Ptr)).unwrap();
+    let six = c(&mut f, e, 6);
+    f.emit(e, Op::Print(p, six), None);
+    let fp = f.emit(e, Op::FuncAddr(tid), Some(IrTy::Ptr)).unwrap();
+    let four = c(&mut f, e, 4);
+    let r = f
+        .emit(
+            e,
+            Op::CallPtr(vec![IrTy::I64], IrTy::I64, fp, vec![four]),
+            Some(IrTy::I64),
+        )
+        .unwrap();
+    f.terminate(e, Term::Return(Some(r)));
+    m.add(f);
+    assert_eq!(verify_module(&m), Vec::<String>::new());
+    let out = run_full(&m, "main", &[]);
+    assert_eq!(out.result, Ok(Val::int(8)));
+    assert_eq!(out.output, "hello\n");
+    let text = print_module(&m);
+    assert!(
+        text.contains("data d0")
+            && text.contains("callptr (i64) -> i64, v")
+            && text.contains("funcaddr @twice"),
+        "{text}"
+    );
+}
+
+#[test]
+fn memory_ops_are_type_checked() {
+    let mut f = Func::new("f", &[IrTy::I64], IrTy::Void);
+    let x = f.block_params(f.entry())[0];
+    let e = f.entry();
+    f.emit(e, Op::PtrAdd(x, x), Some(IrTy::Ptr));
+    f.emit(e, Op::MemCopy(x, x, x), None);
+    f.terminate(e, Term::Return(None));
+    let errs = verify_func(&f);
+    assert!(
+        errs.iter()
+            .any(|m| m.contains("`ptradd` needs a ptr and an i64")),
+        "{errs:?}"
+    );
+    assert!(
+        errs.iter().any(|m| m.contains("`memcopy` needs two ptrs")),
+        "{errs:?}"
+    );
 }

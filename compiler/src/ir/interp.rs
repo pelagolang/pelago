@@ -5,6 +5,7 @@
 //! comparison, shifts, checked arithmetic) read them as signed or unsigned.
 
 use super::*;
+use std::collections::BTreeMap;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Val {
@@ -60,25 +61,87 @@ fn bits_of(t: IrTy) -> u32 {
     }
 }
 
+/// Function addresses are numbers far outside memory, so a stray load cannot hit one.
+const FUNC_BASE: usize = 1 << 40;
+const STACK_SIZE: usize = 1 << 20;
+
 struct Machine<'m> {
     m: &'m Module,
-    mem: Vec<Val>,
+    mem: Vec<u8>,
+    /// Where each piece of static data starts.
+    data_at: Vec<usize>,
+    /// The stack lives in `stack_base..stack_base + STACK_SIZE`; `sp` is its top.
+    stack_base: usize,
+    sp: usize,
+    heap_base: usize,
+    /// Heap blocks by start address: size and whether still alive.
+    heap: BTreeMap<usize, (usize, bool)>,
+    out: Vec<u8>,
     steps: u64,
     depth: u32,
 }
 
+/// What a run gave: the result (or the message of a stop), the text written, and the bytes of heap
+/// memory never freed.
+#[derive(Debug)]
+pub struct Outcome {
+    pub result: Result<Val, String>,
+    pub output: String,
+    pub leaked: usize,
+}
+
 /// Runs the function called `name`. `Err` holds the message of a stop.
 pub fn run(m: &Module, name: &str, args: &[Val]) -> Result<Val, String> {
+    run_full(m, name, args).result
+}
+
+pub fn run_full(m: &Module, name: &str, args: &[Val]) -> Outcome {
     let Some(i) = m.funcs.iter().position(|f| f.name == name) else {
-        return Err(format!("no function `{name}`"));
+        return Outcome {
+            result: Err(format!("no function `{name}`")),
+            output: String::new(),
+            leaked: 0,
+        };
     };
+    let mut mem = vec![0u8; 16];
+    let mut data_at = Vec::new();
+    for d in &m.data {
+        while !mem.len().is_multiple_of(16) {
+            mem.push(0);
+        }
+        data_at.push(mem.len());
+        mem.extend_from_slice(d);
+    }
+    while !mem.len().is_multiple_of(16) {
+        mem.push(0);
+    }
+    let stack_base = mem.len();
+    mem.resize(stack_base + STACK_SIZE, 0);
+    let heap_base = mem.len();
     let mut mc = Machine {
         m,
-        mem: Vec::new(),
+        mem,
+        data_at,
+        stack_base,
+        sp: stack_base,
+        heap_base,
+        heap: BTreeMap::new(),
+        out: Vec::new(),
         steps: 0,
         depth: 0,
     };
-    mc.call(i, args)
+    let result = mc.call(i, args);
+    let leaked = mc
+        .heap
+        .values()
+        .filter(|(_, live)| *live)
+        .map(|(s, _)| *s)
+        .sum();
+    Outcome {
+        result,
+        output: String::from_utf8_lossy(&mc.out).into_owned(),
+        leaked,
+    }
 }
 
 impl Machine<'_> {
@@ -88,6 +151,7 @@ impl Machine<'_> {
             return Err("the stack is full".to_string());
         }
         let f = &self.m.funcs[fi];
+        let frame = self.sp;
         let mut vals: Vec<Val> = vec![Val::Unit; f.values.len()];
         let mut block = 0usize;
         for (p, a) in f.blocks[0].params.iter().zip(args.iter()) {
@@ -97,7 +161,7 @@ impl Machine<'_> {
             let b = &f.blocks[block];
             for &id in &b.insts {
                 self.steps += 1;
-                if self.steps > 50_000_000 {
+                if self.steps > 200_000_000 {
                     return Err("the step limit was reached".to_string());
                 }
                 let inst = &f.insts[id];
@@ -121,13 +185,124 @@ impl Machine<'_> {
                 Term::Unreachable => return Err("reached unreachable code".to_string()),
             }
         };
+        self.sp = frame;
         self.depth -= 1;
         Ok(result)
+    }
+
+    // ---- Memory ---------------------------------------------------------------------------------
+
+    /// Checks that `len` bytes at `addr` may be touched.
+    fn check(&self, addr: usize, len: usize) -> Result<(), String> {
+        if addr < 16 {
+            return Err("used a null address".to_string());
+        }
+        let end = addr.checked_add(len).ok_or("a bad address")?;
+        if end > self.mem.len() {
+            return Err("used an address outside memory".to_string());
+        }
+        if addr >= self.stack_base && addr < self.heap_base {
+            if end > self.sp {
+                return Err("used the stack of a function that has returned".to_string());
+            }
+            return Ok(());
+        }
+        if addr >= self.heap_base {
+            return match self.heap.range(..=addr).next_back() {
+                Some((start, (size, live))) if addr < start + size.max(&1) || len == 0 => {
+                    if !live {
+                        Err("used memory after it was freed".to_string())
+                    } else if end > start + size {
+                        Err("used memory past the end of its block".to_string())
+                    } else {
+                        Ok(())
+                    }
+                }
+                _ => Err("used an address that is not in any block".to_string()),
+            };
+        }
+        Ok(())
+    }
+
+    fn read(&self, ty: IrTy, addr: usize) -> Result<Val, String> {
+        let n = ty.size() as usize;
+        self.check(addr, n)?;
+        let b = &self.mem[addr..addr + n];
+        Ok(match ty {
+            IrTy::Int(_) => {
+                let mut x = 0u128;
+                for (i, byte) in b.iter().enumerate() {
+                    x |= (*byte as u128) << (8 * i);
+                }
+                Val::Int(x)
+            }
+            IrTy::F32 => Val::Float(f32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f64),
+            IrTy::F64 => Val::Float(f64::from_le_bytes(b.try_into().unwrap_or([0; 8]))),
+            IrTy::Bool => Val::Bool(b[0] != 0),
+            IrTy::Ptr => Val::Ptr(u64::from_le_bytes(b.try_into().unwrap_or([0; 8])) as usize),
+            IrTy::Void => Val::Unit,
+        })
+    }
+
+    fn write(&mut self, addr: usize, ty: IrTy, v: Val) -> Result<(), String> {
+        let n = ty.size() as usize;
+        self.check(addr, n)?;
+        let bytes: Vec<u8> = match (ty, v) {
+            (IrTy::Int(_), Val::Int(x)) => (0..n).map(|i| (x >> (8 * i)) as u8).collect(),
+            (IrTy::F32, Val::Float(x)) => (x as f32).to_le_bytes().to_vec(),
+            (IrTy::F64, Val::Float(x)) => x.to_le_bytes().to_vec(),
+            (IrTy::Bool, Val::Bool(b)) => vec![b as u8],
+            (IrTy::Ptr, Val::Ptr(p)) => (p as u64).to_le_bytes().to_vec(),
+            (IrTy::Ptr, Val::Int(p)) => (p as u64).to_le_bytes().to_vec(),
+            (IrTy::Void, _) => Vec::new(),
+            _ => return Err("stored a value of the wrong kind".to_string()),
+        };
+        self.mem[addr..addr + n].copy_from_slice(&bytes);
+        Ok(())
+    }
+
+    fn alloc(&mut self, size: usize) -> usize {
+        while !self.mem.len().is_multiple_of(16) {
+            self.mem.push(0);
+        }
+        // A gap before each block catches writes just past the end of the one before.
+        let addr = self.mem.len() + 16;
+        self.mem.resize(addr + size, 0);
+        self.heap.insert(addr, (size, true));
+        addr
+    }
+
+    fn free(&mut self, p: Val) -> Result<(), String> {
+        let Val::Ptr(addr) = p else {
+            return Err("freed a value that is not an address".to_string());
+        };
+        if addr == 0 {
+            return Ok(());
+        }
+        match self.heap.get_mut(&addr) {
+            Some((_, live)) if !*live => Err("freed memory twice".to_string()),
+            Some((size, live)) => {
+                *live = false;
+                let (a, n) = (addr, *size);
+                for b in &mut self.mem[a..a + n] {
+                    *b = 0xDD;
+                }
+                Ok(())
+            }
+            None => Err("freed an address that was not allocated".to_string()),
+        }
     }
 
     fn exec(&mut self, f: &Func, vals: &[Val], op: &Op) -> Result<Val, String> {
         let get = |v: &Value| vals[v.0 as usize];
         let ty = |v: &Value| f.ty(*v);
+        let addr = |v: &Val| -> Result<usize, String> {
+            match v {
+                Val::Ptr(p) => Ok(*p),
+                Val::Int(p) => Ok(*p as usize),
+                _ => Err("expected an address".to_string()),
+            }
+        };
         Ok(match op {
             Op::Const(t, c) => match c {
                 Const::Int(n) => Val::Int(mask(*n as u128, bits_of(*t))),
@@ -177,22 +352,70 @@ impl Machine<'_> {
                 let argv: Vec<Val> = args.iter().map(get).collect();
                 self.call(callee.0 as usize, &argv)?
             }
-            Op::Slot(_) | Op::Alloc(_) => {
-                self.mem.push(Val::Unit);
-                Val::Ptr(self.mem.len() - 1)
-            }
-            Op::Load(_, p) => match get(p) {
-                Val::Ptr(i) => self.mem[i],
-                _ => return Err("load from a bad address".to_string()),
-            },
-            Op::Store(p, x) => {
-                match get(p) {
-                    Val::Ptr(i) => self.mem[i] = get(x),
-                    _ => return Err("store to a bad address".to_string()),
+            Op::CallPtr(_, _, fptr, args) => {
+                let a = addr(&get(fptr))?;
+                if a < FUNC_BASE || a - FUNC_BASE >= self.m.funcs.len() {
+                    return Err("called a bad function address".to_string());
                 }
+                let argv: Vec<Val> = args.iter().map(get).collect();
+                self.call(a - FUNC_BASE, &argv)?
+            }
+            Op::FuncAddr(fid) => Val::Ptr(FUNC_BASE + fid.0 as usize),
+            Op::DataAddr(i) => Val::Ptr(self.data_at[*i as usize]),
+            Op::Slot(size, align) => {
+                let align = (*align as usize).max(1);
+                let at = self.sp.div_ceil(align) * align;
+                let end = at + *size as usize;
+                if end > self.stack_base + STACK_SIZE {
+                    return Err("the stack is full".to_string());
+                }
+                for b in &mut self.mem[at..end] {
+                    *b = 0;
+                }
+                self.sp = end;
+                Val::Ptr(at)
+            }
+            Op::PtrAdd(p, n) => {
+                let base = addr(&get(p))? as i128;
+                let off = get(n).signed(64);
+                Val::Ptr((base + off) as usize)
+            }
+            Op::MemCopy(d, s, n) => {
+                let (d, s) = (addr(&get(d))?, addr(&get(s))?);
+                let n = get(n).signed(64) as usize;
+                self.check(d, n)?;
+                self.check(s, n)?;
+                self.mem.copy_within(s..s + n, d);
                 Val::Unit
             }
-            Op::Free(_) => Val::Unit,
+            Op::Alloc(n) => {
+                let n = get(n).signed(64);
+                if !(0..=(1 << 32)).contains(&n) {
+                    return Err("allocated a bad size".to_string());
+                }
+                Val::Ptr(self.alloc(n as usize))
+            }
+            Op::Free(p) => {
+                self.free(get(p))?;
+                Val::Unit
+            }
+            Op::Load(t, p) => {
+                let a = addr(&get(p))?;
+                self.read(*t, a)?
+            }
+            Op::Store(p, x) => {
+                let a = addr(&get(p))?;
+                let t = ty(x);
+                self.write(a, t, get(x))?;
+                Val::Unit
+            }
+            Op::Print(p, n) => {
+                let (a, n) = (addr(&get(p))?, get(n).signed(64) as usize);
+                self.check(a, n)?;
+                let bytes = self.mem[a..a + n].to_vec();
+                self.out.extend_from_slice(&bytes);
+                Val::Unit
+            }
         })
     }
 }
@@ -263,6 +486,14 @@ fn cmp(o: CmpOp, a: Val, b: Val, bits: u32) -> bool {
             }
         }
         (Val::Float(x), Val::Float(y)) => match o {
+            CmpOp::Eq => x == y,
+            CmpOp::Ne => x != y,
+            CmpOp::Lt | CmpOp::ULt => x < y,
+            CmpOp::Le | CmpOp::ULe => x <= y,
+            CmpOp::Gt | CmpOp::UGt => x > y,
+            CmpOp::Ge | CmpOp::UGe => x >= y,
+        },
+        (Val::Ptr(x), Val::Ptr(y)) => match o {
             CmpOp::Eq => x == y,
             CmpOp::Ne => x != y,
             CmpOp::Lt | CmpOp::ULt => x < y,

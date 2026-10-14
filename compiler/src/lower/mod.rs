@@ -298,7 +298,11 @@ impl<'a> FnLower<'a> {
     fn slot(&mut self, ty: IrTy) -> Value {
         let entry = self.f.entry();
         self.f
-            .emit(entry, Op::Slot(ty), Some(IrTy::Ptr))
+            .emit(
+                entry,
+                Op::Slot(ty.size(), ty.size().max(1)),
+                Some(IrTy::Ptr),
+            )
             .unwrap_or(Value(0))
     }
 
