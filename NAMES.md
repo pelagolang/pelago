@@ -1,4 +1,17 @@
-# Name brainstorm
+# Name
+
+## Decision: **Pelago**
+
+Chosen on 2026-10 by the owner. Greek *pelagos*, "the open sea", the root of *archipelago*.
+
+- Language: **Pelago**. File extension: **`.pel`**. One tool: **`pelago`** (`pelago check`, `pelago run`, ...).
+- GitHub organisation: `pelagolang`. Repository: `pelagolang/pelago`.
+- Pronunciation used in docs: peh-LAY-go.
+- Why: free on crates.io, npm and PyPI, short to type, no programming-language clash found, and the meaning fits a
+  language built from many small packages. Runner-up: Thalassa (three registry names taken, longer).
+- Research and the head-to-head: `docs/plans/cards/B-01-name.md`. Everything below is the history of the search.
+
+# Name brainstorm (history)
 
 The repo is called `lang` until we choose. Good language names are usually
 **short (3–6 letters), easy to say, easy to search, and free as a file extension
@@ -146,15 +159,15 @@ Nim or Kotlin. Quick web check, October 2026.
 | ~~Vexa~~ | | ❌ VexaScript, an active language. |
 | ~~Draxl~~ | | ❌ A Rust "agent-native source language". |
 
-## Round 6: around `langc`
+## Round 6: around `pelago`
 
-The compiler is called `langc` for now. Most compilers follow the same habit: the language
+The compiler is called `pelago` for now. Most compilers follow the same habit: the language
 name plus `c` (`rustc`, `javac`, `kotlinc`, `scalac`, `swiftc`, `tsc`, `gcc`). Quick web check, October 2026.
 
 | Name | Check |
 |------|-------|
 | **Lang** | Works as a codename, but generic. Several hobby projects are already called `lang`, including a compiler ([ehrlich-b/lang](https://github.com/ehrlich-b/lang)). Hard to search for. |
-| **Langc** | Not found as a language, but close to `langcc` (a compiler-compiler) and `lllc` (Langlanglang). |
+| **Langc** | Not found as a language, but close to `pelagoc` (a compiler-compiler) and `lllc` (Langlanglang). |
 | **Lanc** | Only the old PLANC (Norsk Data, discontinued) turns up. Compiler would be `lancc`, which is awkward. |
 | **Lugha** | Swahili for "language". No programming language found. |
 | **Clangor** | Free, but it sits right beside Clang, the LLVM compiler. Confusing. |
@@ -168,7 +181,27 @@ name plus `c` (`rustc`, `javac`, `kotlinc`, `scalac`, `swiftc`, `tsc`, `gcc`). Q
 A habit worth deciding on now: the newer languages ship **one tool** named after the language
 (`cargo`, `go`, `zig`, `deno`), with `build`, `run`, `test` and `fmt` inside, and keep the compiler
 as an internal part. If we do that, the `c` suffix goes away and the name only needs to work as a
-command. Until a name is chosen, `langc` is a single line in `compiler/Cargo.toml`, so renaming is cheap.
+command. Until a name is chosen, `pelago` is a single line in `compiler/Cargo.toml`, so renaming is cheap.
+
+## Round 7: oceans and vast water
+
+You asked for a name that feels like a vast expanse (Pacific, Atlantic). This round follows that request, so it is an
+exception to the rule "avoid nature-themed names" in `CLAUDE.md` (update that line if an ocean name is chosen).
+Full research, the Wikipedia findings and the review table are in `docs/plans/cards/B-01-name.md`. Web check, October 2026.
+
+| Name | Meaning | Check |
+|------|---------|-------|
+| **Thalassa** | Greek "sea" | ✅ No language found. Distinct and searchable. ⭐ |
+| **Pontus** | Greek primordial sea god | ✅ No language found. Short. ⭐ |
+| **Panthalassa** | "All sea", the one ancient ocean | ✅ No language, ⚠️ a 2026 wave-energy company shares the name. |
+| **Pacific** | The ocean | ✅ No language found, ⚠️ very hard to search ("Pacific language" means human languages). |
+| **Atlantic** | The ocean | ✅ No language found, ⚠️ "Atlantic languages" is a linguistic family; `.atl` is Eclipse ATL. |
+| **Atoll**, **Pelago**, **Offing**, **Nereid**, **Oceanus** | | ✅ none found (Oceanus: ⚠️ a Tencent Cloud product name). |
+| ~~Tethys~~ | | ❌ A toy language and a mission DSL already use it. |
+| ~~Fathom~~ | | ❌ A binary-format language (yeslogic/fathom) and a Rust crate. |
+| ~~Kai~~ | Hawaiian "sea" | ❌ A self-hosted systems language named Kai exists. |
+| ~~Halcyon~~ | | ❌ Two language projects. |
+| **Gyre** | Ocean current | ⚠️ A compiler IR project by that name (inactive). |
 
 ## Picking criteria
 - [ ] Sounds good said out loud ("I wrote it in ___")

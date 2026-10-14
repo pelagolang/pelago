@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "langc"
+name = "pelago"
 version = "0.0.1"

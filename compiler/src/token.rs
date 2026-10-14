@@ -56,6 +56,16 @@ puncts! {
     Bang => "!";
     /// Marks a call that consumes its receiver: `c.close!!()`.
     BangBang => "!!";
+    // Wrapping arithmetic: overflow wraps around on purpose
+    /// Wrapping add.
+    PlusPercent => "+%";
+    /// Wrapping subtract.
+    MinusPercent => "-%";
+    /// Wrapping multiply.
+    StarPercent => "*%";
+    PlusPercentEq => "+%=";
+    MinusPercentEq => "-%=";
+    StarPercentEq => "*%=";
     // Bitwise
     Amp => "&";
     Pipe => "|";

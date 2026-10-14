@@ -66,7 +66,8 @@ A case holds a *pattern*: a shape the value is compared against.
 | a name | anything, and **binds** it | `case n:`, `case (x, 0):` |
 | a tuple | a tuple, piece by piece | `case (0, 0):` |
 | an enum case | that case, and its payload | `case .circle(r):` |
-| `none`, `ok(p)`, `err(p)` | the library cases | `case ok(n):` |
+| `none`, `some(p)`, `ok(p)`, `err(p)` | the library cases | `case some(n):`, `case ok(n):` |
+| a list shape | a list, array or slice by length and parts | `case [first, ...rest]:` (see `list-patterns.md`) |
 
 ```
 switch (x, y) {
@@ -230,8 +231,7 @@ This is the same `is` as `case d is dog:`, so a type test is just one more patte
 
 ## Later still
 
-Patterns over lists (`[first, ..rest]`): under value semantics `rest` must be a view of the list,
-which depends on how collections are designed. Revisit with collections.
+Patterns over lists are decided in `list-patterns.md`.
 
 ## What is already our own
 

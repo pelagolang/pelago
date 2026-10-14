@@ -1,0 +1,46 @@
+/// Counting words and parsing numbers: maps, strings, results and `?`.
+
+fn count_words(text: str) -> map<string, int> {
+    var counts: map<string, int> = {:}
+    for word of text.split(" ") {
+        if word.is_empty() { continue }
+        const key = word.to_lower()
+        const current = counts.get(key) ?? 0
+        counts.insert!(sink key, current + 1)
+    }
+    counts
+}
+
+fn parse_all(items: [str]) -> [int] ! parse_error {
+    var out: [int] = []
+    for item of items {
+        out.push!(item.parse_int()?)
+    }
+    ok(out)
+}
+
+fn longest(words: [string]) -> string? {
+    var best: string? = none
+    for w of words {
+        switch best {
+            case some(b) if b.len() >= w.len(): continue
+            default: best = w
+        }
+    }
+    best
+}
+
+fn main() {
+    const counts = count_words("the quick the lazy the dog")
+    for word, n of counts {
+        print("#word: #n")
+    }
+
+    switch parse_all(["1", "2", "x"]) {
+        case ok(values): print("sum: #(values.iter().sum())")
+        case err(e): print("bad number: #(e.message)")
+    }
+
+    const names = ["ann", "bo", "cy"]
+    print(longest(names) ?? "nobody")
+}

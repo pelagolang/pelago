@@ -211,4 +211,4 @@ a later page; nothing here blocks them.
 - **B2** A builder without brackets as a call's only argument is a lazy stream.
 - **B3** A comma starts a nested loop, and `if` filters the loop before it.
 - **B4** Maps and sets use `map { ... ~> key : value }` and `set { ... ~> value }`.
-- **B5** Patterns that can fail (skipping items that don't match) wait for list patterns.
+- **B5** Skipping items that don't match: write `if x is pattern`; its names are usable in the result (`list-patterns.md`, LP6).

@@ -1,0 +1,397 @@
+(file
+  (mod
+    (doc
+      "A tour of the syntax decided so far. Not a program anyone can run yet:\nit exists so the lexer (and later the parser) has something real to read.\nDocumentation can also\nspan many lines.")
+    tour)
+  (import std)
+  (const name (str "Dennis"))
+  (var score (: int) 10)
+  (+= score 5)
+  (++ score)
+  (const big 1_000_000)
+  (const mask 0xFF)
+  (const bits 0b1010)
+  (const ratio 3.14)
+  (const tiny 1e-3)
+  (const letter 'a')
+  (const tab '\t')
+  (call
+    print
+    (str "Score: " (# score) ", next: " (# (+ score 1)) ", name: " (# name) ", hash: \\#"))
+  (const whole 7)
+  (const decimal (to whole float))
+  (fn
+    (doc "Adds two numbers.\n\nThe last expression is the result.")
+    add
+    ((a : int) (b : int))
+    ->
+    int
+    (block (tail (+ a b))))
+  (fn double ((x : int)) -> int = (* x 2))
+  (fn
+    greet
+    ((name : string) (greeting : string = (str "Hello")))
+    (block (tail (call print (str (# greeting) ", " (# name))))))
+  (call greet (str "Dennis") (arg greeting: (str "Hi")))
+  (fn
+    sum
+    ((... nums : int))
+    ->
+    int
+    (block (var total 0) (for-of (n) nums (block (tail (+= total n)))) (tail total)))
+  (call sum (arg ... (list 1 2 3)))
+  (fn clear ((inout xs : (list int))) (block (tail (call! (. xs clear)))))
+  (fn finish ((sink xs : (list int))) -> int = (call (. xs len)))
+  (call clear (arg inout scores))
+  (call finish (arg sink scores))
+  (fn
+    sum_to
+    ((n : int) (acc : int = 0))
+    ->
+    int
+    (block
+      (if (== n 0) (block (tail (return acc))))
+      (tail (become (call sum_to (- n 1) (+ acc n))))))
+  (fn
+    parse_int
+    ((s : string))
+    ->
+    (result int parse_error)
+    (block (const n (try (call digits s))) (tail (call ok n))))
+  (fn find ((xs : (list string)) (name : string)) -> (option int) (block (tail none)))
+  (const index (?? (call find names (str "Dennis")) (neg 1)))
+  (fn (@ inline) square ((x : int)) -> int = (* x x))
+  (fn meta build_table () -> (array int 256) (block (tail table)))
+  (const table (meta (call build_table)))
+  (fn max (generics (T ordered)) ((a : T) (b : T)) -> T (block (tail (?: (> a b) a b))))
+  (const grade (block (tail (?: (> score 90) (str "A") (?: (> score 80) (str "B") (str "C"))))))
+  (for-in
+    i
+    (..= 0 10)
+    (block (if (== (% i 2) 0) (block (tail continue))) (tail (unless (< i 5) (block (tail break))))))
+  (for-c (var i 0) (< i 10) (+= i 1) (block))
+  (for-of (i x) items (block (tail (call print (str (# i) ": " (# x))))))
+  (for-of ((inout x)) items (block (tail (++ x))))
+  (while (> score 0) (block (tail (-- score))))
+  (do-while (block (tail (++ score))) (< score 3))
+  (loop (block (tail break)))
+  (switch
+    shape
+    (case ((.circle r)) (block (tail (* (* PI r) r))))
+    (case ((.rect (inout w) h)) (block (tail (+= w 1.0))))
+    (case (1 2 3) (block (tail 0.0)))
+    (case (n) (if (> n 100)) (block (tail 1.0)))
+    (case ((as d (type dog))) (block (tail (call (. d fetch)))))
+    (case default (block (tail 0.0))))
+  (if (is shape (.circle r)) (block (tail (call print (str "radius " (# r))))))
+  (guard (is shape (.circle r)) (block (tail return)))
+  (const maybe_dog (to? pet dog))
+  (if (|| (&& (< 0 x) (< x 10)) (not done)) (block))
+  (const inside (in x (.. 1 10)))
+  (const mixed (| (& a b) (^ c (>> (<< d 2) 1))))
+  (struct
+    point
+    (field x : float)
+    (field y : float)
+    (fn
+      length
+      (self)
+      ->
+      float
+      =
+      (call sqrt (+ (* (. self x) (. self x)) (* (. self y) (. self y)))))
+    (fn
+      shift
+      ((inout self) (dx : float) (dy : float))
+      (block (+= (. self x) dx) (tail (+= (. self y) dy)))))
+  (var p (new point (: x 3.0) (: y 4.0)))
+  (call! (. p shift) 1.0 1.0)
+  (const n (call!! (. c close)))
+  (enum
+    (doc "A shape with a size.")
+    shape
+    (case circle (doc "A round one.") (radius: float))
+    (case rect (w: float) (h: float))
+    (case empty))
+  (interface shape_like (fn area (self) -> float))
+  (struct circle (: shape_like) (field radius : float))
+  (impl shape_like for rect)
+  (obj
+    open
+    animal
+    (field name : string)
+    (init ((name : string)) (block (tail (= (. self name) name))))
+    (fn open speak (self) -> string = (str "...")))
+  (obj dog (: animal) (fn override speak (self) -> string = (str "Woof")))
+  (struct stack (generics T) (field items : (list T)))
+  (const lookup (: (map string (list int))) (map (: (str "a") (list 1 2)) (: (str "b") (list))))
+  (const empty (map))
+  (const doubled (call (. numbers map) (~> (x) (* x 2))))
+  (const tripled (call (. numbers map) (~> () (* it 3))))
+  (call (. numbers each) (~> (capture (inout total)) (x) (+= total x)))
+  (const cleaned (|> (|> raw trim) parse))
+  (const user_name (?? (?. user name) (str "anonymous")))
+  (const doubled_pos (build-list (of (x) xs) (if (> x 0)) ~> (* x 2)))
+  (const labels (build-list (of (i x) xs) ~> (str (# i) ": " (# x))))
+  (const pairs (build-list (of (x) xs) (of (y) ys) (if (!= x y)) ~> (tuple x y)))
+  (const remainders (build-set (of (x) xs) ~> (% x 10)))
+  (const ages (build-map (of (u) users) ~> (. u name) : (. u age)))
+  (const total (call sum (build-stream (of (x) xs) (if (> x 0)) ~> (* x x))))
+  (const tail (index xs (.. (neg 3) _)))
+  (const hash (+% (*% a 31) b))
+  (*%= h 31)
+  (+%= h c)
+  (const safe (call (. a checked_add) b))
+  (const capped (call (. a saturating_add) b))
+  (const wrapped (call (. a wrapping_add) b))
+  (fn
+    sum_list
+    ((xs : (list int)))
+    ->
+    int
+    (block
+      (tail
+        (switch
+          xs
+          (case ((list)) (block (tail 0)))
+          (case ((list h (... t))) (block (tail (+ h (call sum_list t)))))))))
+  (fn
+    describe
+    ((xs : (list int)))
+    ->
+    string
+    (block
+      (tail
+        (switch
+          xs
+          (case ((list)) (block (tail (str "empty"))))
+          (case ((list x)) (block (tail (str "one: " (# x)))))
+          (case ((list first (...) last)) (block (tail (str "from " (# first) " to " (# last)))))
+          (case
+            ((list 0 (... rest)))
+            (if (> (call (. rest len)) 3))
+            (block (tail (str "zero then many"))))
+          (case
+            ((list a (... mid) b))
+            (block (tail (str (# a) ", " (# (call (. mid len))) " more, " (# b)))))))))
+  (switch
+    inout
+    xs
+    (case
+      ((list (inout first) (... inout rest)))
+      (block (+= first 1) (tail (call! (. rest reverse)))))
+    (case ((list)) (block (tail (call print (str "nothing"))))))
+  (fn
+    command
+    ((line : string))
+    (block
+      (tail
+        (switch
+          (call (. (call (. line split) (str " ")) to_list))
+          (case ((list (str "add") name)) (block (tail (call! add name))))
+          (case ((list (str "rename") old new)) (block (tail (call! rename old new))))
+          (case ((list cmd (...))) (block (tail (call print (str "unknown command " (# cmd))))))
+          (case ((list)) (block (tail (call print (str "empty line")))))))))
+  (fn
+    starts
+    ((s : string))
+    ->
+    string
+    (block
+      (tail
+        (switch
+          s
+          (case ((str)) (block (tail (str "empty"))))
+          (case ((list 'a' (... rest))) (block (tail (str "starts with a, then " (# rest)))))
+          (case ((list c (...))) (block (tail (str "starts with " (# c)))))))))
+  (if (is args (list cmd (... rest))) (block (tail (call run cmd rest))))
+  (guard (is args (list path)) (block (tail (return (call err (call usage))))))
+  (const radii (build-list (of (s) shapes) (if (is s (.circle r))) ~> r))
+  (const values (build-list (of (o) opts) (if (is o (some v))) ~> (* v 2)))
+  (switch
+    lookup
+    (case ((some n)) (if (> n 3)) (block (tail (str "big"))))
+    (case ((some _)) (block (tail (str "small"))))
+    (case (none) (block (tail (str "missing")))))
+  (switch
+    result
+    (case ((ok (.circle r))) (block (tail r)))
+    (case ((ok _)) (block (tail 0.0)))
+    (case ((err e)) (block (tail (call panic (str "failed: " (# e)))))))
+  (fn
+    parallel_total
+    ((xs : (list int)))
+    ->
+    int
+    (block
+      (var left 0)
+      (var right 0)
+      (const mid (/ (call (. xs len)) 2))
+      (scope
+        s
+        (block
+          (call
+            (. s spawn)
+            (~> (capture (inout left)) () (= left (call sum (index xs (.. _ mid))))))
+          (tail
+            (call
+              (. s spawn)
+              (~> (capture (inout right)) () (= right (call sum (index xs (.. mid _)))))))))
+      (tail (+ left right))))
+  (fn
+    pipeline
+    ()
+    (block
+      (const task (call spawn (~> (capture (sink data)) () (call crunch data))))
+      (const total (call!! (. task join)))
+      (const (tuple tx rx) (call (apply chan int)))
+      (call
+        spawn
+        (~>
+          (capture (sink tx))
+          ()
+          (block (tail (for-of (i) (.. 0 10) (block (tail (try (call (. tx send) i)))))))))
+      (for-of (x) rx (block (tail (call print (str "got " (# x))))))
+      (select
+        (case (= v (call (. a recv))) (block (tail (call print (str "a: " (# v))))))
+        (case (= v (call (. b recv))) (block (tail (call print (str "b: " (# v))))))
+        (case (call (. tx send) next) (block (tail (+= sent 1))))
+        (case (call timeout (call ms 50)) (block (tail (call print (str "slow")))))
+        (case default (block)))
+      (const config (call shared (call load_config)))
+      (const hits (call lock 0))
+      (call! (. hits with) (~> (n) (+= n 1)))
+      (tail (call par_for (arg inout xs) (~> (x) (*= x 2))))))
+  (import (list (: map dict)) = std.collections)
+  (import fmt = std.io)
+  (import (...) = std.math)
+  (import (helper) = .util)
+  (import ..shared.strings)
+  (import pub (read) = std.io)
+  (use std.io)
+  (type id int64)
+  (type pair (generics A B) (tuple A B))
+  (struct
+    (@ derive eq order hash show)
+    user
+    (field pub name : string)
+    (field pub age : int = 18)
+    (field token : string))
+  (struct linear transaction (field id : int))
+  (fn pub commit ((sink t : transaction)) -> (result void db_error) (block))
+  (struct
+    range
+    (field lo : int)
+    (field hi : int)
+    (init
+      ((lo : int) (hi : int))
+      ->
+      (result Self bad_range)
+      (block
+        (if (> lo hi) (block (tail (return (call err bad_range)))))
+        (= (. self lo) lo)
+        (tail (= (. self hi) hi))))
+    (deinit () (block)))
+  (impl
+    add
+    for
+    vec2
+    (fn
+      add
+      (self (other : vec2))
+      ->
+      vec2
+      =
+      (new vec2 (: x (+ (. self x) (. other x))) (: y (+ (. self y) (. other y))))))
+  (impl (generics T) show for (stack T) (where (T show)) (fn show (self) -> string = (str "stack")))
+  (fn
+    largest
+    (generics T)
+    ((xs : (list T)))
+    ->
+    (option T)
+    (where (T ordered) (T eq))
+    (block (tail none)))
+  (fn sized (generics (meta N int)) () -> (array int N) (block (tail (repeat 0 N))))
+  (fn apply ((f : (fn (int) -> int)) (x : int)) -> int = (call f (call f x)))
+  (fn shapes_area ((xs : (list (any shape_like)))) -> float = 0.0)
+  (fn
+    dense
+    ((points : (soa point 8)) (grid : (tuple int string ; 4)) (pair : (tuple int int)))
+    (block))
+  (fn ext puts ((s : ptr)) -> int)
+  (fn ext abs ((x : int)) -> int)
+  (test (str "addition works") (block (tail (call assert (== (call add 1 2) 3)))))
+  (meta-if
+    (== (. target os) linux)
+    (block (fn platform () -> string = (str "linux")))
+    (else (block (fn platform () -> string = (str "other")))))
+  (const widest (call (apply max int) 3 7))
+  (const s (new (stack int) (: items (list))))
+  (const tup (.1 (.0 t)))
+  (const flag (not (not ready)))
+  (var cache (: (option int)) none)
+  (??= cache 3)
+  (const first_ok (?? (?? a b) c))
+  (const
+    chain
+    (call (. (call (. (call (. items filter) (~> () (> it 0))) map) (~> () (* it 2))) to_list)))
+  (const piped (|> (|> raw trim) parse))
+  (const verdict (?: (> score 90) (str "A") (?: (> score 80) (str "B") (str "C"))))
+  (const nested (list (list 1 2) (list 3 4)))
+  (const cfg (new config (: port 9090) verbose (... defaults)))
+  (const scale (** 2 (** 10 2)))
+  (const neg (neg (** x 2)))
+  (const total_len (call (. (call (. values map) (~> (v) (call (. v len)))) sum)))
+  (const adder (~> ((: a int) (: b int)) (+ a b)))
+  (const op (~> (capture (inout total) (sink data)) (x y) (+= total (* x y))))
+  (const only_even (call (. xs filter) (~> () (== (% it 2) 0))))
+  (const grid2 (repeat 0 9))
+  (fn
+    use_defer
+    ()
+    (block
+      (defer (call cleanup))
+      (defer (block (tail (call close file))))
+      (unsafe (block (tail (call poke ptr 1))))
+      (if a (block (tail 1)) (else (if b (block (tail 2)) (else (block (tail 3))))))
+      (unless done (block (tail (call work))) (else (block (tail (call rest)))))
+      (const r (loop (block (tail (break 5)))))))
+  (switch
+    shape
+    (case ((.rect (w: width) h)) (block (tail (* width h))))
+    (case ((shape.circle radius)) (block (tail radius)))
+    (case ((struct point (x 0) (y 0))) (block (tail (str "origin"))))
+    (case ((struct point x ..)) (block (tail (str "x is " (# x)))))
+    (case ((.. 0 10) (..= 20 30)) (block (tail (str "range"))))
+    (case ((.. _ 0)) (block (tail (str "negative"))))
+    (case ((.. 100 _)) (block (tail (str "big"))))
+    (case ((neg 1)) (block (tail (str "minus one"))))
+    (case ((as big (..= 100 999))) (block (tail (str "three digits (" (# big) ")"))))
+    (case ((tuple a b)) (block (tail (str "pair"))))
+    (case ((.circle r) (.square r)) (block (tail (str "one measure " (# r)))))
+    (case default (block (tail (str "other")))))
+  (switch
+    day
+    (case (1) (block (tail (str "a"))))
+    (case (2) (block (tail (str "b"))))
+    (case default (block (tail (str "c")))))
+  (label
+    outer
+    (for-of
+      (i)
+      (.. 0 10)
+      (block
+        (tail
+          (label
+            inner
+            (for-of
+              (j)
+              (.. 0 10)
+              (block
+                (if (> (* i j) 20) (block (tail (break outer))))
+                (if (> j i) (block (tail (continue outer))))
+                (tail (if (== j 3) (block (tail (break inner))))))))))))
+  (label search (loop (block (tail (break search 5)))))
+  (const twice (~> ((: x int)) -> int (* x 2)))
+  (const bump (~> (capture (inout n)) ((: a int) (: b int)) -> int (block (+= n 1) (tail (+ a b))))))

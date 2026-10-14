@@ -1,6 +1,6 @@
 # Roadmap
 
-Working title: **lang** (see [NAMES.md](NAMES.md) for the name shortlist).
+Name: **Pelago**, file extension `.pel`, one tool called `pelago` (see [NAMES.md](NAMES.md) for how the name was chosen).
 
 ## Vision
 
@@ -35,6 +35,12 @@ A serious, self-hosting systems language:
 | Memory layout | AoS by default; `soa<T>` opt-in collection with column access (`points.x`); compiler-chosen layouts later (`docs/design/memory.md`) | decided |
 | Linear types | Opt-in `linear` modifier, staged after the type checker; `linear` reserved as a soft keyword | decided |
 | Collections | `docs/design/collections.md` decisions C1 to C8 recorded (must-exist indexing, negative indexes, insertion-ordered maps, `string`/`str`, `+` and spread); builders (own comprehension shape: `[x of xs if x > 0 ~> x * 2]`) added | decided |
+| Errors | `docs/design/errors.md` decisions E1 to E8: expected failures are `result`/`option`, bugs stop the program (no unwinding), overflow stops in every build with `+% -% *%` for wrapping, `converts` for `?` and `to` | decided |
+| Concurrency | `docs/design/concurrency.md` decisions CC1 to CC9: threads with `sink`/copy capture, scopes, `chan<T>` pairs, `select`, `shared`/`lock`/`atomic`; async still deferred; `par_for` helper; global `var` forbidden | decided |
+| List patterns | `docs/design/list-patterns.md` LP1 to LP8: `[first, ...rest]` with `...`, rest is a view, `some(v)` for options, patterns over text, `sink` elements revisited later | decided |
+| Parser | `docs/design/parser.md` P1 to P10 decided: top-level statements, `loop` values, loop labels (`outer: for ...`, `break outer`), closure return types (`(x: int) -> int ~> ...`), doc comments kept, syntax checks pass | decided |
+| Checker | `docs/design/checker.md`: all five stages built (names, types, interfaces, exhaustiveness, value semantics); TC1 to TC13 decided, VS1 to VS6 chosen (literals, two implicit conversions, no same-scope redeclaration, `fn` types are views, empty literals need context, integer division, equality) | decided |
+| Imports | Imports are bindings: `import std.io`, `import fmt = std.io`, `import { a, b: c, ... } = path`; cycles allowed, top-level only, `pub pkg` middle visibility, orphan rule (`docs/design/modules.md`). A file is a module named after the file; relative paths with leading dots stay | decided |
 | Maps | `map { "a": 1 }`, empty map `{:}` | decided |
 | Closures | `x ~> x * 2` and `~> it * 2` | decided |
 | Null | None. Absence is `none` in `option<T>` | decided |
@@ -83,7 +89,7 @@ No compiler code yet. Everything here is cheap to change.
   - [ ] Generics and interfaces: static dispatch by default, dynamic dispatch opt-in
   - [ ] Error handling (`Result` plus `?`, or an alternative)
   - [ ] Compile-time evaluation (the `comptime` idea from Zig)
-  - [ ] Concurrency: out of scope for v0, but write down the intended direction
+  - [x] Concurrency: decided in `docs/design/concurrency.md`
 - [ ] **Paper test.** Sketch the compiler's own core data (tokens, syntax tree, symbol table, type checker state) under value semantics. If something does not fit, revisit the safety model before writing any compiler code
 - [ ] **Token benchmark.** Run the samples and equivalent Rust and TS programs through real tokenizers. Record the numbers
 - [ ] **First target CPU** for the backend (x86-64 is the usual start) and first OS / object format (ELF on Linux)
@@ -100,21 +106,24 @@ No compiler code yet. Everything here is cheap to change.
 - [ ] Benchmark harness for compile time
 - [x] Keyword table, token kinds and spans (`compiler/src/{keyword,token,span}.rs`)
 - [ ] Source files and a diagnostics system (clear errors with line, column and a source snippet)
-- [x] **Lexer** (`compiler/src/lexer.rs`): about 214 MB/s, 59 M tokens/s in a release build on the first benchmark (`langc lex-bench`)
-- [ ] **Parser** (recursive descent with Pratt parsing for expressions) producing the AST
-- [ ] AST printer and a golden-file test suite (`.lang` input, expected output)
-- [ ] Parse every sample program
+- [x] **Lexer** (`compiler/src/lexer.rs`): about 214 MB/s, 59 M tokens/s in a release build on the first benchmark (`pelago lex-bench`)
+- [x] **Parser** (`compiler/src/parser/`, recursive descent plus precedence climbing) producing the AST (`ast.rs`); see `docs/design/parser.md`
+- [x] AST printer (`ast_print.rs`, `pelago parse`) and golden trees for the examples (`compiler/tests/golden/`)
+- [x] Parse every example program (`examples/*.pel` parse without errors)
 
 **Milestone:** all samples parse, with good errors for bad input.
 
 ## Phase 2: Meaning
 
-- [ ] Name resolution and modules
-- [ ] **Type checker** with local inference, structs, enums, generics and interfaces
-- [ ] **Value-semantics checker:** exclusivity of `inout` access, moves vs copies, `sink`
-- [ ] Pattern-match exhaustiveness
-- [ ] Generics via monomorphization
-- [ ] A first IR (SSA-based) and an IR printer
+- [x] Name resolution and modules (`compiler/src/resolve/`, `package.rs`; `pelago check`); see `docs/design/checker.md`
+- [x] **Type checker, stage 2**: local inference, structs, enums, patterns, methods, closures, basic generics (`compiler/src/typecheck/`, `types.rs`, `compiler/core/core.pel`). Interfaces, bounds and exhaustiveness are stage 3 and 4 of `docs/design/checker.md`
+- [x] **Interfaces and bounds, exhaustiveness, value semantics** (`typecheck/iface.rs`, `typecheck/exhaust.rs`, `values/`): bounds, `impl` completeness, operators, orphan rule; `switch` coverage; moves, `inout` exclusivity, `const` depth. Stage 6 done: `converts`, `main` forms, `defer`; also `become`, `linear`, view escape, `spawn` captures (VS7 to VS15, including `T: linear` and warnings)
+- [x] Pattern-match exhaustiveness (`typecheck/exhaust.rs`)
+- [x] Generics via monomorphization (`compiler/src/lower/`: one IR function per instance)
+- [x] IR data types, printer and verifier (`compiler/src/ir/`, `docs/design/ir.md`, IR1 to IR8 decided)
+- [x] First lowering (numbers, control flow, calls) and the IR interpreter (`compiler/src/lower/`, `pelago ir`)
+- [x] Lowering of aggregates, `switch`, ownership and drops, monomorphisation, closures, maps and sets, `obj` and `any`, `init`, tasks and channels; `pelago run` runs programs in the interpreter (IR9 to IR20 in `docs/design/ir.md`)
+- [ ] Still not lowered: `meta`, `soa`, `async`, `box<T>` values (needs checker support first)
 
 **Milestone:** programs are type-checked and lowered to IR, and the checker rejects the unsafe examples.
 

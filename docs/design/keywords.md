@@ -130,10 +130,12 @@ because TS/JS programmers expect it and it can step in odd ways.
 |---|---|---|
 | `+` `-` `*` `/` | Add, subtract, multiply, divide | 1 |
 | `%` | Remainder after division | 1 |
+| `+%` `-%` `*%` | Wrapping add, subtract, multiply: overflow wraps around on purpose (hashes, checksums). Plain `+ - *` stop on overflow | 2 |
 | `**` | Power (open: or a library function) | 2 |
 | `==` `!=` `<` `>` `<=` `>=` | Comparisons | 1 |
 | `&&` `\|\|` `!` | Logical and, or, not | 1 |
 | `&` `\|` `^` `~` `<<` `>>` | Bitwise and, or, xor, not, shift left, shift right. `^` is also xor on booleans | 2 |
+| `+%=` `-%=` `*%=` | Wrapping versions of the assignment operators | 2 |
 | `=` `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` `<<=` `>>=` | Assign, and assign after a calculation | 1 |
 | `++` `--` | Add or subtract one. Statements only: `i++` on its own, never inside a bigger expression | 2 |
 | `..` `..=` | Range, end excluded / included | 1 |
@@ -235,6 +237,7 @@ interfaces, and a class can only be extended if marked `open`.
 
 | Working | Meaning | Seen in | Phase | Your rename |
 |---|---|---|---|---|
+| `scope` | A block whose threads all finish before it ends: `scope s { ... }` | Rust (`thread::scope`) | 3 | |
 | `spawn` / `go` | Start a task that runs at the same time | Go, Rust | 3 | |
 | `chan` | A channel: a pipe that one task puts values into and another takes values out of | Go | 3 | |
 | `select` | Wait on several channels at once and act on whichever is ready first | Go | 3 | |

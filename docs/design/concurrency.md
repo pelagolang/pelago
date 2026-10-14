@@ -1,0 +1,194 @@
+# Concurrency (draft 2)
+
+Goal: threads that cannot have data races, with no new borrow-checker rules. The access modes we
+already have (`let` / `inout` / `sink`) and second-class references do the work. Async stays deferred (G5).
+
+## 1. The one rule
+
+> **Nothing is shared and changeable at the same time.** A value is either owned by one thread, or
+> shared read-only, or behind a lock.
+
+Value semantics already gives the first two for free. A data race needs two threads touching one memory
+location with at least one writing; we make the compiler refuse to write that program.
+
+What crosses a thread boundary:
+
+| Way | What happens | Cost |
+|---|---|---|
+| `sink` (move) | The value goes to the other thread; the sender can no longer use it | none, a pointer move |
+| copy | The other thread gets its own copy (`copy xs` for owning types) | a copy |
+| read-only view in a **scope** (section 3) | Several threads read the same data; nobody writes | none |
+| `shared<T>` (section 5) | Reference-counted, read-only | one atomic count |
+| `lock<T>`, `atomic<T>` (section 5) | Changeable from several threads, serialised | the lock |
+
+A closure given to a thread may capture only by `sink` or by copy (or by scoped read-only view). Capturing
+`inout` is rejected: that is exactly the shared-and-changeable case.
+
+**Sendable types are worked out by the compiler.** A type can cross a thread if everything inside it can.
+Plain data, owning lists, maps, `obj` values (singly owned), `shared<T>` and channels can. Raw pointers
+and views cannot. There is no `Send` / `Sync` marker to write; an error says which field blocks it.
+
+## 2. Spawning
+
+```
+const h = spawn([sink data] ~> crunch(data))     // runs on a new thread; returns task<int>
+// ... do other work ...
+const total = h.join!!()                       // waits; consumes the handle; gives the int
+```
+
+- `spawn(f)` starts `f` on a new OS thread and returns a `task<T>`.
+- `join!!()` consumes the task and returns the result. If the task stopped (a bug, section 6 of
+  `errors.md`) the **whole program stops**: we have no unwinding, so there is no half-dead program to
+  recover into. Expected failures are returned as a `result` like in any function.
+- Dropping a `task` without `join` detaches the thread. Use `@must_use`
+  on `spawn` so forgetting is a warning.
+- `spawn` is a normal prelude function, not syntax. (`spawn` stays a soft keyword so it can also be a name.)
+
+## 3. Scopes: threads that borrow
+
+`spawn` needs `sink` or copies because the new thread may outlive the caller. A **scope** guarantees every
+thread inside ends before the scope does, so threads may read the caller's data in place:
+
+```
+fn total(xs: [int]) -> int {
+    var left = 0
+    var right = 0
+    const mid = xs.len() / 2
+    scope s {
+        s.spawn([inout left] ~> left = sum(xs[..mid]))     // inout of a *different* variable
+        s.spawn([inout right] ~> right = sum(xs[mid..]))
+    }                                                      // both joined here
+    return left + right
+}
+```
+
+Rules, all checkable locally:
+
+- Inside a scope, a thread may capture `let` views of outer data (nobody can change it while the scope runs,
+  because the scope holds the outer name read-only) and may take **`inout` of a variable no other thread in
+  the scope touches**. The compiler checks the captures are disjoint, the same exclusivity check as for one
+  call with two `inout` arguments.
+- Views cannot escape the scope (they are second-class already).
+- Splitting one list for several writers is a library function that hands out non-overlapping pieces:
+
+```
+scope s {
+    for inout chunk of data.chunks_inout(1000) {
+        s.spawn([inout chunk] ~> process(inout chunk))
+    }
+}
+```
+
+This is the structured-concurrency model of Rust's `thread::scope`, and the safe core of "parallel for".
+
+## 4. Channels
+
+```
+const (tx, rx) = chan<int>()          // sender and receiver ends
+
+spawn([sink tx] ~> {
+    for i of 0..10 { tx.send(i) }     // send takes its value with sink: it is *moved*, never shared
+})                                    // tx is dropped here: the channel closes for senders
+
+for x of rx { print("got #x") }       // loop ends when every sender is gone
+```
+
+- `chan<T>()` gives a `(sender<T>, receiver<T>)` pair. Unbounded by default; `chan<T>(8)` is bounded and
+  `send` waits when full.
+- `tx.send(v)` moves `v` in. If the receiver is gone it returns `result<void, closed>` (an expected failure,
+  not a bug); `tx.send(v)?` propagates it.
+- `rx.recv()` waits and returns `option<T>`: `none` means the channel is empty **and** every sender is gone.
+  `rx.try_recv()` never waits.
+- `for x of rx` is `recv` in a loop.
+- Many senders: `copy tx` (explicit, as for every owning type; `copy` is a keyword, so it is not a method). One receiver; a receiver is moved, not copied.
+  (A many-receiver work queue is a library type later.)
+- Because a channel only moves values, **sending needs no lock-free trick from the user**, and the sent value
+  cannot be touched by the sender afterwards (the compiler rejects it, as for any `sink`).
+
+### `select`
+
+```
+select {
+    case v = a.recv()   { print("a: #v") }
+    case v = b.recv()   { print("b: #v") }
+    case tx.send(next)  { sent += 1 }
+    case timeout(ms(50))  { print("slow") }
+    default             { }                 // optional: do not wait
+}
+```
+
+`select` is a statement like `switch`: arms end at the next `case`, no fallthrough, and `break` leaves the
+enclosing loop. It waits for the first ready arm. A `recv` arm binds an `option` (`none` means that channel closed); see CC5.
+
+## 5. Shared state, when you really need it
+
+Most programs only need sections 2 to 4. For the rest, three library types. All are `obj`-like owners
+with value semantics at the edges:
+
+```
+const config = shared(load_config())            // shared<config>: read-only, counted, cheap to copy
+const mine = copy config
+spawn([sink mine] ~> use(mine))
+
+const hits = lock(0)                            // lock<int>
+hits.with!(n ~> n += 1)                         // the only way in: a closure gets inout access
+
+const done = atomic(false)                      // atomic<bool>
+done.store(true)
+if done.load() { ... }
+```
+
+- `shared<T>`: read-only. To change it you need `lock<T>` inside, or copy it out.
+- `lock<T>`: you cannot get a long-lived reference to the inside. `with` gives the closure a temporary `inout`
+  and releases the lock when it returns. That removes forgotten unlocks, and "guards that outlive the lock"
+  cannot be written because references are second-class.
+- `atomic<T>` for integers, `bool` and pointers; methods `load`, `store`, `add`, `swap`, `compare_swap`, each
+  with an ordering argument defaulting to sequentially consistent.
+- Deadlocks are not prevented (nobody can, cheaply). A debug build may detect lock-order cycles later.
+
+## 6. Interaction with the rest
+
+| Topic | Rule |
+|---|---|
+| Stops | A stop in any thread stops the program, after running `@on_stop` once. No unwinding. |
+| `deinit` | Runs on the thread that drops the value. Moving a value to another thread moves its cleanup too. |
+| `main` returning | Returning from `main` ends the program even if detached tasks run. Join what you need. |
+| `become` | Tail calls are per thread; no interaction. |
+| Closures | Closures are values; one that captured only sendable things is sendable. |
+| `@derive` | No effect; sendability is automatic. |
+| Allocation | The allocator interface (Phase 4) must be callable from any thread; a per-thread cache is an optimisation. |
+| Async | Still deferred. When it comes it can build on tasks and channels (an executor is a library). |
+| Atomic keyword | `atomic` and `volatile` stay soft keywords, now used as `atomic<T>` and as a field marker for hardware memory. |
+
+## 7. What we are not doing
+
+- No shared mutable globals. A global `var` is not allowed; globals are `const`, or an explicit `lock<T>` / `atomic<T>`.
+- No thread-local magic in v1.
+- No async runtime, no green threads, no hidden scheduler (this fits "no runtime").
+- No `volatile` rules here; that belongs with the hardware page (Phase 3).
+
+## Decisions from draft 1
+
+- **CC1** `spawn` returns `task<T>`; `join!!()` consumes it; a stop in a task stops the program.
+- **CC2** `scope s { ... }` is kept (soft keyword `scope`), with disjoint `inout` captures checked by the compiler.
+- **CC3** Two channel ends from `chan<T>()`; `copy tx` for more senders; the receiver is moved, not copied.
+- **CC4** `send` after the receiver is gone returns `result<void, closed>`.
+- **CC5** A `recv` arm in `select` binds an `option<T>`; `none` means that channel closed.
+- **CC6** Shared state types are `shared<T>`, `lock<T>` (access through `with`) and `atomic<T>`.
+- **CC7** Global `var` is forbidden; globals are `const`, or an explicit `lock<T>` / `atomic<T>`.
+- **CC8** A parallel loop helper is part of v1 (below).
+- **CC10** Captures are written in brackets: `spawn([sink data] ~> crunch(data))`. The form `spawn(sink data ~> ...)` would read as a `sink` argument holding a closure with one parameter.
+- **CC9** Durations are plain functions: `ms(50)`, `secs(2)`. No literal suffixes.
+
+## Parallel loop helper
+
+Built on `scope`, in the standard library:
+
+```
+par_for(inout xs, x ~> x *= 2)                  // each element handled once, pieces never overlap
+const squares = par_map(xs, x ~> x * x)         // new list, same order
+```
+
+`par_for` splits the list with `chunks_inout`, runs one scope thread per chunk (count chosen from the
+CPU count, overridable by `threads: 4`), and returns after all finish. The closure may capture `let` data only
+(or `lock` / `atomic`), the same rule as any scoped thread.
