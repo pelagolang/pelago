@@ -14,7 +14,7 @@ impl<'a> Lowerer<'a> {
         }
         let wanted = match kind {
             GlueKind::Drop | GlueKind::Clone => self.needs_drop(ty),
-            GlueKind::ObjDrop | GlueKind::ObjClone => true,
+            GlueKind::ObjDrop | GlueKind::ObjClone | GlueKind::BoxDrop => true,
             _ => true,
         };
         if !wanted {
@@ -22,7 +22,7 @@ impl<'a> Lowerer<'a> {
             return None;
         }
         let (params, ret): (Vec<IrTy>, IrTy) = match kind {
-            GlueKind::Drop | GlueKind::ObjDrop => (vec![IrTy::Ptr], IrTy::Void),
+            GlueKind::Drop | GlueKind::ObjDrop | GlueKind::BoxDrop => (vec![IrTy::Ptr], IrTy::Void),
             GlueKind::Clone | GlueKind::ObjClone => (vec![IrTy::Ptr, IrTy::Ptr], IrTy::Void),
             GlueKind::Eq => (vec![IrTy::Ptr, IrTy::Ptr], IrTy::Bool),
             GlueKind::Cmp => (vec![IrTy::Ptr, IrTy::Ptr], IrTy::I64),
@@ -38,6 +38,7 @@ impl<'a> Lowerer<'a> {
             GlueKind::Show => "show",
             GlueKind::ObjDrop => "objdrop",
             GlueKind::ObjClone => "objclone",
+            GlueKind::BoxDrop => "boxdrop",
         };
         let name = self.unique_name(format!("{label}<{}>", self.show_ty(ty)));
         let mut func = Func::new(&name, &params, ret);
@@ -92,6 +93,10 @@ impl<'a> Lowerer<'a> {
             }
             GlueKind::ObjClone => {
                 self.obj_clone_body(ps[0], ps[1], ty);
+                self.terminate(Term::Return(None));
+            }
+            GlueKind::BoxDrop => {
+                self.box_drop_body(ps[0], ty);
                 self.terminate(Term::Return(None));
             }
         }
@@ -534,11 +539,5 @@ impl<'a> Lowerer<'a> {
         if let Some(n) = self.emit(Op::Call(f, vec![o]), Some(IrTy::Ptr), sp) {
             self.store_at(d, 0, n);
         }
-    }
-    fn drop_any(&mut self, _p: Value, _ty: Ty) {
-        self.unsupported(Span::new(0, 0), "dropping an `any`");
-    }
-    fn clone_any(&mut self, _s: Value, _d: Value, _ty: Ty) {
-        self.unsupported(Span::new(0, 0), "copying an `any`");
     }
 }

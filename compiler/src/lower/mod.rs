@@ -14,6 +14,7 @@
 //! that stops, so the module still verifies and runs.
 
 mod agg;
+mod any;
 mod call;
 mod closure;
 mod coll;
@@ -67,6 +68,8 @@ pub(crate) enum GlueKind {
     ObjDrop,
     /// The function in an object's table that copies it: the object's address, then where to put the copy.
     ObjClone,
+    /// Drops a heap copy of a value and frees it (the first slot of an `any` table).
+    BoxDrop,
 }
 
 pub(crate) enum Job<'a> {
@@ -146,6 +149,8 @@ pub(crate) struct Lowerer<'a> {
     pub glue: HashMap<(GlueKind, Ty), Option<FuncId>>,
     pub obj_ids: HashMap<Ty, i64>,
     pub vtables: HashMap<Ty, u32>,
+    pub any_tables: HashMap<(Ty, DefId), u32>,
+    pub any_thunks: Vec<any::AnyThunkJob>,
     pub f: FnState<'a>,
 }
 
@@ -175,6 +180,8 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         glue: HashMap::new(),
         obj_ids: HashMap::new(),
         vtables: HashMap::new(),
+        any_tables: HashMap::new(),
+        any_thunks: Vec::new(),
         f: FnState::empty(void),
     };
     lw.index();
@@ -515,6 +522,9 @@ impl<'a> Lowerer<'a> {
             }
             while let Some(t) = self.thunks.pop() {
                 self.lower_thunk(t);
+            }
+            while let Some(t) = self.any_thunks.pop() {
+                self.lower_any_thunk(t);
             }
         }
     }

@@ -177,7 +177,17 @@ impl<'a> Lowerer<'a> {
         };
         let info = self.fn_info_for(def, &info);
         let sig = self.sig_of(&info, map);
-        let slot = if info.has_self { self.virtual_slot(def) } else { None };
+        let any_slot = if info.has_self && matches!(sig.params.first(), Some((_, t, _)) if matches!(self.kind(*t), TyKind::Any(_))) {
+            self.any_slot(def)
+        } else {
+            None
+        };
+        let slot = if info.has_self && any_slot.is_none() {
+            self.virtual_slot(def)
+        } else {
+            None
+        };
+        let slot = slot.or(any_slot);
         let fid = if slot.is_some() {
             None
         } else {
@@ -215,11 +225,18 @@ impl<'a> Lowerer<'a> {
         let result = match (fid, slot) {
             (Some(fid), _) => self.emit(Op::Call(fid, ir_args), ret_ir, e.span),
             (None, Some(slot)) => {
-                // The method is looked up in the receiver's table at run time.
+                // The method is looked up in a table at run time.
                 let at = usize::from(sig.ret_pass == RetPass::Sret);
                 let recv = ir_args[at];
-                let vt = self.load_at(recv, 0, IrTy::Ptr);
-                let f = self.load_at(vt, (slot * 8) as u32, IrTy::Ptr);
+                let table = if any_slot.is_some() {
+                    // An `any`: the table is the second word, and `self` is the heap copy.
+                    let data = self.load_at(recv, 0, IrTy::Ptr);
+                    ir_args[at] = data;
+                    self.load_at(recv, 8, IrTy::Ptr)
+                } else {
+                    self.load_at(recv, 0, IrTy::Ptr)
+                };
+                let f = self.load_at(table, (slot * 8) as u32, IrTy::Ptr);
                 let tys: Vec<IrTy> = ir_args.iter().map(|v| self.vty(*v)).collect();
                 self.emit(
                     Op::CallPtr(tys, ret_ir.unwrap_or(IrTy::Void), f, ir_args),

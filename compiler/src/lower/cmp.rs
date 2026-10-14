@@ -571,6 +571,7 @@ impl<'a> Lowerer<'a> {
                 self.show_at(v, string, out, false);
             }
             TyKind::Fn(..) => self.push_static(out, b"<function>"),
+            TyKind::Any(i) => self.show_any(v, out, i),
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Enum => self.show_enum(v, out, ty, d),
                 DefKind::Struct | DefKind::Obj => {
