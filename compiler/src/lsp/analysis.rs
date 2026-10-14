@@ -190,33 +190,6 @@ fn path_str_to_uri(path: &str, windows: bool) -> String {
     out
 }
 
-#[cfg(test)]
-mod uri_tests {
-    use super::*;
-
-    #[test]
-    fn windows_paths_become_file_uris_and_back() {
-        let uri = path_str_to_uri("C:\\Users\\me\\my dir\\a.pel", true);
-        assert_eq!(uri, "file:///C:/Users/me/my%20dir/a.pel");
-        assert_eq!(
-            uri_to_path_str(&uri, true).unwrap(),
-            "C:\\Users\\me\\my dir\\a.pel"
-        );
-        // What VS Code sends: a lower-case drive letter and an escaped colon.
-        assert_eq!(
-            uri_to_path_str("file:///c%3A/Users/me/a.pel", true).unwrap(),
-            "C:\\Users\\me\\a.pel"
-        );
-    }
-
-    #[test]
-    fn unix_paths_are_unchanged() {
-        let uri = path_str_to_uri("/home/me/a b.pel", false);
-        assert_eq!(uri, "file:///home/me/a%20b.pel");
-        assert_eq!(uri_to_path_str(&uri, false).unwrap(), "/home/me/a b.pel");
-    }
-}
-
 // ---- Queries ---------------------------------------------------------------------------------------
 
 /// A symbol of the outline.
@@ -674,5 +647,32 @@ impl Analysis {
         };
         let mods = if class == Class::DocComment { 2 } else { 0 };
         Some((tt(name), mods))
+    }
+}
+
+#[cfg(test)]
+mod uri_tests {
+    use super::*;
+
+    #[test]
+    fn windows_paths_become_file_uris_and_back() {
+        let uri = path_str_to_uri("C:\\Users\\me\\my dir\\a.pel", true);
+        assert_eq!(uri, "file:///C:/Users/me/my%20dir/a.pel");
+        assert_eq!(
+            uri_to_path_str(&uri, true).unwrap(),
+            "C:\\Users\\me\\my dir\\a.pel"
+        );
+        // What VS Code sends: a lower-case drive letter and an escaped colon.
+        assert_eq!(
+            uri_to_path_str("file:///c%3A/Users/me/a.pel", true).unwrap(),
+            "C:\\Users\\me\\a.pel"
+        );
+    }
+
+    #[test]
+    fn unix_paths_are_unchanged() {
+        let uri = path_str_to_uri("/home/me/a b.pel", false);
+        assert_eq!(uri, "file:///home/me/a%20b.pel");
+        assert_eq!(uri_to_path_str(&uri, false).unwrap(), "/home/me/a b.pel");
     }
 }
