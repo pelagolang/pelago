@@ -161,6 +161,29 @@ impl<'a> Lowerer<'a> {
         Res::Unit
     }
 
+    /// Writes the default value of every field that has one.
+    pub(crate) fn fill_defaults(&mut self, dst: Value, t: Ty) {
+        let TyKind::Adt(d, _) = self.kind(t) else {
+            return;
+        };
+        let fs = self.struct_fields(t);
+        let decls: Vec<DefId> = self
+            .typed
+            .adts
+            .get(&d)
+            .map(|a| a.fields.iter().map(|(f, _)| *f).collect())
+            .unwrap_or_default();
+        for (fd, f) in decls.iter().zip(fs.iter()) {
+            if let Some(&(file, dflt)) = self.field_defaults.get(fd) {
+                let p = self.at(dst, f.off);
+                let saved = self.f.file;
+                self.f.file = file;
+                self.into(dflt, p, f.ty);
+                self.f.file = saved;
+            }
+        }
+    }
+
     /// Moves (or copies) the value of a variable to an address.
     pub(crate) fn move_local_into(&mut self, def: DefId, dst: Value, t: Ty, span: Span) {
         match self.f.locals.get(&def).copied() {

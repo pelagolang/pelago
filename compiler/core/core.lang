@@ -1622,3 +1622,18 @@ fn rt_map_at<K, V>(h: ptr, key: ptr) -> ptr {
 
 /// Is there an entry whose key equals the one at `key`?
 fn rt_map_has(h: ptr, key: ptr, ksize: int, eq: ptr, hash: ptr) -> bool = rt_map_find(h, key, ksize, eq, hash) >= 0
+
+// ---- Objects ---------------------------------------------------------------------------------
+
+/// Is the object at `o` of the type with this id, or of a type that extends it? The table of an object
+/// points (in its third slot) to the number of ancestors and then their ids, the object's own first.
+fn rt_obj_is(o: ptr, id: int) -> bool {
+    const table = rt_load_ptr(rt_offset(rt_load_ptr(o), 16))
+    const n = rt_load_int(table)
+    var i = 0
+    while i < n {
+        if rt_load_int(rt_offset(table, 8 + i * 8)) == id { return true }
+        i += 1
+    }
+    false
+}

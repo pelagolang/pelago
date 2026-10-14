@@ -257,6 +257,9 @@ impl<'a> Lowerer<'a> {
             ExprKind::Switch(s) => self.switch_expr(e, s, None, want),
             ExprKind::Call { callee, args, mark } => self.call(e, callee, args, *mark, None),
             ExprKind::Guard { cond, else_ } => self.guard_expr(cond, else_),
+            ExprKind::StructLit { fields, .. } if self.obj_def(want).is_some() => {
+                self.obj_literal_value(e, fields, want)
+            }
             ExprKind::Try(inner) => self.try_expr(e, inner, None),
             ExprKind::Copy(inner) => self.copy_expr(e, inner, None),
             ExprKind::Binary {

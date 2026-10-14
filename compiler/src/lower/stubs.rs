@@ -33,7 +33,4 @@ impl<'a> Lowerer<'a> {
     ) -> Res {
         self.unsupported(e.span, "an object")
     }
-    pub(crate) fn downcast(&mut self, e: &'a Expr, _v: &'a Expr, _dst: Value, _t: Ty) -> Res {
-        self.unsupported(e.span, "`to?`")
-    }
 }

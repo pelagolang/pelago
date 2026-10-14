@@ -23,6 +23,7 @@ mod expr;
 mod func;
 mod glue;
 mod intr;
+mod obj;
 mod ops;
 mod pat;
 mod seq;
@@ -62,6 +63,10 @@ pub(crate) enum GlueKind {
     Cmp,
     Hash,
     Show,
+    /// The function in an object's table that drops it: takes the object's address.
+    ObjDrop,
+    /// The function in an object's table that copies it: the object's address, then where to put the copy.
+    ObjClone,
 }
 
 pub(crate) enum Job<'a> {
@@ -109,6 +114,7 @@ pub(crate) struct Sig {
 pub(crate) struct FnEntry<'a> {
     pub file: ModuleId,
     pub decl: &'a FnDecl,
+    pub mods: &'a Modifiers,
 }
 
 /// A module-level constant or variable: its initializer is evaluated where it is used.
@@ -138,6 +144,8 @@ pub(crate) struct Lowerer<'a> {
     pub enums: HashMap<Ty, Rc<EnumInfo>>,
     pub drop_cache: HashMap<Ty, bool>,
     pub glue: HashMap<(GlueKind, Ty), Option<FuncId>>,
+    pub obj_ids: HashMap<Ty, i64>,
+    pub vtables: HashMap<Ty, u32>,
     pub f: FnState<'a>,
 }
 
@@ -165,6 +173,8 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         enums: HashMap::new(),
         drop_cache: HashMap::new(),
         glue: HashMap::new(),
+        obj_ids: HashMap::new(),
+        vtables: HashMap::new(),
         f: FnState::empty(void),
     };
     lw.index();
@@ -221,7 +231,14 @@ impl<'a> Lowerer<'a> {
         match &item.kind {
             ItemKind::Fn(f) => {
                 if let Some(&d) = self.res.item_defs.get(&(file, item.span.start)) {
-                    self.fns.insert(d, FnEntry { file, decl: f });
+                    self.fns.insert(
+                        d,
+                        FnEntry {
+                            file,
+                            decl: f,
+                            mods: &item.mods,
+                        },
+                    );
                 }
             }
             ItemKind::Struct(d) | ItemKind::Obj(d) | ItemKind::Interface(d) => {
@@ -321,6 +338,43 @@ impl<'a> Lowerer<'a> {
     }
 
     /// The IR signature of a function for these type arguments.
+    /// The signature `init` and `deinit` really have: they work on an implicit `self`.
+    pub(crate) fn fn_info_for(&mut self, def: DefId, info: &FnInfo) -> FnInfo {
+        let kind = self.fns.get(&def).map(|e| e.decl.kind).unwrap_or(FnKind::Fn);
+        let mut i = info.clone();
+        if kind == FnKind::Fn {
+            return i;
+        }
+        let is_obj = info
+            .self_ty
+            .is_some_and(|t| self.obj_def_raw(t).is_some());
+        match kind {
+            FnKind::Deinit => {
+                i.has_self = true;
+                i.self_mode = if is_obj { None } else { Some(Mode::Inout) };
+            }
+            FnKind::Init => {
+                if is_obj {
+                    i.has_self = true;
+                    i.self_mode = None;
+                } else if matches!(self.types.kind_of(info.ret), TyKind::Void) {
+                    if let Some(t) = info.self_ty {
+                        i.ret = t;
+                    }
+                }
+            }
+            FnKind::Fn => {}
+        }
+        i
+    }
+
+    pub(crate) fn obj_def_raw(&self, t: Ty) -> Option<DefId> {
+        match self.types.kind_of(t) {
+            TyKind::Adt(d, _) if self.res.def(*d).kind == DefKind::Obj => Some(*d),
+            _ => None,
+        }
+    }
+
     pub(crate) fn sig_of(&mut self, info: &FnInfo, map: &HashMap<DefId, Ty>) -> Sig {
         let mut params: Vec<(Pass, Ty, Option<Mode>)> = Vec::new();
         let mut srcs: Vec<(Ty, Option<Mode>)> = Vec::new();
@@ -432,6 +486,7 @@ impl<'a> Lowerer<'a> {
             return Some(*id);
         }
         let info = self.typed.fn_infos.get(&def)?.clone();
+        let info = self.fn_info_for(def, &info);
         let concrete: HashMap<DefId, Ty> = key_subst.into_iter().collect();
         let sig = self.sig_of(&info, &concrete);
         let base = self.fn_display_name(def, &concrete);
@@ -468,6 +523,7 @@ impl<'a> Lowerer<'a> {
         let Some(info) = self.typed.fn_infos.get(&def).cloned() else {
             return;
         };
+        let info = self.fn_info_for(def, &info);
         let Some(entry) = self.fns.get(&def) else {
             return;
         };
@@ -527,6 +583,9 @@ impl<'a> Lowerer<'a> {
                     sd = self.res.decls.get(&(file, p.name.span.start)).copied();
                 }
             }
+            if decl.kind != FnKind::Fn {
+                sd = self.res.decls.get(&(file, decl.name.span.start)).copied();
+            }
             decl_params.push(sd);
         }
         for p in decl.params.iter().filter(|p| !p.is_self) {
@@ -570,6 +629,32 @@ impl<'a> Lowerer<'a> {
                 }
             }
         }
+        // A struct's `init` builds its value in place (or in a temporary, when it can fail).
+        let mut init_tmp: Option<(Value, Ty)> = None;
+        if decl.kind == FnKind::Init && !info.has_self {
+            if let Some(st) = info.self_ty {
+                let st = self.conc(st);
+                let sd = self.res.decls.get(&(file, decl.name.span.start)).copied();
+                let ptr = if st == sig.ret {
+                    self.f.sret.unwrap_or_else(|| self.slot_for(st))
+                } else {
+                    let t = self.slot_for(st);
+                    init_tmp = Some((t, st));
+                    t
+                };
+                self.fill_defaults(ptr, st);
+                if let Some(sd) = sd {
+                    self.f.locals.insert(
+                        sd,
+                        Local::Slot {
+                            ptr,
+                            ty: st,
+                            flag: None,
+                        },
+                    );
+                }
+            }
+        }
         // The body.
         let ret = sig.ret;
         let body_res = match &decl.body {
@@ -579,6 +664,11 @@ impl<'a> Lowerer<'a> {
         };
         if self.f.fail.is_some() {
             return Err(());
+        }
+        if let Some((tmp, st)) = init_tmp {
+            if self.f.cur.is_some() {
+                self.write_ok_value(sig.ret, tmp, st);
+            }
         }
         self.finish_return(body_res, sig, decl.name.span);
         if self.f.fail.is_some() {
@@ -612,6 +702,19 @@ impl<'a> Lowerer<'a> {
                 self.unsupported(span, "a function body without a value");
             }
             (_, Res::Never) => {}
+        }
+    }
+
+    /// Writes `ok(value)` at the return address; the value moves in.
+    fn write_ok_value(&mut self, ret: Ty, src: Value, st: Ty) {
+        let (Some(sret), Some(info)) = (self.f.sret, self.enum_info(ret)) else {
+            return;
+        };
+        let zero = self.konst(info.tag, Const::Int(0), Span::new(0, 0));
+        self.store_at(sret, 0, zero);
+        if let Some(f) = info.variants[0].first() {
+            let p = self.addr(sret, f.off);
+            self.copy_mem(p, src, st);
         }
     }
 

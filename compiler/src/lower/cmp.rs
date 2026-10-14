@@ -468,7 +468,12 @@ impl<'a> Lowerer<'a> {
             };
             let string = self.types.string;
             let tmp = self.slot_for(string);
-            self.emit(Op::Call(f, vec![tmp, v]), None, sp);
+            let arg = if self.obj_def(ty).is_some() {
+                self.load_at(v, 0, IrTy::Ptr)
+            } else {
+                v
+            };
+            self.emit(Op::Call(f, vec![tmp, arg]), None, sp);
             let d = self.load_at(tmp, 0, IrTy::Ptr);
             let n = self.load_at(tmp, 8, IrTy::I64);
             self.call_core("rt_str_push", vec![out, d, n]);
@@ -568,9 +573,15 @@ impl<'a> Lowerer<'a> {
             TyKind::Fn(..) => self.push_static(out, b"<function>"),
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Enum => self.show_enum(v, out, ty, d),
-                DefKind::Struct => {
+                DefKind::Struct | DefKind::Obj => {
                     let name = self.res.def(d).name.clone();
                     self.push_static(out, name.as_bytes());
+                    let v = if self.res.def(d).kind == DefKind::Obj {
+                        let o = self.load_at(v, 0, IrTy::Ptr);
+                        self.addr(o, super::obj::OBJ_HEADER)
+                    } else {
+                        v
+                    };
                     let fs = self.struct_fields(ty);
                     if !fs.is_empty() {
                         let decls: Vec<DefId> = self

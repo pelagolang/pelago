@@ -14,6 +14,7 @@ impl<'a> Lowerer<'a> {
         }
         let wanted = match kind {
             GlueKind::Drop | GlueKind::Clone => self.needs_drop(ty),
+            GlueKind::ObjDrop | GlueKind::ObjClone => true,
             _ => true,
         };
         if !wanted {
@@ -21,8 +22,8 @@ impl<'a> Lowerer<'a> {
             return None;
         }
         let (params, ret): (Vec<IrTy>, IrTy) = match kind {
-            GlueKind::Drop => (vec![IrTy::Ptr], IrTy::Void),
-            GlueKind::Clone => (vec![IrTy::Ptr, IrTy::Ptr], IrTy::Void),
+            GlueKind::Drop | GlueKind::ObjDrop => (vec![IrTy::Ptr], IrTy::Void),
+            GlueKind::Clone | GlueKind::ObjClone => (vec![IrTy::Ptr, IrTy::Ptr], IrTy::Void),
             GlueKind::Eq => (vec![IrTy::Ptr, IrTy::Ptr], IrTy::Bool),
             GlueKind::Cmp => (vec![IrTy::Ptr, IrTy::Ptr], IrTy::I64),
             GlueKind::Hash => (vec![IrTy::Ptr], IrTy::I64),
@@ -35,6 +36,8 @@ impl<'a> Lowerer<'a> {
             GlueKind::Cmp => "cmp",
             GlueKind::Hash => "hash",
             GlueKind::Show => "show",
+            GlueKind::ObjDrop => "objdrop",
+            GlueKind::ObjClone => "objclone",
         };
         let name = self.unique_name(format!("{label}<{}>", self.show_ty(ty)));
         let mut func = Func::new(&name, &params, ret);
@@ -81,6 +84,14 @@ impl<'a> Lowerer<'a> {
             }
             GlueKind::Show => {
                 self.show_body(ps[0], ps[1], ty);
+                self.terminate(Term::Return(None));
+            }
+            GlueKind::ObjDrop => {
+                self.obj_drop_body(ps[0], ty);
+                self.terminate(Term::Return(None));
+            }
+            GlueKind::ObjClone => {
+                self.obj_clone_body(ps[0], ps[1], ty);
                 self.terminate(Term::Return(None));
             }
         }
@@ -463,11 +474,66 @@ impl<'a> Lowerer<'a> {
 
     // ---- Parts for later steps ---------------------------------------------------------------------------------------------
 
-    fn drop_object(&mut self, _p: Value, _ty: Ty) {
-        self.unsupported(Span::new(0, 0), "dropping an object");
+    /// Drops an object through its table.
+    fn drop_object(&mut self, p: Value, _ty: Ty) {
+        let sp = Span::new(0, 0);
+        let o = self.load_at(p, 0, IrTy::Ptr);
+        let vt = self.load_at(o, 0, IrTy::Ptr);
+        let f = self.load_at(vt, 0, IrTy::Ptr);
+        self.emit(Op::CallPtr(vec![IrTy::Ptr], IrTy::Void, f, vec![o]), None, sp);
     }
-    fn clone_object(&mut self, _s: Value, _d: Value, _ty: Ty) {
-        self.unsupported(Span::new(0, 0), "copying an object");
+
+    /// Copies an object through its table.
+    fn clone_object(&mut self, s: Value, d: Value, _ty: Ty) {
+        let sp = Span::new(0, 0);
+        let o = self.load_at(s, 0, IrTy::Ptr);
+        let vt = self.load_at(o, 0, IrTy::Ptr);
+        let f = self.load_at(vt, 8, IrTy::Ptr);
+        self.emit(
+            Op::CallPtr(vec![IrTy::Ptr, IrTy::Ptr], IrTy::Void, f, vec![o, d]),
+            None,
+            sp,
+        );
+    }
+
+    /// The drop function of one concrete object type: `deinit` of each class, the fields, the block.
+    fn obj_drop_body(&mut self, o: Value, ty: Ty) {
+        let sp = Span::new(0, 0);
+        for c in self.obj_chain(ty) {
+            if let Some(d) = self.obj_def(c) {
+                if let Some(m) = self.res.member(d, "deinit") {
+                    if self.fns.contains_key(&m) {
+                        let TyKind::Adt(_, args) = self.kind(c) else {
+                            continue;
+                        };
+                        let map = self.adt_subst(d, &args);
+                        if let Some(f) = self.request_fn(m, &map) {
+                            self.emit(Op::Call(f, vec![o]), None, sp);
+                        }
+                    }
+                }
+            }
+        }
+        let body = self.addr(o, super::obj::OBJ_HEADER);
+        self.drop_fields(body, ty);
+        self.emit(Op::Free(o), None, sp);
+    }
+
+    /// The copy function of one concrete object type: the type's own `clone`.
+    fn obj_clone_body(&mut self, o: Value, d: Value, ty: Ty) {
+        let sp = Span::new(0, 0);
+        let Some((m, map)) = self.find_impl_method(ty, "clone") else {
+            // Only reachable through a `copy` the checker would have rejected.
+            self.terminate(Term::Stop("this object has no `clone`".to_string()));
+            self.f.cur = Some(self.f.func.entry());
+            return;
+        };
+        let Some(f) = self.request_fn(m, &map) else {
+            return;
+        };
+        if let Some(n) = self.emit(Op::Call(f, vec![o]), Some(IrTy::Ptr), sp) {
+            self.store_at(d, 0, n);
+        }
     }
     fn drop_any(&mut self, _p: Value, _ty: Ty) {
         self.unsupported(Span::new(0, 0), "dropping an `any`");

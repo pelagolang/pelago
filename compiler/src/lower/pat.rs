@@ -524,9 +524,26 @@ impl<'a> Lowerer<'a> {
         ty: Ty,
         fail: BlockId,
     ) -> bool {
-        let _ = (path, ptr, ty, fail);
-        self.unsupported(p.span, "a type test");
-        false
+        let Some(last) = path.segments.last() else {
+            return false;
+        };
+        let Some(def) = self.res.use_at(self.f.file, last.span.start) else {
+            self.unsupported(p.span, "a type test for an unknown type");
+            return false;
+        };
+        if self.res.def(def).kind != DefKind::Obj || self.obj_def(ty).is_none() {
+            self.unsupported(p.span, "a type test on this type");
+            return false;
+        }
+        let target = self.types.mk(TyKind::Adt(def, vec![]));
+        let o = self.load_at(ptr, 0, IrTy::Ptr);
+        let Some(ok) = self.obj_is(o, target) else {
+            return false;
+        };
+        let more = self.new_block(&[]);
+        self.branch(ok, more, fail);
+        self.start(more);
+        true
     }
 
     // ---- switch ------------------------------------------------------------------------------------------------------

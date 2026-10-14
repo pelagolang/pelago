@@ -175,9 +175,16 @@ impl<'a> Lowerer<'a> {
         let Some(info) = self.typed.fn_infos.get(&def).cloned() else {
             return self.unsupported(e.span, "a function without a signature");
         };
+        let info = self.fn_info_for(def, &info);
         let sig = self.sig_of(&info, map);
-        let Some(fid) = self.request_fn(def, map) else {
-            return self.unsupported(e.span, "a function that cannot be lowered");
+        let slot = if info.has_self { self.virtual_slot(def) } else { None };
+        let fid = if slot.is_some() {
+            None
+        } else {
+            match self.request_fn(def, map) {
+                Some(f) => Some(f),
+                None => return self.unsupported(e.span, "a function that cannot be lowered"),
+            }
         };
         let mut ir_args: Vec<Value> = Vec::new();
         // Where a memory result goes.
@@ -205,7 +212,23 @@ impl<'a> Lowerer<'a> {
             RetPass::Val(t) => Some(t),
             _ => None,
         };
-        let result = self.emit(Op::Call(fid, ir_args), ret_ir, e.span);
+        let result = match (fid, slot) {
+            (Some(fid), _) => self.emit(Op::Call(fid, ir_args), ret_ir, e.span),
+            (None, Some(slot)) => {
+                // The method is looked up in the receiver's table at run time.
+                let at = usize::from(sig.ret_pass == RetPass::Sret);
+                let recv = ir_args[at];
+                let vt = self.load_at(recv, 0, IrTy::Ptr);
+                let f = self.load_at(vt, (slot * 8) as u32, IrTy::Ptr);
+                let tys: Vec<IrTy> = ir_args.iter().map(|v| self.vty(*v)).collect();
+                self.emit(
+                    Op::CallPtr(tys, ret_ir.unwrap_or(IrTy::Void), f, ir_args),
+                    ret_ir,
+                    e.span,
+                )
+            }
+            _ => None,
+        };
         let never = matches!(self.kind(sig.ret), TyKind::Never);
         if never {
             self.terminate(Term::Unreachable);
@@ -241,6 +264,7 @@ impl<'a> Lowerer<'a> {
     ) -> Option<Value> {
         let arg = match src {
             ArgSource::Expr(arg) => arg,
+            ArgSource::Val(v) => return Some(v),
             ArgSource::Addr(p) => {
                 return match pass {
                     Pass::Skip => None,
@@ -328,7 +352,7 @@ impl<'a> Lowerer<'a> {
 
     /// Matches the arguments of a call to the declared parameters: by label, then by position, with
     /// defaults filling the gaps.
-    fn match_args(
+    pub(crate) fn match_args(
         &mut self,
         info: &FnInfo,
         def: DefId,
@@ -563,8 +587,19 @@ impl<'a> Lowerer<'a> {
     }
 
     fn construct(&mut self, e: &'a Expr, def: DefId, args: &'a [Arg], dst: Option<Value>) -> Res {
-        let _ = (def, args, dst);
-        self.unsupported(e.span, "constructing with `init`")
+        let Some((init, map)) = self.call_target(e.span) else {
+            return self.unsupported(e.span, "constructing without an `init`");
+        };
+        if self.res.def(def).kind == DefKind::Obj {
+            let Some(t) = self.ty_of(e) else {
+                return self.unsupported(e.span, "an object of unknown type");
+            };
+            if self.obj_def(t).is_none() {
+                return self.unsupported(e.span, "an `init` that can fail on an object");
+            }
+            return self.obj_construct(e, init, map, t, args);
+        }
+        self.emit_call(e, init, map, None, args, CallMark::None, dst)
     }
 }
 
@@ -576,4 +611,6 @@ pub(crate) enum ArgSource<'a> {
     Pack(&'a [Arg]),
     /// An existing value of the parameter's type, given by address.
     Addr(Value),
+    /// A ready scalar value.
+    Val(Value),
 }
