@@ -115,3 +115,14 @@ the shelf items that need real machine features (S-01 measured maps, S-02 thread
 5. Emitted size-class allocator now, a library allocator in Phase 4 (recommended)?
 6. `stopped: msg` on stderr and exit status 1 for a stop, like the interpreter (recommended)?
 7. Start now with N1, or keep this as a plan until you say go?
+
+# What is left from A-09 (decided approach for each; to be done as N6)
+
+| Item | Approach |
+|---|---|
+| **Buffered `print`** | A 64 KiB buffer in `.data`; `Print` copies into it and flushes when full; flushed by `rt_exit`, by `rt_stop` (before the message, so the order of standard output and standard error stays right) and before the program returns from `main`. One `write` per 64 KiB instead of one per `print`. |
+| **`--emit asm`** | **Not built; replaced** by reading the output with the tools that exist: the ELF has section headers and function symbols, so `objdump -d out` and `gdb` show our code by function name; for PE use `objdump -D -b pei-x86-64`. Documented in `backend.md`. We do not write a disassembler. |
+| **The optimiser by default** | `pelago build` optimises unless `--no-opt` (every test already runs plain and optimised); `run` stays as it is until check removal (A-11 S2) is done. |
+| **`float32` rounding** | Make the interpreter round after every `float32` operation and conversion (`as f32 as f64`) so both engines agree; add tests with values that are not exactly representable. |
+| **`FloatToInt` out of range** | Define it as in Rust's `as`: **saturate** to the target width, NaN becomes 0. The interpreter changes to match; natively, `cvttsd2si` plus compares against the bounds. |
+| **Stack overflow and bad addresses** | The interpreter reports precise memory errors; native code cannot (it is not memory-checked). A guard page below the big stack plus a fault handler (Linux: `sigaltstack` and `rt_sigaction`; Windows: a vectored exception handler) turns a crash into `stopped: stack overflow` or `stopped: invalid memory access` and exit status 1. Documented as a difference. |

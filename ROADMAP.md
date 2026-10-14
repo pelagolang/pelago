@@ -159,7 +159,7 @@ Plan: `docs/plans/cards/A-09-native-backend.md` (stages N1 to N7; waits for the 
 
 - [ ] Optimizer that uses no-alias facts from value semantics (inlining, loop optimizations, vectorization)
 - [ ] Benchmarks against Rust and C, published and tracked
-- [ ] More targets: AArch64, then RISC-V
+- [ ] More targets: AArch64 (plan: `docs/plans/cards/A-10-aarch64.md`), then RISC-V; native speed plan: `docs/plans/cards/A-11-native-speed.md`
 - [ ] Compile-time profiling and speedups
 
 ## Phase 7: Tooling and community

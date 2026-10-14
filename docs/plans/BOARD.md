@@ -8,6 +8,8 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 
 | Column | Card | Title | Size |
 |---|---|---|---|
+| Needs decision | [A-10](cards/A-10-aarch64.md) | AArch64 (64-bit ARM) backend: Linux first, then Windows on ARM and macOS | L |
+| Needs decision | [A-11](cards/A-11-native-speed.md) | Native speed: constants, checks, real register allocation (4.5 times slower than C -O2 today) | XL |
 | Doing | [A-09](cards/A-09-native-backend.md) | Native backend: x86-64 machine code, ELF and PE, straight from the IR (N1 to N4 and Windows done; N5 next) | XL |
 
 ## Track B: tooling and identity
