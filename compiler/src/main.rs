@@ -5,7 +5,23 @@ use pelago::lexer::tokenize;
 use pelago::span::LineIndex;
 use pelago::token::{Punct, TokenKind};
 
+/// The compiler runs on a thread with a big stack: the parser and the checker recurse, and the
+/// main thread has only 1 MiB on Windows and 8 MiB on Linux.
 fn main() {
+    let worker = std::thread::Builder::new()
+        .stack_size(256 << 20)
+        .spawn(real_main);
+    match worker {
+        Ok(h) => {
+            if h.join().is_err() {
+                std::process::exit(101);
+            }
+        }
+        Err(_) => real_main(),
+    }
+}
+
+fn real_main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("keywords") => match args.next().as_deref() {

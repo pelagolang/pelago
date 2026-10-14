@@ -662,6 +662,16 @@ fn parsing_continues_after_an_error() {
 
 #[test]
 fn deep_nesting_is_an_error_not_a_crash() {
+    // The parser recurses; give the test the stack the compiler itself runs on.
+    std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(deep_nesting_body)
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+fn deep_nesting_body() {
     let src = "(".repeat(10_000);
     let (out, _) = parse_source(&src);
     assert!(!out.errors.is_empty());

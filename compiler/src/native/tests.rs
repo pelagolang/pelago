@@ -18,7 +18,9 @@ fn every_encoding_matches_the_assembler() {
     }
 }
 
-/// When `as` and `objcopy` are installed, ask them again (the golden bytes could be stale).
+/// When `as` and `objcopy` are installed, ask them again (the golden bytes could be stale). Only on
+/// Linux: the tools that come with other systems may default to other settings.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_installed_assembler_agrees() {
     let have = |tool: &str| {

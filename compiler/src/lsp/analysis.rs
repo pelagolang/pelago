@@ -123,6 +123,16 @@ impl<'a> LineMap<'a> {
 // ---- Uris ------------------------------------------------------------------------------------------
 
 pub fn uri_to_path(uri: &str) -> Option<std::path::PathBuf> {
+    uri_to_path_str(uri, cfg!(windows)).map(std::path::PathBuf::from)
+}
+
+pub fn path_to_uri(path: &std::path::Path) -> String {
+    path_str_to_uri(&path.to_string_lossy(), cfg!(windows))
+}
+
+/// `file:///C:/Users/me/x.pel` (or `file:///c%3A/...`) to `C:\Users\me\x.pel` when `windows`;
+/// otherwise the plain decoded path.
+fn uri_to_path_str(uri: &str, windows: bool) -> Option<String> {
     let rest = uri.strip_prefix("file://")?;
     let bytes = rest.as_bytes();
     let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
@@ -141,20 +151,70 @@ pub fn uri_to_path(uri: &str) -> Option<std::path::PathBuf> {
         out.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8(out).ok().map(std::path::PathBuf::from)
+    let mut p = String::from_utf8(out).ok()?;
+    if windows {
+        // `/C:/dir` has a drive letter after the first slash.
+        let b = p.as_bytes();
+        if b.len() >= 3 && b[0] == b'/' && b[1].is_ascii_alphabetic() && b[2] == b':' {
+            p.remove(0);
+        }
+        p = p.replace('/', "\\");
+        if p.as_bytes().get(1) == Some(&b':') {
+            // A drive letter is spelled in capitals, whatever the editor sent.
+            let up = p[..1].to_ascii_uppercase();
+            p.replace_range(..1, &up);
+        }
+    }
+    Some(p)
 }
 
-pub fn path_to_uri(path: &std::path::Path) -> String {
+fn path_str_to_uri(path: &str, windows: bool) -> String {
+    let mut p = if windows {
+        path.replace('\\', "/")
+    } else {
+        path.to_string()
+    };
+    if windows && p.as_bytes().get(1) == Some(&b':') {
+        p.insert(0, '/');
+    }
     let mut out = String::from("file://");
-    for b in path.to_string_lossy().bytes() {
+    for b in p.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
                 out.push(b as char)
             }
+            b':' if windows => out.push(':'),
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
     out
+}
+
+#[cfg(test)]
+mod uri_tests {
+    use super::*;
+
+    #[test]
+    fn windows_paths_become_file_uris_and_back() {
+        let uri = path_str_to_uri("C:\\Users\\me\\my dir\\a.pel", true);
+        assert_eq!(uri, "file:///C:/Users/me/my%20dir/a.pel");
+        assert_eq!(
+            uri_to_path_str(&uri, true).unwrap(),
+            "C:\\Users\\me\\my dir\\a.pel"
+        );
+        // What VS Code sends: a lower-case drive letter and an escaped colon.
+        assert_eq!(
+            uri_to_path_str("file:///c%3A/Users/me/a.pel", true).unwrap(),
+            "C:\\Users\\me\\a.pel"
+        );
+    }
+
+    #[test]
+    fn unix_paths_are_unchanged() {
+        let uri = path_str_to_uri("/home/me/a b.pel", false);
+        assert_eq!(uri, "file:///home/me/a%20b.pel");
+        assert_eq!(uri_to_path_str(&uri, false).unwrap(), "/home/me/a b.pel");
+    }
 }
 
 // ---- Queries ---------------------------------------------------------------------------------------
