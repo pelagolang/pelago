@@ -14,6 +14,7 @@ mod print;
 mod tests;
 mod verify;
 
+pub(crate) use interp::fold;
 pub use interp::{run, run_full, Outcome, Val};
 pub use print::{print_func, print_module};
 pub use verify::{verify_func, verify_module};

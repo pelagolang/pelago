@@ -327,32 +327,7 @@ impl Machine<'_> {
                 Const::Bool(b) => Val::Bool(*b),
             },
             Op::Bin(o, a, b) => bin(*o, get(a), get(b), ty(a))?,
-            Op::Checked(o, signed, a, b) => {
-                let bits = bits_of(ty(a));
-                let (x, y) = (get(a), get(b));
-                let (Val::Int(xu), Val::Int(yu)) = (x, y) else {
-                    return Err("checked arithmetic needs integers".to_string());
-                };
-                let (lo, hi, xv, yv): (i128, i128, i128, i128) = if *signed {
-                    (
-                        -(1i128 << (bits - 1)),
-                        (1i128 << (bits - 1)) - 1,
-                        sign_extend(xu, bits),
-                        sign_extend(yu, bits),
-                    )
-                } else {
-                    (0, (1i128 << bits.min(126)) - 1, xu as i128, yu as i128)
-                };
-                let r = match o {
-                    BinOp::Add => xv.checked_add(yv),
-                    BinOp::Sub => xv.checked_sub(yv),
-                    _ => xv.checked_mul(yv),
-                };
-                match r {
-                    Some(r) if r >= lo && r <= hi => Val::Int(mask(r as u128, bits)),
-                    _ => return Err("arithmetic overflow".to_string()),
-                }
-            }
+            Op::Checked(o, signed, a, b) => checked(*o, *signed, get(a), get(b), bits_of(ty(a)))?,
             Op::Cmp(o, a, b) => Val::Bool(cmp(*o, get(a), get(b), bits_of(ty(a)))),
             Op::Neg(a) => match get(a) {
                 Val::Float(x) => Val::Float(-x),
@@ -443,6 +418,65 @@ fn enter(f: &Func, vals: &mut [Val], t: &Target) -> usize {
         vals[p.0 as usize] = a;
     }
     t.block.0 as usize
+}
+
+/// `add`, `sub` or `mul` that stops on overflow.
+fn checked(o: BinOp, signed: bool, x: Val, y: Val, bits: u32) -> Result<Val, String> {
+    let (Val::Int(xu), Val::Int(yu)) = (x, y) else {
+        return Err("checked arithmetic needs integers".to_string());
+    };
+    let (lo, hi, xv, yv): (i128, i128, i128, i128) = if signed {
+        (
+            -(1i128 << (bits - 1)),
+            (1i128 << (bits - 1)) - 1,
+            sign_extend(xu, bits),
+            sign_extend(yu, bits),
+        )
+    } else {
+        (0, (1i128 << bits.min(126)) - 1, xu as i128, yu as i128)
+    };
+    let r = match o {
+        BinOp::Add => xv.checked_add(yv),
+        BinOp::Sub => xv.checked_sub(yv),
+        _ => xv.checked_mul(yv),
+    };
+    match r {
+        Some(r) if r >= lo && r <= hi => Ok(Val::Int(mask(r as u128, bits))),
+        _ => Err("arithmetic overflow".to_string()),
+    }
+}
+
+/// The value of a pure operation on known operands, for the optimiser: `None` when the operation
+/// would stop, is not pure, or its operands are not all known integers or booleans.
+pub(crate) fn fold(op: &Op, f: &Func, get: &dyn Fn(Value) -> Option<Val>) -> Option<Val> {
+    let known = |v: &Value| get(*v).filter(|x| matches!(x, Val::Int(_) | Val::Bool(_)));
+    let r = match op {
+        Op::Const(t, c) => match c {
+            Const::Int(n) => Val::Int(mask(*n as u128, bits_of(*t))),
+            Const::Bool(b) => Val::Bool(*b),
+            Const::Float(_) => return None,
+        },
+        Op::Bin(o, a, b) => bin(*o, known(a)?, known(b)?, f.ty(*a)).ok()?,
+        Op::Checked(o, signed, a, b) => {
+            checked(*o, *signed, known(a)?, known(b)?, bits_of(f.ty(*a))).ok()?
+        }
+        Op::Cmp(o, a, b) => Val::Bool(cmp(*o, known(a)?, known(b)?, bits_of(f.ty(*a)))),
+        Op::Neg(a) => match known(a)? {
+            Val::Int(n) => Val::Int(mask(0u128.wrapping_sub(n), bits_of(f.ty(*a)))),
+            _ => return None,
+        },
+        Op::Not(a) => match known(a)? {
+            Val::Bool(b) => Val::Bool(!b),
+            Val::Int(n) => Val::Int(mask(!n, bits_of(f.ty(*a)))),
+            _ => return None,
+        },
+        Op::Cast(k, a, to) if !matches!(k, CastKind::PtrToInt | CastKind::IntToPtr) => {
+            let v = cast(*k, known(a)?, bits_of(f.ty(*a)), *to);
+            matches!(v, Val::Int(_) | Val::Bool(_)).then_some(v)?
+        }
+        _ => return None,
+    };
+    Some(r)
 }
 
 fn bin(o: BinOp, a: Val, b: Val, t: IrTy) -> Result<Val, String> {
