@@ -291,7 +291,7 @@ impl<'p> Checker<'p> {
         false
     }
 
-    fn adt_map_of(&mut self, d: DefId, args: &[Ty]) -> HashMap<DefId, Ty> {
+    pub(crate) fn adt_map_of(&mut self, d: DefId, args: &[Ty]) -> HashMap<DefId, Ty> {
         let gens = self.adt_generics(d);
         gens.iter().copied().zip(args.iter().copied()).collect()
     }

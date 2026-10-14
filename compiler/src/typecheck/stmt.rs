@@ -86,11 +86,11 @@ impl<'p> Checker<'p> {
             (None, Some(t)) => t,
             (None, None) => self.tt.unknown,
         };
-        self.check_pattern(&d.pattern, ty);
+        self.check_irrefutable(&d.pattern, ty);
     }
 
     pub(crate) fn bind_decl_pattern(&mut self, p: &'p Pattern, ty: Ty) {
-        self.check_pattern(p, ty);
+        self.check_irrefutable(p, ty);
     }
 
     // ---- if / switch / select --------------------------------------------------------------
@@ -124,9 +124,17 @@ impl<'p> Checker<'p> {
     pub(crate) fn switch_expr(&mut self, e: &'p Expr, s: &'p Switch, exp: Exp) -> Ty {
         let st = self.check_expr(&s.scrutinee, Exp::Any);
         let mut branches: Vec<(Ty, Span)> = Vec::new();
+        let mut counted: Vec<&'p Pattern> = Vec::new();
+        let mut has_default = false;
         for arm in &s.arms {
             for p in &arm.patterns {
                 self.check_pattern(p, st);
+                if arm.guard.is_none() {
+                    counted.push(p);
+                }
+            }
+            if arm.is_default && arm.guard.is_none() {
+                has_default = true;
             }
             if let Some(g) = &arm.guard {
                 self.check_coerce(g, self.tt.bool_);
@@ -134,6 +142,14 @@ impl<'p> Checker<'p> {
             let t = self.check_block(&arm.body, exp);
             branches.push((t, arm.body.span));
         }
+        self.pending_matches.push(exhaust::PendingMatch {
+            file: self.file,
+            span: s.scrutinee.span,
+            ty: st,
+            kind: exhaust::MatchKind::Switch,
+            pats: counted,
+            has_default,
+        });
         if branches.is_empty() {
             return self.tt.void;
         }
@@ -211,13 +227,13 @@ impl<'p> Checker<'p> {
                 let it = self.check_expr(iter, Exp::Any);
                 let tys = self.iteration_types(it, pats.len(), false, iter.span);
                 for (p, t) in pats.iter().zip(tys.iter()) {
-                    self.check_pattern(p, *t);
+                    self.check_irrefutable(p, *t);
                 }
             }
             ForHead::In { pat, iter } => {
                 let it = self.check_expr(iter, Exp::Any);
                 let tys = self.iteration_types(it, 1, true, iter.span);
-                self.check_pattern(pat, tys[0]);
+                self.check_irrefutable(pat, tys[0]);
             }
             ForHead::C { init, cond, step } => {
                 if let Some(s) = init {

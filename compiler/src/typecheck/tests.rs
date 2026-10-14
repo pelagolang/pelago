@@ -1062,3 +1062,112 @@ fn copy_needs_a_copyable_type() {
     );
     clean("obj o { x: int }\nimpl clone for o { fn clone(self) -> o = o { x: self.x } }\nfn t(a: o) { const b = copy a }");
 }
+
+// ---- Stage 4: exhaustiveness --------------------------------------------------------------------
+
+const SHAPES: &str = "enum shape { circle(float)\n rect(float, float)\n empty }\n";
+
+#[test]
+fn switch_must_cover_every_case() {
+    clean(&format!("{SHAPES}fn t(s: shape) -> int {{ switch s {{ case .circle(r): 1\n case .rect(w, h): 2\n case .empty: 3 }} }}"));
+    flagged(
+        &format!("{SHAPES}fn t(s: shape) -> int {{ switch s {{ case .circle(r): 1\n case .empty: 3 }} }}"),
+        "does not handle `.rect(_, _)`",
+    );
+    clean(&format!(
+        "{SHAPES}fn t(s: shape) -> int {{ switch s {{ case .circle(r): 1\n default: 0 }} }}"
+    ));
+    clean(&format!(
+        "{SHAPES}fn t(s: shape) -> int {{ switch s {{ case .circle(r): 1\n case other: 0 }} }}"
+    ));
+    // A guard may fail, so it does not count.
+    flagged(
+        &format!("{SHAPES}fn t(s: shape) -> int {{ switch s {{ case .circle(r) if r > 1.0: 1\n case .rect(w, h): 2\n case .empty: 3 }} }}"),
+        "does not handle `.circle(_)`",
+    );
+    clean(&format!("{SHAPES}fn t(s: shape) -> int {{ switch s {{ case .circle(r) if r > 1.0: 1\n case .circle(r): 4\n case .rect(w, h): 2\n case .empty: 3 }} }}"));
+    // Alternatives in one arm.
+    clean(&format!("{SHAPES}fn t(s: shape) -> int {{ switch s {{ case .circle(_), .rect(_, _): 1\n case .empty: 3 }} }}"));
+}
+
+#[test]
+fn switch_over_options_results_bools_tuples() {
+    flagged(
+        "fn t(o: int?) -> int { switch o { case some(v): v } }",
+        "does not handle `none`",
+    );
+    clean("fn t(o: int?) -> int { switch o { case some(v): v\n case none: 0 } }");
+    flagged(
+        "fn t(r: int ! error) -> int { switch r { case ok(v): v } }",
+        "`err(_)`",
+    );
+    flagged(
+        "fn t(b: bool) -> int { switch b { case true: 1 } }",
+        "`false`",
+    );
+    clean("fn t(b: bool) -> int { switch b { case true: 1\n case false: 0 } }");
+    flagged("fn t(a: bool, b: bool) -> int { switch (a, b) { case (true, true): 1\n case (false, _): 0 } }", "`(true, false)`");
+    clean("fn t(a: bool, b: bool) -> int { switch (a, b) { case (true, _): 1\n case (false, _): 0 } }");
+    flagged(
+        "fn t(o: (int?)?) -> int { switch o { case some(some(v)): v\n case none: 0 } }",
+        "`some(none)`",
+    );
+}
+
+#[test]
+fn numbers_and_text_need_a_default() {
+    flagged(
+        "fn t(n: int) -> int { switch n { case 0: 1\n case 1: 2 } }",
+        "does not handle `_`",
+    );
+    clean("fn t(n: int) -> int { switch n { case 0: 1\n default: 2 } }");
+    flagged(
+        "fn t(s: string) -> int { switch s { case \"a\": 1 } }",
+        "does not handle",
+    );
+    clean("fn t(n: int) -> int { switch n { case 0..10: 1\n case x: 2 } }");
+}
+
+#[test]
+fn list_patterns_are_checked_by_length() {
+    flagged(
+        "fn t(xs: [int]) -> int { switch xs { case []: 0\n case [a]: 1 } }",
+        "does not handle `[_, _, ...]`",
+    );
+    clean("fn t(xs: [int]) -> int { switch xs { case []: 0\n case [first, ...rest]: 1 } }");
+    clean("fn t(xs: [int]) -> int { switch xs { case [..., last]: 0\n case []: 1 } }");
+    flagged(
+        "fn t(xs: [int]) -> int { switch xs { case [first, ...rest]: 1 } }",
+        "does not handle `[]`",
+    );
+    clean("fn t(xs: [int]) -> int { switch xs { case []: 0\n case [a]: 1\n case [a, b, ...rest]: 2 } }");
+}
+
+#[test]
+fn irrefutable_patterns_must_always_match() {
+    clean("fn t(p: (int, int)) { const (a, b) = p }");
+    clean("struct pt { x: int, y: int }\nfn t(p: pt) { const pt { x, y } = p }");
+    flagged(
+        &format!("{SHAPES}fn t(s: shape) {{ const .circle(r) = s }}"),
+        "does not always match",
+    );
+    flagged(
+        "fn t(o: int?) { const some(v) = o }",
+        "does not always match",
+    );
+    flagged(
+        "fn t(xs: [int]) { const [a, b] = xs }",
+        "does not always match",
+    );
+    clean("fn t(xs: [(int, int)]) { for (a, b) of xs { } }");
+    clean("enum one { only(int) }\nfn t(x: one) { const .only(n) = x }");
+}
+
+#[test]
+fn recursive_enums_do_not_blow_up() {
+    clean("enum tree { leaf\n node(tree, tree) }\nfn t(x: tree) -> int { switch x { case .leaf: 0\n case .node(.leaf, _): 1\n case .node(_, _): 2 } }");
+    flagged(
+        "enum tree { leaf\n node(tree, tree) }\nfn t(x: tree) -> int { switch x { case .leaf: 0\n case .node(.leaf, _): 1 } }",
+        "does not handle `.node(.node(.leaf, _), _)`",
+    );
+}

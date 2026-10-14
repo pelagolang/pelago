@@ -355,6 +355,7 @@ impl<'p> Checker<'p> {
         let Some(owner) = self.def(v).parent else {
             return;
         };
+        self.record_ctor(p, exhaust::PatCtor::Variant(v));
         let gens = self.adt_generics(owner);
         let map = self.fresh_map(&gens, p.span);
         let eargs: Vec<Ty> = gens.iter().map(|g| map[g]).collect();
@@ -418,6 +419,14 @@ impl<'p> Checker<'p> {
         ty: Ty,
     ) {
         let a = self.var(p.span);
+        self.record_ctor(
+            p,
+            match name {
+                "some" => exhaust::PatCtor::Some,
+                "ok" => exhaust::PatCtor::Ok,
+                _ => exhaust::PatCtor::Err,
+            },
+        );
         let (shape, payload) = match name {
             "some" => (self.tt.option(a), a),
             "ok" => {

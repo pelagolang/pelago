@@ -739,7 +739,7 @@ impl<'p> Checker<'p> {
                     let st = self.check_expr(source, Exp::Any);
                     let tys = self.iteration_types(st, pats.len(), false, source.span);
                     for (p, t) in pats.iter().zip(tys.iter()) {
-                        self.check_pattern(p, *t);
+                        self.check_irrefutable(p, *t);
                     }
                     if first_elem.is_none() {
                         first_elem = tys.last().copied();

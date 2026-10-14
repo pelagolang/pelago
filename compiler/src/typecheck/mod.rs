@@ -17,6 +17,7 @@
 //! unifies with everything, so one gap does not cause a flood of errors.
 
 mod call;
+mod exhaust;
 mod expr;
 mod iface;
 mod pat;
@@ -257,6 +258,8 @@ pub(crate) struct Checker<'p> {
     /// Bounds to check once the types are known.
     pending_bounds: Vec<iface::PendingBound>,
     core_ifaces: HashMap<String, DefId>,
+    pat_ctors: HashMap<(ModuleId, u32, u32), exhaust::PatCtor>,
+    pending_matches: Vec<exhaust::PendingMatch<'p>>,
 }
 
 fn int_text(text: &str) -> Option<u128> {
@@ -307,11 +310,14 @@ impl<'p> Checker<'p> {
             derives: HashMap::new(),
             pending_bounds: Vec::new(),
             core_ifaces: HashMap::new(),
+            pat_ctors: HashMap::new(),
+            pending_matches: Vec::new(),
         }
     }
 
     fn finish(mut self) -> Typed {
         self.flush_bounds();
+        self.flush_matches();
         let mut tys = HashMap::new();
         let entries = std::mem::take(&mut self.expr_tys);
         for (f, s, e, t) in entries {
@@ -1175,6 +1181,7 @@ impl<'p> Checker<'p> {
             self.err(span, "cannot work out the type here; add a type annotation");
         }
         self.flush_bounds();
+        self.flush_matches();
         let lits = std::mem::take(&mut self.lits);
         for l in lits {
             if let Some(k) = self.tt.int_kind(l.ty) {
