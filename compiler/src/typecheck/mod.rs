@@ -32,6 +32,51 @@ use crate::span::Span;
 use crate::types::*;
 use std::collections::HashMap;
 
+/// A parameter of a function, as the lowering needs it.
+#[derive(Clone, Debug)]
+pub struct ParamInfo {
+    pub name: String,
+    pub mode: Option<Mode>,
+    pub ty: Ty,
+    pub has_default: bool,
+    pub variadic: bool,
+}
+
+/// A function's signature with types in terms of its own and its owner's type parameters.
+#[derive(Clone, Debug)]
+pub struct FnInfo {
+    pub params: Vec<ParamInfo>,
+    pub ret: Ty,
+    pub has_self: bool,
+    pub self_mode: Option<Mode>,
+    /// The function's own type parameters.
+    pub generics: Vec<DefId>,
+    /// The type `self` has, for a method.
+    pub self_ty: Option<Ty>,
+}
+
+/// What the lowering needs to know about a struct, obj, enum or interface.
+#[derive(Clone, Debug, Default)]
+pub struct AdtInfo {
+    pub generics: Vec<DefId>,
+    /// Fields in memory order (the fields of an `obj`'s bases first), with types in terms of `generics`.
+    pub fields: Vec<(DefId, Ty)>,
+    /// The cases of an enum with their payload types.
+    pub variants: Vec<(DefId, Vec<(Option<String>, Ty)>)>,
+    /// The `obj` base, when there is one.
+    pub base: Option<Ty>,
+}
+
+/// An `impl` block: the type it is for, its type parameters, and its methods by name.
+#[derive(Clone, Debug)]
+pub struct ImplEntry {
+    pub generics: Vec<DefId>,
+    pub self_ty: Ty,
+    pub iface: Option<DefId>,
+    pub iface_args: Vec<Ty>,
+    pub methods: HashMap<String, DefId>,
+}
+
 type RawCall = (ModuleId, Span, DefId, Vec<(DefId, Ty)>);
 
 /// The function an expression runs, and the types its type parameters stand for.
@@ -55,6 +100,9 @@ pub struct Typed {
     pub linear: std::collections::HashSet<DefId>,
     /// The return type of each function with a body.
     pub fn_rets: HashMap<DefId, Ty>,
+    pub fn_infos: HashMap<DefId, FnInfo>,
+    pub adts: HashMap<DefId, AdtInfo>,
+    pub impls: Vec<ImplEntry>,
     /// The function run by each call, method call, operator, `?` conversion and `for` iteration,
     /// keyed by the expression's file and span.
     pub calls: HashMap<(ModuleId, u32, u32), CallTarget>,
@@ -393,6 +441,98 @@ impl<'p> Checker<'p> {
             local_tys.insert(d, z);
         }
         let owning = self.compute_owning();
+        // Signatures of every function, including `ext` ones and those never called.
+        let fn_defs: Vec<(DefId, Owner)> = {
+            let mut v: Vec<(DefId, Owner)> = self
+                .nodes
+                .iter()
+                .filter_map(|(d, n)| match n {
+                    Node::Fn { owner, .. } => Some((*d, *owner)),
+                    _ => None,
+                })
+                .collect();
+            v.sort_by_key(|(d, _)| *d);
+            v
+        };
+        let mut fn_infos = HashMap::new();
+        for (d, owner) in fn_defs {
+            let Some(sig) = self.fn_sig(d) else { continue };
+            let self_ty = self.owner_self_ty(owner);
+            let ret = self.tt.zonk(sig.ret);
+            let params = sig
+                .params
+                .iter()
+                .map(|p| ParamInfo {
+                    name: p.name.clone(),
+                    mode: p.mode,
+                    ty: p.ty,
+                    has_default: p.has_default,
+                    variadic: p.variadic,
+                })
+                .collect();
+            fn_infos.insert(
+                d,
+                FnInfo {
+                    params,
+                    ret,
+                    has_self: sig.has_self,
+                    self_mode: sig.self_mode,
+                    generics: sig.generics.clone(),
+                    self_ty,
+                },
+            );
+        }
+        let mut adts = HashMap::new();
+        let mut adt_defs: Vec<DefId> = self
+            .nodes
+            .iter()
+            .filter_map(|(d, n)| matches!(n, Node::Adt { .. }).then_some(*d))
+            .collect();
+        adt_defs.sort();
+        for d in adt_defs {
+            let generics = self.adt_generics(d);
+            let own = self.own_adt_ty(d);
+            let TyKind::Adt(_, args) = self.kind_of(own) else {
+                continue;
+            };
+            let mut info = AdtInfo {
+                generics,
+                ..AdtInfo::default()
+            };
+            match self.def(d).kind {
+                DefKind::Struct | DefKind::Obj => info.fields = self.collect_fields(d, &args),
+                DefKind::Enum => {
+                    let members = self.def(d).members.clone();
+                    for m in members {
+                        if self.def(m).kind == DefKind::Variant {
+                            let fs = self.variant_fields(m);
+                            info.variants.push((m, fs));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            for b in self.bases_of(d) {
+                if let TyKind::Adt(bd, _) = self.kind_of(b) {
+                    if self.def(bd).kind == DefKind::Obj {
+                        info.base = Some(b);
+                    }
+                }
+            }
+            adts.insert(d, info);
+        }
+        let impls: Vec<ImplEntry> = (0..self.impls.len())
+            .map(|i| {
+                let im = &self.impls[i];
+                ImplEntry {
+                    generics: im.generics.clone(),
+                    self_ty: im.self_ty,
+                    iface: im.iface,
+                    iface_args: im.iface_args.clone(),
+                    methods: im.methods.clone(),
+                }
+            })
+            .collect();
         let raw_calls = std::mem::take(&mut self.calls);
         let mut calls = HashMap::new();
         for (file, span, def, subst) in raw_calls {
@@ -415,6 +555,9 @@ impl<'p> Checker<'p> {
             owning,
             linear,
             fn_rets,
+            fn_infos,
+            adts,
+            impls,
             calls,
             tys,
             local_tys,
@@ -1185,6 +1328,7 @@ impl<'p> Checker<'p> {
             "void" => tt.void,
             "never" => tt.never,
             "error" => tt.error,
+            "ptr" => tt.mk(TyKind::Ptr),
             "list" if want(self, 1) => self.tt.list(lowered[0]),
             "set" if want(self, 1) => self.tt.mk(TyKind::Set(lowered[0])),
             "range" if want(self, 1) => self.tt.mk(TyKind::Range(lowered[0])),

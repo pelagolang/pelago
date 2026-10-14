@@ -122,6 +122,8 @@ pub enum TyKind {
     Iter(Ty),
     Box(Ty),
     Fn(Vec<ParamTy>, Ty),
+    /// `ptr`: a raw address, used by the library (`unsafe`).
+    Ptr,
     /// `any iface`
     Any(DefId),
     /// An inference variable.
@@ -139,6 +141,7 @@ pub enum VarKind {
     Float,
 }
 
+#[derive(Clone)]
 pub struct TypeTable {
     kinds: Vec<TyKind>,
     map: HashMap<TyKind, Ty>,
@@ -542,6 +545,7 @@ impl TypeTable {
             TyKind::Char => "char".to_string(),
             TyKind::String => "string".to_string(),
             TyKind::Str => "str".to_string(),
+            TyKind::Ptr => "ptr".to_string(),
             TyKind::Void => "void".to_string(),
             TyKind::Never => "never".to_string(),
             TyKind::Error => "error".to_string(),

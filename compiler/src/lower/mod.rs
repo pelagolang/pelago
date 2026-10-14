@@ -1,23 +1,39 @@
-//! Lowering the checked program to the IR (`docs/design/ir.md`, step 2).
+//! Lowering the checked program to the IR (`docs/design/ir.md`).
 //!
-//! This first version handles functions over numbers and booleans: parameters, `const` and `var`,
-//! arithmetic with overflow checks, comparisons, `&&` / `||`, `if`, `while`, `loop`, `for` over a
-//! range, `break`, `continue`, `return`, conversions with `to`, and calls between such functions.
-//! `const` values and parameters are SSA values; a `var` lives in a stack slot (a later pass can turn
-//! slots into values). Anything else is reported as "not lowered yet" and its function is replaced by a
-//! stop, so the module still verifies and runs.
+//! The lowering works function by function, starting from the functions that have no type parameters
+//! and from `main`; every call to a generic function (or a method of a generic type) asks for an
+//! **instance** with concrete type arguments, which is lowered in turn (monomorphisation). Library code
+//! is lowered the same way, on demand.
+//!
+//! Values: scalars (numbers, `bool`, `char`, addresses) live in SSA values; everything else lives in
+//! memory and is handled by address (see `ty.rs`). A function that returns a memory value is given the
+//! address to write it to as a hidden first parameter. Owning values are dropped at the end of their
+//! scope, with a one-byte flag per variable that records whether it still owns its value.
+//!
+//! Anything not handled yet is reported as a note ("not lowered yet") and its function becomes a stub
+//! that stops, so the module still verifies and runs.
+
+mod call;
+mod expr;
+mod func;
+mod glue;
+mod pat;
+mod stubs;
+mod ty;
 
 use crate::ast::*;
-use crate::ir::{
-    BinOp, BlockId, CastKind, CmpOp, Const, Func, FuncId, IrTy, Module, Op, Target, Term, Value,
-};
+use crate::ir::{BinOp, BlockId, CastKind, CmpOp, Const, Func, FuncId, IrTy, Module, Op, Target, Term, Value};
 use crate::package::{Diagnostic, ModuleId, Program};
 use crate::resolve::{DefId, DefKind, Resolved};
 use crate::span::Span;
 use crate::token::Punct;
-use crate::typecheck::{literal_value, Typed};
-use crate::types::{FloatKind, Ty, TyKind};
+use crate::typecheck::{FnInfo, Typed};
+use crate::types::{FloatKind, Ty, TyKind, TypeTable};
 use std::collections::HashMap;
+use std::rc::Rc;
+
+pub(crate) use func::*;
+pub(crate) use ty::*;
 
 #[cfg(test)]
 mod tests;
@@ -28,1147 +44,480 @@ pub struct Lowered {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-struct Shared<'a> {
-    program: &'a Program,
-    res: &'a Resolved,
-    typed: &'a Typed,
-    /// The functions that can be called, with their IR signatures.
-    funcs: HashMap<DefId, FuncId>,
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) enum GlueKind {
+    Drop,
+    Clone,
+    Eq,
+    Cmp,
+    Hash,
+    Show,
+}
+
+pub(crate) enum Job {
+    Fn {
+        id: FuncId,
+        def: DefId,
+        subst: HashMap<DefId, Ty>,
+    },
+    Glue {
+        id: FuncId,
+        kind: GlueKind,
+        ty: Ty,
+    },
+}
+
+/// How a parameter is passed in the IR.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Pass {
+    /// Nothing is passed (the type has no value).
+    Skip,
+    Val(IrTy),
+    /// The address of the value.
+    Ptr,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RetPass {
+    Void,
+    Val(IrTy),
+    /// The caller passes the address to write the result to.
+    Sret,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Sig {
+    /// Per source parameter (the receiver first): how it is passed, its type and mode.
+    pub params: Vec<(Pass, Ty, Option<Mode>)>,
+    pub ret: Ty,
+    pub ret_pass: RetPass,
+    pub ir_params: Vec<IrTy>,
+    pub ir_ret: IrTy,
+}
+
+pub(crate) struct FnEntry<'a> {
+    pub file: ModuleId,
+    pub decl: &'a FnDecl,
+}
+
+pub(crate) struct Lowerer<'a> {
+    pub program: &'a Program,
+    pub res: &'a Resolved,
+    pub typed: &'a Typed,
+    pub types: TypeTable,
+    pub module: Module,
+    pub diags: Vec<Diagnostic>,
+    pub fns: HashMap<DefId, FnEntry<'a>>,
+    pub instances: HashMap<(DefId, Vec<(DefId, Ty)>), FuncId>,
+    pub jobs: Vec<Job>,
+    pub names: HashMap<String, u32>,
+    pub layouts: HashMap<Ty, Layout>,
+    pub fields_cache: HashMap<Ty, Vec<Field>>,
+    pub enums: HashMap<Ty, Rc<EnumInfo>>,
+    pub drop_cache: HashMap<Ty, bool>,
+    pub glue: HashMap<(GlueKind, Ty), Option<FuncId>>,
+    pub f: FnState<'a>,
 }
 
 pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
-    let mut module = Module::default();
-    let mut diagnostics = Vec::new();
-    let mut shared = Shared {
+    let types = typed.types.clone();
+    let void = types.void;
+    let mut lw = Lowerer {
         program,
         res,
         typed,
-        funcs: HashMap::new(),
+        types,
+        module: Module::default(),
+        diags: Vec::new(),
+        fns: HashMap::new(),
+        instances: HashMap::new(),
+        jobs: Vec::new(),
+        names: HashMap::new(),
+        layouts: HashMap::new(),
+        fields_cache: HashMap::new(),
+        enums: HashMap::new(),
+        drop_cache: HashMap::new(),
+        glue: HashMap::new(),
+        f: FnState::empty(void),
     };
-    // Pass 1: every function with a simple signature gets a place in the module.
-    let mut todo: Vec<(ModuleId, &FnDecl, DefId)> = Vec::new();
-    let mut names: HashMap<String, u32> = HashMap::new();
-    for m in &program.modules {
-        if program.package(m.package).name == "core" {
-            continue;
-        }
-        for s in &m.file.stmts {
-            let StmtKind::Item(it) = &s.kind else {
-                continue;
-            };
-            let ItemKind::Fn(f) = &it.kind else {
-                continue;
-            };
-            let Some(&def) = res.item_defs.get(&(m.id, it.span.start)) else {
-                continue;
-            };
-            if f.kind != FnKind::Fn || matches!(f.body, FnBody::None) {
-                continue;
-            }
-            let Some((params, ret)) = signature(&shared, m.id, f, def) else {
-                continue;
-            };
-            let base = res.def(def).name.clone();
-            let n = names.entry(base.clone()).or_insert(0);
-            let name = if *n == 0 {
-                base.clone()
-            } else {
-                format!("{base}#{n}")
-            };
-            *n += 1;
-            let mut func = Func::new(&name, &params, ret);
-            let e = func.entry();
-            func.terminate(e, Term::Stop("not lowered yet".to_string()));
-            let id = module.add(func);
-            shared.funcs.insert(def, id);
-            todo.push((m.id, f, def));
-        }
+    lw.index();
+    // Roots: every function of the program that needs no type arguments.
+    let mut roots: Vec<DefId> = lw
+        .fns
+        .iter()
+        .filter(|(d, e)| {
+            let in_core = program.package(program.module(e.file).package).name == "core";
+            !in_core && !matches!(e.decl.body, FnBody::None) && lw.is_plain_fn(**d)
+        })
+        .map(|(d, _)| *d)
+        .collect();
+    roots.sort();
+    for d in roots {
+        lw.request_fn(d, &HashMap::new());
     }
-    // Pass 2: the bodies.
-    for (file, f, def) in todo {
-        let id = shared.funcs[&def];
-        let template = module.funcs[id.0 as usize].clone();
-        let mut fl = FnLower::new(
-            &shared,
-            file,
-            template.name.clone(),
-            &template.params,
-            template.ret,
-        );
-        match fl.lower_fn(f) {
-            Ok(func) => module.funcs[id.0 as usize] = func,
-            Err((span, msg)) => diagnostics.push(Diagnostic {
-                module: file,
-                span,
-                message: format!("not lowered yet: {msg} (in `{}`)", template.name),
-                warning: true,
-            }),
-        }
-    }
+    lw.run_jobs();
     Lowered {
-        module,
-        diagnostics,
+        module: lw.module,
+        diagnostics: lw.diags,
     }
 }
 
-/// The IR type of a source type, when it is one the first lowering handles.
-fn ir_ty(typed: &Typed, t: Ty) -> Option<IrTy> {
-    let t = typed.types.shallow(t);
-    Some(match typed.types.kind(t) {
-        TyKind::Int(k) => IrTy::Int(k.bits() as u8),
-        TyKind::Float(FloatKind::F32) => IrTy::F32,
-        TyKind::Float(FloatKind::F64) => IrTy::F64,
-        TyKind::Bool => IrTy::Bool,
-        TyKind::Char => IrTy::Int(32),
-        TyKind::Void => IrTy::Void,
-        _ => return None,
-    })
-}
+impl<'a> Lowerer<'a> {
+    // ---- Index --------------------------------------------------------------------------------------
 
-fn is_signed(typed: &Typed, t: Ty) -> bool {
-    let t = typed.types.shallow(t);
-    matches!(typed.types.kind(t), TyKind::Int(k) if k.signed())
-}
-
-fn signature(shared: &Shared, file: ModuleId, f: &FnDecl, def: DefId) -> Option<(Vec<IrTy>, IrTy)> {
-    if !f.generics.params.is_empty() {
-        return None;
-    }
-    let mut params = Vec::new();
-    for p in &f.params {
-        if p.is_self
-            || p.variadic
-            || p.default.is_some()
-            || !matches!(p.mode, None | Some(Mode::Let))
-        {
-            return None;
-        }
-        let d = shared.res.decls.get(&(file, p.name.span.start))?;
-        let t = shared.typed.local_tys.get(d)?;
-        let ty = ir_ty(shared.typed, *t)?;
-        if ty == IrTy::Void {
-            return None;
-        }
-        params.push(ty);
-    }
-    let ret = shared.typed.fn_rets.get(&def)?;
-    let ret = ir_ty(shared.typed, *ret)?;
-    Some((params, ret))
-}
-
-#[derive(Clone, Copy)]
-enum Local {
-    Val(Value),
-    /// A stack slot and the type stored in it.
-    Slot(Value, IrTy),
-}
-
-/// What lowering an expression gave.
-#[derive(Clone, Copy)]
-enum Res {
-    Val(Value),
-    /// Nothing to use (the expression has no value).
-    Unit,
-    /// Control never gets past this expression.
-    Never,
-}
-
-struct LoopCtx {
-    label: Option<String>,
-    cont: BlockId,
-    exit: BlockId,
-    /// Type of the value `break` carries, for `loop`.
-    break_ty: Option<IrTy>,
-}
-
-type Fail = (Span, String);
-
-struct FnLower<'a> {
-    sh: &'a Shared<'a>,
-    file: ModuleId,
-    f: Func,
-    cur: Option<BlockId>,
-    locals: HashMap<DefId, Local>,
-    loops: Vec<LoopCtx>,
-    stops: HashMap<String, BlockId>,
-    pending_label: Option<String>,
-    fail: Option<Fail>,
-}
-
-impl<'a> FnLower<'a> {
-    fn new(sh: &'a Shared<'a>, file: ModuleId, name: String, params: &[IrTy], ret: IrTy) -> Self {
-        let f = Func::new(&name, params, ret);
-        let cur = Some(f.entry());
-        FnLower {
-            sh,
-            file,
-            f,
-            cur,
-            locals: HashMap::new(),
-            loops: Vec::new(),
-            stops: HashMap::new(),
-            pending_label: None,
-            fail: None,
+    fn index(&mut self) {
+        let program = self.program;
+        for m in &program.modules {
+            self.index_stmts(m.id, &m.file.stmts);
         }
     }
 
-    // ---- Plumbing -------------------------------------------------------------------------------
-
-    fn unsupported(&mut self, span: Span, what: &str) -> Res {
-        if self.fail.is_none() {
-            self.fail = Some((span, what.to_string()));
-        }
-        Res::Never
-    }
-
-    fn ty_of(&self, e: &Expr) -> Option<Ty> {
-        self.sh
-            .typed
-            .tys
-            .get(&(self.file, e.span.start, e.span.end))
-            .copied()
-    }
-
-    fn ir_of(&self, e: &Expr) -> Option<IrTy> {
-        ir_ty(self.sh.typed, self.ty_of(e)?)
-    }
-
-    fn signed_of(&self, e: &Expr) -> bool {
-        self.ty_of(e).is_some_and(|t| is_signed(self.sh.typed, t))
-    }
-
-    fn emit(&mut self, op: Op, ty: Option<IrTy>, span: Span) -> Option<Value> {
-        let b = self.cur?;
-        self.f.emit_at(b, op, ty, span)
-    }
-
-    fn konst(&mut self, ty: IrTy, c: Const, span: Span) -> Value {
-        self.emit(Op::Const(ty, c), Some(ty), span)
-            .unwrap_or(Value(0))
-    }
-
-    fn terminate(&mut self, t: Term) {
-        if let Some(b) = self.cur.take() {
-            self.f.terminate(b, t);
-        }
-    }
-
-    fn jump(&mut self, to: BlockId, args: Vec<Value>) {
-        self.terminate(Term::Jump(Target { block: to, args }));
-    }
-
-    fn branch(&mut self, c: Value, yes: BlockId, no: BlockId) {
-        self.terminate(Term::Branch(
-            c,
-            Target {
-                block: yes,
-                args: vec![],
-            },
-            Target {
-                block: no,
-                args: vec![],
-            },
-        ));
-    }
-
-    fn start(&mut self, b: BlockId) {
-        self.cur = Some(b);
-    }
-
-    /// The block that stops the program with this message (one per message and function).
-    fn stop_block(&mut self, msg: &str) -> BlockId {
-        if let Some(b) = self.stops.get(msg) {
-            return *b;
-        }
-        let b = self.f.new_block(&[]);
-        self.f.terminate(b, Term::Stop(msg.to_string()));
-        self.stops.insert(msg.to_string(), b);
-        b
-    }
-
-    /// Stops with `msg` when `cond` holds; otherwise goes on in a new block.
-    fn stop_if(&mut self, cond: Value, msg: &str) {
-        let stop = self.stop_block(msg);
-        let go = self.f.new_block(&[]);
-        self.branch(cond, stop, go);
-        self.start(go);
-    }
-
-    /// A stack slot in the entry block, so a loop does not grow the stack.
-    fn slot(&mut self, ty: IrTy) -> Value {
-        let entry = self.f.entry();
-        self.f
-            .emit(
-                entry,
-                Op::Slot(ty.size(), ty.size().max(1)),
-                Some(IrTy::Ptr),
-            )
-            .unwrap_or(Value(0))
-    }
-
-    // ---- Functions --------------------------------------------------------------------------------
-
-    fn lower_fn(&mut self, f: &FnDecl) -> Result<Func, Fail> {
-        for (p, v) in f
-            .params
-            .iter()
-            .zip(self.f.block_params(self.f.entry()).to_vec())
-        {
-            if let Some(&d) = self.sh.res.decls.get(&(self.file, p.name.span.start)) {
-                self.locals.insert(d, Local::Val(v));
+    pub(crate) fn index_stmts(&mut self, file: ModuleId, stmts: &'a [Stmt]) {
+        for s in stmts {
+            if let StmtKind::Item(it) = &s.kind {
+                self.index_item(file, it);
             }
         }
-        let ret = self.f.ret;
-        let r = match &f.body {
-            FnBody::Block(b) => self.block(b),
-            FnBody::Expr(e) => self.expr(e),
-            FnBody::None => Res::Unit,
-        };
-        match (r, ret) {
-            (Res::Never, _) => {}
-            (Res::Val(v), t) if t != IrTy::Void => self.terminate(Term::Return(Some(v))),
-            (_, IrTy::Void) => self.terminate(Term::Return(None)),
-            _ => {
-                self.unsupported(f.name.span, "a function body without a value");
-            }
-        }
-        if let Some(e) = self.fail.take() {
-            return Err(e);
-        }
-        // The slots were added to the entry block after its first instructions; the stop blocks are
-        // already complete.
-        Ok(std::mem::replace(
-            &mut self.f,
-            Func::new("", &[], IrTy::Void),
-        ))
     }
 
-    // ---- Blocks and statements ----------------------------------------------------------------------
-
-    fn block(&mut self, b: &Block) -> Res {
-        for s in &b.stmts {
-            match &s.kind {
-                StmtKind::Decl(d) => self.decl(d),
-                StmtKind::Expr(e) => {
-                    self.expr(e);
-                }
-                StmtKind::Item(_) => {
-                    self.unsupported(s.span, "a nested item");
+    pub(crate) fn index_item(&mut self, file: ModuleId, item: &'a Item) {
+        match &item.kind {
+            ItemKind::Fn(f) => {
+                if let Some(&d) = self.res.item_defs.get(&(file, item.span.start)) {
+                    self.fns.insert(d, FnEntry { file, decl: f });
                 }
             }
-        }
-        match &b.tail {
-            Some(t) => self.expr(t),
-            None if self.cur.is_none() => Res::Never,
-            None => Res::Unit,
-        }
-    }
-
-    fn decl(&mut self, d: &Decl) {
-        let Some(init) = &d.init else {
-            self.unsupported(d.pattern.span, "a declaration without a value");
-            return;
-        };
-        let r = self.expr(init);
-        let Res::Val(v) = r else {
-            if matches!(r, Res::Unit) {
-                self.unsupported(d.pattern.span, "a value-less declaration");
-            }
-            return;
-        };
-        match &d.pattern.kind {
-            PatternKind::Wildcard => {}
-            PatternKind::Binding { name, .. } => {
-                let Some(&def) = self.sh.res.decls.get(&(self.file, name.span.start)) else {
-                    return;
-                };
-                match d.kind {
-                    DeclKind::Const => {
-                        self.locals.insert(def, Local::Val(v));
-                    }
-                    DeclKind::Var => {
-                        let ty = self.f.ty(v);
-                        let slot = self.slot(ty);
-                        self.emit(Op::Store(slot, v), None, d.pattern.span);
-                        self.locals.insert(def, Local::Slot(slot, ty));
+            ItemKind::Struct(d) | ItemKind::Obj(d) | ItemKind::Interface(d) => {
+                for m in &d.members {
+                    if let Member::Item(i) = m {
+                        self.index_item(file, i);
                     }
                 }
             }
-            _ => {
-                self.unsupported(d.pattern.span, "a pattern in a declaration");
-            }
-        }
-    }
-
-    // ---- Expressions ----------------------------------------------------------------------------------
-
-    fn expr(&mut self, e: &Expr) -> Res {
-        if self.cur.is_none() || self.fail.is_some() {
-            return Res::Never;
-        }
-        match &e.kind {
-            ExprKind::Int => {
-                let Some(ty) = self.ir_of(e) else {
-                    return self.unsupported(e.span, "an integer of this type");
-                };
-                let text = &self.sh.program.module(self.file).src
-                    [e.span.start as usize..e.span.end as usize];
-                let n = literal_value(text).unwrap_or(0);
-                if ty.is_float() {
-                    return Res::Val(self.konst(ty, Const::Float(n as f64), e.span));
+            ItemKind::Enum(e) => {
+                for i in &e.items {
+                    self.index_item(file, i);
                 }
-                Res::Val(self.konst(ty, Const::Int(n as i128), e.span))
             }
-            ExprKind::Float => {
-                let Some(ty) = self.ir_of(e) else {
-                    return self.unsupported(e.span, "a float of this type");
-                };
-                let text = &self.sh.program.module(self.file).src
-                    [e.span.start as usize..e.span.end as usize];
-                let x: f64 = text.replace('_', "").parse().unwrap_or(0.0);
-                Res::Val(self.konst(ty, Const::Float(x), e.span))
-            }
-            ExprKind::Bool(b) => Res::Val(self.konst(IrTy::Bool, Const::Bool(*b), e.span)),
-            ExprKind::Paren(i) => self.expr(i),
-            ExprKind::Name(id) => self.name(e, id),
-            ExprKind::Block(b) => self.block(b),
-            ExprKind::Unary { op, operand } => self.unary(e, *op, operand),
-            ExprKind::Binary { op, lhs, rhs } => self.binary(e, *op, lhs, rhs),
-            ExprKind::Assign { op, lhs, rhs } => self.assign(e, *op, lhs, rhs),
-            ExprKind::IncDec { op, operand } => self.incdec(e, *op, operand),
-            ExprKind::If(i) => self.if_expr(e, i, false),
-            ExprKind::Unless(i) => self.if_expr(e, i, true),
-            ExprKind::Ternary { cond, then, else_ } => self.ternary(e, cond, then, else_),
-            ExprKind::While { cond, body } => self.while_loop(cond, body),
-            ExprKind::Loop(body) => self.loop_expr(e, body),
-            ExprKind::For(f) => self.for_loop(e, f),
-            ExprKind::Labeled { label, body } => {
-                let name = self.sh.program.module(self.file).src
-                    [label.span.start as usize..label.span.end as usize]
-                    .to_string();
-                self.pending_label = Some(name);
-                let r = self.expr(body);
-                self.pending_label = None;
-                r
-            }
-            ExprKind::Break { label, value } => {
-                self.break_expr(e, label.as_ref(), value.as_deref())
-            }
-            ExprKind::Continue { label } => self.continue_expr(e, label.as_ref()),
-            ExprKind::Return(v) => self.return_expr(e, v.as_deref()),
-            ExprKind::Call { callee, args, mark } => self.call(e, callee, args, *mark),
-            ExprKind::Convert {
-                value,
-                checked: false,
-                ..
-            } => self.convert(e, value),
-            _ => self.unsupported(e.span, "this kind of expression"),
-        }
-    }
-
-    fn name(&mut self, e: &Expr, id: &Ident) -> Res {
-        let Some(def) = self.sh.res.use_at(self.file, id.span.start) else {
-            return self.unsupported(e.span, "an unresolved name");
-        };
-        match self.locals.get(&def).copied() {
-            Some(Local::Val(v)) => Res::Val(v),
-            Some(Local::Slot(p, ty)) => match self.emit(Op::Load(ty, p), Some(ty), e.span) {
-                Some(v) => Res::Val(v),
-                None => Res::Never,
-            },
-            None => self.unsupported(e.span, "a global or a function used as a value"),
-        }
-    }
-
-    fn value(&mut self, e: &Expr) -> Option<Value> {
-        match self.expr(e) {
-            Res::Val(v) => Some(v),
-            Res::Unit => {
-                self.unsupported(e.span, "a value-less operand");
-                None
-            }
-            Res::Never => None,
-        }
-    }
-
-    fn unary(&mut self, e: &Expr, op: Punct, operand: &Expr) -> Res {
-        let Some(ty) = self.ir_of(e) else {
-            return self.unsupported(e.span, "this operand type");
-        };
-        match op {
-            Punct::Minus => {
-                if matches!(operand.kind, ExprKind::Int) {
-                    let text = &self.sh.program.module(self.file).src
-                        [operand.span.start as usize..operand.span.end as usize];
-                    let n = literal_value(text).unwrap_or(0) as i128;
-                    return Res::Val(if ty.is_float() {
-                        self.konst(ty, Const::Float(-(n as f64)), e.span)
-                    } else {
-                        self.konst(ty, Const::Int(-n), e.span)
-                    });
+            ItemKind::Impl(im) => {
+                for m in &im.members {
+                    if let Member::Item(i) = m {
+                        self.index_item(file, i);
+                    }
                 }
-                let Some(v) = self.value(operand) else {
-                    return Res::Never;
-                };
-                if ty.is_float() {
-                    return self.wrap(Op::Neg(v), ty, e.span);
-                }
-                let zero = self.konst(ty, Const::Int(0), e.span);
-                self.wrap(Op::Checked(BinOp::Sub, true, zero, v), ty, e.span)
             }
-            Punct::Bang | Punct::Tilde => {
-                let Some(v) = self.value(operand) else {
-                    return Res::Never;
-                };
-                self.wrap(Op::Not(v), ty, e.span)
-            }
-            _ => self.unsupported(e.span, "this operator"),
-        }
-    }
-
-    fn wrap(&mut self, op: Op, ty: IrTy, span: Span) -> Res {
-        match self.emit(op, Some(ty), span) {
-            Some(v) => Res::Val(v),
-            None => Res::Never,
-        }
-    }
-
-    fn binary(&mut self, e: &Expr, op: Punct, lhs: &Expr, rhs: &Expr) -> Res {
-        match op {
-            Punct::AndAnd | Punct::OrOr => {
-                return self.short_circuit(e, op == Punct::AndAnd, lhs, rhs)
-            }
-            Punct::EqEq | Punct::NotEq | Punct::Lt | Punct::Gt | Punct::LtEq | Punct::GtEq => {
-                return self.compare(e, op, lhs, rhs)
-            }
+            ItemKind::Mod { body: Some(b), .. } => self.index_stmts(file, b),
             _ => {}
         }
-        let Some(ty) = self.ir_of(e) else {
-            return self.unsupported(e.span, "this operand type");
-        };
-        let signed = self.signed_of(e);
-        let Some(a) = self.value(lhs) else {
-            return Res::Never;
-        };
-        let Some(b) = self.value(rhs) else {
-            return Res::Never;
-        };
-        self.arith(e.span, op, ty, signed, a, b)
     }
 
-    /// `a op b` on two values of type `ty`.
-    fn arith(&mut self, span: Span, op: Punct, ty: IrTy, signed: bool, a: Value, b: Value) -> Res {
-        if ty.is_float() {
-            let o = match op {
-                Punct::Plus => BinOp::Add,
-                Punct::Minus => BinOp::Sub,
-                Punct::Star => BinOp::Mul,
-                Punct::Slash => BinOp::Div,
-                Punct::Percent => BinOp::Rem,
-                _ => return self.unsupported(span, "this float operator"),
-            };
-            return self.wrap(Op::Bin(o, a, b), ty, span);
+    /// A function that can be lowered without being told type arguments.
+    fn is_plain_fn(&self, def: DefId) -> bool {
+        let Some(info) = self.typed.fn_infos.get(&def) else {
+            return false;
+        };
+        if !info.generics.is_empty() {
+            return false;
         }
-        if !ty.is_int() {
-            return self.unsupported(span, "this operand type");
+        match info.self_ty {
+            Some(t) => !self.has_params(t),
+            None => true,
         }
-        let bits = if let IrTy::Int(b) = ty { b as i128 } else { 64 };
-        match op {
-            Punct::Plus => self.wrap(Op::Checked(BinOp::Add, signed, a, b), ty, span),
-            Punct::Minus => self.wrap(Op::Checked(BinOp::Sub, signed, a, b), ty, span),
-            Punct::Star => self.wrap(Op::Checked(BinOp::Mul, signed, a, b), ty, span),
-            Punct::PlusPercent => self.wrap(Op::Bin(BinOp::Add, a, b), ty, span),
-            Punct::MinusPercent => self.wrap(Op::Bin(BinOp::Sub, a, b), ty, span),
-            Punct::StarPercent => self.wrap(Op::Bin(BinOp::Mul, a, b), ty, span),
-            Punct::Amp => self.wrap(Op::Bin(BinOp::And, a, b), ty, span),
-            Punct::Pipe => self.wrap(Op::Bin(BinOp::Or, a, b), ty, span),
-            Punct::Caret => self.wrap(Op::Bin(BinOp::Xor, a, b), ty, span),
-            Punct::Slash | Punct::Percent => {
-                let zero = self.konst(ty, Const::Int(0), span);
-                let is_zero = self.emit(Op::Cmp(CmpOp::Eq, b, zero), Some(IrTy::Bool), span);
-                if let Some(z) = is_zero {
-                    self.stop_if(z, "division by zero");
-                }
-                let o = match (op, signed) {
-                    (Punct::Slash, true) => BinOp::Div,
-                    (Punct::Slash, false) => BinOp::UDiv,
-                    (_, true) => BinOp::Rem,
-                    (_, false) => BinOp::URem,
-                };
-                self.wrap(Op::Bin(o, a, b), ty, span)
+    }
+
+    fn has_params(&self, t: Ty) -> bool {
+        match self.types.kind_of(t) {
+            TyKind::Param(_) => true,
+            TyKind::Adt(_, args) | TyKind::Tuple(args) => args.iter().any(|a| self.has_params(*a)),
+            TyKind::List(e) | TyKind::Option(e) | TyKind::Set(e) | TyKind::Box(e) | TyKind::Range(e) | TyKind::Iter(e) => {
+                self.has_params(*e)
             }
-            Punct::Shl | Punct::Shr => {
-                // The amount is checked against the width (a negative amount looks huge).
-                let limit = self.konst(ty, Const::Int(bits), span);
-                let too_far = self.emit(Op::Cmp(CmpOp::UGe, b, limit), Some(IrTy::Bool), span);
-                if let Some(t) = too_far {
-                    self.stop_if(t, "shifted by the width or more");
-                }
-                let o = match (op, signed) {
-                    (Punct::Shl, _) => BinOp::Shl,
-                    (_, true) => BinOp::Shr,
-                    (_, false) => BinOp::UShr,
-                };
-                self.wrap(Op::Bin(o, a, b), ty, span)
+            TyKind::Result(a, b) | TyKind::Map(a, b) => self.has_params(*a) || self.has_params(*b),
+            TyKind::Array(e, _) => self.has_params(*e),
+            TyKind::Fn(ps, r) => ps.iter().any(|p| self.has_params(p.ty)) || self.has_params(*r),
+            _ => false,
+        }
+    }
+
+    // ---- Instances --------------------------------------------------------------------------------------
+
+    fn unique_name(&mut self, base: String) -> String {
+        let n = self.names.entry(base.clone()).or_insert(0);
+        let name = if *n == 0 { base.clone() } else { format!("{base}#{n}") };
+        *n += 1;
+        name
+    }
+
+    /// The type with these type arguments substituted.
+    pub(crate) fn conc_with(&mut self, t: Ty, map: &HashMap<DefId, Ty>) -> Ty {
+        let t = if map.is_empty() { t } else { self.types.subst(t, map) };
+        self.types.zonk(t)
+    }
+
+    /// The IR signature of a function for these type arguments.
+    pub(crate) fn sig_of(&mut self, info: &FnInfo, map: &HashMap<DefId, Ty>) -> Sig {
+        let mut params: Vec<(Pass, Ty, Option<Mode>)> = Vec::new();
+        let mut srcs: Vec<(Ty, Option<Mode>)> = Vec::new();
+        if info.has_self {
+            if let Some(st) = info.self_ty {
+                srcs.push((st, info.self_mode));
             }
-            _ => self.unsupported(span, "this operator"),
         }
-    }
-
-    fn compare(&mut self, e: &Expr, op: Punct, lhs: &Expr, rhs: &Expr) -> Res {
-        let signed = self.signed_of(lhs);
-        let ok = self.ir_of(lhs).is_some_and(|t| t != IrTy::Void);
-        if !ok {
-            return self.unsupported(e.span, "comparing this type");
+        for p in &info.params {
+            srcs.push((p.ty, p.mode));
         }
-        let Some(a) = self.value(lhs) else {
-            return Res::Never;
+        let mut ir_params = Vec::new();
+        let ret = self.conc_with(info.ret, map);
+        let ret_pass = match self.repr(ret) {
+            Repr::Zst => RetPass::Void,
+            Repr::Scalar(t) => RetPass::Val(t),
+            Repr::Mem(_) => RetPass::Sret,
         };
-        let Some(b) = self.value(rhs) else {
-            return Res::Never;
-        };
-        let float = self.f.ty(a).is_float();
-        let o = match (op, signed || float) {
-            (Punct::EqEq, _) => CmpOp::Eq,
-            (Punct::NotEq, _) => CmpOp::Ne,
-            (Punct::Lt, true) => CmpOp::Lt,
-            (Punct::LtEq, true) => CmpOp::Le,
-            (Punct::Gt, true) => CmpOp::Gt,
-            (Punct::GtEq, true) => CmpOp::Ge,
-            (Punct::Lt, false) => CmpOp::ULt,
-            (Punct::LtEq, false) => CmpOp::ULe,
-            (Punct::Gt, false) => CmpOp::UGt,
-            _ => CmpOp::UGe,
-        };
-        self.wrap(Op::Cmp(o, a, b), IrTy::Bool, e.span)
-    }
-
-    fn short_circuit(&mut self, e: &Expr, and: bool, lhs: &Expr, rhs: &Expr) -> Res {
-        let Some(a) = self.value(lhs) else {
-            return Res::Never;
-        };
-        let eval_rhs = self.f.new_block(&[]);
-        let join = self.f.new_block(&[IrTy::Bool]);
-        let skip = Target {
-            block: join,
-            args: vec![a],
-        };
-        let go = Target {
-            block: eval_rhs,
-            args: vec![],
-        };
-        // `a && b`: when `a` is false the result is `a`. `a || b`: when `a` is true the result is `a`.
-        if and {
-            self.terminate(Term::Branch(a, go, skip));
-        } else {
-            self.terminate(Term::Branch(a, skip, go));
+        if ret_pass == RetPass::Sret {
+            ir_params.push(IrTy::Ptr);
         }
-        self.start(eval_rhs);
-        let b = self.value(rhs);
-        if let Some(b) = b {
-            self.jump(join, vec![b]);
-        }
-        self.start(join);
-        let _ = e;
-        Res::Val(self.f.block_params(join)[0])
-    }
-
-    fn assign(&mut self, e: &Expr, op: Punct, lhs: &Expr, rhs: &Expr) -> Res {
-        let ExprKind::Name(id) = &lhs.kind else {
-            return self.unsupported(e.span, "assigning to this kind of place");
-        };
-        let Some(def) = self.sh.res.use_at(self.file, id.span.start) else {
-            return self.unsupported(e.span, "an unresolved name");
-        };
-        let Some(Local::Slot(slot, ty)) = self.locals.get(&def).copied() else {
-            return self.unsupported(e.span, "assigning to this variable");
-        };
-        let Some(rv) = self.value(rhs) else {
-            return Res::Never;
-        };
-        let new = if op == Punct::Eq {
-            rv
-        } else {
-            let base = match op {
-                Punct::PlusEq => Punct::Plus,
-                Punct::MinusEq => Punct::Minus,
-                Punct::StarEq => Punct::Star,
-                Punct::SlashEq => Punct::Slash,
-                Punct::PercentEq => Punct::Percent,
-                Punct::AmpEq => Punct::Amp,
-                Punct::PipeEq => Punct::Pipe,
-                Punct::CaretEq => Punct::Caret,
-                Punct::ShlEq => Punct::Shl,
-                Punct::ShrEq => Punct::Shr,
-                Punct::PlusPercentEq => Punct::PlusPercent,
-                Punct::MinusPercentEq => Punct::MinusPercent,
-                Punct::StarPercentEq => Punct::StarPercent,
-                _ => return self.unsupported(e.span, "this assignment operator"),
-            };
-            let signed = self.signed_of(lhs);
-            let Some(cur) = self.emit(Op::Load(ty, slot), Some(ty), e.span) else {
-                return Res::Never;
-            };
-            let rv = if base == Punct::Shl || base == Punct::Shr {
-                self.resize(rv, ty, self.signed_of(rhs), e.span)
-            } else {
-                rv
-            };
-            match self.arith(e.span, base, ty, signed, cur, rv) {
-                Res::Val(v) => v,
-                other => return other,
+        for (t, mode) in srcs {
+            let t = self.conc_with(t, map);
+            let pass = self.pass_of(t, mode);
+            match pass {
+                Pass::Skip => {}
+                Pass::Val(x) => ir_params.push(x),
+                Pass::Ptr => ir_params.push(IrTy::Ptr),
             }
+            params.push((pass, t, mode));
+        }
+        let ir_ret = match ret_pass {
+            RetPass::Val(t) => t,
+            _ => IrTy::Void,
         };
-        self.emit(Op::Store(slot, new), None, e.span);
-        Res::Unit
+        Sig { params, ret, ret_pass, ir_params, ir_ret }
     }
 
-    /// Changes an integer to the width of `ty`.
-    fn resize(&mut self, v: Value, ty: IrTy, signed: bool, span: Span) -> Value {
-        let from = self.f.ty(v);
-        if from == ty {
-            return v;
-        }
-        let (IrTy::Int(a), IrTy::Int(b)) = (from, ty) else {
-            return v;
-        };
-        let kind = if b > a {
-            if signed {
-                CastKind::SExt
-            } else {
-                CastKind::ZExt
-            }
-        } else {
-            CastKind::Trunc
-        };
-        self.emit(Op::Cast(kind, v, ty), Some(ty), span)
-            .unwrap_or(v)
-    }
-
-    fn incdec(&mut self, e: &Expr, op: Punct, operand: &Expr) -> Res {
-        let ExprKind::Name(id) = &operand.kind else {
-            return self.unsupported(e.span, "`++` on this kind of place");
-        };
-        let Some(def) = self.sh.res.use_at(self.file, id.span.start) else {
-            return self.unsupported(e.span, "an unresolved name");
-        };
-        let Some(Local::Slot(slot, ty)) = self.locals.get(&def).copied() else {
-            return self.unsupported(e.span, "`++` on this variable");
-        };
-        let signed = self.signed_of(operand);
-        let Some(cur) = self.emit(Op::Load(ty, slot), Some(ty), e.span) else {
-            return Res::Never;
-        };
-        let one = self.konst(ty, Const::Int(1), e.span);
-        let o = if op == Punct::PlusPlus {
-            Punct::Plus
-        } else {
-            Punct::Minus
-        };
-        if let Res::Val(v) = self.arith(e.span, o, ty, signed, cur, one) {
-            self.emit(Op::Store(slot, v), None, e.span);
-        }
-        Res::Unit
-    }
-
-    fn convert(&mut self, e: &Expr, value: &Expr) -> Res {
-        let (Some(from), Some(to)) = (self.ty_of(value), self.ty_of(e)) else {
-            return self.unsupported(e.span, "this conversion");
-        };
-        let (Some(fi), Some(ti)) = (ir_ty(self.sh.typed, from), ir_ty(self.sh.typed, to)) else {
-            return self.unsupported(e.span, "this conversion");
-        };
-        let signed = is_signed(self.sh.typed, from);
-        let Some(v) = self.value(value) else {
-            return Res::Never;
-        };
-        if fi == ti {
-            return Res::Val(v);
-        }
-        let kind = match (fi, ti) {
-            (IrTy::Int(a), IrTy::Int(b)) if b > a => {
-                if signed {
-                    CastKind::SExt
+    pub(crate) fn pass_of(&mut self, t: Ty, mode: Option<Mode>) -> Pass {
+        match self.repr(t) {
+            Repr::Zst => Pass::Skip,
+            Repr::Scalar(s) => {
+                if mode == Some(Mode::Inout) {
+                    Pass::Ptr
                 } else {
-                    CastKind::ZExt
+                    Pass::Val(s)
                 }
             }
-            (IrTy::Int(_), IrTy::Int(_)) => CastKind::Trunc,
-            (IrTy::Int(_), t) if t.is_float() => CastKind::IntToFloat,
-            (f, t) if f.is_float() && t.is_float() => CastKind::FloatResize,
-            _ => return self.unsupported(e.span, "this conversion"),
-        };
-        self.wrap(Op::Cast(kind, v, ti), ti, e.span)
-    }
-
-    // ---- Control flow -------------------------------------------------------------------------------------
-
-    /// The IR type of an expression's value: `Some(Void)` for none, `None` when it cannot be lowered.
-    fn result_ty(&self, e: &Expr) -> Option<IrTy> {
-        match self.ty_of(e).map(|t| {
-            self.sh
-                .typed
-                .types
-                .kind_of(self.sh.typed.types.shallow(t))
-                .clone()
-        }) {
-            Some(TyKind::Never) => Some(IrTy::Void),
-            Some(_) => self.ir_of(e),
-            None => None,
+            Repr::Mem(_) => Pass::Ptr,
         }
     }
 
-    fn if_expr(&mut self, e: &Expr, i: &IfExpr, unless: bool) -> Res {
-        let Some(c) = self.value(&i.cond) else {
-            return Res::Never;
+    fn fn_display_name(&mut self, def: DefId, map: &HashMap<DefId, Ty>) -> String {
+        let name = self.res.def(def).name.clone();
+        let mut base = match self.typed.fn_infos.get(&def).and_then(|i| i.self_ty) {
+            Some(st) => {
+                let st = self.conc_with(st, map);
+                format!("{}.{name}", self.show_ty(st))
+            }
+            None => name,
         };
-        let Some(rt) = self.result_ty(e) else {
-            return self.unsupported(e.span, "an `if` with a value of this type");
-        };
-        let then_b = self.f.new_block(&[]);
-        let else_b = self.f.new_block(&[]);
-        if unless {
-            self.branch(c, else_b, then_b);
-        } else {
-            self.branch(c, then_b, else_b);
+        let gens = self.typed.fn_infos.get(&def).map(|i| i.generics.clone()).unwrap_or_default();
+        if !gens.is_empty() {
+            let args: Vec<String> = gens
+                .iter()
+                .map(|g| match map.get(g) {
+                    Some(t) => {
+                        let t = self.conc_with(*t, &HashMap::new());
+                        self.show_ty(t)
+                    }
+                    None => "?".to_string(),
+                })
+                .collect();
+            base = format!("{base}<{}>", args.join(","));
         }
-        let join_params: Vec<IrTy> = if rt == IrTy::Void { vec![] } else { vec![rt] };
-        let join = self.f.new_block(&join_params);
-        let mut reached = false;
-        self.start(then_b);
-        let r = self.block(&i.then);
-        reached |= self.finish_arm(r, join, rt);
-        self.start(else_b);
-        let r = match &i.else_ {
-            Some(el) => self.expr(el),
-            None => Res::Unit,
-        };
-        reached |= self.finish_arm(r, join, rt);
-        if !reached {
-            self.cur = None;
-            return Res::Never;
-        }
-        self.start(join);
-        if rt == IrTy::Void {
-            Res::Unit
-        } else {
-            Res::Val(self.f.block_params(join)[0])
-        }
+        base
     }
 
-    /// Jumps to the join block with the arm's value. Gives whether control reaches the join.
-    fn finish_arm(&mut self, r: Res, join: BlockId, rt: IrTy) -> bool {
-        match r {
-            Res::Never => false,
-            Res::Unit if rt == IrTy::Void => {
-                self.jump(join, vec![]);
-                true
-            }
-            Res::Val(v) if rt != IrTy::Void => {
-                self.jump(join, vec![v]);
-                true
-            }
-            Res::Val(_) => {
-                self.jump(join, vec![]);
-                true
-            }
-            Res::Unit => {
-                self.unsupported(Span::new(0, 0), "an arm without a value");
-                false
+    pub(crate) fn show_ty(&self, t: Ty) -> String {
+        self.types.display(t, &|d| self.res.def(d).name.clone())
+    }
+
+    /// The function for `def` with these type arguments; lowered later from the job list.
+    pub(crate) fn request_fn(&mut self, def: DefId, map: &HashMap<DefId, Ty>) -> Option<FuncId> {
+        let mut key_subst: Vec<(DefId, Ty)> = Vec::new();
+        for (k, v) in map {
+            let v = self.types.zonk(*v);
+            key_subst.push((*k, v));
+        }
+        key_subst.sort_by_key(|(k, _)| *k);
+        let key = (def, key_subst.clone());
+        if let Some(id) = self.instances.get(&key) {
+            return Some(*id);
+        }
+        let info = self.typed.fn_infos.get(&def)?.clone();
+        let concrete: HashMap<DefId, Ty> = key_subst.into_iter().collect();
+        let sig = self.sig_of(&info, &concrete);
+        let base = self.fn_display_name(def, &concrete);
+        let name = self.unique_name(base);
+        let mut func = Func::new(&name, &sig.ir_params, sig.ir_ret);
+        let e = func.entry();
+        func.terminate(e, Term::Stop("not lowered yet".to_string()));
+        let id = self.module.add(func);
+        self.instances.insert(key, id);
+        self.jobs.push(Job::Fn { id, def, subst: concrete });
+        Some(id)
+    }
+
+    // ---- Running the jobs ------------------------------------------------------------------------------------
+
+    fn run_jobs(&mut self) {
+        while let Some(job) = self.jobs.pop() {
+            match job {
+                Job::Fn { id, def, subst } => self.lower_fn_job(id, def, subst),
+                Job::Glue { id, kind, ty } => self.lower_glue_job(id, kind, ty),
             }
         }
     }
 
-    fn ternary(&mut self, e: &Expr, cond: &Expr, then: &Expr, else_: &Expr) -> Res {
-        let Some(c) = self.value(cond) else {
-            return Res::Never;
+    fn lower_fn_job(&mut self, id: FuncId, def: DefId, subst: HashMap<DefId, Ty>) {
+        let Some(info) = self.typed.fn_infos.get(&def).cloned() else {
+            return;
         };
-        let Some(rt) = self.result_ty(e) else {
-            return self.unsupported(e.span, "a conditional with a value of this type");
+        let Some(entry) = self.fns.get(&def) else {
+            return;
         };
-        let then_b = self.f.new_block(&[]);
-        let else_b = self.f.new_block(&[]);
-        self.branch(c, then_b, else_b);
-        let params: Vec<IrTy> = if rt == IrTy::Void { vec![] } else { vec![rt] };
-        let join = self.f.new_block(&params);
-        let mut reached = false;
-        self.start(then_b);
-        let r = self.expr(then);
-        reached |= self.finish_arm(r, join, rt);
-        self.start(else_b);
-        let r = self.expr(else_);
-        reached |= self.finish_arm(r, join, rt);
-        if !reached {
-            self.cur = None;
-            return Res::Never;
+        let (file, decl) = (entry.file, entry.decl);
+        if matches!(decl.body, FnBody::None) {
+            // An `ext` function: the compiler supplies it.
+            self.lower_intrinsic_job(id, def, &subst);
+            return;
         }
-        self.start(join);
-        if rt == IrTy::Void {
-            Res::Unit
-        } else {
-            Res::Val(self.f.block_params(join)[0])
-        }
-    }
-
-    fn take_label(&mut self) -> Option<String> {
-        self.pending_label.take()
-    }
-
-    fn while_loop(&mut self, cond: &Expr, body: &Block) -> Res {
-        let label = self.take_label();
-        let head = self.f.new_block(&[]);
-        let body_b = self.f.new_block(&[]);
-        let exit = self.f.new_block(&[]);
-        self.jump(head, vec![]);
-        self.start(head);
-        if let Some(c) = self.value(cond) {
-            self.branch(c, body_b, exit);
-        }
-        self.loops.push(LoopCtx {
-            label,
-            cont: head,
-            exit,
-            break_ty: None,
-        });
-        self.start(body_b);
-        let r = self.block(body);
-        if !matches!(r, Res::Never) {
-            self.jump(head, vec![]);
-        }
-        self.loops.pop();
-        self.start(exit);
-        Res::Unit
-    }
-
-    fn loop_expr(&mut self, e: &Expr, body: &Block) -> Res {
-        let label = self.take_label();
-        let rt = self.result_ty(e);
-        let Some(rt) = rt else {
-            return self.unsupported(e.span, "a `loop` with a value of this type");
-        };
-        let params: Vec<IrTy> = if rt == IrTy::Void { vec![] } else { vec![rt] };
-        let head = self.f.new_block(&[]);
-        let exit = self.f.new_block(&params);
-        self.jump(head, vec![]);
-        self.start(head);
-        let break_ty = if rt == IrTy::Void { None } else { Some(rt) };
-        self.loops.push(LoopCtx {
-            label,
-            cont: head,
-            exit,
-            break_ty,
-        });
-        let r = self.block(body);
-        if !matches!(r, Res::Never) {
-            self.jump(head, vec![]);
-        }
-        self.loops.pop();
-        // The exit is reached only through `break`; if nothing broke, the loop never ends.
-        let reached = self
-            .f
-            .blocks
-            .iter()
-            .any(|b| matches!(&b.term, Some(Term::Jump(t)) if t.block == exit)
-                || matches!(&b.term, Some(Term::Branch(_, a, c)) if a.block == exit || c.block == exit));
-        if !reached {
-            self.cur = None;
-            return Res::Never;
-        }
-        self.start(exit);
-        if rt == IrTy::Void {
-            Res::Unit
-        } else {
-            Res::Val(self.f.block_params(exit)[0])
-        }
-    }
-
-    fn for_loop(&mut self, e: &Expr, f: &ForExpr) -> Res {
-        let label = self.take_label();
-        let ForHead::Of { pats, iter } = &f.head else {
-            return self.unsupported(e.span, "this kind of `for`");
-        };
-        let ExprKind::Range {
-            start: Some(start),
-            end: Some(end),
-            inclusive,
-            step: None,
-        } = &iter.kind
-        else {
-            return self.unsupported(iter.span, "looping over anything but a range");
-        };
-        let [pat] = pats.as_slice() else {
-            return self.unsupported(e.span, "this `for` pattern");
-        };
-        let (var, wild) = match &pat.kind {
-            PatternKind::Binding { name, mode: None } => (
-                self.sh
-                    .res
-                    .decls
-                    .get(&(self.file, name.span.start))
-                    .copied(),
-                false,
-            ),
-            PatternKind::Wildcard => (None, true),
-            _ => return self.unsupported(pat.span, "this `for` pattern"),
-        };
-        let _ = wild;
-        let Some(ty) = self.ir_of(start) else {
-            return self.unsupported(iter.span, "a range of this type");
-        };
-        let signed = self.signed_of(start);
-        let Some(a) = self.value(start) else {
-            return Res::Never;
-        };
-        let Some(b) = self.value(end) else {
-            return Res::Never;
-        };
-        let head = self.f.new_block(&[ty]);
-        let body_b = self.f.new_block(&[]);
-        let step = self.f.new_block(&[]);
-        let exit = self.f.new_block(&[]);
-        self.jump(head, vec![a]);
-        self.start(head);
-        let i = self.f.block_params(head)[0];
-        let cmp = match (*inclusive, signed) {
-            (false, true) => CmpOp::Lt,
-            (false, false) => CmpOp::ULt,
-            (true, true) => CmpOp::Le,
-            (true, false) => CmpOp::ULe,
-        };
-        if let Some(c) = self.emit(Op::Cmp(cmp, i, b), Some(IrTy::Bool), iter.span) {
-            self.branch(c, body_b, exit);
-        }
-        if let Some(d) = var {
-            self.locals.insert(d, Local::Val(i));
-        }
-        self.loops.push(LoopCtx {
-            label,
-            cont: step,
-            exit,
-            break_ty: None,
-        });
-        self.start(body_b);
-        let r = self.block(&f.body);
-        if !matches!(r, Res::Never) {
-            self.jump(step, vec![]);
-        }
-        self.loops.pop();
-        self.start(step);
-        let next = if *inclusive {
-            // After the last value, stop without adding (the add could overflow).
-            let at_end = self.emit(Op::Cmp(CmpOp::Eq, i, b), Some(IrTy::Bool), iter.span);
-            let more = self.f.new_block(&[]);
-            if let Some(c) = at_end {
-                self.branch(c, exit, more);
+        let sig = self.sig_of(&info, &subst);
+        let name = self.module.funcs[id.0 as usize].name.clone();
+        let void = self.types.void;
+        let mut state = FnState::empty(void);
+        state.func = Func::new(&name, &sig.ir_params, sig.ir_ret);
+        state.file = file;
+        state.cur = Some(state.func.entry());
+        state.subst = subst;
+        state.ret_ty = sig.ret;
+        self.f = state;
+        let r = self.lower_body(decl, &info, &sig);
+        let st = std::mem::replace(&mut self.f, FnState::empty(void));
+        match (r, st.fail) {
+            (Ok(()), None) => self.module.funcs[id.0 as usize] = st.func,
+            (_, fail) => {
+                let (span, msg) = fail.unwrap_or((decl.name.span, "an internal problem".to_string()));
+                self.diags.push(Diagnostic {
+                    module: file,
+                    span,
+                    message: format!("not lowered yet: {msg} (in `{name}`)"),
+                    warning: true,
+                });
             }
-            self.start(more);
-            let one = self.konst(ty, Const::Int(1), iter.span);
-            self.emit(Op::Bin(BinOp::Add, i, one), Some(ty), iter.span)
-        } else {
-            let one = self.konst(ty, Const::Int(1), iter.span);
-            self.emit(Op::Bin(BinOp::Add, i, one), Some(ty), iter.span)
-        };
-        if let Some(n) = next {
-            self.jump(head, vec![n]);
-        }
-        self.start(exit);
-        Res::Unit
-    }
-
-    fn find_loop(&self, label: Option<&Ident>) -> Option<usize> {
-        match label {
-            Some(l) => {
-                let name = &self.sh.program.module(self.file).src
-                    [l.span.start as usize..l.span.end as usize];
-                self.loops
-                    .iter()
-                    .rposition(|c| c.label.as_deref() == Some(name))
-            }
-            None => self.loops.len().checked_sub(1),
         }
     }
 
-    fn break_expr(&mut self, e: &Expr, label: Option<&Ident>, value: Option<&Expr>) -> Res {
-        let Some(i) = self.find_loop(label) else {
-            return self.unsupported(e.span, "`break` outside a loop");
-        };
-        let exit = self.loops[i].exit;
-        let want = self.loops[i].break_ty;
-        let args = match (value, want) {
-            (Some(v), Some(_)) => match self.value(v) {
-                Some(x) => vec![x],
-                None => return Res::Never,
-            },
-            (None, None) => vec![],
-            _ => return self.unsupported(e.span, "`break` with a mismatched value"),
-        };
-        self.jump(exit, args);
-        Res::Never
-    }
-
-    fn continue_expr(&mut self, e: &Expr, label: Option<&Ident>) -> Res {
-        let Some(i) = self.find_loop(label) else {
-            return self.unsupported(e.span, "`continue` outside a loop");
-        };
-        let to = self.loops[i].cont;
-        self.jump(to, vec![]);
-        Res::Never
-    }
-
-    fn return_expr(&mut self, e: &Expr, v: Option<&Expr>) -> Res {
-        match (v, self.f.ret) {
-            (Some(x), t) if t != IrTy::Void => {
-                if let Some(val) = self.value(x) {
-                    self.terminate(Term::Return(Some(val)));
+    fn lower_body(&mut self, decl: &'a FnDecl, info: &FnInfo, sig: &Sig) -> Result<(), ()> {
+        let entry = self.f.func.entry();
+        let ir_params = self.f.func.block_params(entry).to_vec();
+        let mut next = 0usize;
+        if sig.ret_pass == RetPass::Sret {
+            self.f.sret = Some(ir_params[0]);
+            next = 1;
+        }
+        self.push_scope();
+        // The parameters: the receiver, then the declared ones.
+        let file = self.f.file;
+        let mut decl_params: Vec<Option<DefId>> = Vec::new();
+        if info.has_self {
+            let mut sd = None;
+            for p in &decl.params {
+                if p.is_self {
+                    sd = self.res.decls.get(&(file, p.name.span.start)).copied();
                 }
             }
-            (None, IrTy::Void) => self.terminate(Term::Return(None)),
-            _ => return self.unsupported(e.span, "this `return`"),
+            decl_params.push(sd);
         }
-        Res::Never
+        for p in decl.params.iter().filter(|p| !p.is_self) {
+            decl_params.push(self.res.decls.get(&(file, p.name.span.start)).copied());
+        }
+        for (i, (pass, ty, mode)) in sig.params.iter().enumerate() {
+            let (pass, ty, mode) = (*pass, *ty, *mode);
+            let def = decl_params.get(i).copied().flatten();
+            match pass {
+                Pass::Skip => {}
+                Pass::Val(_) => {
+                    let v = ir_params[next];
+                    next += 1;
+                    let Some(def) = def else { continue };
+                    if mode == Some(Mode::Sink) && self.needs_drop(ty) {
+                        let slot = self.slot_for(ty);
+                        self.store_scalar_ty(slot, v);
+                        let flag = self.own(slot, ty, true);
+                        self.f.locals.insert(def, Local::Slot { ptr: slot, ty, flag });
+                    } else {
+                        self.f.locals.insert(def, Local::Val(v));
+                    }
+                }
+                Pass::Ptr => {
+                    let p = ir_params[next];
+                    next += 1;
+                    let Some(def) = def else { continue };
+                    let flag = if mode == Some(Mode::Sink) { self.own(p, ty, true) } else { None };
+                    self.f.locals.insert(def, Local::Slot { ptr: p, ty, flag });
+                }
+            }
+        }
+        // The body.
+        let ret = sig.ret;
+        let body_res = match &decl.body {
+            FnBody::Block(b) => self.block_value(b, sig.ret_pass, ret),
+            FnBody::Expr(e) => self.body_expr(e, sig.ret_pass, ret),
+            FnBody::None => Res::Unit,
+        };
+        if self.f.fail.is_some() {
+            return Err(());
+        }
+        self.finish_return(body_res, sig, decl.name.span);
+        if self.f.fail.is_some() {
+            return Err(());
+        }
+        Ok(())
     }
 
-    fn call(&mut self, e: &Expr, callee: &Expr, args: &[Arg], mark: CallMark) -> Res {
-        let ExprKind::Name(id) = &callee.kind else {
-            return self.unsupported(e.span, "this kind of call");
-        };
-        let Some(def) = self.sh.res.use_at(self.file, id.span.start) else {
-            return self.unsupported(e.span, "an unresolved name");
-        };
-        if self.sh.res.def(def).kind != DefKind::Fn || mark != CallMark::None {
-            return self.unsupported(e.span, "this kind of call");
+    /// The end of a function: the scope of the parameters ends, then the value is returned.
+    fn finish_return(&mut self, r: Res, sig: &Sig, span: Span) {
+        if self.f.cur.is_none() {
+            self.f.scopes.pop();
+            return;
         }
-        let Some(&fid) = self.sh.funcs.get(&def) else {
-            let n = self.sh.res.def(def).name.clone();
-            return self.unsupported(e.span, &format!("a call to `{n}`, which is not lowered"));
-        };
-        let mut vals = Vec::new();
-        for a in args {
-            if a.label.is_some() || a.spread || a.mode.is_some() {
-                return self.unsupported(a.value.span, "this kind of argument");
+        match (sig.ret_pass, r) {
+            (RetPass::Val(_), Res::Val(v)) => {
+                self.pop_scope();
+                self.terminate(Term::Return(Some(v)));
             }
-            match self.value(&a.value) {
-                Some(v) => vals.push(v),
-                None => return Res::Never,
+            (RetPass::Void, _) => {
+                self.pop_scope();
+                self.terminate(Term::Return(None));
             }
+            (RetPass::Sret, Res::Unit) | (RetPass::Sret, Res::Val(_)) => {
+                // `void ! E` ends with success.
+                self.write_ok_void(sig.ret);
+                self.pop_scope();
+                self.terminate(Term::Return(None));
+            }
+            (RetPass::Val(_), _) => {
+                self.unsupported(span, "a function body without a value");
+            }
+            (_, Res::Never) => {}
         }
-        let ret = self.result_ty(e);
-        match ret {
-            Some(IrTy::Void) => {
-                self.emit(Op::Call(fid, vals), None, e.span);
-                if self.ty_of(e).is_some_and(|t| {
-                    matches!(
-                        self.sh.typed.types.kind_of(self.sh.typed.types.shallow(t)),
-                        TyKind::Never
-                    )
-                }) {
-                    self.terminate(Term::Unreachable);
-                    return Res::Never;
+    }
+
+    /// Writes the success case of a `void ! E` result at the return address, if the body did not.
+    fn write_ok_void(&mut self, ret: Ty) {
+        if let (Some(sret), TyKind::Result(ok, _)) = (self.f.sret, self.kind(ret)) {
+            if matches!(self.kind(ok), TyKind::Void) {
+                if let Some(info) = self.enum_info(ret) {
+                    let zero = self.konst(info.tag, Const::Int(0), Span::new(0, 0));
+                    self.store_at(sret, 0, zero);
                 }
-                Res::Unit
             }
-            Some(t) => self.wrap(Op::Call(fid, vals), t, e.span),
-            None => self.unsupported(e.span, "a call with a result of this type"),
         }
     }
 }
