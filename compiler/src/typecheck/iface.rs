@@ -509,7 +509,7 @@ impl<'p> Checker<'p> {
             let sig = self.fn_sig(m)?;
             let mut map = HashMap::new();
             map.insert(i, r);
-            return Some(call::Method { sig, map });
+            return Some(call::Method { def: m, sig, map });
         }
         None
     }
@@ -610,30 +610,34 @@ impl<'p> Checker<'p> {
     }
 
     /// Can a `from` become a `to` through `impl converts<to> for from`? Used by `?` and `to`.
-    pub(crate) fn converts_to(&mut self, from: Ty, to: Ty) -> bool {
-        let Some(conv) = self.core_iface("converts") else {
-            return false;
-        };
-        let Some(h) = self.head_of(from) else {
-            return false;
-        };
+    /// The `convert` method and its substitution, when `from` becomes `to` through `converts`.
+    pub(crate) fn converts_with(
+        &mut self,
+        from: Ty,
+        to: Ty,
+    ) -> Option<(DefId, HashMap<DefId, Ty>)> {
+        let conv = self.core_iface("converts")?;
+        let h = self.head_of(from)?;
         for idx in self.impl_by_head.get(&h).cloned().unwrap_or_default() {
             if self.impls[idx].iface != Some(conv) || self.impls[idx].iface_args.len() != 1 {
                 continue;
             }
+            let Some(&method) = self.impls[idx].methods.get("convert") else {
+                continue;
+            };
             let span = self.def(conv).span;
             let gens = self.impls[idx].generics.clone();
             let map: HashMap<DefId, Ty> = gens.iter().map(|g| (*g, self.var(span))).collect();
             let inst = self.tt.subst(self.impls[idx].self_ty, &map);
             let target = self.tt.subst(self.impls[idx].iface_args[0], &map);
+            // Keep the unification: it fixes the impl's type parameters.
             let mark = self.tt.snapshot();
-            let ok = self.tt.unify(inst, from) && self.tt.unify(target, to);
-            self.tt.rollback(mark);
-            if ok {
-                return true;
+            if self.tt.unify(inst, from) && self.tt.unify(target, to) {
+                return Some((method, map));
             }
+            self.tt.rollback(mark);
         }
-        false
+        None
     }
 
     /// `fn main()`, `fn main(args: [string])`, and a result `void ! E` for either.
@@ -1006,6 +1010,7 @@ impl<'p> Checker<'p> {
         };
         match self.lookup_method(lt, name, e.span) {
             Some(m) if m.sig.params.len() == 1 => {
+                self.note_call(e.span, m.def, &m.map);
                 let other = self.tt.subst(m.sig.params[0].ty, &m.map);
                 self.check_coerce(rhs, other);
                 self.tt.subst(m.sig.ret, &m.map)

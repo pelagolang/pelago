@@ -453,6 +453,7 @@ impl<'p> Checker<'p> {
             return Some(self.tt.unknown);
         }
         let map = self.fresh_map(&sig.generics, span);
+        self.note_call(span, def, &map);
         let params: Vec<ParamTy> = sig
             .params
             .iter()
@@ -709,6 +710,7 @@ impl<'p> Checker<'p> {
             if let Some(m) = self.lookup_method(source, "iter", span) {
                 let r = self.tt.subst(m.sig.ret, &m.map);
                 if let TyKind::Iter(e) = self.kind_of(r) {
+                    self.note_call(span, m.def, &m.map);
                     return one(self, e);
                 }
             }
@@ -927,7 +929,10 @@ impl<'p> Checker<'p> {
                 };
                 if matches!(k, TyKind::Adt(..) | TyKind::Param(_) | TyKind::Any(_)) {
                     return match self.lookup_method(t, "neg", e.span) {
-                        Some(m) => self.tt.subst(m.sig.ret, &m.map),
+                        Some(m) => {
+                            self.note_call(e.span, m.def, &m.map);
+                            self.tt.subst(m.sig.ret, &m.map)
+                        }
                         None => {
                             let s = self.show(t);
                             self.err(
@@ -1336,10 +1341,16 @@ impl<'p> Checker<'p> {
                     TyKind::Result(_, ret_err) => {
                         // The error may widen into `error` (or, later, through `converts`).
                         let to_catch_all = matches!(self.kind_of(ret_err), TyKind::Error);
-                        if !to_catch_all
-                            && !self.tt.unify(err, ret_err)
-                            && !self.converts_to(err, ret_err)
-                        {
+                        let direct = to_catch_all || self.tt.unify(err, ret_err);
+                        let via = if direct {
+                            None
+                        } else {
+                            self.converts_with(err, ret_err)
+                        };
+                        if let Some((m, map)) = &via {
+                            self.note_call(e.span, *m, map);
+                        }
+                        if !direct && via.is_none() {
                             let (a, b) = (self.show(err), self.show(ret_err));
                             self.err(
                                 e.span,
@@ -1431,8 +1442,11 @@ impl<'p> Checker<'p> {
             (TyKind::Unknown, _) | (_, TyKind::Unknown) => true,
             _ => false,
         };
-        if !ok && self.converts_to(vt, target) {
-            return target;
+        if !ok {
+            if let Some((m, map)) = self.converts_with(vt, target) {
+                self.note_call(e.span, m, &map);
+                return target;
+            }
         }
         if !ok {
             let (a, b) = (self.show(vt), self.show(target));

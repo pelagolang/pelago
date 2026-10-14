@@ -32,6 +32,13 @@ use crate::span::Span;
 use crate::types::*;
 use std::collections::HashMap;
 
+/// The function an expression runs, and the types its type parameters stand for.
+#[derive(Clone, Debug)]
+pub struct CallTarget {
+    pub def: DefId,
+    pub subst: Vec<(DefId, Ty)>,
+}
+
 /// The result of checking a program.
 pub struct Typed {
     /// The type of each expression, keyed by file and span.
@@ -46,6 +53,9 @@ pub struct Typed {
     pub linear: std::collections::HashSet<DefId>,
     /// The return type of each function with a body.
     pub fn_rets: HashMap<DefId, Ty>,
+    /// The function run by each call, method call, operator, `?` conversion and `for` iteration,
+    /// keyed by the expression's file and span.
+    pub calls: HashMap<(ModuleId, u32, u32), CallTarget>,
     names: Vec<String>,
 }
 
@@ -299,6 +309,8 @@ pub(crate) struct Checker<'p> {
     pending_matches: Vec<exhaust::PendingMatch<'p>>,
     /// Places passed to a `sink` parameter without `sink`: an error only if they own something.
     pending_sinks: Vec<(ModuleId, Span, String)>,
+    /// Which function each call, operator or conversion runs, with its type arguments.
+    calls: Vec<(ModuleId, Span, DefId, Vec<(DefId, Ty)>)>,
     owning_cache: Option<std::collections::HashSet<DefId>>,
     linear: std::collections::HashSet<DefId>,
     pending_nonlinear: Vec<(ModuleId, Span, Ty, DefId)>,
@@ -355,6 +367,7 @@ impl<'p> Checker<'p> {
             pat_ctors: HashMap::new(),
             pending_matches: Vec::new(),
             pending_sinks: Vec::new(),
+            calls: Vec::new(),
             owning_cache: None,
             linear: std::collections::HashSet::new(),
             pending_nonlinear: Vec::new(),
@@ -378,6 +391,15 @@ impl<'p> Checker<'p> {
             local_tys.insert(d, z);
         }
         let owning = self.compute_owning();
+        let raw_calls = std::mem::take(&mut self.calls);
+        let mut calls = HashMap::new();
+        for (file, span, def, subst) in raw_calls {
+            let subst: Vec<(DefId, Ty)> = subst
+                .into_iter()
+                .map(|(k, t)| (k, self.tt.zonk(t)))
+                .collect();
+            calls.insert((file, span.start, span.end), CallTarget { def, subst });
+        }
         let linear = std::mem::take(&mut self.linear);
         let rets: Vec<(DefId, Ty)> = self.fn_sigs.iter().map(|(d, s)| (*d, s.ret)).collect();
         let mut fn_rets = HashMap::new();
@@ -391,6 +413,7 @@ impl<'p> Checker<'p> {
             owning,
             linear,
             fn_rets,
+            calls,
             tys,
             local_tys,
             names: self.res.defs.iter().map(|d| d.name.clone()).collect(),
@@ -408,6 +431,13 @@ impl<'p> Checker<'p> {
             message: message.into(),
             warning: false,
         });
+    }
+
+    /// Remembers that the expression at `span` runs `def` with these type arguments.
+    pub(crate) fn note_call(&mut self, span: Span, def: DefId, map: &HashMap<DefId, Ty>) {
+        let mut subst: Vec<(DefId, Ty)> = map.iter().map(|(k, v)| (*k, *v)).collect();
+        subst.sort_by_key(|(k, _)| *k);
+        self.calls.push((self.file, span, def, subst));
     }
 
     /// Something worth fixing that does not stop compilation.

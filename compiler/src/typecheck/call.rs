@@ -4,6 +4,8 @@ use super::*;
 
 /// A method found for a receiver.
 pub(crate) struct Method {
+    /// The function that was found.
+    pub def: DefId,
     pub sig: FnSig,
     /// Owner / impl generics → their values for this receiver.
     pub map: HashMap<DefId, Ty>,
@@ -22,7 +24,7 @@ impl<'p> Checker<'p> {
             if self.def(m).kind == DefKind::Fn {
                 let sig = self.fn_sig(m)?;
                 let map = self.adt_map(def, args);
-                return Some(Method { sig, map });
+                return Some(Method { def: m, sig, map });
             }
         }
         // An `obj` inherits the methods of its base.
@@ -83,7 +85,11 @@ impl<'p> Checker<'p> {
                 let mark = self.tt.snapshot();
                 if self.tt.unify(inst, r) {
                     let sig = self.fn_sig(mdef)?;
-                    return Some(Method { sig, map });
+                    return Some(Method {
+                        def: mdef,
+                        sig,
+                        map,
+                    });
                 }
                 self.tt.rollback(mark);
             }
@@ -679,6 +685,7 @@ impl<'p> Checker<'p> {
                     );
                 }
                 let map = self.generic_map(&sig.generics, explicit, e.span);
+                self.note_call(e.span, def, &map);
                 let name = d.name.clone();
                 self.match_args(&sig.params, &map, args, e.span, &name);
                 let ret = self.tt.subst(sig.ret, &map);
@@ -762,6 +769,7 @@ impl<'p> Checker<'p> {
         let mut map = self.fresh_map(&gens, e.span);
         let own = self.fresh_map(&sig.generics, e.span);
         map.extend(own);
+        self.note_call(e.span, init, &map);
         self.match_args(&sig.params, &map, args, e.span, &tn);
         // `init` returns `Self`, or `Self ! error`.
         let ret = if self.tt.kind_of(sig.ret) == &TyKind::Void {
@@ -980,6 +988,7 @@ impl<'p> Checker<'p> {
         let mut map = m.map.clone();
         let own = self.fresh_map(&m.sig.generics, e.span);
         map.extend(own);
+        self.note_call(e.span, m.def, &map);
         self.match_args(&m.sig.params, &map, args, e.span, n);
         let ret = self.tt.subst(m.sig.ret, &map);
         if wrap {
