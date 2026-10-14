@@ -119,7 +119,7 @@ impl<'a> Lowerer<'a> {
 
     /// An expression that makes a new value: scalars come back directly, memory values are built in a
     /// temporary owned by the current scope.
-    fn rvalue_expr(&mut self, e: &'a Expr) -> Res {
+    pub(crate) fn rvalue_expr(&mut self, e: &'a Expr) -> Res {
         let Some(t) = self.ty_of(e) else {
             return self.unsupported(e.span, "an expression of unknown type");
         };
@@ -318,21 +318,21 @@ impl<'a> Lowerer<'a> {
 
     // ---- Names and places ---------------------------------------------------------------------------------------
 
-    fn name_expr(&mut self, e: &Expr, id: &Ident) -> Res {
+    fn name_expr(&mut self, e: &'a Expr, id: &Ident) -> Res {
         let Some(def) = self.res.use_at(self.f.file, id.span.start) else {
             return self.unsupported(e.span, "an unresolved name");
         };
         self.local_value(e, def)
     }
 
-    fn self_expr(&mut self, e: &Expr) -> Res {
+    fn self_expr(&mut self, e: &'a Expr) -> Res {
         let Some(def) = self.res.use_at(self.f.file, e.span.start) else {
             return self.unsupported(e.span, "`self` here");
         };
         self.local_value(e, def)
     }
 
-    fn local_value(&mut self, e: &Expr, def: DefId) -> Res {
+    fn local_value(&mut self, e: &'a Expr, def: DefId) -> Res {
         match self.f.locals.get(&def).copied() {
             Some(Local::Val(v)) => Res::Val(v),
             Some(Local::Slot { ptr, ty, .. }) => match self.repr(ty) {

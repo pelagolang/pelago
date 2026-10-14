@@ -191,3 +191,99 @@ fn the_printed_form_of_a_small_function() {
 "
     );
 }
+
+// ---- Aggregates -----------------------------------------------------------------------------------------
+
+#[test]
+fn structs_and_fields() {
+    let src = "struct point { x: int, y: int }\nfn dist2(p: point) -> int = p.x * p.x + p.y * p.y\nfn f() -> int { const p = point { x: 3, y: 4 }\n dist2(p) }";
+    assert_eq!(eval(src, "f", &[]), Ok(25));
+    let src = "struct point { x: int, y: int }\nfn f() -> int { var p = point { x: 1, y: 2 }\n p.x = 10\n p.y += 5\n p.x * 100 + p.y }";
+    assert_eq!(eval(src, "f", &[]), Ok(1007));
+    let src = "struct point { x: int, y: int }\nfn make(a: int) -> point = point { x: a, y: a * 2 }\nfn f() -> int { const p = make(7)\n p.x + p.y }";
+    assert_eq!(eval(src, "f", &[]), Ok(21));
+    let src = "struct point { x: int, y: int }\nfn f() -> int { const p = point { x: 1, y: 2 }\n const q = point { y: 9, ...p }\n q.x * 10 + q.y }";
+    assert_eq!(eval(src, "f", &[]), Ok(19));
+    let src = "struct cfg { port: int = 80, debug: bool = false }\nfn f() -> int { const c = cfg { debug: true }\n c.port + (c.debug ? 1 : 0) }";
+    assert_eq!(eval(src, "f", &[]), Ok(81));
+    let src = "struct p { x: int, y: int }\nfn f() -> int { const x = 4\n const y = 5\n const q = p { x, y }\n q.x + q.y }";
+    assert_eq!(eval(src, "f", &[]), Ok(9));
+}
+
+#[test]
+fn tuples_and_destructuring() {
+    let src = "fn swap(p: (int, int)) -> (int, int) = (p.1, p.0)\nfn f() -> int { const (a, b) = swap((1, 2))\n a * 10 + b }";
+    assert_eq!(eval(src, "f", &[]), Ok(21));
+    let src = "fn f() -> int { const t = (1, true, 3)\n t.0 + t.2 }";
+    assert_eq!(eval(src, "f", &[]), Ok(4));
+    let src = "struct p { x: int, y: int }\nfn f() -> int { const q = p { x: 6, y: 7 }\n const p { x, y } = q\n x * y }";
+    assert_eq!(eval(src, "f", &[]), Ok(42));
+}
+
+#[test]
+fn enums_and_switch() {
+    let shapes = "enum shape { circle(int)\n rect(int, int)\n empty }\n";
+    let area = format!("{shapes}fn area(s: shape) -> int {{ switch s {{ case .circle(r): 3 * r * r\n case .rect(w, h): w * h\n case .empty: 0 }} }}\n");
+    assert_eq!(eval(&format!("{area}fn f() -> int = area(.circle(2))"), "f", &[]), Ok(12));
+    assert_eq!(eval(&format!("{area}fn f() -> int = area(shape.rect(3, 4))"), "f", &[]), Ok(12));
+    assert_eq!(eval(&format!("{area}fn f() -> int = area(.empty)"), "f", &[]), Ok(0));
+    let alt = format!("{shapes}fn f(s: shape) -> int {{ switch s {{ case .circle(r), .rect(r, _): r\n default: -1 }} }}");
+    assert_eq!(eval(&format!("{alt}\nfn g() -> int = f(.rect(7, 8))"), "g", &[]), Ok(7));
+    assert_eq!(eval(&format!("{alt}\nfn g() -> int = f(.empty)"), "g", &[]), Ok(-1));
+    let guard = format!("{shapes}fn f(s: shape) -> int {{ switch s {{ case .circle(r) if r > 5: 1\n case .circle(r): 2\n default: 3 }} }}");
+    assert_eq!(eval(&format!("{guard}\nfn g() -> int = f(.circle(9))"), "g", &[]), Ok(1));
+    assert_eq!(eval(&format!("{guard}\nfn g() -> int = f(.circle(1))"), "g", &[]), Ok(2));
+    assert_eq!(eval(&format!("{guard}\nfn g() -> int = f(.empty)"), "g", &[]), Ok(3));
+}
+
+#[test]
+fn numbers_in_switch() {
+    let src = "fn f(n: int) -> int { switch n { case 0: 10\n case 1..5: 20\n case 5..=9: 30\n default: 40 } }";
+    assert_eq!(eval(src, "f", &[0]), Ok(10));
+    assert_eq!(eval(src, "f", &[3]), Ok(20));
+    assert_eq!(eval(src, "f", &[9]), Ok(30));
+    assert_eq!(eval(src, "f", &[50]), Ok(40));
+}
+
+#[test]
+fn options() {
+    let src = "fn pick(a: int, b: int) -> int? { if a > 0 { a } else if b > 0 { b } else { none } }\nfn f(a: int, b: int) -> int { switch pick(a, b) { case some(v): v\n case none: -1 } }";
+    assert_eq!(eval(src, "f", &[5, 0]), Ok(5));
+    assert_eq!(eval(src, "f", &[0, 6]), Ok(6));
+    assert_eq!(eval(src, "f", &[0, 0]), Ok(-1));
+    let src = "fn f(o: int?) -> int { if o is some(v) && v > 3 { v } else { 0 } }\nfn g() -> int = f(9)\nfn h() -> int = f(2)\nfn k() -> int = f(none)";
+    assert_eq!(eval(src, "g", &[]), Ok(9));
+    assert_eq!(eval(src, "h", &[]), Ok(0));
+    assert_eq!(eval(src, "k", &[]), Ok(0));
+}
+
+#[test]
+fn results() {
+    let src = "fn half(n: int) -> int ! error { if n % 2 == 0 { ok(n / 2) } else { err(oops()) } }\nfn oops() -> error = todo()";
+    let _ = src;
+    let src = "fn safe_div(a: int, b: int) -> int ! int { if b == 0 { err(-1) } else { ok(a / b) } }\nfn f(a: int, b: int) -> int { switch safe_div(a, b) { case ok(v): v\n case err(c): c } }";
+    assert_eq!(eval(src, "f", &[10, 2]), Ok(5));
+    assert_eq!(eval(src, "f", &[10, 0]), Ok(-1));
+}
+
+#[test]
+fn methods_and_inout() {
+    let src = "struct point { x: int, y: int\n fn sum(self) -> int = self.x + self.y\n fn shift(inout self, d: int) { self.x += d\n self.y += d } }\nfn f() -> int { var p = point { x: 1, y: 2 }\n p.shift!(10)\n p.sum() }";
+    assert_eq!(eval(src, "f", &[]), Ok(23));
+    let src = "fn bump(inout n: int) { n += 1 }\nfn f() -> int { var a = 5\n bump(inout a)\n bump(inout a)\n a }";
+    assert_eq!(eval(src, "f", &[]), Ok(7));
+    let src = "struct counter { n: int\n fn next(inout self) -> int { self.n += 1\n self.n } }\nfn f() -> int { var c = counter { n: 0 }\n c.next!()\n c.next!()\n c.next!() }";
+    assert_eq!(eval(src, "f", &[]), Ok(3));
+}
+
+#[test]
+fn generics_are_specialised() {
+    let src = "fn first<T>(a: T, b: T) -> T = a\nfn f() -> int = first(7, 8)\nfn g() -> bool = first(true, false)";
+    assert_eq!(eval(src, "f", &[]), Ok(7));
+    assert_eq!(eval(src, "g", &[]), Ok(1));
+    let l = lowered(src);
+    let names: Vec<&str> = l.module.funcs.iter().map(|f| f.name.as_str()).collect();
+    assert!(names.contains(&"first<int>") && names.contains(&"first<bool>"), "{names:?}");
+    let src = "struct pair<T> { a: T, b: T\n fn sum(self) -> int = 0 }\nfn f() -> int { const p = pair { a: 3, b: 4 }\n p.a + p.b }";
+    assert_eq!(eval(src, "f", &[]), Ok(7));
+}

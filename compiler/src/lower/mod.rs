@@ -13,6 +13,7 @@
 //! Anything not handled yet is reported as a note ("not lowered yet") and its function becomes a stub
 //! that stops, so the module still verifies and runs.
 
+mod agg;
 mod call;
 mod expr;
 mod func;
@@ -100,6 +101,12 @@ pub(crate) struct FnEntry<'a> {
     pub decl: &'a FnDecl,
 }
 
+/// A module-level constant or variable: its initializer is evaluated where it is used.
+pub(crate) struct GlobalEntry<'a> {
+    pub file: ModuleId,
+    pub init: &'a Expr,
+}
+
 pub(crate) struct Lowerer<'a> {
     pub program: &'a Program,
     pub res: &'a Resolved,
@@ -108,6 +115,8 @@ pub(crate) struct Lowerer<'a> {
     pub module: Module,
     pub diags: Vec<Diagnostic>,
     pub fns: HashMap<DefId, FnEntry<'a>>,
+    pub globals: HashMap<DefId, GlobalEntry<'a>>,
+    pub field_defaults: HashMap<DefId, (ModuleId, &'a Expr)>,
     pub instances: HashMap<(DefId, Vec<(DefId, Ty)>), FuncId>,
     pub jobs: Vec<Job>,
     pub names: HashMap<String, u32>,
@@ -130,6 +139,8 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         module: Module::default(),
         diags: Vec::new(),
         fns: HashMap::new(),
+        globals: HashMap::new(),
+        field_defaults: HashMap::new(),
         instances: HashMap::new(),
         jobs: Vec::new(),
         names: HashMap::new(),
@@ -174,8 +185,16 @@ impl<'a> Lowerer<'a> {
 
     pub(crate) fn index_stmts(&mut self, file: ModuleId, stmts: &'a [Stmt]) {
         for s in stmts {
-            if let StmtKind::Item(it) = &s.kind {
-                self.index_item(file, it);
+            match &s.kind {
+                StmtKind::Item(it) => self.index_item(file, it),
+                StmtKind::Decl(d) => {
+                    if let (PatternKind::Binding { name, .. }, Some(init)) = (&d.pattern.kind, &d.init) {
+                        if let Some(&def) = self.res.decls.get(&(file, name.span.start)) {
+                            self.globals.insert(def, GlobalEntry { file, init });
+                        }
+                    }
+                }
+                StmtKind::Expr(_) => {}
             }
         }
     }
@@ -188,9 +207,25 @@ impl<'a> Lowerer<'a> {
                 }
             }
             ItemKind::Struct(d) | ItemKind::Obj(d) | ItemKind::Interface(d) => {
+                let owner = self.res.item_defs.get(&(file, item.span.start)).copied();
                 for m in &d.members {
-                    if let Member::Item(i) = m {
-                        self.index_item(file, i);
+                    match m {
+                        Member::Item(i) => self.index_item(file, i),
+                        Member::Field(f) => {
+                            if let (Some(owner), Some(default)) = (owner, &f.default) {
+                                let name = &self.program.module(file).src[f.name.span.start as usize..f.name.span.end as usize];
+                                if let Some(fd) = self.res.member(owner, name) {
+                                    self.field_defaults.insert(fd, (file, default));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            ItemKind::Decl(d) => {
+                if let (PatternKind::Binding { name, .. }, Some(init)) = (&d.pattern.kind, &d.init) {
+                    if let Some(&def) = self.res.decls.get(&(file, name.span.start)) {
+                        self.globals.insert(def, GlobalEntry { file, init });
                     }
                 }
             }
@@ -400,7 +435,11 @@ impl<'a> Lowerer<'a> {
         let r = self.lower_body(decl, &info, &sig);
         let st = std::mem::replace(&mut self.f, FnState::empty(void));
         match (r, st.fail) {
-            (Ok(()), None) => self.module.funcs[id.0 as usize] = st.func,
+            (Ok(()), None) => {
+                let mut func = st.func;
+                func.compact();
+                self.module.funcs[id.0 as usize] = func;
+            }
             (_, fail) => {
                 let (span, msg) = fail.unwrap_or((decl.name.span, "an internal problem".to_string()));
                 self.diags.push(Diagnostic {

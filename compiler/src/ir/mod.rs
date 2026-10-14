@@ -348,6 +348,50 @@ impl Func {
         self.blocks[b.0 as usize].term = Some(t);
     }
 
+    /// Removes the blocks that cannot be reached from the entry and renumbers the rest.
+    pub fn compact(&mut self) {
+        let n = self.blocks.len();
+        let mut seen = vec![false; n];
+        let mut stack = vec![0usize];
+        seen[0] = true;
+        while let Some(b) = stack.pop() {
+            for s in self.successors(BlockId(b as u32)) {
+                let s = s.0 as usize;
+                if s < n && !seen[s] {
+                    seen[s] = true;
+                    stack.push(s);
+                }
+            }
+        }
+        if seen.iter().all(|x| *x) {
+            return;
+        }
+        let mut map = vec![u32::MAX; n];
+        let mut next = 0u32;
+        for (i, keep) in seen.iter().enumerate() {
+            if *keep {
+                map[i] = next;
+                next += 1;
+            }
+        }
+        let old = std::mem::take(&mut self.blocks);
+        for (i, mut b) in old.into_iter().enumerate() {
+            if !seen[i] {
+                continue;
+            }
+            let fix = |t: &mut Target| t.block = BlockId(map[t.block.0 as usize]);
+            match &mut b.term {
+                Some(Term::Jump(t)) => fix(t),
+                Some(Term::Branch(_, a, c)) => {
+                    fix(a);
+                    fix(c);
+                }
+                _ => {}
+            }
+            self.blocks.push(b);
+        }
+    }
+
     /// The blocks a block can go to.
     pub fn successors(&self, b: BlockId) -> Vec<BlockId> {
         match &self.blocks[b.0 as usize].term {

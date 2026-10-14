@@ -267,24 +267,25 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    /// Registers a value to be dropped at the end of the current scope. Gives its flag when the value
-    /// may be moved out before then.
-    pub(crate) fn own(&mut self, ptr: Value, ty: Ty, with_flag: bool) -> Option<Value> {
+    /// Registers a value to be dropped at the end of the current scope. Gives its flag: a byte that
+    /// is 1 while the value is alive (set here, cleared when it is moved out or after it is dropped).
+    /// The flag starts at 0 in the entry block, so code that never reached this point drops nothing.
+    pub(crate) fn own(&mut self, ptr: Value, ty: Ty, _with_flag: bool) -> Option<Value> {
         if !self.needs_drop(ty) {
             return None;
         }
-        let flag = if with_flag {
-            let f = self.slot_bytes(1, 1);
-            let one = self.konst(IrTy::Bool, Const::Bool(true), Span::new(0, 0));
-            self.emit(Op::Store(f, one), None, Span::new(0, 0));
-            Some(f)
-        } else {
-            None
-        };
-        if let Some(s) = self.f.scopes.last_mut() {
-            s.push(ScopeItem::Drop { ptr, ty, flag });
+        let f = self.slot_bytes(1, 1);
+        let entry = self.f.func.entry();
+        let no = self.f.func.emit(entry, Op::Const(IrTy::Bool, Const::Bool(false)), Some(IrTy::Bool));
+        if let Some(no) = no {
+            self.f.func.emit(entry, Op::Store(f, no), None);
         }
-        flag
+        let one = self.konst(IrTy::Bool, Const::Bool(true), Span::new(0, 0));
+        self.emit(Op::Store(f, one), None, Span::new(0, 0));
+        if let Some(s) = self.f.scopes.last_mut() {
+            s.push(ScopeItem::Drop { ptr, ty, flag: Some(f) });
+        }
+        Some(f)
     }
 
     pub(crate) fn clear_flag(&mut self, flag: Value) {
@@ -308,6 +309,7 @@ impl<'a> Lowerer<'a> {
                 self.branch(live, do_it, after);
                 self.start(do_it);
                 self.emit(Op::Call(glue, vec![ptr]), None, Span::new(0, 0));
+                self.clear_flag(fl);
                 self.jump(after, vec![]);
                 self.start(after);
             }

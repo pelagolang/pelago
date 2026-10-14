@@ -187,9 +187,8 @@ impl<'a> Lowerer<'a> {
 
     /// One argument, passed the way its parameter wants it.
     fn lower_arg(&mut self, pass: Pass, ty: Ty, mode: Option<Mode>, src: ArgSource<'a>, span: Span) -> Option<Value> {
-        let ArgSource::Expr(arg) = src else {
-            return self.unsupported_none(span, "a missing argument");
-        };
+        let ArgSource::Expr(arg) = src;
+        let _ = span;
         match pass {
             Pass::Skip => {
                 self.expr(arg);
