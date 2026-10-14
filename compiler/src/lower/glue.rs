@@ -109,11 +109,23 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Runs `body(i_address)` for each element of a buffer of `len` elements of `esize` bytes.
-    pub(crate) fn each_elem(&mut self, data: Value, len: Value, esize: u32, body: impl FnMut(&mut Self, Value, Value)) {
+    pub(crate) fn each_elem(
+        &mut self,
+        data: Value,
+        len: Value,
+        esize: u32,
+        body: impl FnMut(&mut Self, Value, Value),
+    ) {
         self.each_element(data, len, esize, body)
     }
 
-    fn each_element(&mut self, data: Value, len: Value, esize: u32, mut body: impl FnMut(&mut Self, Value, Value)) {
+    fn each_element(
+        &mut self,
+        data: Value,
+        len: Value,
+        esize: u32,
+        mut body: impl FnMut(&mut Self, Value, Value),
+    ) {
         let head = self.new_block(&[IrTy::I64]);
         let step = self.new_block(&[]);
         let done = self.new_block(&[]);
@@ -121,20 +133,34 @@ impl<'a> Lowerer<'a> {
         self.jump(head, vec![zero]);
         self.start(head);
         let i = self.f.func.block_params(head)[0];
-        let more = self.emit(Op::Cmp(CmpOp::Lt, i, len), Some(IrTy::Bool), Span::new(0, 0));
+        let more = self.emit(
+            Op::Cmp(CmpOp::Lt, i, len),
+            Some(IrTy::Bool),
+            Span::new(0, 0),
+        );
         let go = self.new_block(&[]);
         if let Some(m) = more {
             self.branch(m, go, done);
         }
         self.start(go);
         let sz = self.i64c(esize as i64);
-        let off = self.emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), Span::new(0, 0)).unwrap_or(i);
-        let p = self.emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), Span::new(0, 0)).unwrap_or(data);
+        let off = self
+            .emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), Span::new(0, 0))
+            .unwrap_or(i);
+        let p = self
+            .emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), Span::new(0, 0))
+            .unwrap_or(data);
         body(self, p, off);
         self.jump(step, vec![]);
         self.start(step);
         let one = self.i64c(1);
-        let next = self.emit(Op::Bin(BinOp::Add, i, one), Some(IrTy::I64), Span::new(0, 0)).unwrap_or(i);
+        let next = self
+            .emit(
+                Op::Bin(BinOp::Add, i, one),
+                Some(IrTy::I64),
+                Span::new(0, 0),
+            )
+            .unwrap_or(i);
         self.jump(head, vec![next]);
         self.start(done);
     }
@@ -158,7 +184,12 @@ impl<'a> Lowerer<'a> {
 
     fn cmp_i64_gt0(&mut self, v: Value) -> Value {
         let zero = self.i64c(0);
-        self.emit(Op::Cmp(CmpOp::Gt, v, zero), Some(IrTy::Bool), Span::new(0, 0)).unwrap_or(v)
+        self.emit(
+            Op::Cmp(CmpOp::Gt, v, zero),
+            Some(IrTy::Bool),
+            Span::new(0, 0),
+        )
+        .unwrap_or(v)
     }
 
     /// Calls the user's `deinit` for a type that has one.
@@ -244,12 +275,20 @@ impl<'a> Lowerer<'a> {
         let tag = self.load_at(p, 0, info.tag);
         let done = self.new_block(&[]);
         for (i, fields) in info.variants.iter().enumerate() {
-            let owned: Vec<Field> = fields.iter().copied().filter(|f| self.needs_drop(f.ty)).collect();
+            let owned: Vec<Field> = fields
+                .iter()
+                .copied()
+                .filter(|f| self.needs_drop(f.ty))
+                .collect();
             if owned.is_empty() {
                 continue;
             }
             let want = self.konst(info.tag, Const::Int(i as i128), Span::new(0, 0));
-            let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, tag, want), Some(IrTy::Bool), Span::new(0, 0)) else {
+            let Some(c) = self.emit(
+                Op::Cmp(CmpOp::Eq, tag, want),
+                Some(IrTy::Bool),
+                Span::new(0, 0),
+            ) else {
                 continue;
             };
             let yes = self.new_block(&[]);
@@ -275,13 +314,19 @@ impl<'a> Lowerer<'a> {
             TyKind::String => {
                 let len = self.load_at(src, 8, IrTy::I64);
                 let data = self.load_at(src, 0, IrTy::Ptr);
-                let buf = self.emit(Op::Alloc(len), Some(IrTy::Ptr), Span::new(0, 0)).unwrap_or(data);
+                let buf = self
+                    .emit(Op::Alloc(len), Some(IrTy::Ptr), Span::new(0, 0))
+                    .unwrap_or(data);
                 self.emit(Op::MemCopy(buf, data, len), None, Span::new(0, 0));
                 self.store_at(dst, 0, buf);
                 self.store_at(dst, 8, len);
                 // An empty copy still owns its (zero-size) block; a capacity of at least 1 says so.
                 let one = self.i64c(1);
-                let big = self.emit(Op::Cmp(CmpOp::Lt, len, one), Some(IrTy::Bool), Span::new(0, 0));
+                let big = self.emit(
+                    Op::Cmp(CmpOp::Lt, len, one),
+                    Some(IrTy::Bool),
+                    Span::new(0, 0),
+                );
                 let cap = match big {
                     Some(b) => match self.select(b, one, len, IrTy::I64, Span::new(0, 0)) {
                         Res::Val(v) => v,
@@ -296,12 +341,24 @@ impl<'a> Lowerer<'a> {
                 let data = self.load_at(src, 0, IrTy::Ptr);
                 let esize = self.layout(e).size;
                 let sz = self.i64c(esize as i64);
-                let bytes = self.emit(Op::Bin(BinOp::Mul, len, sz), Some(IrTy::I64), Span::new(0, 0)).unwrap_or(len);
-                let buf = self.emit(Op::Alloc(bytes), Some(IrTy::Ptr), Span::new(0, 0)).unwrap_or(data);
+                let bytes = self
+                    .emit(
+                        Op::Bin(BinOp::Mul, len, sz),
+                        Some(IrTy::I64),
+                        Span::new(0, 0),
+                    )
+                    .unwrap_or(len);
+                let buf = self
+                    .emit(Op::Alloc(bytes), Some(IrTy::Ptr), Span::new(0, 0))
+                    .unwrap_or(data);
                 self.store_at(dst, 0, buf);
                 self.store_at(dst, 8, len);
                 let one = self.i64c(1);
-                let small = self.emit(Op::Cmp(CmpOp::Lt, len, one), Some(IrTy::Bool), Span::new(0, 0));
+                let small = self.emit(
+                    Op::Cmp(CmpOp::Lt, len, one),
+                    Some(IrTy::Bool),
+                    Span::new(0, 0),
+                );
                 let cap = match small {
                     Some(b) => match self.select(b, one, len, IrTy::I64, Span::new(0, 0)) {
                         Res::Val(v) => v,
@@ -313,7 +370,9 @@ impl<'a> Lowerer<'a> {
                 if self.needs_drop(e) {
                     // Element by element.
                     self.each_element(data, len, esize, |s, q, off| {
-                        let d = s.emit(Op::PtrAdd(buf, off), Some(IrTy::Ptr), Span::new(0, 0)).unwrap_or(buf);
+                        let d = s
+                            .emit(Op::PtrAdd(buf, off), Some(IrTy::Ptr), Span::new(0, 0))
+                            .unwrap_or(buf);
                         s.clone_into(q, d, e);
                     });
                 } else {
@@ -324,7 +383,9 @@ impl<'a> Lowerer<'a> {
                 let q = self.load_at(src, 0, IrTy::Ptr);
                 let size = self.layout(inner).size.max(1);
                 let n = self.i64c(size as i64);
-                let buf = self.emit(Op::Alloc(n), Some(IrTy::Ptr), Span::new(0, 0)).unwrap_or(q);
+                let buf = self
+                    .emit(Op::Alloc(n), Some(IrTy::Ptr), Span::new(0, 0))
+                    .unwrap_or(q);
                 self.clone_into(q, buf, inner);
                 self.store_at(dst, 0, buf);
             }
@@ -368,12 +429,20 @@ impl<'a> Lowerer<'a> {
         let tag = self.load_at(src, 0, info.tag);
         let done = self.new_block(&[]);
         for (i, fields) in info.variants.iter().enumerate() {
-            let owned: Vec<Field> = fields.iter().copied().filter(|f| self.needs_drop(f.ty)).collect();
+            let owned: Vec<Field> = fields
+                .iter()
+                .copied()
+                .filter(|f| self.needs_drop(f.ty))
+                .collect();
             if owned.is_empty() {
                 continue;
             }
             let want = self.konst(info.tag, Const::Int(i as i128), Span::new(0, 0));
-            let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, tag, want), Some(IrTy::Bool), Span::new(0, 0)) else {
+            let Some(c) = self.emit(
+                Op::Cmp(CmpOp::Eq, tag, want),
+                Some(IrTy::Bool),
+                Span::new(0, 0),
+            ) else {
                 continue;
             };
             let yes = self.new_block(&[]);

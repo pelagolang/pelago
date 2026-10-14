@@ -624,9 +624,8 @@ impl<'p> Checker<'p> {
             }
             ExprKind::Name(id) => match self.used(id) {
                 Some(def) => {
-                    let t = self.call_def(e, def, args, exp, None);
                     self.record(callee, self.tt.unknown);
-                    t
+                    self.call_def(e, def, args, exp, None)
                 }
                 None => {
                     for a in args {
@@ -706,6 +705,9 @@ impl<'p> Checker<'p> {
             }
             DefKind::Local | DefKind::Param | DefKind::Const | DefKind::Var => {
                 let ft = self.value_of_def(def, e.span, Exp::Any);
+                if let ExprKind::Call { callee, .. } = &e.kind {
+                    self.record(callee, ft);
+                }
                 self.call_value(e, ft, args)
             }
             _ => {

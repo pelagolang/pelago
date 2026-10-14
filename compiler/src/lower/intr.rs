@@ -16,14 +16,28 @@ impl<'a> Lowerer<'a> {
         if !matches!(e.decl.body, FnBody::None) {
             return false;
         }
-        let in_core = self.program.package(self.program.module(e.file).package).name == "core";
+        let in_core = self
+            .program
+            .package(self.program.module(e.file).package)
+            .name
+            == "core";
         let name = &self.res.def(def).name;
         in_core
-            && (name.starts_with("rt_") || matches!(name.as_str(), "print" | "assert" | "panic" | "todo" | "unreachable"))
+            && (name.starts_with("rt_")
+                || matches!(
+                    name.as_str(),
+                    "print" | "assert" | "panic" | "todo" | "unreachable"
+                ))
     }
 
     /// An intrinsic that is used as a function value would need a real body; none do yet.
-    pub(crate) fn lower_intrinsic_job(&mut self, _id: FuncId, _def: DefId, _s: &HashMap<DefId, Ty>) {}
+    pub(crate) fn lower_intrinsic_job(
+        &mut self,
+        _id: FuncId,
+        _def: DefId,
+        _s: &HashMap<DefId, Ty>,
+    ) {
+    }
 
     /// The type argument of an intrinsic such as `rt_size_of<T>`.
     fn intr_type(&mut self, def: DefId, map: &HashMap<DefId, Ty>) -> Option<Ty> {
@@ -34,7 +48,12 @@ impl<'a> Lowerer<'a> {
 
     /// All type arguments of an intrinsic, in declaration order.
     fn intr_types(&mut self, def: DefId, map: &HashMap<DefId, Ty>) -> Vec<Ty> {
-        let gens = self.typed.fn_infos.get(&def).map(|i| i.generics.clone()).unwrap_or_default();
+        let gens = self
+            .typed
+            .fn_infos
+            .get(&def)
+            .map(|i| i.generics.clone())
+            .unwrap_or_default();
         gens.iter()
             .filter_map(|g| map.get(g).copied())
             .map(|t| self.conc_with(t, &HashMap::new()))
@@ -67,38 +86,58 @@ impl<'a> Lowerer<'a> {
                 self.wrap(Op::Cast(CastKind::IntToPtr, z, ptr), ptr, sp)
             }
             "rt_alloc" => {
-                let Some(n) = self.arg_scalar(args, 0) else { return Res::Never };
+                let Some(n) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
                 self.wrap(Op::Alloc(n), ptr, sp)
             }
             "rt_free" => {
-                let Some(p) = self.arg_scalar(args, 0) else { return Res::Never };
+                let Some(p) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
                 self.emit(Op::Free(p), None, sp);
                 Res::Unit
             }
             "rt_offset" => {
-                let (Some(p), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1)) else {
+                let (Some(p), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
+                else {
                     return Res::Never;
                 };
                 self.wrap(Op::PtrAdd(p, n), ptr, sp)
             }
             "rt_copy" => {
-                let (Some(d), Some(s), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1), self.arg_scalar(args, 2)) else {
+                let (Some(d), Some(s), Some(n)) = (
+                    self.arg_scalar(args, 0),
+                    self.arg_scalar(args, 1),
+                    self.arg_scalar(args, 2),
+                ) else {
                     return Res::Never;
                 };
                 self.emit(Op::MemCopy(d, s, n), None, sp);
                 Res::Unit
             }
             "rt_is_null" => {
-                let Some(p) = self.arg_scalar(args, 0) else { return Res::Never };
-                let n = self.emit(Op::Cast(CastKind::PtrToInt, p, IrTy::I64), Some(IrTy::I64), sp).unwrap_or(p);
+                let Some(p) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
+                let n = self
+                    .emit(
+                        Op::Cast(CastKind::PtrToInt, p, IrTy::I64),
+                        Some(IrTy::I64),
+                        sp,
+                    )
+                    .unwrap_or(p);
                 let z = self.i64c(0);
                 self.wrap(Op::Cmp(CmpOp::Eq, n, z), IrTy::Bool, sp)
             }
             "rt_addr_int" => {
-                let Some(p) = self.arg_scalar(args, 0) else { return Res::Never };
+                let Some(p) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
                 self.wrap(Op::Cast(CastKind::PtrToInt, p, IrTy::I64), IrTy::I64, sp)
             }
-            "rt_load_int" | "rt_load_byte" | "rt_load_ptr" | "rt_load_float" | "rt_load_char" | "rt_load_bool" => {
+            "rt_load_int" | "rt_load_byte" | "rt_load_ptr" | "rt_load_float" | "rt_load_char"
+            | "rt_load_bool" => {
                 let t = match name.as_str() {
                     "rt_load_int" => IrTy::I64,
                     "rt_load_byte" => IrTy::Int(8),
@@ -107,36 +146,50 @@ impl<'a> Lowerer<'a> {
                     "rt_load_bool" => IrTy::Bool,
                     _ => IrTy::Int(32),
                 };
-                let Some(p) = self.arg_scalar(args, 0) else { return Res::Never };
+                let Some(p) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
                 self.wrap(Op::Load(t, p), t, sp)
             }
-            "rt_store_int" | "rt_store_byte" | "rt_store_ptr" | "rt_store_float" | "rt_store_char" | "rt_store_bool" => {
-                let (Some(p), Some(v)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1)) else {
+            "rt_store_int" | "rt_store_byte" | "rt_store_ptr" | "rt_store_float"
+            | "rt_store_char" | "rt_store_bool" => {
+                let (Some(p), Some(v)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
+                else {
                     return Res::Never;
                 };
                 self.emit(Op::Store(p, v), None, sp);
                 Res::Unit
             }
             "rt_print" => {
-                let (Some(p), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1)) else {
+                let (Some(p), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
+                else {
                     return Res::Never;
                 };
                 self.emit(Op::Print(p, n), None, sp);
                 Res::Unit
             }
             "rt_to_byte" => {
-                let Some(n) = self.arg_scalar(args, 0) else { return Res::Never };
+                let Some(n) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
                 self.wrap(Op::Cast(CastKind::Trunc, n, IrTy::Int(8)), IrTy::Int(8), sp)
             }
             "rt_to_char" => {
-                let Some(n) = self.arg_scalar(args, 0) else { return Res::Never };
-                self.wrap(Op::Cast(CastKind::Trunc, n, IrTy::Int(32)), IrTy::Int(32), sp)
+                let Some(n) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
+                self.wrap(
+                    Op::Cast(CastKind::Trunc, n, IrTy::Int(32)),
+                    IrTy::Int(32),
+                    sp,
+                )
             }
             "rt_show_to" => {
                 let Some(t) = self.intr_type(def, map) else {
                     return self.unsupported(sp, "`rt_show_to` of an unknown type");
                 };
-                let (Some(p), Some(out)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1)) else {
+                let (Some(p), Some(out)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
+                else {
                     return Res::Never;
                 };
                 if self.show_at(p, t, out, false) {
@@ -146,7 +199,9 @@ impl<'a> Lowerer<'a> {
                 }
             }
             "rt_to_int" => {
-                let Some(x) = self.arg_scalar(args, 0) else { return Res::Never };
+                let Some(x) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
                 self.wrap(Op::Cast(CastKind::FloatToInt, x, IrTy::I64), IrTy::I64, sp)
             }
             "rt_size_of" => {
@@ -173,7 +228,9 @@ impl<'a> Lowerer<'a> {
                 let Some(t) = self.intr_type(def, map) else {
                     return self.unsupported(sp, "`rt_read` of an unknown type");
                 };
-                let Some(p) = self.arg_scalar(args, 0) else { return Res::Never };
+                let Some(p) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
                 match self.repr(t) {
                     Repr::Scalar(s) => self.wrap(Op::Load(s, p), s, sp),
                     Repr::Zst => Res::Unit,
@@ -197,7 +254,9 @@ impl<'a> Lowerer<'a> {
                     return self.unsupported(sp, "`rt_cast` of unknown types");
                 };
                 let (a, b) = (*a, *b);
-                let Some(arg) = args.first() else { return Res::Never };
+                let Some(arg) = args.first() else {
+                    return Res::Never;
+                };
                 match self.repr(a) {
                     Repr::Mem(_) => self.with_dst(dst, b, |s, d| s.into(&arg.value, d, a)),
                     _ => match self.consume_scalar(&arg.value) {
@@ -210,7 +269,9 @@ impl<'a> Lowerer<'a> {
                 let Some(t) = self.intr_type(def, map) else {
                     return self.unsupported(sp, "`rt_clone` of an unknown type");
                 };
-                let Some(src) = self.arg_scalar(args, 0) else { return Res::Never };
+                let Some(src) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
                 match self.repr(t) {
                     Repr::Mem(_) => self.with_dst(dst, t, |s, d| {
                         s.clone_into(src, d, t);
@@ -232,7 +293,8 @@ impl<'a> Lowerer<'a> {
                 let Some(t) = self.intr_type(def, map) else {
                     return self.unsupported(sp, "`rt_clone_to` of an unknown type");
                 };
-                let (Some(s), Some(d)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1)) else {
+                let (Some(s), Some(d)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
+                else {
                     return Res::Never;
                 };
                 self.clone_into(s, d, t);
@@ -242,11 +304,14 @@ impl<'a> Lowerer<'a> {
                 let Some(t) = self.intr_type(def, map) else {
                     return self.unsupported(sp, "`rt_drop_at` of an unknown type");
                 };
-                let Some(p) = self.arg_scalar(args, 0) else { return Res::Never };
+                let Some(p) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
                 self.drop_at(p, t);
                 Res::Unit
             }
-            "rt_drop_fn" | "rt_clone_fn" | "rt_eq_fn" | "rt_cmp_fn" | "rt_hash_fn" | "rt_show_fn" => {
+            "rt_drop_fn" | "rt_clone_fn" | "rt_eq_fn" | "rt_cmp_fn" | "rt_hash_fn"
+            | "rt_show_fn" => {
                 let Some(t) = self.intr_type(def, map) else {
                     return self.unsupported(sp, "a glue function of an unknown type");
                 };
@@ -266,8 +331,11 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
-            "rt_call_void1" | "rt_call_void2" | "rt_call_bool2" | "rt_call_int2" | "rt_call_int1" => {
-                let Some(f) = self.arg_scalar(args, 0) else { return Res::Never };
+            "rt_call_void1" | "rt_call_void2" | "rt_call_bool2" | "rt_call_int2"
+            | "rt_call_int1" => {
+                let Some(f) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
                 let n = if name.ends_with('1') { 1 } else { 2 };
                 let mut vals = Vec::new();
                 for i in 0..n {
@@ -291,7 +359,9 @@ impl<'a> Lowerer<'a> {
             }
             "print" => self.print_call(e, args),
             "assert" => {
-                let Some(c) = self.arg_scalar(args, 0) else { return Res::Never };
+                let Some(c) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
                 let bad = self.emit(Op::Not(c), Some(IrTy::Bool), sp).unwrap_or(c);
                 self.stop_if(bad, "assertion failed");
                 Res::Unit
@@ -311,12 +381,20 @@ impl<'a> Lowerer<'a> {
     }
 
     /// A built-in function reached by its name only (when the resolver gave it no definition in `core`).
-    pub(crate) fn intrinsic_by_name(&mut self, e: &'a Expr, name: &str, args: &'a [Arg], dst: Option<Value>) -> Res {
+    pub(crate) fn intrinsic_by_name(
+        &mut self,
+        e: &'a Expr,
+        name: &str,
+        args: &'a [Arg],
+        dst: Option<Value>,
+    ) -> Res {
         let _ = dst;
         match name {
             "print" => self.print_call(e, args),
             "assert" => {
-                let Some(c) = self.arg_scalar(args, 0) else { return Res::Never };
+                let Some(c) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
                 let bad = self.emit(Op::Not(c), Some(IrTy::Bool), e.span).unwrap_or(c);
                 self.stop_if(bad, "assertion failed");
                 Res::Unit

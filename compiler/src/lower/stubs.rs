@@ -3,13 +3,23 @@
 use super::*;
 
 impl<'a> Lowerer<'a> {
-    pub(crate) fn closure_value(&mut self, e: &'a Expr, _c: &'a Closure, _dst: Value, _t: Ty) -> Res {
-        self.unsupported(e.span, "a closure")
-    }
-    pub(crate) fn convert_mem(&mut self, e: &'a Expr, _v: &'a Expr, _c: bool, _dst: Value, _t: Ty) -> Res {
+    pub(crate) fn convert_mem(
+        &mut self,
+        e: &'a Expr,
+        _v: &'a Expr,
+        _c: bool,
+        _dst: Value,
+        _t: Ty,
+    ) -> Res {
         self.unsupported(e.span, "this conversion")
     }
-    pub(crate) fn builder_expr(&mut self, e: &'a Expr, _b: &'a Builder, _dst: Value, _t: Ty) -> Res {
+    pub(crate) fn builder_expr(
+        &mut self,
+        e: &'a Expr,
+        _b: &'a Builder,
+        _dst: Value,
+        _t: Ty,
+    ) -> Res {
         self.unsupported(e.span, "a builder")
     }
     pub(crate) fn map_lit(&mut self, e: &'a Expr, _i: &'a [MapItem], _dst: Value, _t: Ty) -> Res {
@@ -27,13 +37,22 @@ impl<'a> Lowerer<'a> {
     pub(crate) fn user_operator_into(&mut self, _e: &'a Expr, _dst: Value) -> Option<Res> {
         None
     }
-    pub(crate) fn coerce_to_any(&mut self, _e: &'a Expr, _have: Ty, _dst: Value, _iface: DefId) -> Option<Res> {
+    pub(crate) fn coerce_to_any(
+        &mut self,
+        _e: &'a Expr,
+        _have: Ty,
+        _dst: Value,
+        _iface: DefId,
+    ) -> Option<Res> {
         None
     }
-    pub(crate) fn fn_as_value(&mut self, e: &'a Expr, _def: DefId) -> Res {
-        self.unsupported(e.span, "a function used as a value")
-    }
-    pub(crate) fn obj_literal(&mut self, e: &'a Expr, _i: &'a [StructInit], _dst: Value, _t: Ty) -> Res {
+    pub(crate) fn obj_literal(
+        &mut self,
+        e: &'a Expr,
+        _i: &'a [StructInit],
+        _dst: Value,
+        _t: Ty,
+    ) -> Res {
         self.unsupported(e.span, "an object")
     }
     pub(crate) fn eq_collection(&mut self, _a: Value, _b: Value, _ty: Ty, _fail: BlockId) -> bool {
@@ -42,7 +61,14 @@ impl<'a> Lowerer<'a> {
     pub(crate) fn show_collection(&mut self, _v: Value, _out: Value, _ty: Ty) {
         self.unsupported(Span::new(0, 0), "printing a map or set");
     }
-    pub(crate) fn in_collection(&mut self, e: &'a Expr, _l: &'a Expr, _r: &'a Expr, _lt: Ty, _rt: Ty) -> Res {
+    pub(crate) fn in_collection(
+        &mut self,
+        e: &'a Expr,
+        _l: &'a Expr,
+        _r: &'a Expr,
+        _lt: Ty,
+        _rt: Ty,
+    ) -> Res {
         self.unsupported(e.span, "`in` on this type")
     }
 }

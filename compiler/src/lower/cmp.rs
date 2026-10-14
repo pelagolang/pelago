@@ -10,7 +10,10 @@ impl<'a> Lowerer<'a> {
         }
         let (m, map) = self.find_impl_method(ty, name)?;
         // Only code written in the program counts, not an interface's promise.
-        let body = self.fns.get(&m).is_some_and(|e| !matches!(e.decl.body, FnBody::None));
+        let body = self
+            .fns
+            .get(&m)
+            .is_some_and(|e| !matches!(e.decl.body, FnBody::None));
         body.then_some((m, map))
     }
 
@@ -22,10 +25,18 @@ impl<'a> Lowerer<'a> {
 
     fn three_way(&mut self, a: Value, b: Value, signed: bool) -> Value {
         let float = self.vty(a).is_float();
-        let (lt, gt) = if signed || float { (CmpOp::Lt, CmpOp::Gt) } else { (CmpOp::ULt, CmpOp::UGt) };
+        let (lt, gt) = if signed || float {
+            (CmpOp::Lt, CmpOp::Gt)
+        } else {
+            (CmpOp::ULt, CmpOp::UGt)
+        };
         let sp = Span::new(0, 0);
-        let l = self.emit(Op::Cmp(lt, a, b), Some(IrTy::Bool), sp).unwrap_or(a);
-        let g = self.emit(Op::Cmp(gt, a, b), Some(IrTy::Bool), sp).unwrap_or(a);
+        let l = self
+            .emit(Op::Cmp(lt, a, b), Some(IrTy::Bool), sp)
+            .unwrap_or(a);
+        let g = self
+            .emit(Op::Cmp(gt, a, b), Some(IrTy::Bool), sp)
+            .unwrap_or(a);
         let one = self.i64c(1);
         let neg = self.i64c(-1);
         let zero = self.i64c(0);
@@ -58,8 +69,12 @@ impl<'a> Lowerer<'a> {
     fn eq_part(&mut self, a: Value, b: Value, ty: Ty, fail: BlockId) -> bool {
         let sp = Span::new(0, 0);
         if let Some((m, map)) = self.own_method(ty, "eq") {
-            let Some(f) = self.request_fn(m, &map) else { return false };
-            let Some(r) = self.emit(Op::Call(f, vec![a, b]), Some(IrTy::Bool), sp) else { return false };
+            let Some(f) = self.request_fn(m, &map) else {
+                return false;
+            };
+            let Some(r) = self.emit(Op::Call(f, vec![a, b]), Some(IrTy::Bool), sp) else {
+                return false;
+            };
             self.require_true(r, fail);
             return true;
         }
@@ -103,7 +118,9 @@ impl<'a> Lowerer<'a> {
                 let esize = self.layout(e).size;
                 let mut ok = true;
                 self.each_elem(da, la, esize, |s, p, off| {
-                    let q = s.emit(Op::PtrAdd(db, off), Some(IrTy::Ptr), sp).unwrap_or(db);
+                    let q = s
+                        .emit(Op::PtrAdd(db, off), Some(IrTy::Ptr), sp)
+                        .unwrap_or(db);
                     ok &= s.eq_part(p, q, e, fail);
                 });
                 ok
@@ -125,7 +142,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn eq_enum(&mut self, a: Value, b: Value, ty: Ty, fail: BlockId) -> bool {
-        let Some(info) = self.enum_info(ty) else { return false };
+        let Some(info) = self.enum_info(ty) else {
+            return false;
+        };
         let sp = Span::new(0, 0);
         let ta = self.load_at(a, 0, info.tag);
         let tb = self.load_at(b, 0, info.tag);
@@ -138,7 +157,9 @@ impl<'a> Lowerer<'a> {
                 continue;
             }
             let want = self.konst(info.tag, Const::Int(i as i128), sp);
-            let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, ta, want), Some(IrTy::Bool), sp) else { continue };
+            let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, ta, want), Some(IrTy::Bool), sp) else {
+                continue;
+            };
             let yes = self.new_block(&[]);
             let no = self.new_block(&[]);
             self.branch(c, yes, no);
@@ -173,8 +194,12 @@ impl<'a> Lowerer<'a> {
     fn cmp_part(&mut self, a: Value, b: Value, ty: Ty) -> bool {
         let sp = Span::new(0, 0);
         if let Some((m, map)) = self.own_method(ty, "cmp") {
-            let Some(f) = self.request_fn(m, &map) else { return false };
-            let Some(r) = self.emit(Op::Call(f, vec![a, b]), Some(IrTy::I64), sp) else { return false };
+            let Some(f) = self.request_fn(m, &map) else {
+                return false;
+            };
+            let Some(r) = self.emit(Op::Call(f, vec![a, b]), Some(IrTy::I64), sp) else {
+                return false;
+            };
             self.return_if_nonzero(r);
             return true;
         }
@@ -223,7 +248,9 @@ impl<'a> Lowerer<'a> {
                 let esize = self.layout(e).size;
                 let mut ok = true;
                 self.each_elem(da, short, esize, |s, p, off| {
-                    let q = s.emit(Op::PtrAdd(db, off), Some(IrTy::Ptr), sp).unwrap_or(db);
+                    let q = s
+                        .emit(Op::PtrAdd(db, off), Some(IrTy::Ptr), sp)
+                        .unwrap_or(db);
                     ok &= s.cmp_part(p, q, e);
                 });
                 let r = self.three_way(la, lb, true);
@@ -237,7 +264,9 @@ impl<'a> Lowerer<'a> {
     fn return_if_nonzero(&mut self, r: Value) {
         let sp = Span::new(0, 0);
         let zero = self.i64c(0);
-        let Some(c) = self.emit(Op::Cmp(CmpOp::Ne, r, zero), Some(IrTy::Bool), sp) else { return };
+        let Some(c) = self.emit(Op::Cmp(CmpOp::Ne, r, zero), Some(IrTy::Bool), sp) else {
+            return;
+        };
         let ret = self.new_block(&[]);
         let go = self.new_block(&[]);
         self.branch(c, ret, go);
@@ -258,7 +287,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn cmp_enum(&mut self, a: Value, b: Value, ty: Ty) -> bool {
-        let Some(info) = self.enum_info(ty) else { return false };
+        let Some(info) = self.enum_info(ty) else {
+            return false;
+        };
         let sp = Span::new(0, 0);
         let ta = self.load_at(a, 0, info.tag);
         let tb = self.load_at(b, 0, info.tag);
@@ -272,7 +303,9 @@ impl<'a> Lowerer<'a> {
                 continue;
             }
             let want = self.konst(info.tag, Const::Int(i as i128), sp);
-            let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, ta, want), Some(IrTy::Bool), sp) else { continue };
+            let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, ta, want), Some(IrTy::Bool), sp) else {
+                continue;
+            };
             let yes = self.new_block(&[]);
             let no = self.new_block(&[]);
             self.branch(c, yes, no);
@@ -310,16 +343,24 @@ impl<'a> Lowerer<'a> {
         let sp = Span::new(0, 0);
         let cur = self.load_at(acc, 0, IrTy::I64);
         let k = self.i64c(1099511628211);
-        let m = self.emit(Op::Bin(BinOp::Mul, cur, k), Some(IrTy::I64), sp).unwrap_or(cur);
-        let n = self.emit(Op::Bin(BinOp::Xor, m, x), Some(IrTy::I64), sp).unwrap_or(m);
+        let m = self
+            .emit(Op::Bin(BinOp::Mul, cur, k), Some(IrTy::I64), sp)
+            .unwrap_or(cur);
+        let n = self
+            .emit(Op::Bin(BinOp::Xor, m, x), Some(IrTy::I64), sp)
+            .unwrap_or(m);
         self.store_scalar_ty(acc, n);
     }
 
     fn hash_part(&mut self, a: Value, ty: Ty, acc: Value) -> bool {
         let sp = Span::new(0, 0);
         if let Some((m, map)) = self.own_method(ty, "hash") {
-            let Some(f) = self.request_fn(m, &map) else { return false };
-            let Some(r) = self.emit(Op::Call(f, vec![a]), Some(IrTy::I64), sp) else { return false };
+            let Some(f) = self.request_fn(m, &map) else {
+                return false;
+            };
+            let Some(r) = self.emit(Op::Call(f, vec![a]), Some(IrTy::I64), sp) else {
+                return false;
+            };
             self.mix(acc, r);
             return true;
         }
@@ -382,7 +423,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn hash_enum(&mut self, a: Value, ty: Ty, acc: Value) -> bool {
-        let Some(info) = self.enum_info(ty) else { return false };
+        let Some(info) = self.enum_info(ty) else {
+            return false;
+        };
         let sp = Span::new(0, 0);
         let tag = self.load_at(a, 0, info.tag);
         let t = self.resize(tag, IrTy::I64, false, sp);
@@ -393,7 +436,9 @@ impl<'a> Lowerer<'a> {
                 continue;
             }
             let want = self.konst(info.tag, Const::Int(i as i128), sp);
-            let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, tag, want), Some(IrTy::Bool), sp) else { continue };
+            let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, tag, want), Some(IrTy::Bool), sp) else {
+                continue;
+            };
             let yes = self.new_block(&[]);
             let no = self.new_block(&[]);
             self.branch(c, yes, no);
@@ -418,7 +463,9 @@ impl<'a> Lowerer<'a> {
         let sp = Span::new(0, 0);
         if let Some((m, map)) = self.own_method(ty, "show") {
             // The type's own `show` makes a string, which is appended and dropped.
-            let Some(f) = self.request_fn(m, &map) else { return };
+            let Some(f) = self.request_fn(m, &map) else {
+                return;
+            };
             let string = self.types.string;
             let tmp = self.slot_for(string);
             self.emit(Op::Call(f, vec![tmp, v]), None, sp);
@@ -444,10 +491,14 @@ impl<'a> Lowerer<'a> {
                 self.push_static(out, b"]");
             }
             TyKind::Option(inner) => {
-                let Some(info) = self.enum_info(ty) else { return };
+                let Some(info) = self.enum_info(ty) else {
+                    return;
+                };
                 let tag = self.load_at(v, 0, info.tag);
                 let zero = self.konst(info.tag, Const::Int(0), sp);
-                if let Some(is_none) = self.emit(Op::Cmp(CmpOp::Eq, tag, zero), Some(IrTy::Bool), sp) {
+                if let Some(is_none) =
+                    self.emit(Op::Cmp(CmpOp::Eq, tag, zero), Some(IrTy::Bool), sp)
+                {
                     let none_b = self.new_block(&[]);
                     let some_b = self.new_block(&[]);
                     let done = self.new_block(&[]);
@@ -465,10 +516,13 @@ impl<'a> Lowerer<'a> {
                 }
             }
             TyKind::Result(..) => {
-                let Some(info) = self.enum_info(ty) else { return };
+                let Some(info) = self.enum_info(ty) else {
+                    return;
+                };
                 let tag = self.load_at(v, 0, info.tag);
                 let zero = self.konst(info.tag, Const::Int(0), sp);
-                if let Some(is_ok) = self.emit(Op::Cmp(CmpOp::Eq, tag, zero), Some(IrTy::Bool), sp) {
+                if let Some(is_ok) = self.emit(Op::Cmp(CmpOp::Eq, tag, zero), Some(IrTy::Bool), sp)
+                {
                     let ok_b = self.new_block(&[]);
                     let err_b = self.new_block(&[]);
                     let done = self.new_block(&[]);
@@ -519,7 +573,12 @@ impl<'a> Lowerer<'a> {
                     self.push_static(out, name.as_bytes());
                     let fs = self.struct_fields(ty);
                     if !fs.is_empty() {
-                        let decls: Vec<DefId> = self.typed.adts.get(&d).map(|a| a.fields.iter().map(|(f, _)| *f).collect()).unwrap_or_default();
+                        let decls: Vec<DefId> = self
+                            .typed
+                            .adts
+                            .get(&d)
+                            .map(|a| a.fields.iter().map(|(f, _)| *f).collect())
+                            .unwrap_or_default();
                         self.push_static(out, b" { ");
                         for (i, (f, fd)) in fs.iter().zip(decls.iter()).enumerate() {
                             if i > 0 {
@@ -546,14 +605,23 @@ impl<'a> Lowerer<'a> {
     }
 
     fn show_enum(&mut self, v: Value, out: Value, ty: Ty, d: DefId) {
-        let Some(info) = self.enum_info(ty) else { return };
+        let Some(info) = self.enum_info(ty) else {
+            return;
+        };
         let sp = Span::new(0, 0);
         let tag = self.load_at(v, 0, info.tag);
-        let variants: Vec<DefId> = self.typed.adts.get(&d).map(|a| a.variants.iter().map(|(v, _)| *v).collect()).unwrap_or_default();
+        let variants: Vec<DefId> = self
+            .typed
+            .adts
+            .get(&d)
+            .map(|a| a.variants.iter().map(|(v, _)| *v).collect())
+            .unwrap_or_default();
         let done = self.new_block(&[]);
         for (i, vd) in variants.iter().enumerate() {
             let want = self.konst(info.tag, Const::Int(i as i128), sp);
-            let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, tag, want), Some(IrTy::Bool), sp) else { continue };
+            let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, tag, want), Some(IrTy::Bool), sp) else {
+                continue;
+            };
             let yes = self.new_block(&[]);
             let no = self.new_block(&[]);
             self.branch(c, yes, no);

@@ -356,9 +356,44 @@ impl<T> list<T> {
 
     fn iter(self) -> iter<T> = rt_cast<list<T>, iter<T>>(rt_clone<list<T>>(rt_addr_of(self)))
     fn to_list(self) -> list<T> = rt_clone<list<T>>(rt_addr_of(self))
-    ext fn map<U>(self, f: fn(T) -> U) -> iter<U>
-    ext fn filter(self, f: fn(T) -> bool) -> iter<T>
-    ext fn each(self, f: fn(T))
+    fn map<U>(self, f: fn(T) -> U) -> iter<U> {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var out: list<U> = []
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            out.push!(f(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size))))
+            i += 1
+        }
+        rt_cast<list<U>, iter<U>>(sink out)
+    }
+
+    fn filter(self, f: fn(T) -> bool) -> iter<T> {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var out: list<T> = []
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            if f(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size))) {
+                out.push!(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size)))
+            }
+            i += 1
+        }
+        rt_cast<list<T>, iter<T>>(sink out)
+    }
+
+    fn each(self, f: fn(T)) {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            f(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size)))
+            i += 1
+        }
+    }
 }
 
 // ---- Text: strings are a pointer, a length and a capacity (0 means borrowed or static) ---------
@@ -777,9 +812,44 @@ impl<T> iter<T> {
     }
 
     fn to_list(self) -> list<T> = rt_cast<iter<T>, list<T>>(rt_clone<iter<T>>(rt_addr_of(self)))
-    ext fn map<U>(self, f: fn(T) -> U) -> iter<U>
-    ext fn filter(self, f: fn(T) -> bool) -> iter<T>
-    ext fn each(self, f: fn(T))
+    fn map<U>(self, f: fn(T) -> U) -> iter<U> {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var out: list<U> = []
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            out.push!(f(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size))))
+            i += 1
+        }
+        rt_cast<list<U>, iter<U>>(sink out)
+    }
+
+    fn filter(self, f: fn(T) -> bool) -> iter<T> {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var out: list<T> = []
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            if f(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size))) {
+                out.push!(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size)))
+            }
+            i += 1
+        }
+        rt_cast<list<T>, iter<T>>(sink out)
+    }
+
+    fn each(self, f: fn(T)) {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            f(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size)))
+            i += 1
+        }
+    }
     ext fn to_set(self) -> set<T>
 }
 
@@ -828,8 +898,19 @@ impl<T> option<T> {
         }
     }
 
-    ext fn map<U>(self, f: fn(T) -> U) -> U?
-    ext fn or_err<E>(self, e: E) -> T ! E
+    fn map<U>(self, f: fn(T) -> U) -> U? {
+        switch self {
+            case some(v): f(rt_clone<T>(rt_addr_of(v)))
+            case none: none
+        }
+    }
+
+    fn or_err<E>(self, e: E) -> T ! E {
+        switch self {
+            case some(v): ok(rt_clone<T>(rt_addr_of(v)))
+            case none: err(rt_clone<E>(rt_addr_of(e)))
+        }
+    }
 }
 
 impl<T, E> result<T, E> {
@@ -856,7 +937,12 @@ impl<T, E> result<T, E> {
         }
     }
 
-    ext fn map_err<F>(self, f: fn(E) -> F) -> T ! F
+    fn map_err<F>(self, f: fn(E) -> F) -> T ! F {
+        switch self {
+            case ok(v): ok(rt_clone<T>(rt_addr_of(v)))
+            case err(e): err(f(rt_clone<E>(rt_addr_of(e))))
+        }
+    }
 
     /// Adds a line of context to the error: `context: error`.
     fn context(self, message: str) -> T ! error {

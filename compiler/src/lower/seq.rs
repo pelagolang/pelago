@@ -13,8 +13,13 @@ impl<'a> Lowerer<'a> {
             return Some(*d);
         }
         let found = self.fns.iter().find_map(|(d, e)| {
-            let in_core = self.program.package(self.program.module(e.file).package).name == "core";
-            (in_core && self.res.def(*d).parent.is_none() && self.res.def(*d).name == name).then_some(*d)
+            let in_core = self
+                .program
+                .package(self.program.module(e.file).package)
+                .name
+                == "core";
+            (in_core && self.res.def(*d).parent.is_none() && self.res.def(*d).name == name)
+                .then_some(*d)
         })?;
         self.core_fns.insert(name.to_string(), found);
         Some(found)
@@ -78,7 +83,9 @@ impl<'a> Lowerer<'a> {
     /// The address and length of static bytes.
     pub(crate) fn static_bytes(&mut self, bytes: &[u8]) -> (Value, Value) {
         let d = self.module.add_data(bytes);
-        let p = self.emit(Op::DataAddr(d), Some(IrTy::Ptr), Span::new(0, 0)).unwrap_or(Value(0));
+        let p = self
+            .emit(Op::DataAddr(d), Some(IrTy::Ptr), Span::new(0, 0))
+            .unwrap_or(Value(0));
         let n = self.i64c(bytes.len() as i64);
         (p, n)
     }
@@ -91,7 +98,13 @@ impl<'a> Lowerer<'a> {
         self.call_core("rt_str_push", vec![out, p, n]);
     }
 
-    pub(crate) fn string_lit(&mut self, e: &'a Expr, parts: &'a [StrPart], dst: Value, t: Ty) -> Res {
+    pub(crate) fn string_lit(
+        &mut self,
+        e: &'a Expr,
+        parts: &'a [StrPart],
+        dst: Value,
+        t: Ty,
+    ) -> Res {
         let interpolated = parts.iter().any(|p| matches!(p, StrPart::Interp(_)));
         if !interpolated {
             let mut bytes = Vec::new();
@@ -111,7 +124,13 @@ impl<'a> Lowerer<'a> {
         }
         // Interpolation builds a new string piece by piece.
         let zp = self.i64c(0);
-        let nullp = self.emit(Op::Cast(CastKind::IntToPtr, zp, IrTy::Ptr), Some(IrTy::Ptr), e.span).unwrap_or(dst);
+        let nullp = self
+            .emit(
+                Op::Cast(CastKind::IntToPtr, zp, IrTy::Ptr),
+                Some(IrTy::Ptr),
+                e.span,
+            )
+            .unwrap_or(dst);
         self.store_at(dst, 0, nullp);
         let z1 = self.i64c(0);
         self.store_at(dst, 8, z1);
@@ -142,11 +161,15 @@ impl<'a> Lowerer<'a> {
         };
         match self.repr(t) {
             Repr::Scalar(_) => {
-                let Some(v) = self.scalar(x) else { return false };
+                let Some(v) = self.scalar(x) else {
+                    return false;
+                };
                 self.show_scalar(v, t, out)
             }
             Repr::Mem(_) => {
-                let Res::Val(p) = self.expr(x) else { return false };
+                let Res::Val(p) = self.expr(x) else {
+                    return false;
+                };
                 self.show_at(p, t, out, false)
             }
             Repr::Zst => {
@@ -167,7 +190,12 @@ impl<'a> Lowerer<'a> {
             }
             TyKind::Float(_) => {
                 let w = if self.vty(v) == IrTy::F32 {
-                    self.emit(Op::Cast(CastKind::FloatResize, v, IrTy::F64), Some(IrTy::F64), Span::new(0, 0)).unwrap_or(v)
+                    self.emit(
+                        Op::Cast(CastKind::FloatResize, v, IrTy::F64),
+                        Some(IrTy::F64),
+                        Span::new(0, 0),
+                    )
+                    .unwrap_or(v)
                 } else {
                     v
                 };
@@ -240,7 +268,13 @@ impl<'a> Lowerer<'a> {
         // Each value is shown into one line.
         let line = self.slot_bytes(24, 8);
         let z = self.i64c(0);
-        let nullp = self.emit(Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr), Some(IrTy::Ptr), e.span).unwrap_or(line);
+        let nullp = self
+            .emit(
+                Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr),
+                Some(IrTy::Ptr),
+                e.span,
+            )
+            .unwrap_or(line);
         self.store_at(line, 0, nullp);
         let z1 = self.i64c(0);
         self.store_at(line, 8, z1);
@@ -265,16 +299,29 @@ impl<'a> Lowerer<'a> {
 
     pub(crate) fn concat(&mut self, e: &'a Expr, l: &'a Expr, r: &'a Expr, dst: Value) -> Res {
         let _ = e;
-        let Res::Val(a) = self.expr(l) else { return Res::Never };
-        let Res::Val(b) = self.expr(r) else { return Res::Never };
+        let Res::Val(a) = self.expr(l) else {
+            return Res::Never;
+        };
+        let Res::Val(b) = self.expr(r) else {
+            return Res::Never;
+        };
         self.call_core("rt_str_concat", vec![dst, a, b]);
         Res::Unit
     }
 
     /// `s += text`
-    pub(crate) fn append_assign(&mut self, e: &'a Expr, op: Punct, p: Value, t: Ty, rhs: &'a Expr) -> Res {
+    pub(crate) fn append_assign(
+        &mut self,
+        e: &'a Expr,
+        op: Punct,
+        p: Value,
+        t: Ty,
+        rhs: &'a Expr,
+    ) -> Res {
         if op == Punct::PlusEq && matches!(self.kind(t), TyKind::String) {
-            let Res::Val(b) = self.expr(rhs) else { return Res::Never };
+            let Res::Val(b) = self.expr(rhs) else {
+                return Res::Never;
+            };
             let d = self.load_at(b, 0, IrTy::Ptr);
             let n = self.load_at(b, 8, IrTy::I64);
             self.call_core("rt_str_push", vec![p, d, n]);
@@ -284,15 +331,29 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Is the text at `ptr` equal to a literal? (For patterns.)
-    pub(crate) fn text_equals_literal(&mut self, ptr: Value, ty: Ty, lit: &'a Expr) -> Option<Value> {
+    pub(crate) fn text_equals_literal(
+        &mut self,
+        ptr: Value,
+        ty: Ty,
+        lit: &'a Expr,
+    ) -> Option<Value> {
         let _ = ty;
-        let Res::Val(l) = self.expr(lit) else { return None };
+        let Res::Val(l) = self.expr(lit) else {
+            return None;
+        };
         self.call_core("rt_str_eq", vec![ptr, l])
     }
 
     // ---- Comparison of memory values ----------------------------------------------------------------------------------------
 
-    pub(crate) fn compare_mem(&mut self, e: &'a Expr, op: Punct, lhs: &'a Expr, rhs: &'a Expr, lt: Ty) -> Res {
+    pub(crate) fn compare_mem(
+        &mut self,
+        e: &'a Expr,
+        op: Punct,
+        lhs: &'a Expr,
+        rhs: &'a Expr,
+        lt: Ty,
+    ) -> Res {
         // The right side may need converting to the left's type (a value into an option).
         let rt = self.ty_of(rhs).unwrap_or(lt);
         let Res::Val(a) = self.expr(lhs) else {
@@ -359,7 +420,13 @@ impl<'a> Lowerer<'a> {
 
     // ---- Lists ----------------------------------------------------------------------------------------------------------------------
 
-    pub(crate) fn list_lit(&mut self, e: &'a Expr, items: &'a [ListItem], dst: Value, t: Ty) -> Res {
+    pub(crate) fn list_lit(
+        &mut self,
+        e: &'a Expr,
+        items: &'a [ListItem],
+        dst: Value,
+        t: Ty,
+    ) -> Res {
         let elem = match self.kind(t) {
             TyKind::List(x) | TyKind::Iter(x) => x,
             _ => return self.unsupported(e.span, "a list literal of this type"),
@@ -371,11 +438,19 @@ impl<'a> Lowerer<'a> {
         let esize = self.layout(elem).size as i64;
         let (buf, cap) = if n == 0 {
             let z = self.i64c(0);
-            let np = self.emit(Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr), Some(IrTy::Ptr), e.span).unwrap_or(dst);
+            let np = self
+                .emit(
+                    Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr),
+                    Some(IrTy::Ptr),
+                    e.span,
+                )
+                .unwrap_or(dst);
             (np, self.i64c(0))
         } else {
             let bytes = self.i64c((n * esize).max(1));
-            let b = self.emit(Op::Alloc(bytes), Some(IrTy::Ptr), e.span).unwrap_or(dst);
+            let b = self
+                .emit(Op::Alloc(bytes), Some(IrTy::Ptr), e.span)
+                .unwrap_or(dst);
             (b, self.i64c(n))
         };
         // The list is complete (and owned) only at the end; elements that fail midway are not tracked.
@@ -393,9 +468,22 @@ impl<'a> Lowerer<'a> {
     }
 
     /// `[a, ...xs, b]`: an empty list that grows.
-    fn list_with_spreads(&mut self, e: &'a Expr, items: &'a [ListItem], dst: Value, t: Ty, elem: Ty) -> Res {
+    fn list_with_spreads(
+        &mut self,
+        e: &'a Expr,
+        items: &'a [ListItem],
+        dst: Value,
+        t: Ty,
+        elem: Ty,
+    ) -> Res {
         let z = self.i64c(0);
-        let np = self.emit(Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr), Some(IrTy::Ptr), e.span).unwrap_or(dst);
+        let np = self
+            .emit(
+                Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr),
+                Some(IrTy::Ptr),
+                e.span,
+            )
+            .unwrap_or(dst);
         self.store_at(dst, 0, np);
         let z1 = self.i64c(0);
         self.store_at(dst, 8, z1);
@@ -404,7 +492,9 @@ impl<'a> Lowerer<'a> {
         let esize = self.layout(elem).size as i64;
         for it in items {
             if it.spread {
-                let Res::Val(src) = self.expr(&it.value) else { return Res::Never };
+                let Res::Val(src) = self.expr(&it.value) else {
+                    return Res::Never;
+                };
                 let n = self.load_at(src, 8, IrTy::I64);
                 let data = self.load_at(src, 0, IrTy::Ptr);
                 let sz = self.i64c(esize);
@@ -414,12 +504,18 @@ impl<'a> Lowerer<'a> {
             // Push one element.
             let len = self.load_at(dst, 8, IrTy::I64);
             let one = self.i64c(1);
-            let need = self.emit(Op::Bin(BinOp::Add, len, one), Some(IrTy::I64), e.span).unwrap_or(len);
+            let need = self
+                .emit(Op::Bin(BinOp::Add, len, one), Some(IrTy::I64), e.span)
+                .unwrap_or(len);
             let sz = self.i64c(esize);
             self.call_core("rt_grow", vec![dst, sz, need]);
             let data = self.load_at(dst, 0, IrTy::Ptr);
-            let off = self.emit(Op::Bin(BinOp::Mul, len, sz), Some(IrTy::I64), e.span).unwrap_or(len);
-            let p = self.emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), e.span).unwrap_or(data);
+            let off = self
+                .emit(Op::Bin(BinOp::Mul, len, sz), Some(IrTy::I64), e.span)
+                .unwrap_or(len);
+            let p = self
+                .emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), e.span)
+                .unwrap_or(data);
             if let Res::Never = self.into(&it.value, p, elem) {
                 return Res::Never;
             }
@@ -428,16 +524,29 @@ impl<'a> Lowerer<'a> {
         Res::Unit
     }
 
-    pub(crate) fn repeat_lit(&mut self, e: &'a Expr, value: &'a Expr, count: &'a Expr, dst: Value, t: Ty) -> Res {
+    pub(crate) fn repeat_lit(
+        &mut self,
+        e: &'a Expr,
+        value: &'a Expr,
+        count: &'a Expr,
+        dst: Value,
+        t: Ty,
+    ) -> Res {
         let elem = match self.kind(t) {
             TyKind::List(x) => x,
             _ => return self.unsupported(e.span, "a repeated list of this type"),
         };
-        let Some(n) = self.scalar(count) else { return Res::Never };
+        let Some(n) = self.scalar(count) else {
+            return Res::Never;
+        };
         let esize = self.layout(elem).size as i64;
         let sz = self.i64c(esize.max(1));
-        let bytes = self.emit(Op::Bin(BinOp::Mul, n, sz), Some(IrTy::I64), e.span).unwrap_or(n);
-        let buf = self.emit(Op::Alloc(bytes), Some(IrTy::Ptr), e.span).unwrap_or(dst);
+        let bytes = self
+            .emit(Op::Bin(BinOp::Mul, n, sz), Some(IrTy::I64), e.span)
+            .unwrap_or(n);
+        let buf = self
+            .emit(Op::Alloc(bytes), Some(IrTy::Ptr), e.span)
+            .unwrap_or(dst);
         // The value is built once and cloned into each place.
         let tmp = self.slot_for(elem);
         if let Res::Never = self.into(value, tmp, elem) {
@@ -454,11 +563,17 @@ impl<'a> Lowerer<'a> {
             self.branch(c, body, done);
         }
         self.start(body);
-        let off = self.emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), e.span).unwrap_or(i);
-        let p = self.emit(Op::PtrAdd(buf, off), Some(IrTy::Ptr), e.span).unwrap_or(buf);
+        let off = self
+            .emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), e.span)
+            .unwrap_or(i);
+        let p = self
+            .emit(Op::PtrAdd(buf, off), Some(IrTy::Ptr), e.span)
+            .unwrap_or(buf);
         self.clone_into(tmp, p, elem);
         let one = self.i64c(1);
-        let next = self.emit(Op::Bin(BinOp::Add, i, one), Some(IrTy::I64), e.span).unwrap_or(i);
+        let next = self
+            .emit(Op::Bin(BinOp::Add, i, one), Some(IrTy::I64), e.span)
+            .unwrap_or(i);
         self.jump(head, vec![next]);
         self.start(done);
         // The template itself is dropped.
@@ -474,7 +589,13 @@ impl<'a> Lowerer<'a> {
         let ExprKind::Index { base, index } = &e.kind else {
             return self.unsupported(e.span, "this slice");
         };
-        let ExprKind::Range { start, end, inclusive, .. } = &index.kind else {
+        let ExprKind::Range {
+            start,
+            end,
+            inclusive,
+            ..
+        } = &index.kind
+        else {
             return self.unsupported(e.span, "this slice");
         };
         let Some(bt) = self.ty_of(base) else {
@@ -485,7 +606,9 @@ impl<'a> Lowerer<'a> {
             TyKind::List(x) | TyKind::Iter(x) => self.layout(x).size as i64,
             _ => return self.unsupported(e.span, "slicing this type"),
         };
-        let Res::Val(h) = self.expr(base) else { return Res::Never };
+        let Res::Val(h) = self.expr(base) else {
+            return Res::Never;
+        };
         let len = self.load_at(h, 8, IrTy::I64);
         let lo = match start {
             Some(s) => match self.scalar(s) {
@@ -499,7 +622,8 @@ impl<'a> Lowerer<'a> {
                 Some(v) => {
                     if *inclusive {
                         let one = self.i64c(1);
-                        self.emit(Op::Bin(BinOp::Add, v, one), Some(IrTy::I64), e.span).unwrap_or(v)
+                        self.emit(Op::Bin(BinOp::Add, v, one), Some(IrTy::I64), e.span)
+                            .unwrap_or(v)
                     } else {
                         v
                     }
@@ -517,9 +641,15 @@ impl<'a> Lowerer<'a> {
         }
         let data = self.load_at(h, 0, IrTy::Ptr);
         let sz = self.i64c(esize);
-        let off = self.emit(Op::Bin(BinOp::Mul, lo, sz), Some(IrTy::I64), e.span).unwrap_or(lo);
-        let p = self.emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), e.span).unwrap_or(data);
-        let n = self.emit(Op::Bin(BinOp::Sub, hi, lo), Some(IrTy::I64), e.span).unwrap_or(hi);
+        let off = self
+            .emit(Op::Bin(BinOp::Mul, lo, sz), Some(IrTy::I64), e.span)
+            .unwrap_or(lo);
+        let p = self
+            .emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), e.span)
+            .unwrap_or(data);
+        let n = self
+            .emit(Op::Bin(BinOp::Sub, hi, lo), Some(IrTy::I64), e.span)
+            .unwrap_or(hi);
         self.store_at(dst, 0, p);
         self.store_at(dst, 8, n);
         // A list slice is a list that owns nothing; text slices are `str`.
@@ -536,13 +666,21 @@ impl<'a> Lowerer<'a> {
 
     // ---- Loops over lists --------------------------------------------------------------------------------------------------------------
 
-    pub(crate) fn for_each(&mut self, label: Option<String>, pats: &'a [Pattern], iter: &'a Expr, body: &'a Block) -> Res {
+    pub(crate) fn for_each(
+        &mut self,
+        label: Option<String>,
+        pats: &'a [Pattern],
+        iter: &'a Expr,
+        body: &'a Block,
+    ) -> Res {
         let Some(it) = self.ty_of(iter) else {
             return self.unsupported(iter.span, "looping over a value of unknown type");
         };
         let elem = match self.kind(it) {
             TyKind::List(x) | TyKind::Iter(x) => x,
-            TyKind::Map(..) | TyKind::Set(_) => return self.for_each_collection(label, pats, iter, body, it),
+            TyKind::Map(..) | TyKind::Set(_) => {
+                return self.for_each_collection(label, pats, iter, body, it)
+            }
             _ => return self.unsupported(iter.span, "looping over this"),
         };
         self.push_scope();
@@ -566,8 +704,12 @@ impl<'a> Lowerer<'a> {
         }
         self.start(body_b);
         let sz = self.i64c(esize);
-        let off = self.emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), iter.span).unwrap_or(i);
-        let ep = self.emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), iter.span).unwrap_or(data);
+        let off = self
+            .emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), iter.span)
+            .unwrap_or(i);
+        let ep = self
+            .emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), iter.span)
+            .unwrap_or(data);
         let int = self.types.int;
         let bind_fail = self.stop_block("pattern did not match");
         let depth = self.f.scopes.len();
@@ -581,13 +723,22 @@ impl<'a> Lowerer<'a> {
                 // `for i, x of xs`: the position, then the element.
                 let slot = self.slot_for(int);
                 self.store_scalar_ty(slot, i);
-                if !self.pat_test(pi, slot, int, bind_fail) || !self.pat_test(pe, ep, elem, bind_fail) {
+                if !self.pat_test(pi, slot, int, bind_fail)
+                    || !self.pat_test(pe, ep, elem, bind_fail)
+                {
                     return Res::Never;
                 }
             }
             _ => return self.unsupported(iter.span, "this `for` pattern"),
         }
-        self.f.loops.push(LoopCtx { label, cont: step, exit, break_ty: None, break_dst: None, scope_depth: depth });
+        self.f.loops.push(LoopCtx {
+            label,
+            cont: step,
+            exit,
+            break_ty: None,
+            break_dst: None,
+            scope_depth: depth,
+        });
         let void = self.types.void;
         let r = self.block(body, None, void);
         if !matches!(r, Res::Never) {
@@ -604,7 +755,14 @@ impl<'a> Lowerer<'a> {
         Res::Unit
     }
 
-    pub(crate) fn for_each_collection(&mut self, _label: Option<String>, _pats: &'a [Pattern], iter: &'a Expr, _body: &'a Block, _t: Ty) -> Res {
+    pub(crate) fn for_each_collection(
+        &mut self,
+        _label: Option<String>,
+        _pats: &'a [Pattern],
+        iter: &'a Expr,
+        _body: &'a Block,
+        _t: Ty,
+    ) -> Res {
         self.unsupported(iter.span, "looping over a map or set")
     }
 }

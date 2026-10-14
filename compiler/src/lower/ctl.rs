@@ -36,7 +36,9 @@ impl<'a> Lowerer<'a> {
         }
         // The success path: the payload.
         self.start(ok_b);
-        let payload = info.variants[if is_result { 0 } else { 1 }].first().copied();
+        let payload = info.variants[if is_result { 0 } else { 1 }]
+            .first()
+            .copied();
         let Some(pf) = payload else {
             return Res::Unit;
         };
@@ -71,25 +73,40 @@ impl<'a> Lowerer<'a> {
     fn propagate(&mut self, e: &'a Expr, tmp: Value, it: Ty, is_result: bool) -> bool {
         let ret = self.f.ret_ty;
         let Some(sret) = self.f.sret else {
-            self.unsupported(e.span, "`?` in a function that does not return a result or option");
+            self.unsupported(
+                e.span,
+                "`?` in a function that does not return a result or option",
+            );
             return false;
         };
         let Some(rinfo) = self.enum_info(ret) else {
-            self.unsupported(e.span, "`?` in a function that does not return a result or option");
+            self.unsupported(
+                e.span,
+                "`?` in a function that does not return a result or option",
+            );
             return false;
         };
-        let Some(info) = self.enum_info(it) else { return false };
+        let Some(info) = self.enum_info(it) else {
+            return false;
+        };
         if is_result {
             let ret_err = match self.kind(ret) {
                 TyKind::Result(_, b) => b,
                 _ => {
-                    self.unsupported(e.span, "`?` on a result in a function that returns something else");
+                    self.unsupported(
+                        e.span,
+                        "`?` on a result in a function that returns something else",
+                    );
                     return false;
                 }
             };
-            let Some(from) = info.variants[1].first().copied() else { return false };
+            let Some(from) = info.variants[1].first().copied() else {
+                return false;
+            };
             let src = self.addr(tmp, from.off);
-            let Some(to) = rinfo.variants[1].first().copied() else { return false };
+            let Some(to) = rinfo.variants[1].first().copied() else {
+                return false;
+            };
             let dstp = self.addr(sret, to.off);
             if from.ty == ret_err {
                 self.copy_mem_or_scalar(dstp, src, from.ty);
@@ -97,7 +114,13 @@ impl<'a> Lowerer<'a> {
                 // Any error becomes the catch-all: its text is the message.
                 let string = self.types.string;
                 let z = self.i64c(0);
-                let np = self.emit(Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr), Some(IrTy::Ptr), e.span).unwrap_or(dstp);
+                let np = self
+                    .emit(
+                        Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr),
+                        Some(IrTy::Ptr),
+                        e.span,
+                    )
+                    .unwrap_or(dstp);
                 self.store_at(dstp, 0, np);
                 let z1 = self.i64c(0);
                 self.store_at(dstp, 8, z1);
@@ -110,7 +133,9 @@ impl<'a> Lowerer<'a> {
                 self.drop_at(src, from.ty);
             } else if let Some((m, map)) = self.call_target(e.span) {
                 // `impl converts<...> for ...`
-                let Some(f) = self.request_fn(m, &map) else { return false };
+                let Some(f) = self.request_fn(m, &map) else {
+                    return false;
+                };
                 self.emit(Op::Call(f, vec![dstp, src]), None, e.span);
             } else {
                 self.unsupported(e.span, "converting this error for `?`");
@@ -142,7 +167,14 @@ impl<'a> Lowerer<'a> {
     // ---- `??` -------------------------------------------------------------------------------------------------------
 
     /// `a ?? b`: the value inside `a`, or `b` when `a` is `none`.
-    pub(crate) fn default_expr(&mut self, e: &'a Expr, lhs: &'a Expr, rhs: &'a Expr, dst: Option<Value>, want: Ty) -> Res {
+    pub(crate) fn default_expr(
+        &mut self,
+        e: &'a Expr,
+        lhs: &'a Expr,
+        rhs: &'a Expr,
+        dst: Option<Value>,
+        want: Ty,
+    ) -> Res {
         let _ = want;
         let (Some(lt), Some(rt)) = (self.ty_of(lhs), self.ty_of(e)) else {
             return self.unsupported(e.span, "`??` on values of unknown type");
@@ -156,7 +188,8 @@ impl<'a> Lowerer<'a> {
         }
         let tag = self.load_at(tmp, 0, info.tag);
         let zero = self.konst(info.tag, Const::Int(0), e.span);
-        let Some(is_none) = self.emit(Op::Cmp(CmpOp::Eq, tag, zero), Some(IrTy::Bool), e.span) else {
+        let Some(is_none) = self.emit(Op::Cmp(CmpOp::Eq, tag, zero), Some(IrTy::Bool), e.span)
+        else {
             return Res::Never;
         };
         let repr = self.repr(rt);
@@ -245,7 +278,9 @@ impl<'a> Lowerer<'a> {
         };
         match self.repr(t) {
             Repr::Mem(_) => {
-                let Res::Val(src) = self.expr(inner) else { return Res::Never };
+                let Res::Val(src) = self.expr(inner) else {
+                    return Res::Never;
+                };
                 self.with_dst(dst, t, |s, d| {
                     s.clone_into(src, d, t);
                     Res::Unit
@@ -282,22 +317,34 @@ impl<'a> Lowerer<'a> {
 
     pub(crate) fn in_expr(&mut self, e: &'a Expr, lhs: &'a Expr, rhs: &'a Expr) -> Res {
         let rhs = super::expr::strip_parens(rhs);
-        if let ExprKind::Range { start, end, inclusive, step: None } = &rhs.kind {
+        if let ExprKind::Range {
+            start,
+            end,
+            inclusive,
+            step: None,
+        } = &rhs.kind
+        {
             let Some(t) = self.ty_of(lhs) else {
                 return self.unsupported(e.span, "`in` on a value of unknown type");
             };
             let signed = self.is_signed(t) || self.scalar_of(t).is_some_and(|s| s.is_float());
-            let Some(x) = self.scalar(lhs) else { return Res::Never };
+            let Some(x) = self.scalar(lhs) else {
+                return Res::Never;
+            };
             let mut cond: Option<Value> = None;
             if let Some(lo) = start {
-                let Some(lo) = self.scalar(lo) else { return Res::Never };
+                let Some(lo) = self.scalar(lo) else {
+                    return Res::Never;
+                };
                 let op = if signed { CmpOp::Ge } else { CmpOp::UGe };
                 cond = self.emit(Op::Cmp(op, x, lo), Some(IrTy::Bool), e.span);
             }
             let low_ok = cond;
             let hi_ok = match end {
                 Some(hi) => {
-                    let Some(hi) = self.scalar(hi) else { return Res::Never };
+                    let Some(hi) = self.scalar(hi) else {
+                        return Res::Never;
+                    };
                     let op = match (*inclusive, signed) {
                         (true, true) => CmpOp::Le,
                         (true, false) => CmpOp::ULe,
@@ -313,7 +360,17 @@ impl<'a> Lowerer<'a> {
                     // Both bounds: `a && b` without branching on a pure comparison.
                     let join = self.new_block(&[IrTy::Bool]);
                     let more = self.new_block(&[]);
-                    self.terminate(Term::Branch(a, Target { block: more, args: vec![] }, Target { block: join, args: vec![a] }));
+                    self.terminate(Term::Branch(
+                        a,
+                        Target {
+                            block: more,
+                            args: vec![],
+                        },
+                        Target {
+                            block: join,
+                            args: vec![a],
+                        },
+                    ));
                     self.start(more);
                     self.jump(join, vec![b]);
                     self.start(join);
@@ -328,20 +385,30 @@ impl<'a> Lowerer<'a> {
         };
         match self.kind(rt) {
             TyKind::List(el) | TyKind::Iter(el) => {
-                let Res::Val(h) = self.expr(rhs) else { return Res::Never };
+                let Res::Val(h) = self.expr(rhs) else {
+                    return Res::Never;
+                };
                 let probe = self.probe_addr(lhs, lt, el);
-                let Some(probe) = probe else { return Res::Never };
+                let Some(probe) = probe else {
+                    return Res::Never;
+                };
                 let size = self.layout(el).size;
                 let sz = self.i64c(size as i64);
-                let Some(eq) = self.glue_addr(GlueKind::Eq, el) else { return Res::Never };
+                let Some(eq) = self.glue_addr(GlueKind::Eq, el) else {
+                    return Res::Never;
+                };
                 match self.call_core("rt_list_contains", vec![h, probe, sz, eq]) {
                     Some(v) => Res::Val(v),
                     None => Res::Never,
                 }
             }
             TyKind::String | TyKind::Str => {
-                let Res::Val(h) = self.expr(rhs) else { return Res::Never };
-                let Res::Val(p) = self.expr(lhs) else { return Res::Never };
+                let Res::Val(h) = self.expr(rhs) else {
+                    return Res::Never;
+                };
+                let Res::Val(p) = self.expr(lhs) else {
+                    return Res::Never;
+                };
                 match self.call_core("rt_str_contains", vec![h, p]) {
                     Some(v) => Res::Val(v),
                     None => Res::Never,
@@ -384,7 +451,11 @@ impl<'a> Lowerer<'a> {
             Some(f) => self.emit(Op::FuncAddr(f), Some(IrTy::Ptr), Span::new(0, 0)),
             None => {
                 let z = self.i64c(0);
-                self.emit(Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr), Some(IrTy::Ptr), Span::new(0, 0))
+                self.emit(
+                    Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr),
+                    Some(IrTy::Ptr),
+                    Span::new(0, 0),
+                )
             }
         }
     }

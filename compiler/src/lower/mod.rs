@@ -15,6 +15,7 @@
 
 mod agg;
 mod call;
+mod closure;
 mod cmp;
 mod ctl;
 mod expr;
@@ -27,7 +28,9 @@ mod stubs;
 mod ty;
 
 use crate::ast::*;
-use crate::ir::{BinOp, BlockId, CastKind, CmpOp, Const, Func, FuncId, IrTy, Module, Op, Target, Term, Value};
+use crate::ir::{
+    BinOp, BlockId, CastKind, CmpOp, Const, Func, FuncId, IrTy, Module, Op, Target, Term, Value,
+};
 use crate::package::{Diagnostic, ModuleId, Program};
 use crate::resolve::{DefId, DefKind, Resolved};
 use crate::span::Span;
@@ -59,7 +62,7 @@ pub(crate) enum GlueKind {
     Show,
 }
 
-pub(crate) enum Job {
+pub(crate) enum Job<'a> {
     Fn {
         id: FuncId,
         def: DefId,
@@ -70,6 +73,7 @@ pub(crate) enum Job {
         kind: GlueKind,
         ty: Ty,
     },
+    Closure(closure::ClosureJob<'a>),
 }
 
 /// How a parameter is passed in the IR.
@@ -123,7 +127,8 @@ pub(crate) struct Lowerer<'a> {
     pub core_fns: HashMap<String, DefId>,
     pub field_defaults: HashMap<DefId, (ModuleId, &'a Expr)>,
     pub instances: HashMap<(DefId, Vec<(DefId, Ty)>), FuncId>,
-    pub jobs: Vec<Job>,
+    pub jobs: Vec<Job<'a>>,
+    pub thunks: Vec<closure::ThunkJob>,
     pub names: HashMap<String, u32>,
     pub layouts: HashMap<Ty, Layout>,
     pub fields_cache: HashMap<Ty, Vec<Field>>,
@@ -149,6 +154,7 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         field_defaults: HashMap::new(),
         instances: HashMap::new(),
         jobs: Vec::new(),
+        thunks: Vec::new(),
         names: HashMap::new(),
         layouts: HashMap::new(),
         fields_cache: HashMap::new(),
@@ -194,7 +200,9 @@ impl<'a> Lowerer<'a> {
             match &s.kind {
                 StmtKind::Item(it) => self.index_item(file, it),
                 StmtKind::Decl(d) => {
-                    if let (PatternKind::Binding { name, .. }, Some(init)) = (&d.pattern.kind, &d.init) {
+                    if let (PatternKind::Binding { name, .. }, Some(init)) =
+                        (&d.pattern.kind, &d.init)
+                    {
                         if let Some(&def) = self.res.decls.get(&(file, name.span.start)) {
                             self.globals.insert(def, GlobalEntry { file, init });
                         }
@@ -219,7 +227,8 @@ impl<'a> Lowerer<'a> {
                         Member::Item(i) => self.index_item(file, i),
                         Member::Field(f) => {
                             if let (Some(owner), Some(default)) = (owner, &f.default) {
-                                let name = &self.program.module(file).src[f.name.span.start as usize..f.name.span.end as usize];
+                                let name = &self.program.module(file).src
+                                    [f.name.span.start as usize..f.name.span.end as usize];
                                 if let Some(fd) = self.res.member(owner, name) {
                                     self.field_defaults.insert(fd, (file, default));
                                 }
@@ -229,7 +238,8 @@ impl<'a> Lowerer<'a> {
                 }
             }
             ItemKind::Decl(d) => {
-                if let (PatternKind::Binding { name, .. }, Some(init)) = (&d.pattern.kind, &d.init) {
+                if let (PatternKind::Binding { name, .. }, Some(init)) = (&d.pattern.kind, &d.init)
+                {
                     if let Some(&def) = self.res.decls.get(&(file, name.span.start)) {
                         self.globals.insert(def, GlobalEntry { file, init });
                     }
@@ -270,9 +280,12 @@ impl<'a> Lowerer<'a> {
         match self.types.kind_of(t) {
             TyKind::Param(_) => true,
             TyKind::Adt(_, args) | TyKind::Tuple(args) => args.iter().any(|a| self.has_params(*a)),
-            TyKind::List(e) | TyKind::Option(e) | TyKind::Set(e) | TyKind::Box(e) | TyKind::Range(e) | TyKind::Iter(e) => {
-                self.has_params(*e)
-            }
+            TyKind::List(e)
+            | TyKind::Option(e)
+            | TyKind::Set(e)
+            | TyKind::Box(e)
+            | TyKind::Range(e)
+            | TyKind::Iter(e) => self.has_params(*e),
             TyKind::Result(a, b) | TyKind::Map(a, b) => self.has_params(*a) || self.has_params(*b),
             TyKind::Array(e, _) => self.has_params(*e),
             TyKind::Fn(ps, r) => ps.iter().any(|p| self.has_params(p.ty)) || self.has_params(*r),
@@ -284,14 +297,22 @@ impl<'a> Lowerer<'a> {
 
     fn unique_name(&mut self, base: String) -> String {
         let n = self.names.entry(base.clone()).or_insert(0);
-        let name = if *n == 0 { base.clone() } else { format!("{base}#{n}") };
+        let name = if *n == 0 {
+            base.clone()
+        } else {
+            format!("{base}#{n}")
+        };
         *n += 1;
         name
     }
 
     /// The type with these type arguments substituted.
     pub(crate) fn conc_with(&mut self, t: Ty, map: &HashMap<DefId, Ty>) -> Ty {
-        let t = if map.is_empty() { t } else { self.types.subst(t, map) };
+        let t = if map.is_empty() {
+            t
+        } else {
+            self.types.subst(t, map)
+        };
         self.types.zonk(t)
     }
 
@@ -331,7 +352,13 @@ impl<'a> Lowerer<'a> {
             RetPass::Val(t) => t,
             _ => IrTy::Void,
         };
-        Sig { params, ret, ret_pass, ir_params, ir_ret }
+        Sig {
+            params,
+            ret,
+            ret_pass,
+            ir_params,
+            ir_ret,
+        }
     }
 
     pub(crate) fn pass_of(&mut self, t: Ty, mode: Option<Mode>) -> Pass {
@@ -357,7 +384,12 @@ impl<'a> Lowerer<'a> {
             }
             None => name,
         };
-        let gens = self.typed.fn_infos.get(&def).map(|i| i.generics.clone()).unwrap_or_default();
+        let gens = self
+            .typed
+            .fn_infos
+            .get(&def)
+            .map(|i| i.generics.clone())
+            .unwrap_or_default();
         if !gens.is_empty() {
             let args: Vec<String> = gens
                 .iter()
@@ -400,7 +432,11 @@ impl<'a> Lowerer<'a> {
         func.terminate(e, Term::Stop("not lowered yet".to_string()));
         let id = self.module.add(func);
         self.instances.insert(key, id);
-        self.jobs.push(Job::Fn { id, def, subst: concrete });
+        self.jobs.push(Job::Fn {
+            id,
+            def,
+            subst: concrete,
+        });
         Some(id)
     }
 
@@ -411,6 +447,10 @@ impl<'a> Lowerer<'a> {
             match job {
                 Job::Fn { id, def, subst } => self.lower_fn_job(id, def, subst),
                 Job::Glue { id, kind, ty } => self.lower_glue_job(id, kind, ty),
+                Job::Closure(j) => self.lower_closure_job(j),
+            }
+            while let Some(t) = self.thunks.pop() {
+                self.lower_thunk(t);
             }
         }
     }
@@ -447,7 +487,8 @@ impl<'a> Lowerer<'a> {
                 self.module.funcs[id.0 as usize] = func;
             }
             (_, fail) => {
-                let (span, msg) = fail.unwrap_or((decl.name.span, "an internal problem".to_string()));
+                let (span, msg) =
+                    fail.unwrap_or((decl.name.span, "an internal problem".to_string()));
                 self.diags.push(Diagnostic {
                     module: file,
                     span,
@@ -495,7 +536,14 @@ impl<'a> Lowerer<'a> {
                         let slot = self.slot_for(ty);
                         self.store_scalar_ty(slot, v);
                         let flag = self.own(slot, ty, true);
-                        self.f.locals.insert(def, Local::Slot { ptr: slot, ty, flag });
+                        self.f.locals.insert(
+                            def,
+                            Local::Slot {
+                                ptr: slot,
+                                ty,
+                                flag,
+                            },
+                        );
                     } else {
                         self.f.locals.insert(def, Local::Val(v));
                     }
@@ -504,7 +552,11 @@ impl<'a> Lowerer<'a> {
                     let p = ir_params[next];
                     next += 1;
                     let Some(def) = def else { continue };
-                    let flag = if mode == Some(Mode::Sink) { self.own(p, ty, true) } else { None };
+                    let flag = if mode == Some(Mode::Sink) {
+                        self.own(p, ty, true)
+                    } else {
+                        None
+                    };
                     self.f.locals.insert(def, Local::Slot { ptr: p, ty, flag });
                 }
             }

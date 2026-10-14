@@ -117,26 +117,39 @@ impl<'a> Lowerer<'a> {
 
     fn compute_layout(&mut self, t: Ty) -> Layout {
         match self.kind(t) {
-            TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Ptr | TyKind::Box(_) => {
+            TyKind::Int(_)
+            | TyKind::Float(_)
+            | TyKind::Bool
+            | TyKind::Char
+            | TyKind::Ptr
+            | TyKind::Box(_) => {
                 let s = self.scalar_of(t).unwrap_or(IrTy::I64);
-                Layout { size: s.size(), align: s.size().max(1) }
+                Layout {
+                    size: s.size(),
+                    align: s.size().max(1),
+                }
             }
             TyKind::Void | TyKind::Never => Layout { size: 0, align: 1 },
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Obj => Layout { size: 8, align: 8 },
-                DefKind::Enum => self.enum_info(t).map_or(Layout { size: 0, align: 1 }, |e| e.layout),
+                DefKind::Enum => self
+                    .enum_info(t)
+                    .map_or(Layout { size: 0, align: 1 }, |e| e.layout),
                 _ => self.struct_layout(t),
             },
-            TyKind::Option(_) | TyKind::Result(..) => {
-                self.enum_info(t).map_or(Layout { size: 0, align: 1 }, |e| e.layout)
-            }
+            TyKind::Option(_) | TyKind::Result(..) => self
+                .enum_info(t)
+                .map_or(Layout { size: 0, align: 1 }, |e| e.layout),
             TyKind::Array(e, len) => {
                 let n = match len {
                     ArrayLen::Known(n) => n as u32,
                     _ => 0,
                 };
                 let el = self.layout(e);
-                Layout { size: el.size * n, align: el.align }
+                Layout {
+                    size: el.size * n,
+                    align: el.align,
+                }
             }
             _ => self.struct_layout(t),
         }
@@ -155,7 +168,10 @@ impl<'a> Lowerer<'a> {
             size = size.max(f.off + l.size);
             align = align.max(l.align);
         }
-        Layout { size: align_up(size, align), align }
+        Layout {
+            size: align_up(size, align),
+            align,
+        }
     }
 
     /// Offsets for a list of field types laid out in order, starting at `start`.
@@ -173,7 +189,12 @@ impl<'a> Lowerer<'a> {
 
     /// The type arguments of an ADT as a substitution for its type parameters.
     pub(crate) fn adt_subst(&mut self, d: DefId, args: &[Ty]) -> HashMap<DefId, Ty> {
-        let gens = self.typed.adts.get(&d).map(|a| a.generics.clone()).unwrap_or_default();
+        let gens = self
+            .typed
+            .adts
+            .get(&d)
+            .map(|a| a.generics.clone())
+            .unwrap_or_default();
         gens.into_iter().zip(args.iter().copied()).collect()
     }
 
@@ -190,7 +211,12 @@ impl<'a> Lowerer<'a> {
             TyKind::AltTuple(ts, _) => ts,
             TyKind::Adt(d, args) => {
                 let map = self.adt_subst(d, &args);
-                let fields = self.typed.adts.get(&d).map(|a| a.fields.clone()).unwrap_or_default();
+                let fields = self
+                    .typed
+                    .adts
+                    .get(&d)
+                    .map(|a| a.fields.clone())
+                    .unwrap_or_default();
                 fields
                     .into_iter()
                     .map(|(_, ft)| {
@@ -228,7 +254,12 @@ impl<'a> Lowerer<'a> {
             TyKind::Result(a, b) => vec![vec![a], vec![b]],
             TyKind::Adt(d, args) if self.res.def(d).kind == DefKind::Enum => {
                 let map = self.adt_subst(d, &args);
-                let variants = self.typed.adts.get(&d).map(|a| a.variants.clone()).unwrap_or_default();
+                let variants = self
+                    .typed
+                    .adts
+                    .get(&d)
+                    .map(|a| a.variants.clone())
+                    .unwrap_or_default();
                 variants
                     .into_iter()
                     .map(|(_, fs)| {
@@ -243,7 +274,11 @@ impl<'a> Lowerer<'a> {
             }
             _ => return None,
         };
-        let tag = if cases.len() <= 256 { IrTy::Int(8) } else { IrTy::Int(32) };
+        let tag = if cases.len() <= 256 {
+            IrTy::Int(8)
+        } else {
+            IrTy::Int(32)
+        };
         // The payloads of all cases start at the same offset.
         let mut max_align = tag.size();
         for case in &cases {
@@ -265,7 +300,10 @@ impl<'a> Lowerer<'a> {
             tag,
             payload_off,
             variants,
-            layout: Layout { size: align_up(end, max_align), align: max_align },
+            layout: Layout {
+                size: align_up(end, max_align),
+                align: max_align,
+            },
         });
         self.enums.insert(t, info.clone());
         Some(info)
@@ -290,7 +328,12 @@ impl<'a> Lowerer<'a> {
         // Break cycles: a recursive type through a `box` is dropped by its box.
         self.drop_cache.insert(t, false);
         let r = match self.kind(t) {
-            TyKind::String | TyKind::List(_) | TyKind::Iter(_) | TyKind::Map(..) | TyKind::Set(_) | TyKind::Box(_) => true,
+            TyKind::String
+            | TyKind::List(_)
+            | TyKind::Iter(_)
+            | TyKind::Map(..)
+            | TyKind::Set(_)
+            | TyKind::Box(_) => true,
             TyKind::Error => true,
             TyKind::Any(_) => true,
             TyKind::Adt(d, _) if self.res.def(d).kind == DefKind::Obj => true,
@@ -299,7 +342,9 @@ impl<'a> Lowerer<'a> {
                     true
                 } else if self.res.def(d).kind == DefKind::Enum {
                     let info = self.enum_info(t);
-                    let tys: Vec<Ty> = info.map(|e| e.variants.iter().flatten().map(|f| f.ty).collect()).unwrap_or_default();
+                    let tys: Vec<Ty> = info
+                        .map(|e| e.variants.iter().flatten().map(|f| f.ty).collect())
+                        .unwrap_or_default();
                     tys.into_iter().any(|x| self.needs_drop(x))
                 } else {
                     let fs = self.struct_fields(t);
@@ -308,7 +353,9 @@ impl<'a> Lowerer<'a> {
             }
             TyKind::Option(_) | TyKind::Result(..) => {
                 let info = self.enum_info(t);
-                let tys: Vec<Ty> = info.map(|e| e.variants.iter().flatten().map(|f| f.ty).collect()).unwrap_or_default();
+                let tys: Vec<Ty> = info
+                    .map(|e| e.variants.iter().flatten().map(|f| f.ty).collect())
+                    .unwrap_or_default();
                 tys.into_iter().any(|x| self.needs_drop(x))
             }
             TyKind::Tuple(ts) => ts.into_iter().any(|x| self.needs_drop(x)),

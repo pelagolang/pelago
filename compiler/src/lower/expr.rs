@@ -22,7 +22,11 @@ impl<'a> Lowerer<'a> {
 
     /// The (concrete) type of an expression.
     pub(crate) fn ty_of(&mut self, e: &Expr) -> Option<Ty> {
-        let t = self.typed.tys.get(&(self.f.file, e.span.start, e.span.end)).copied()?;
+        let t = self
+            .typed
+            .tys
+            .get(&(self.f.file, e.span.start, e.span.end))
+            .copied()?;
         let t = self.conc(t);
         match self.kind(t) {
             TyKind::Unknown | TyKind::Var(_) | TyKind::Param(_) => None,
@@ -77,7 +81,11 @@ impl<'a> Lowerer<'a> {
                 let Some(ty) = self.scalar_ty_of(e) else {
                     return self.unsupported(e.span, "a float of this type");
                 };
-                let x: f64 = self.src_text(e.span).replace('_', "").parse().unwrap_or(0.0);
+                let x: f64 = self
+                    .src_text(e.span)
+                    .replace('_', "")
+                    .parse()
+                    .unwrap_or(0.0);
                 Res::Val(self.konst(ty, Const::Float(x), e.span))
             }
             ExprKind::Char => {
@@ -101,7 +109,9 @@ impl<'a> Lowerer<'a> {
                 self.f.pending_label = None;
                 r
             }
-            ExprKind::Break { label, value } => self.break_expr(e, label.as_ref(), value.as_deref()),
+            ExprKind::Break { label, value } => {
+                self.break_expr(e, label.as_ref(), value.as_deref())
+            }
             ExprKind::Continue { label } => self.continue_expr(e, label.as_ref()),
             ExprKind::Return(v) => self.return_expr(e, v.as_deref()),
             ExprKind::Defer(inner) => {
@@ -110,10 +120,16 @@ impl<'a> Lowerer<'a> {
                 }
                 Res::Unit
             }
-            ExprKind::Convert { value, checked: false, .. } => self.convert(e, value),
+            ExprKind::Convert {
+                value,
+                checked: false,
+                ..
+            } => self.convert(e, value),
             ExprKind::Is { value, pattern } => self.is_expr(e, value, pattern),
             ExprKind::In { lhs, rhs } => self.in_expr(e, lhs, rhs),
-            ExprKind::Field { .. } | ExprKind::TupleIndex { .. } | ExprKind::Index { .. } => self.place_expr(e),
+            ExprKind::Field { .. } | ExprKind::TupleIndex { .. } | ExprKind::Index { .. } => {
+                self.place_expr(e)
+            }
             _ => self.rvalue_expr(e),
         }
     }
@@ -171,9 +187,10 @@ impl<'a> Lowerer<'a> {
             }
             Repr::Mem(_) => match &e.kind {
                 ExprKind::Paren(i) => self.into_exact(i, dst, t),
-                ExprKind::Name(_) | ExprKind::SelfValue | ExprKind::Field { .. } | ExprKind::TupleIndex { .. } => {
-                    self.into_from_place(e, dst, t)
-                }
+                ExprKind::Name(_)
+                | ExprKind::SelfValue
+                | ExprKind::Field { .. }
+                | ExprKind::TupleIndex { .. } => self.into_from_place(e, dst, t),
                 ExprKind::Index { index, .. } if !matches!(index.kind, ExprKind::Range { .. }) => {
                     self.into_from_place(e, dst, t)
                 }
@@ -233,14 +250,20 @@ impl<'a> Lowerer<'a> {
             ExprKind::Unsafe(b) => self.block(b, None, want),
             ExprKind::If(i) => self.if_expr(e, i, false, None, want),
             ExprKind::Unless(i) => self.if_expr(e, i, true, None, want),
-            ExprKind::Ternary { cond, then, else_ } => self.ternary(e, cond, then, else_, None, want),
+            ExprKind::Ternary { cond, then, else_ } => {
+                self.ternary(e, cond, then, else_, None, want)
+            }
             ExprKind::Loop(body) => self.loop_expr(e, body, None, want),
             ExprKind::Switch(s) => self.switch_expr(e, s, None, want),
             ExprKind::Call { callee, args, mark } => self.call(e, callee, args, *mark, None),
             ExprKind::Guard { cond, else_ } => self.guard_expr(cond, else_),
             ExprKind::Try(inner) => self.try_expr(e, inner, None),
             ExprKind::Copy(inner) => self.copy_expr(e, inner, None),
-            ExprKind::Binary { op: Punct::QuestionQuestion, lhs, rhs } => self.default_expr(e, lhs, rhs, None, want),
+            ExprKind::Binary {
+                op: Punct::QuestionQuestion,
+                lhs,
+                rhs,
+            } => self.default_expr(e, lhs, rhs, None, want),
             ExprKind::Binary { .. } | ExprKind::Unary { .. } => self.expr(e),
             _ => self.unsupported(e.span, "this kind of expression"),
         }
@@ -252,7 +275,9 @@ impl<'a> Lowerer<'a> {
             ExprKind::Block(b) | ExprKind::Unsafe(b) => self.block(b, Some(dst), t),
             ExprKind::If(i) => self.if_expr(e, i, false, Some(dst), t),
             ExprKind::Unless(i) => self.if_expr(e, i, true, Some(dst), t),
-            ExprKind::Ternary { cond, then, else_ } => self.ternary(e, cond, then, else_, Some(dst), t),
+            ExprKind::Ternary { cond, then, else_ } => {
+                self.ternary(e, cond, then, else_, Some(dst), t)
+            }
             ExprKind::Loop(body) => self.loop_expr(e, body, Some(dst), t),
             ExprKind::Switch(s) => self.switch_expr(e, s, Some(dst), t),
             ExprKind::Call { callee, args, mark } => self.call(e, callee, args, *mark, Some(dst)),
@@ -263,18 +288,29 @@ impl<'a> Lowerer<'a> {
             ExprKind::Str(parts) => self.string_lit(e, parts, dst, t),
             ExprKind::List(items) => self.list_lit(e, items, dst, t),
             ExprKind::None => self.none_lit(e, dst, t),
-            ExprKind::Name(_) | ExprKind::DotName(_) | ExprKind::Field { .. } => self.variant_value(e, dst, t),
+            ExprKind::Name(_) | ExprKind::DotName(_) | ExprKind::Field { .. } => {
+                self.variant_value(e, dst, t)
+            }
             ExprKind::Index { .. } => self.slice_expr(e, dst, t),
-            ExprKind::Binary { op: Punct::QuestionQuestion, lhs, rhs } => self.default_expr(e, lhs, rhs, Some(dst), t),
+            ExprKind::Binary {
+                op: Punct::QuestionQuestion,
+                lhs,
+                rhs,
+            } => self.default_expr(e, lhs, rhs, Some(dst), t),
             ExprKind::Closure(c) => self.closure_value(e, c, dst, t),
-            ExprKind::Convert { value, checked, .. } => self.convert_mem(e, value, *checked, dst, t),
+            ExprKind::Convert { value, checked, .. } => {
+                self.convert_mem(e, value, *checked, dst, t)
+            }
             ExprKind::Builder(b) => self.builder_expr(e, b, dst, t),
             ExprKind::Map(items) => self.map_lit(e, items, dst, t),
             ExprKind::Set(items) => self.set_lit(e, items, dst, t),
             ExprKind::Repeat { value, count } => self.repeat_lit(e, value, count, dst, t),
             ExprKind::Binary { .. } => self.binary_mem(e, dst, t),
             ExprKind::Range { .. } => self.range_value(e, dst, t),
-            ExprKind::Guard { .. } | ExprKind::Return(_) | ExprKind::Break { .. } | ExprKind::Continue { .. } => self.expr(e),
+            ExprKind::Guard { .. }
+            | ExprKind::Return(_)
+            | ExprKind::Break { .. }
+            | ExprKind::Continue { .. } => self.expr(e),
             _ => self.unsupported(e.span, "this kind of expression"),
         }
     }
@@ -466,7 +502,10 @@ impl<'a> Lowerer<'a> {
             return None;
         };
         let info = self.typed.adts.get(&d)?;
-        let idx = info.fields.iter().position(|(fd, _)| self.res.def(*fd).name == fname)?;
+        let idx = info
+            .fields
+            .iter()
+            .position(|(fd, _)| self.res.def(*fd).name == fname)?;
         let fs = self.struct_fields(inner);
         let f = fs.get(idx)?;
         Some(self.addr(p, f.off))
@@ -596,7 +635,12 @@ impl<'a> Lowerer<'a> {
 
     /// Operators on memory types: joining text.
     fn binary_mem(&mut self, e: &'a Expr, dst: Value, t: Ty) -> Res {
-        if let ExprKind::Binary { op: Punct::Plus, lhs, rhs } = &e.kind {
+        if let ExprKind::Binary {
+            op: Punct::Plus,
+            lhs,
+            rhs,
+        } = &e.kind
+        {
             if matches!(self.kind(t), TyKind::String) {
                 return self.concat(e, lhs, rhs, dst);
             }
@@ -608,7 +652,15 @@ impl<'a> Lowerer<'a> {
     }
 
     /// `a op b` on two values of type `ty`.
-    pub(crate) fn arith(&mut self, span: Span, op: Punct, ty: IrTy, signed: bool, a: Value, b: Value) -> Res {
+    pub(crate) fn arith(
+        &mut self,
+        span: Span,
+        op: Punct,
+        ty: IrTy,
+        signed: bool,
+        a: Value,
+        b: Value,
+    ) -> Res {
         if ty.is_float() {
             let o = match op {
                 Punct::Plus => BinOp::Add,
@@ -701,8 +753,14 @@ impl<'a> Lowerer<'a> {
             Some(a) => a,
             None => return Res::Never,
         };
-        let skip = Target { block: join, args: vec![a] };
-        let go = Target { block: eval_rhs, args: vec![] };
+        let skip = Target {
+            block: join,
+            args: vec![a],
+        };
+        let go = Target {
+            block: eval_rhs,
+            args: vec![],
+        };
         // `a && b`: when `a` is false the result is `a`. `a || b`: when `a` is true the result is `a`.
         if and {
             self.terminate(Term::Branch(a, go, skip));
@@ -867,7 +925,8 @@ impl<'a> Lowerer<'a> {
         } else {
             CastKind::Trunc
         };
-        self.emit(Op::Cast(kind, v, ty), Some(ty), span).unwrap_or(v)
+        self.emit(Op::Cast(kind, v, ty), Some(ty), span)
+            .unwrap_or(v)
     }
 
     fn incdec(&mut self, e: &'a Expr, op: Punct, operand: &'a Expr) -> Res {
@@ -885,7 +944,11 @@ impl<'a> Lowerer<'a> {
             return Res::Never;
         };
         let one = self.konst(ty, Const::Int(1), e.span);
-        let o = if op == Punct::PlusPlus { Punct::Plus } else { Punct::Minus };
+        let o = if op == Punct::PlusPlus {
+            Punct::Plus
+        } else {
+            Punct::Minus
+        };
         if let Res::Val(v) = self.arith(e.span, o, ty, signed, cur, one) {
             self.emit(Op::Store(p, v), None, e.span);
         }
@@ -937,8 +1000,14 @@ impl<'a> Lowerer<'a> {
         let join = self.new_block(&[ty]);
         self.terminate(Term::Branch(
             cond,
-            Target { block: join, args: vec![a] },
-            Target { block: join, args: vec![b] },
+            Target {
+                block: join,
+                args: vec![a],
+            },
+            Target {
+                block: join,
+                args: vec![b],
+            },
         ));
         self.start(join);
         Res::Val(self.f.func.block_params(join)[0])
@@ -1032,7 +1101,8 @@ impl<'a> Lowerer<'a> {
         let declared = match &d.pattern.kind {
             PatternKind::Binding { name, .. } => {
                 let def = self.res.decls.get(&(self.f.file, name.span.start)).copied();
-                def.and_then(|df| self.typed.local_tys.get(&df).copied()).map(|t| self.conc(t))
+                def.and_then(|df| self.typed.local_tys.get(&df).copied())
+                    .map(|t| self.conc(t))
             }
             _ => None,
         };
@@ -1079,7 +1149,14 @@ impl<'a> Lowerer<'a> {
                     return;
                 }
                 let flag = self.own(slot, vt, true);
-                self.f.locals.insert(def, Local::Slot { ptr: slot, ty: vt, flag });
+                self.f.locals.insert(
+                    def,
+                    Local::Slot {
+                        ptr: slot,
+                        ty: vt,
+                        flag,
+                    },
+                );
             }
         }
     }
@@ -1091,7 +1168,14 @@ impl<'a> Lowerer<'a> {
         self.repr(t)
     }
 
-    fn if_expr(&mut self, e: &'a Expr, i: &'a IfExpr, unless: bool, dst: Option<Value>, want: Ty) -> Res {
+    fn if_expr(
+        &mut self,
+        e: &'a Expr,
+        i: &'a IfExpr,
+        unless: bool,
+        dst: Option<Value>,
+        want: Ty,
+    ) -> Res {
         let rt = self.ty_of(e).unwrap_or(self.types.void);
         let repr = self.arm_ty(rt);
         let then_b = self.new_block(&[]);
@@ -1109,7 +1193,15 @@ impl<'a> Lowerer<'a> {
         let join = self.new_block(&join_params);
         let mut reached = false;
         self.start(then_b);
-        let r = self.block(&i.then, if matches!(repr, Repr::Mem(_)) { dst } else { None }, want);
+        let r = self.block(
+            &i.then,
+            if matches!(repr, Repr::Mem(_)) {
+                dst
+            } else {
+                None
+            },
+            want,
+        );
         reached |= self.finish_arm(r, join, repr);
         self.start(else_b);
         let r = match &i.else_ {
@@ -1132,7 +1224,13 @@ impl<'a> Lowerer<'a> {
     }
 
     /// An arm that is an expression (`else` branch, ternary side, `case` body expression).
-    pub(crate) fn arm_expr(&mut self, e: &'a Expr, repr: Repr, dst: Option<Value>, want: Ty) -> Res {
+    pub(crate) fn arm_expr(
+        &mut self,
+        e: &'a Expr,
+        repr: Repr,
+        dst: Option<Value>,
+        want: Ty,
+    ) -> Res {
         self.push_scope();
         let r = match repr {
             Repr::Mem(_) => match dst {
@@ -1170,7 +1268,15 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn ternary(&mut self, e: &'a Expr, cond: &'a Expr, then: &'a Expr, else_: &'a Expr, dst: Option<Value>, want: Ty) -> Res {
+    fn ternary(
+        &mut self,
+        e: &'a Expr,
+        cond: &'a Expr,
+        then: &'a Expr,
+        else_: &'a Expr,
+        dst: Option<Value>,
+        want: Ty,
+    ) -> Res {
         let rt = self.ty_of(e).unwrap_or(self.types.void);
         let repr = self.arm_ty(rt);
         let then_b = self.new_block(&[]);
@@ -1219,7 +1325,14 @@ impl<'a> Lowerer<'a> {
         self.exit_scopes(depth);
         self.jump(exit, vec![]);
         self.f.cur = saved;
-        self.f.loops.push(LoopCtx { label, cont: head, exit, break_ty: None, break_dst: None, scope_depth: depth });
+        self.f.loops.push(LoopCtx {
+            label,
+            cont: head,
+            exit,
+            break_ty: None,
+            break_dst: None,
+            scope_depth: depth,
+        });
         self.start(body_b);
         let void = self.types.void;
         let r = self.block(body, None, void);
@@ -1256,10 +1369,21 @@ impl<'a> Lowerer<'a> {
             Repr::Scalar(s) => Some(s),
             _ => None,
         };
-        let break_dst = if matches!(repr, Repr::Mem(_)) { dst } else { None };
+        let break_dst = if matches!(repr, Repr::Mem(_)) {
+            dst
+        } else {
+            None
+        };
         let _ = want;
         let depth = self.f.scopes.len();
-        self.f.loops.push(LoopCtx { label, cont: head, exit, break_ty, break_dst, scope_depth: depth });
+        self.f.loops.push(LoopCtx {
+            label,
+            cont: head,
+            exit,
+            break_ty,
+            break_dst,
+            scope_depth: depth,
+        });
         let void = self.types.void;
         let r = self.block(body, None, void);
         if !matches!(r, Res::Never) {
@@ -1288,7 +1412,13 @@ impl<'a> Lowerer<'a> {
         let ForHead::Of { pats, iter } = &f.head else {
             return self.unsupported(e.span, "this kind of `for`");
         };
-        if let ExprKind::Range { start: Some(start), end: Some(end), inclusive, step: None } = &iter.kind {
+        if let ExprKind::Range {
+            start: Some(start),
+            end: Some(end),
+            inclusive,
+            step: None,
+        } = &iter.kind
+        {
             return self.for_range(label, pats, start, end, *inclusive, &f.body, iter.span);
         }
         self.for_each(label, pats, iter, &f.body)
@@ -1309,7 +1439,9 @@ impl<'a> Lowerer<'a> {
             return self.unsupported(span, "this `for` pattern");
         };
         let var = match &pat.kind {
-            PatternKind::Binding { name, mode: None } => self.res.decls.get(&(self.f.file, name.span.start)).copied(),
+            PatternKind::Binding { name, mode: None } => {
+                self.res.decls.get(&(self.f.file, name.span.start)).copied()
+            }
             PatternKind::Wildcard => None,
             _ => return self.unsupported(pat.span, "this `for` pattern"),
         };
@@ -1346,7 +1478,14 @@ impl<'a> Lowerer<'a> {
             self.f.locals.insert(d, Local::Val(i));
         }
         let depth = self.f.scopes.len();
-        self.f.loops.push(LoopCtx { label, cont: step, exit, break_ty: None, break_dst: None, scope_depth: depth });
+        self.f.loops.push(LoopCtx {
+            label,
+            cont: step,
+            exit,
+            break_ty: None,
+            break_dst: None,
+            scope_depth: depth,
+        });
         self.start(body_b);
         let void = self.types.void;
         let r = self.block(body, None, void);
@@ -1380,7 +1519,10 @@ impl<'a> Lowerer<'a> {
         match label {
             Some(l) => {
                 let name = self.src_text(l.span);
-                self.f.loops.iter().rposition(|c| c.label.as_deref() == Some(name))
+                self.f
+                    .loops
+                    .iter()
+                    .rposition(|c| c.label.as_deref() == Some(name))
             }
             None => self.f.loops.len().checked_sub(1),
         }

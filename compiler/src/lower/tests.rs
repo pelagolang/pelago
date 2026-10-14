@@ -224,16 +224,44 @@ fn tuples_and_destructuring() {
 fn enums_and_switch() {
     let shapes = "enum shape { circle(int)\n rect(int, int)\n empty }\n";
     let area = format!("{shapes}fn area(s: shape) -> int {{ switch s {{ case .circle(r): 3 * r * r\n case .rect(w, h): w * h\n case .empty: 0 }} }}\n");
-    assert_eq!(eval(&format!("{area}fn f() -> int = area(.circle(2))"), "f", &[]), Ok(12));
-    assert_eq!(eval(&format!("{area}fn f() -> int = area(shape.rect(3, 4))"), "f", &[]), Ok(12));
-    assert_eq!(eval(&format!("{area}fn f() -> int = area(.empty)"), "f", &[]), Ok(0));
+    assert_eq!(
+        eval(&format!("{area}fn f() -> int = area(.circle(2))"), "f", &[]),
+        Ok(12)
+    );
+    assert_eq!(
+        eval(
+            &format!("{area}fn f() -> int = area(shape.rect(3, 4))"),
+            "f",
+            &[]
+        ),
+        Ok(12)
+    );
+    assert_eq!(
+        eval(&format!("{area}fn f() -> int = area(.empty)"), "f", &[]),
+        Ok(0)
+    );
     let alt = format!("{shapes}fn f(s: shape) -> int {{ switch s {{ case .circle(r), .rect(r, _): r\n default: -1 }} }}");
-    assert_eq!(eval(&format!("{alt}\nfn g() -> int = f(.rect(7, 8))"), "g", &[]), Ok(7));
-    assert_eq!(eval(&format!("{alt}\nfn g() -> int = f(.empty)"), "g", &[]), Ok(-1));
+    assert_eq!(
+        eval(&format!("{alt}\nfn g() -> int = f(.rect(7, 8))"), "g", &[]),
+        Ok(7)
+    );
+    assert_eq!(
+        eval(&format!("{alt}\nfn g() -> int = f(.empty)"), "g", &[]),
+        Ok(-1)
+    );
     let guard = format!("{shapes}fn f(s: shape) -> int {{ switch s {{ case .circle(r) if r > 5: 1\n case .circle(r): 2\n default: 3 }} }}");
-    assert_eq!(eval(&format!("{guard}\nfn g() -> int = f(.circle(9))"), "g", &[]), Ok(1));
-    assert_eq!(eval(&format!("{guard}\nfn g() -> int = f(.circle(1))"), "g", &[]), Ok(2));
-    assert_eq!(eval(&format!("{guard}\nfn g() -> int = f(.empty)"), "g", &[]), Ok(3));
+    assert_eq!(
+        eval(&format!("{guard}\nfn g() -> int = f(.circle(9))"), "g", &[]),
+        Ok(1)
+    );
+    assert_eq!(
+        eval(&format!("{guard}\nfn g() -> int = f(.circle(1))"), "g", &[]),
+        Ok(2)
+    );
+    assert_eq!(
+        eval(&format!("{guard}\nfn g() -> int = f(.empty)"), "g", &[]),
+        Ok(3)
+    );
 }
 
 #[test]
@@ -283,7 +311,10 @@ fn generics_are_specialised() {
     assert_eq!(eval(src, "g", &[]), Ok(1));
     let l = lowered(src);
     let names: Vec<&str> = l.module.funcs.iter().map(|f| f.name.as_str()).collect();
-    assert!(names.contains(&"first<int>") && names.contains(&"first<bool>"), "{names:?}");
+    assert!(
+        names.contains(&"first<int>") && names.contains(&"first<bool>"),
+        "{names:?}"
+    );
     let src = "struct pair<T> { a: T, b: T\n fn sum(self) -> int = 0 }\nfn f() -> int { const p = pair { a: 3, b: 4 }\n p.a + p.b }";
     assert_eq!(eval(src, "f", &[]), Ok(7));
 }
@@ -308,33 +339,73 @@ fn output_of(src: &str) -> String {
 #[test]
 fn printing_basic_values() {
     assert_eq!(output_of("fn main() { print(\"hello\") }"), "hello\n");
-    assert_eq!(output_of("fn main() { print(1, 2.5, true, 'x', \"s\") }"), "1 2.5 true x s\n");
-    assert_eq!(output_of("fn main() { print(-42, 0, 9223372036854775807) }"), "-42 0 9223372036854775807\n");
-    assert_eq!(output_of("fn main() { print(0.1 + 0.2, 100.0, 1.0 / 3.0) }"), "0.3 100 0.333333\n");
+    assert_eq!(
+        output_of("fn main() { print(1, 2.5, true, 'x', \"s\") }"),
+        "1 2.5 true x s\n"
+    );
+    assert_eq!(
+        output_of("fn main() { print(-42, 0, 9223372036854775807) }"),
+        "-42 0 9223372036854775807\n"
+    );
+    assert_eq!(
+        output_of("fn main() { print(0.1 + 0.2, 100.0, 1.0 / 3.0) }"),
+        "0.3 100 0.333333\n"
+    );
 }
 
 #[test]
 fn interpolation_and_joining() {
-    assert_eq!(output_of("fn main() { const name = \"Ann\"\n print(\"hi #name, #(1 + 2)!\") }"), "hi Ann, 3!\n");
-    assert_eq!(output_of("fn main() { const a = \"foo\"\n const b = \"bar\"\n print(a + b + \"!\") }"), "foobar!\n");
-    assert_eq!(output_of("fn main() { var s = \"a\"\n s += \"b\"\n s += \"c\"\n print(s) }"), "abc\n");
-    assert_eq!(output_of("fn main() { print(\"tab\\there \\\"q\\\"\") }"), "tab\there \"q\"\n");
+    assert_eq!(
+        output_of("fn main() { const name = \"Ann\"\n print(\"hi #name, #(1 + 2)!\") }"),
+        "hi Ann, 3!\n"
+    );
+    assert_eq!(
+        output_of("fn main() { const a = \"foo\"\n const b = \"bar\"\n print(a + b + \"!\") }"),
+        "foobar!\n"
+    );
+    assert_eq!(
+        output_of("fn main() { var s = \"a\"\n s += \"b\"\n s += \"c\"\n print(s) }"),
+        "abc\n"
+    );
+    assert_eq!(
+        output_of("fn main() { print(\"tab\\there \\\"q\\\"\") }"),
+        "tab\there \"q\"\n"
+    );
 }
 
 #[test]
 fn text_comparison_and_slices() {
-    assert_eq!(output_of("fn main() { print(\"a\" == \"a\", \"a\" == \"b\", \"a\" < \"b\", \"b\" <= \"a\") }"), "true false true false\n");
-    assert_eq!(output_of("fn main() { const s = \"hello\"\n print(s[1..3], s[..2], s[3..]) }"), "el he lo\n");
+    assert_eq!(
+        output_of(
+            "fn main() { print(\"a\" == \"a\", \"a\" == \"b\", \"a\" < \"b\", \"b\" <= \"a\") }"
+        ),
+        "true false true false\n"
+    );
+    assert_eq!(
+        output_of("fn main() { const s = \"hello\"\n print(s[1..3], s[..2], s[3..]) }"),
+        "el he lo\n"
+    );
     assert_eq!(output_of("fn f(s: str) -> int { switch s { case \"a\": 1\n case \"b\": 2\n default: 0 } }\nfn main() { print(f(\"a\"), f(\"b\"), f(\"z\")) }"), "1 2 0\n");
 }
 
 #[test]
 fn lists() {
-    assert_eq!(output_of("fn main() { var xs: [int] = []\n xs.push!(3)\n xs.push!(4)\n print(xs.len(), xs) }"), "2 [3, 4]\n");
+    assert_eq!(
+        output_of(
+            "fn main() { var xs: [int] = []\n xs.push!(3)\n xs.push!(4)\n print(xs.len(), xs) }"
+        ),
+        "2 [3, 4]\n"
+    );
     assert_eq!(output_of("fn main() { const xs = [1, 2, 3]\n var t = 0\n for x of xs { t += x }\n print(t, xs[1]) }"), "6 2\n");
-    assert_eq!(output_of("fn main() { var xs = [5, 3, 9, 1]\n xs.sort!()\n print(xs, xs.reversed()) }"), "[1, 3, 5, 9] [9, 5, 3, 1]\n");
+    assert_eq!(
+        output_of("fn main() { var xs = [5, 3, 9, 1]\n xs.sort!()\n print(xs, xs.reversed()) }"),
+        "[1, 3, 5, 9] [9, 5, 3, 1]\n"
+    );
     assert_eq!(output_of("fn main() { var xs = [1, 2, 3]\n const p = xs.pop!()\n print(p, xs, xs.first(), xs.last(), xs.get(7)) }"), "some(3) [1, 2] some(1) some(2) none\n");
-    assert_eq!(output_of("fn main() { const xs = [10, 20, 30]\n for i, x of xs { print(i, x) } }"), "0 10\n1 20\n2 30\n");
+    assert_eq!(
+        output_of("fn main() { const xs = [10, 20, 30]\n for i, x of xs { print(i, x) } }"),
+        "0 10\n1 20\n2 30\n"
+    );
     assert_eq!(output_of("fn main() { var xs = [1, 2, 3]\n xs.insert!(1, 9)\n const r = xs.remove!(0)\n print(xs, r, xs.contains(9), xs.contains(7)) }"), "[9, 2, 3] 1 true false\n");
     let o = run_main("fn main() { const xs = [1, 2, 3]\n print(xs[5]) }");
     assert_eq!(o.result, Err("index out of range".to_string()));
@@ -362,7 +433,8 @@ fn owning_values_are_dropped_exactly_once() {
 fn question_mark_and_defaults() {
     let src = "fn quarter(n: int) -> int ! parse_error {\n const h = parse(\"8\")?\n ok(h + n)\n}\nfn parse(s: str) -> int ! parse_error = s.parse_int()\nfn main() { print(quarter(1), parse(\"x\")) }";
     assert_eq!(output_of(src), "ok(9) err(bad digit at position 0)\n");
-    let src = "fn f(o: int?) -> int? {\n const v = o?\n v + 1\n}\nfn main() { print(f(5), f(none)) }";
+    let src =
+        "fn f(o: int?) -> int? {\n const v = o?\n v + 1\n}\nfn main() { print(f(5), f(none)) }";
     assert_eq!(output_of(src), "some(6) none\n");
     let src = "fn main() { const a: int? = none\n const b: int? = 4\n print(a ?? 9, b ?? 9) }";
     assert_eq!(output_of(src), "9 4\n");
@@ -374,7 +446,8 @@ fn question_mark_and_defaults() {
 
 #[test]
 fn copy_and_in() {
-    let src = "fn main() { const a = [\"x\", \"y\"]\n var b = copy a\n b.push!(\"z\")\n print(a, b) }";
+    let src =
+        "fn main() { const a = [\"x\", \"y\"]\n var b = copy a\n b.push!(\"z\")\n print(a, b) }";
     assert_eq!(output_of(src), "[\"x\", \"y\"] [\"x\", \"y\", \"z\"]\n");
     let src = "fn main() { print(3 in 1..5, 5 in 1..5, 5 in 1..=5, 2 in [1, 2, 3], \"ell\" in \"hello\", 9 in [1, 2]) }";
     assert_eq!(output_of(src), "true false true true true false\n");
@@ -383,11 +456,38 @@ fn copy_and_in() {
 #[test]
 fn text_methods() {
     let src = "fn main() { const s = \"  Hello, World  \"\n print(s.trim(), s.trim().to_upper(), s.to_lower().trim(), s.contains(\"World\"), s.trim().starts_with(\"Hello\"), s.trim().ends_with(\"d\")) }";
-    assert_eq!(output_of(src), "Hello, World HELLO, WORLD hello, world true true true\n");
-    let src = "fn main() { const parts = \"a,b,,c\".split(\",\").to_list()\n print(parts, parts.len()) }";
+    assert_eq!(
+        output_of(src),
+        "Hello, World HELLO, WORLD hello, world true true true\n"
+    );
+    let src =
+        "fn main() { const parts = \"a,b,,c\".split(\",\").to_list()\n print(parts, parts.len()) }";
     assert_eq!(output_of(src), "[\"a\", \"b\", \"\", \"c\"] 4\n");
-    let src = "fn main() { print(\"hello world\".replace(\"o\", \"0\"), \"héllo\".chars().count()) }";
+    let src =
+        "fn main() { print(\"hello world\".replace(\"o\", \"0\"), \"héllo\".chars().count()) }";
     assert_eq!(output_of(src), "hell0 w0rld 5\n");
     let src = "fn main() { print(\"42\".parse_int(), \"-7\".parse_int(), \"4x\".parse_int(), \"3.5\".parse_float()) }";
-    assert_eq!(output_of(src), "ok(42) ok(-7) err(bad digit at position 1) ok(3.5)\n");
+    assert_eq!(
+        output_of(src),
+        "ok(42) ok(-7) err(bad digit at position 1) ok(3.5)\n"
+    );
+}
+
+#[test]
+fn function_values() {
+    let src = "fn apply(f: fn(int) -> int, x: int) -> int = f(x)\nfn dbl(x: int) -> int = x * 2\nfn main() { print(apply(dbl, 4), apply(x ~> x + 1, 4)) }";
+    assert_eq!(output_of(src), "8 5\n");
+    let src = "fn apply(f: fn(int) -> int, x: int) -> int = f(x)\nfn main() { const k = 10\n const add = x ~> x + k\n print(apply(add, 1), add(2)) }";
+    assert_eq!(output_of(src), "11 12\n");
+    let src =
+        "fn main() { var n = 0\n const bump = () ~> { n += 1 }\n bump()\n bump()\n print(n) }";
+    assert_eq!(output_of(src), "2\n");
+}
+
+#[test]
+fn list_closures_and_option_map() {
+    let src = "fn main() {\n const xs = [1, 2, 3, 4]\n print(xs.map(x ~> x * 10).to_list(), xs.filter(x ~> x % 2 == 0).to_list())\n var total = 0\n xs.each(x ~> { total += x })\n print(total) }";
+    assert_eq!(output_of(src), "[10, 20, 30, 40] [2, 4]\n10\n");
+    let src = "fn main() {\n const names = [\"a\", \"bb\"]\n print(names.map(s ~> s.len()).to_list())\n const o: int? = 4\n print(o.map(x ~> x + 1), o.or_err(\"no\"))\n const r: int ! string = err(\"e\")\n print(r.map_err(s ~> s.len())) }";
+    assert_eq!(output_of(src), "[1, 2]\nsome(5) ok(4)\nerr(1)\n");
 }

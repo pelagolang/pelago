@@ -110,7 +110,8 @@ impl<'a> Lowerer<'a> {
     }
 
     pub(crate) fn konst(&mut self, ty: IrTy, c: Const, span: Span) -> Value {
-        self.emit(Op::Const(ty, c), Some(ty), span).unwrap_or(Value(0))
+        self.emit(Op::Const(ty, c), Some(ty), span)
+            .unwrap_or(Value(0))
     }
 
     pub(crate) fn i64c(&mut self, n: i64) -> Value {
@@ -130,8 +131,14 @@ impl<'a> Lowerer<'a> {
     pub(crate) fn branch(&mut self, c: Value, yes: BlockId, no: BlockId) {
         self.terminate(Term::Branch(
             c,
-            Target { block: yes, args: vec![] },
-            Target { block: no, args: vec![] },
+            Target {
+                block: yes,
+                args: vec![],
+            },
+            Target {
+                block: no,
+                args: vec![],
+            },
         ));
     }
 
@@ -193,7 +200,8 @@ impl<'a> Lowerer<'a> {
 
     pub(crate) fn load_at(&mut self, base: Value, off: u32, ty: IrTy) -> Value {
         let p = self.addr(base, off);
-        self.emit(Op::Load(ty, p), Some(ty), Span::new(0, 0)).unwrap_or(Value(0))
+        self.emit(Op::Load(ty, p), Some(ty), Span::new(0, 0))
+            .unwrap_or(Value(0))
     }
 
     pub(crate) fn store_at(&mut self, base: Value, off: u32, v: Value) {
@@ -259,7 +267,11 @@ impl<'a> Lowerer<'a> {
             let items: Vec<ScopeItem<'a>> = self.f.scopes[i]
                 .iter()
                 .map(|it| match it {
-                    ScopeItem::Drop { ptr, ty, flag } => ScopeItem::Drop { ptr: *ptr, ty: *ty, flag: *flag },
+                    ScopeItem::Drop { ptr, ty, flag } => ScopeItem::Drop {
+                        ptr: *ptr,
+                        ty: *ty,
+                        flag: *flag,
+                    },
                     ScopeItem::Defer(e) => ScopeItem::Defer(e),
                 })
                 .collect();
@@ -276,14 +288,22 @@ impl<'a> Lowerer<'a> {
         }
         let f = self.slot_bytes(1, 1);
         let entry = self.f.func.entry();
-        let no = self.f.func.emit(entry, Op::Const(IrTy::Bool, Const::Bool(false)), Some(IrTy::Bool));
+        let no = self.f.func.emit(
+            entry,
+            Op::Const(IrTy::Bool, Const::Bool(false)),
+            Some(IrTy::Bool),
+        );
         if let Some(no) = no {
             self.f.func.emit(entry, Op::Store(f, no), None);
         }
         let one = self.konst(IrTy::Bool, Const::Bool(true), Span::new(0, 0));
         self.emit(Op::Store(f, one), None, Span::new(0, 0));
         if let Some(s) = self.f.scopes.last_mut() {
-            s.push(ScopeItem::Drop { ptr, ty, flag: Some(f) });
+            s.push(ScopeItem::Drop {
+                ptr,
+                ty,
+                flag: Some(f),
+            });
         }
         Some(f)
     }

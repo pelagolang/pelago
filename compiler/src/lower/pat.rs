@@ -18,19 +18,30 @@ impl<'a> Lowerer<'a> {
         }
         let c = strip_parens(c);
         match &c.kind {
-            ExprKind::Binary { op: Punct::AndAnd, lhs, rhs } => {
+            ExprKind::Binary {
+                op: Punct::AndAnd,
+                lhs,
+                rhs,
+            } => {
                 let mid = self.new_block(&[]);
                 self.cond_branch(lhs, mid, no);
                 self.start(mid);
                 self.cond_branch(rhs, yes, no);
             }
-            ExprKind::Binary { op: Punct::OrOr, lhs, rhs } => {
+            ExprKind::Binary {
+                op: Punct::OrOr,
+                lhs,
+                rhs,
+            } => {
                 let mid = self.new_block(&[]);
                 self.cond_branch(lhs, yes, mid);
                 self.start(mid);
                 self.cond_branch(rhs, yes, no);
             }
-            ExprKind::Unary { op: Punct::Bang, operand } => self.cond_branch(operand, no, yes),
+            ExprKind::Unary {
+                op: Punct::Bang,
+                operand,
+            } => self.cond_branch(operand, no, yes),
             ExprKind::Is { value, pattern } => {
                 let Some((p, t)) = self.scrutinee(value) else {
                     return;
@@ -131,7 +142,11 @@ impl<'a> Lowerer<'a> {
                 self.pat_test(pattern, ptr, ty, fail)
             }
             PatternKind::Literal(lit) => self.test_literal(lit, ptr, ty, fail),
-            PatternKind::Range { start, end, inclusive } => self.test_range(start.as_deref(), end.as_deref(), *inclusive, ptr, ty, fail),
+            PatternKind::Range {
+                start,
+                end,
+                inclusive,
+            } => self.test_range(start.as_deref(), end.as_deref(), *inclusive, ptr, ty, fail),
             PatternKind::Tuple(ps) => {
                 if ps.is_empty() {
                     return true;
@@ -150,10 +165,14 @@ impl<'a> Lowerer<'a> {
                 true
             }
             PatternKind::None => self.test_tag(ptr, ty, 0, fail, p.span),
-            PatternKind::Variant { leading_dot, path, args } => {
-                self.test_variant(p, *leading_dot, path, args.as_deref(), ptr, ty, fail)
+            PatternKind::Variant {
+                leading_dot,
+                path,
+                args,
+            } => self.test_variant(p, *leading_dot, path, args.as_deref(), ptr, ty, fail),
+            PatternKind::Struct { path, fields, .. } => {
+                self.test_struct(p, path, fields, ptr, ty, fail)
             }
-            PatternKind::Struct { path, fields, .. } => self.test_struct(p, path, fields, ptr, ty, fail),
             PatternKind::List(items) => self.test_list(p, items, ptr, ty, fail),
             PatternKind::TypeTest(path) => self.test_type(p, path, ptr, ty, fail),
         }
@@ -170,7 +189,14 @@ impl<'a> Lowerer<'a> {
 
     fn bind_alias(&mut self, name: &Ident, ptr: Value, ty: Ty) {
         if let Some(def) = self.binding_def(name) {
-            self.f.locals.insert(def, Local::Slot { ptr, ty, flag: None });
+            self.f.locals.insert(
+                def,
+                Local::Slot {
+                    ptr,
+                    ty,
+                    flag: None,
+                },
+            );
         }
     }
 
@@ -195,14 +221,26 @@ impl<'a> Lowerer<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn test_variant(&mut self, p: &'a Pattern, leading_dot: bool, path: &'a Path, args: Option<&'a [PatArg]>, ptr: Value, ty: Ty, fail: BlockId) -> bool {
+    fn test_variant(
+        &mut self,
+        p: &'a Pattern,
+        leading_dot: bool,
+        path: &'a Path,
+        args: Option<&'a [PatArg]>,
+        ptr: Value,
+        ty: Ty,
+        fail: BlockId,
+    ) -> bool {
         let Some(last) = path.segments.last() else {
             return false;
         };
         // `some`, `ok` and `err`.
         if !leading_dot && path.segments.len() == 1 {
             if let Some(d) = self.res.use_at(self.f.file, last.span.start) {
-                if matches!(self.res.def(d).kind, DefKind::BuiltinFn | DefKind::BuiltinCase) {
+                if matches!(
+                    self.res.def(d).kind,
+                    DefKind::BuiltinFn | DefKind::BuiltinCase
+                ) {
                     let idx = match self.res.def(d).name.as_str() {
                         "some" | "err" => 1,
                         _ => 0,
@@ -240,7 +278,16 @@ impl<'a> Lowerer<'a> {
 
     /// Tests the tag, then the patterns for the payload of that case.
     #[allow(clippy::too_many_arguments)]
-    fn test_payload(&mut self, p: &'a Pattern, ptr: Value, ty: Ty, idx: usize, args: Option<&'a [PatArg]>, labels: &[Option<String>], fail: BlockId) -> bool {
+    fn test_payload(
+        &mut self,
+        p: &'a Pattern,
+        ptr: Value,
+        ty: Ty,
+        idx: usize,
+        args: Option<&'a [PatArg]>,
+        labels: &[Option<String>],
+        fail: BlockId,
+    ) -> bool {
         if !self.test_tag(ptr, ty, idx, fail, p.span) {
             return false;
         }
@@ -256,7 +303,10 @@ impl<'a> Lowerer<'a> {
             let i = match &a.label {
                 Some(l) => {
                     let n = self.src_text(l.span);
-                    labels.iter().position(|x| x.as_deref() == Some(n)).unwrap_or(next)
+                    labels
+                        .iter()
+                        .position(|x| x.as_deref() == Some(n))
+                        .unwrap_or(next)
                 }
                 None => next,
             };
@@ -273,14 +323,27 @@ impl<'a> Lowerer<'a> {
         true
     }
 
-    fn test_struct(&mut self, p: &'a Pattern, path: &'a Path, fields: &'a [FieldPat], ptr: Value, ty: Ty, fail: BlockId) -> bool {
+    fn test_struct(
+        &mut self,
+        p: &'a Pattern,
+        path: &'a Path,
+        fields: &'a [FieldPat],
+        ptr: Value,
+        ty: Ty,
+        fail: BlockId,
+    ) -> bool {
         let _ = path;
         let TyKind::Adt(d, _) = self.kind(ty) else {
             self.unsupported(p.span, "a struct pattern for this type");
             return false;
         };
         let fs = self.struct_fields(ty);
-        let decls: Vec<DefId> = self.typed.adts.get(&d).map(|a| a.fields.iter().map(|(f, _)| *f).collect()).unwrap_or_default();
+        let decls: Vec<DefId> = self
+            .typed
+            .adts
+            .get(&d)
+            .map(|a| a.fields.iter().map(|(f, _)| *f).collect())
+            .unwrap_or_default();
         for fp in fields {
             let name = self.src_text(fp.name.span);
             let Some(i) = decls.iter().position(|f| self.res.def(*f).name == name) else {
@@ -308,7 +371,9 @@ impl<'a> Lowerer<'a> {
                     return false;
                 };
                 let cur = self.load_at(ptr, 0, s);
-                if let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, cur, have), Some(IrTy::Bool), lit.span) {
+                if let Some(c) =
+                    self.emit(Op::Cmp(CmpOp::Eq, cur, have), Some(IrTy::Bool), lit.span)
+                {
                     self.require(c, fail);
                 }
                 true
@@ -324,7 +389,15 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn test_range(&mut self, start: Option<&'a Expr>, end: Option<&'a Expr>, inclusive: bool, ptr: Value, ty: Ty, fail: BlockId) -> bool {
+    fn test_range(
+        &mut self,
+        start: Option<&'a Expr>,
+        end: Option<&'a Expr>,
+        inclusive: bool,
+        ptr: Value,
+        ty: Ty,
+        fail: BlockId,
+    ) -> bool {
         let Some(s) = self.scalar_of(ty) else {
             self.unsupported(Span::new(0, 0), "a range pattern for this type");
             return false;
@@ -332,14 +405,18 @@ impl<'a> Lowerer<'a> {
         let signed = self.is_signed(ty) || s.is_float();
         let cur = self.load_at(ptr, 0, s);
         if let Some(lo) = start {
-            let Some(lo) = self.scalar(lo) else { return false };
+            let Some(lo) = self.scalar(lo) else {
+                return false;
+            };
             let op = if signed { CmpOp::Ge } else { CmpOp::UGe };
             if let Some(c) = self.emit(Op::Cmp(op, cur, lo), Some(IrTy::Bool), Span::new(0, 0)) {
                 self.require(c, fail);
             }
         }
         if let Some(hi) = end {
-            let Some(hi) = self.scalar(hi) else { return false };
+            let Some(hi) = self.scalar(hi) else {
+                return false;
+            };
             let op = match (inclusive, signed) {
                 (true, true) => CmpOp::Le,
                 (true, false) => CmpOp::ULe,
@@ -353,7 +430,14 @@ impl<'a> Lowerer<'a> {
         true
     }
 
-    fn test_list(&mut self, p: &'a Pattern, items: &'a [ListPatItem], ptr: Value, ty: Ty, fail: BlockId) -> bool {
+    fn test_list(
+        &mut self,
+        p: &'a Pattern,
+        items: &'a [ListPatItem],
+        ptr: Value,
+        ty: Ty,
+        fail: BlockId,
+    ) -> bool {
         let elem = match self.kind(ty) {
             TyKind::List(e) | TyKind::Iter(e) => e,
             _ => {
@@ -387,7 +471,9 @@ impl<'a> Lowerer<'a> {
         let data = self.load_at(ptr, 0, IrTy::Ptr);
         for (i, sub) in prefix.iter().enumerate() {
             let off = self.i64c(i as i64 * esize);
-            let q = self.emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), p.span).unwrap_or(data);
+            let q = self
+                .emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), p.span)
+                .unwrap_or(data);
             if !self.pat_test(sub, q, elem, fail) {
                 return false;
             }
@@ -396,10 +482,16 @@ impl<'a> Lowerer<'a> {
         for (j, sub) in suffix.iter().enumerate() {
             // Counted from the end: element `len - k + j`.
             let kk = self.i64c(k - j as i64);
-            let from_end = self.emit(Op::Bin(BinOp::Sub, len, kk), Some(IrTy::I64), p.span).unwrap_or(len);
+            let from_end = self
+                .emit(Op::Bin(BinOp::Sub, len, kk), Some(IrTy::I64), p.span)
+                .unwrap_or(len);
             let sz = self.i64c(esize);
-            let off = self.emit(Op::Bin(BinOp::Mul, from_end, sz), Some(IrTy::I64), p.span).unwrap_or(len);
-            let q = self.emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), p.span).unwrap_or(data);
+            let off = self
+                .emit(Op::Bin(BinOp::Mul, from_end, sz), Some(IrTy::I64), p.span)
+                .unwrap_or(len);
+            let q = self
+                .emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), p.span)
+                .unwrap_or(data);
             if !self.pat_test(sub, q, elem, fail) {
                 return false;
             }
@@ -408,9 +500,13 @@ impl<'a> Lowerer<'a> {
             // The rest is a view of the middle: a list that owns nothing.
             let view = self.slot_for(ty);
             let skip = self.i64c(prefix.len() as i64 * esize);
-            let start = self.emit(Op::PtrAdd(data, skip), Some(IrTy::Ptr), p.span).unwrap_or(data);
+            let start = self
+                .emit(Op::PtrAdd(data, skip), Some(IrTy::Ptr), p.span)
+                .unwrap_or(data);
             let kc = self.i64c(n);
-            let rest_len = self.emit(Op::Bin(BinOp::Sub, len, kc), Some(IrTy::I64), p.span).unwrap_or(len);
+            let rest_len = self
+                .emit(Op::Bin(BinOp::Sub, len, kc), Some(IrTy::I64), p.span)
+                .unwrap_or(len);
             let zero = self.i64c(0);
             self.store_at(view, 0, start);
             self.store_at(view, 8, rest_len);
@@ -420,7 +516,14 @@ impl<'a> Lowerer<'a> {
         true
     }
 
-    fn test_type(&mut self, p: &'a Pattern, path: &'a Path, ptr: Value, ty: Ty, fail: BlockId) -> bool {
+    fn test_type(
+        &mut self,
+        p: &'a Pattern,
+        path: &'a Path,
+        ptr: Value,
+        ty: Ty,
+        fail: BlockId,
+    ) -> bool {
         let _ = (path, ptr, ty, fail);
         self.unsupported(p.span, "a type test");
         false
@@ -428,7 +531,13 @@ impl<'a> Lowerer<'a> {
 
     // ---- switch ------------------------------------------------------------------------------------------------------
 
-    pub(crate) fn switch_expr(&mut self, e: &'a Expr, s: &'a Switch, dst: Option<Value>, want: Ty) -> Res {
+    pub(crate) fn switch_expr(
+        &mut self,
+        e: &'a Expr,
+        s: &'a Switch,
+        dst: Option<Value>,
+        want: Ty,
+    ) -> Res {
         let rt = self.ty_of(e).unwrap_or(self.types.void);
         let repr = self.repr(rt);
         self.push_scope();
@@ -442,7 +551,11 @@ impl<'a> Lowerer<'a> {
         };
         let join = self.new_block(&join_params);
         let mut reached = false;
-        let mem_dst = if matches!(repr, Repr::Mem(_)) { dst } else { None };
+        let mem_dst = if matches!(repr, Repr::Mem(_)) {
+            dst
+        } else {
+            None
+        };
         for arm in &s.arms {
             if self.f.cur.is_none() || self.failed() {
                 break;
@@ -484,12 +597,17 @@ impl<'a> Lowerer<'a> {
             return Some(());
         }
         if arm.patterns.len() == 1 {
-            return self.pat_test(&arm.patterns[0], ptr, sty, next).then_some(());
+            return self
+                .pat_test(&arm.patterns[0], ptr, sty, next)
+                .then_some(());
         }
         // Alternatives share one body: each hands the addresses of the names to the body block.
         let mut names: Vec<(Ident, Option<Mode>)> = Vec::new();
         crate::resolve::collect_pattern_names(&arm.patterns[0], &mut names);
-        let defs: Vec<DefId> = names.iter().filter_map(|(n, _)| self.binding_def(n)).collect();
+        let defs: Vec<DefId> = names
+            .iter()
+            .filter_map(|(n, _)| self.binding_def(n))
+            .collect();
         let tys: Vec<Ty> = defs
             .iter()
             .map(|d| {
@@ -520,7 +638,14 @@ impl<'a> Lowerer<'a> {
         self.start(body);
         let ps = self.f.func.block_params(body).to_vec();
         for ((d, t), pv) in defs.iter().zip(tys.iter()).zip(ps) {
-            self.f.locals.insert(*d, Local::Slot { ptr: pv, ty: *t, flag: None });
+            self.f.locals.insert(
+                *d,
+                Local::Slot {
+                    ptr: pv,
+                    ty: *t,
+                    flag: None,
+                },
+            );
         }
         Some(())
     }

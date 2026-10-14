@@ -1,7 +1,6 @@
 //! Building aggregates: tuples, structs, enum cases, `option` and `result` values, and the
 //! implicit conversions that put a value into a differently shaped destination.
 
-use super::expr::strip_parens;
 use super::*;
 
 impl<'a> Lowerer<'a> {
@@ -9,7 +8,13 @@ impl<'a> Lowerer<'a> {
 
     /// When the destination type differs from the expression's type: a value into an `option`, a
     /// `string` into a `str` view, an `obj` into its base. `None` means no conversion applies.
-    pub(crate) fn coerce_into(&mut self, e: &'a Expr, have: Ty, dst: Value, want: Ty) -> Option<Res> {
+    pub(crate) fn coerce_into(
+        &mut self,
+        e: &'a Expr,
+        have: Ty,
+        dst: Value,
+        want: Ty,
+    ) -> Option<Res> {
         let (hk, wk) = (self.kind(have), self.kind(want));
         match (hk, wk) {
             (TyKind::Never, _) => Some(self.expr(e)),
@@ -35,7 +40,9 @@ impl<'a> Lowerer<'a> {
                 self.store_at(dst, 8, n);
                 Some(Res::Unit)
             }
-            (TyKind::Adt(a, _), TyKind::Adt(b, _)) if a != b && self.res.def(a).kind == DefKind::Obj => {
+            (TyKind::Adt(a, _), TyKind::Adt(b, _))
+                if a != b && self.res.def(a).kind == DefKind::Obj =>
+            {
                 // An object used as its base: the same address.
                 Some(self.into_exact(e, dst, have))
             }
@@ -65,7 +72,13 @@ impl<'a> Lowerer<'a> {
         Res::Unit
     }
 
-    pub(crate) fn struct_lit(&mut self, e: &'a Expr, inits: &'a [StructInit], dst: Value, t: Ty) -> Res {
+    pub(crate) fn struct_lit(
+        &mut self,
+        e: &'a Expr,
+        inits: &'a [StructInit],
+        dst: Value,
+        t: Ty,
+    ) -> Res {
         let TyKind::Adt(d, _) = self.kind(t) else {
             return self.unsupported(e.span, "a struct literal of this type");
         };
@@ -76,12 +89,23 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Writes the fields of a struct value at `dst` (also used for the part of an `obj` after its header).
-    pub(crate) fn fill_struct(&mut self, e: &'a Expr, inits: &'a [StructInit], dst: Value, t: Ty) -> Res {
+    pub(crate) fn fill_struct(
+        &mut self,
+        e: &'a Expr,
+        inits: &'a [StructInit],
+        dst: Value,
+        t: Ty,
+    ) -> Res {
         let TyKind::Adt(d, _) = self.kind(t) else {
             return self.unsupported(e.span, "a struct literal of this type");
         };
         let fs = self.struct_fields(t);
-        let decls: Vec<DefId> = self.typed.adts.get(&d).map(|a| a.fields.iter().map(|(f, _)| *f).collect()).unwrap_or_default();
+        let decls: Vec<DefId> = self
+            .typed
+            .adts
+            .get(&d)
+            .map(|a| a.fields.iter().map(|(f, _)| *f).collect())
+            .unwrap_or_default();
         // The spread source, evaluated once.
         let mut spread: Option<Value> = None;
         for i in inits {
@@ -193,7 +217,12 @@ impl<'a> Lowerer<'a> {
     // ---- Enums, options, results -------------------------------------------------------------------------------------
 
     /// Runs `f` with an address for the result: `dst`, or a new temporary owned by the scope.
-    pub(crate) fn with_dst(&mut self, dst: Option<Value>, t: Ty, f: impl FnOnce(&mut Self, Value) -> Res) -> Res {
+    pub(crate) fn with_dst(
+        &mut self,
+        dst: Option<Value>,
+        t: Ty,
+        f: impl FnOnce(&mut Self, Value) -> Res,
+    ) -> Res {
         match dst {
             Some(d) => f(self, d),
             None => {
@@ -244,8 +273,17 @@ impl<'a> Lowerer<'a> {
         Res::Unit
     }
 
-    pub(crate) fn enum_ctor(&mut self, e: &'a Expr, t: Ty, owner: DefId, variant: DefId, args: &'a [Arg], dst: Value) -> Res {
-        let (Some(info), Some(idx)) = (self.enum_info(t), self.variant_index(owner, variant)) else {
+    pub(crate) fn enum_ctor(
+        &mut self,
+        e: &'a Expr,
+        t: Ty,
+        owner: DefId,
+        variant: DefId,
+        args: &'a [Arg],
+        dst: Value,
+    ) -> Res {
+        let (Some(info), Some(idx)) = (self.enum_info(t), self.variant_index(owner, variant))
+        else {
             return self.unsupported(e.span, "an enum case");
         };
         let labels: Vec<Option<String>> = self
@@ -265,7 +303,14 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Evaluates the arguments of a case into its payload fields.
-    fn fill_payload(&mut self, e: &'a Expr, args: &'a [Arg], labels: &[Option<String>], fields: &[Field], dst: Value) -> Option<()> {
+    fn fill_payload(
+        &mut self,
+        e: &'a Expr,
+        args: &'a [Arg],
+        labels: &[Option<String>],
+        fields: &[Field],
+        dst: Value,
+    ) -> Option<()> {
         if args.len() != fields.len() {
             self.unsupported(e.span, "a case with a different number of values");
             return None;
@@ -275,7 +320,10 @@ impl<'a> Lowerer<'a> {
             let idx = match &a.label {
                 Some(l) => {
                     let name = self.src_text(l.span);
-                    labels.iter().position(|x| x.as_deref() == Some(name)).unwrap_or(next)
+                    labels
+                        .iter()
+                        .position(|x| x.as_deref() == Some(name))
+                        .unwrap_or(next)
                 }
                 None => next,
             };
@@ -289,7 +337,14 @@ impl<'a> Lowerer<'a> {
         Some(())
     }
 
-    pub(crate) fn enum_ctor_by_name(&mut self, e: &'a Expr, t: Ty, name: &str, args: &'a [Arg], dst: Option<Value>) -> Res {
+    pub(crate) fn enum_ctor_by_name(
+        &mut self,
+        e: &'a Expr,
+        t: Ty,
+        name: &str,
+        args: &'a [Arg],
+        dst: Option<Value>,
+    ) -> Res {
         // The case belongs to the enum the context expects (possibly inside an `option`).
         let et = match self.kind(t) {
             TyKind::Option(inner) => inner,
@@ -304,7 +359,13 @@ impl<'a> Lowerer<'a> {
         self.with_dst(dst, et, |s, dst| s.enum_ctor(e, et, d, v, args, dst))
     }
 
-    pub(crate) fn result_ctor(&mut self, e: &'a Expr, is_err: bool, args: &'a [Arg], dst: Option<Value>) -> Res {
+    pub(crate) fn result_ctor(
+        &mut self,
+        e: &'a Expr,
+        is_err: bool,
+        args: &'a [Arg],
+        dst: Option<Value>,
+    ) -> Res {
         let Some(t) = self.ty_of(e) else {
             return self.unsupported(e.span, "`ok` / `err` of unknown type");
         };

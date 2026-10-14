@@ -25,7 +25,14 @@ impl<'a> Lowerer<'a> {
         Some((def, map))
     }
 
-    pub(crate) fn call(&mut self, e: &'a Expr, callee: &'a Expr, args: &'a [Arg], mark: CallMark, dst: Option<Value>) -> Res {
+    pub(crate) fn call(
+        &mut self,
+        e: &'a Expr,
+        callee: &'a Expr,
+        args: &'a [Arg],
+        mark: CallMark,
+        dst: Option<Value>,
+    ) -> Res {
         let callee = strip_parens(callee);
         match &callee.kind {
             ExprKind::Name(id) => {
@@ -46,7 +53,11 @@ impl<'a> Lowerer<'a> {
                 self.call_def(e, def, None, args, mark, dst)
             }
             ExprKind::DotName(name) => self.dot_call(e, name, args, dst),
-            ExprKind::Field { base, name, optional } => {
+            ExprKind::Field {
+                base,
+                name,
+                optional,
+            } => {
                 if let Some(def) = self.res.use_at(self.f.file, name.span.start) {
                     // A path: `shape.circle(1.0)`, `util.helper(2)`.
                     return self.call_def(e, def, None, args, mark, dst);
@@ -60,7 +71,15 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn call_def(&mut self, e: &'a Expr, def: DefId, recv: Option<&'a Expr>, args: &'a [Arg], mark: CallMark, dst: Option<Value>) -> Res {
+    fn call_def(
+        &mut self,
+        e: &'a Expr,
+        def: DefId,
+        recv: Option<&'a Expr>,
+        args: &'a [Arg],
+        mark: CallMark,
+        dst: Option<Value>,
+    ) -> Res {
         match self.res.def(def).kind {
             DefKind::Fn => {
                 let Some((target, map)) = self.call_target(e.span) else {
@@ -74,12 +93,23 @@ impl<'a> Lowerer<'a> {
                 let name = self.res.def(def).name.clone();
                 self.builtin_call(e, &name, args, dst)
             }
-            DefKind::Local | DefKind::Param | DefKind::Const | DefKind::Var => self.call_value(e, e, args, dst),
+            DefKind::Local | DefKind::Param | DefKind::Const | DefKind::Var => match &e.kind {
+                ExprKind::Call { callee, .. } => self.call_value(e, callee, args, dst),
+                _ => self.unsupported(e.span, "this kind of call"),
+            },
             _ => self.unsupported(e.span, "this kind of call"),
         }
     }
 
-    fn method_call(&mut self, e: &'a Expr, base: &'a Expr, name: &Ident, args: &'a [Arg], mark: CallMark, dst: Option<Value>) -> Res {
+    fn method_call(
+        &mut self,
+        e: &'a Expr,
+        base: &'a Expr,
+        name: &Ident,
+        args: &'a [Arg],
+        mark: CallMark,
+        dst: Option<Value>,
+    ) -> Res {
         let Some((target, map)) = self.call_target(e.span) else {
             // A field that holds a function: `self.callback(x)`.
             let _ = name;
@@ -186,7 +216,14 @@ impl<'a> Lowerer<'a> {
     }
 
     /// One argument, passed the way its parameter wants it.
-    fn lower_arg(&mut self, pass: Pass, ty: Ty, mode: Option<Mode>, src: ArgSource<'a>, span: Span) -> Option<Value> {
+    pub(crate) fn lower_arg(
+        &mut self,
+        pass: Pass,
+        ty: Ty,
+        mode: Option<Mode>,
+        src: ArgSource<'a>,
+        span: Span,
+    ) -> Option<Value> {
         let ArgSource::Expr(arg) = src;
         let _ = span;
         match pass {
@@ -259,7 +296,13 @@ impl<'a> Lowerer<'a> {
 
     /// Matches the arguments of a call to the declared parameters: by label, then by position, with
     /// defaults filling the gaps.
-    fn match_args(&mut self, info: &FnInfo, def: DefId, args: &'a [Arg], span: Span) -> Option<Vec<ArgSource<'a>>> {
+    fn match_args(
+        &mut self,
+        info: &FnInfo,
+        def: DefId,
+        args: &'a [Arg],
+        span: Span,
+    ) -> Option<Vec<ArgSource<'a>>> {
         let n = info.params.len();
         let mut slots: Vec<Option<ArgSource<'a>>> = vec![None; n];
         let mut next = 0usize;
@@ -317,14 +360,23 @@ impl<'a> Lowerer<'a> {
     fn default_arg(&mut self, def: DefId, i: usize) -> Option<&'a Expr> {
         let entry = self.fns.get(&def)?;
         let decl = entry.decl;
-        decl.params.iter().filter(|p| !p.is_self).nth(i)?.default.as_ref()
+        decl.params
+            .iter()
+            .filter(|p| !p.is_self)
+            .nth(i)?
+            .default
+            .as_ref()
     }
 
     // ---- Which function runs --------------------------------------------------------------------------------------------
 
     /// A call through an interface method is resolved to the type's own method (or the interface's
     /// default).
-    fn resolve_dispatch(&mut self, def: DefId, map: HashMap<DefId, Ty>) -> (DefId, HashMap<DefId, Ty>) {
+    fn resolve_dispatch(
+        &mut self,
+        def: DefId,
+        map: HashMap<DefId, Ty>,
+    ) -> (DefId, HashMap<DefId, Ty>) {
         let Some(parent) = self.res.def(def).parent else {
             return (def, map);
         };
@@ -348,7 +400,11 @@ impl<'a> Lowerer<'a> {
     }
 
     /// The method called `name` that a concrete type has: its own, one from an `impl` block.
-    pub(crate) fn find_impl_method(&mut self, self_ty: Ty, name: &str) -> Option<(DefId, HashMap<DefId, Ty>)> {
+    pub(crate) fn find_impl_method(
+        &mut self,
+        self_ty: Ty,
+        name: &str,
+    ) -> Option<(DefId, HashMap<DefId, Ty>)> {
         let self_ty = self.types.zonk(self_ty);
         if let TyKind::Adt(d, args) = self.kind(self_ty) {
             if let Some(m) = self.res.member(d, name) {
@@ -395,13 +451,17 @@ impl<'a> Lowerer<'a> {
             | (TyKind::Range(a), TyKind::Range(b))
             | (TyKind::Iter(a), TyKind::Iter(b)) => self.match_ty(a, b, map),
             (TyKind::Array(a, _), TyKind::Array(b, _)) => self.match_ty(a, b, map),
-            (TyKind::Result(a, b), TyKind::Result(c, d)) | (TyKind::Map(a, b), TyKind::Map(c, d)) => {
+            (TyKind::Result(a, b), TyKind::Result(c, d))
+            | (TyKind::Map(a, b), TyKind::Map(c, d)) => {
                 self.match_ty(a, c, map) && self.match_ty(b, d, map)
             }
             (TyKind::Tuple(xs), TyKind::Tuple(ys)) => self.match_all(&xs, &ys, map),
             (TyKind::Fn(ps, r), TyKind::Fn(qs, s)) => {
                 ps.len() == qs.len()
-                    && ps.iter().zip(qs.iter()).all(|(p, q)| self.match_ty(p.ty, q.ty, map))
+                    && ps
+                        .iter()
+                        .zip(qs.iter())
+                        .all(|(p, q)| self.match_ty(p.ty, q.ty, map))
                     && self.match_ty(r, s, map)
             }
             _ => false,
@@ -409,12 +469,22 @@ impl<'a> Lowerer<'a> {
     }
 
     fn match_all(&mut self, xs: &[Ty], ys: &[Ty], map: &mut HashMap<DefId, Ty>) -> bool {
-        xs.len() == ys.len() && xs.iter().zip(ys.iter()).all(|(x, y)| self.match_ty(*x, *y, map))
+        xs.len() == ys.len()
+            && xs
+                .iter()
+                .zip(ys.iter())
+                .all(|(x, y)| self.match_ty(*x, *y, map))
     }
 
     // ---- Things that are not plain function calls ----------------------------------------------------------------------------
 
-    fn variant_call(&mut self, e: &'a Expr, variant: DefId, args: &'a [Arg], dst: Option<Value>) -> Res {
+    fn variant_call(
+        &mut self,
+        e: &'a Expr,
+        variant: DefId,
+        args: &'a [Arg],
+        dst: Option<Value>,
+    ) -> Res {
         let Some(t) = self.ty_of(e) else {
             return self.unsupported(e.span, "a case of unknown type");
         };
@@ -436,7 +506,13 @@ impl<'a> Lowerer<'a> {
         self.enum_ctor(e, t, owner, variant, args, dst)
     }
 
-    fn builtin_call(&mut self, e: &'a Expr, name: &str, args: &'a [Arg], dst: Option<Value>) -> Res {
+    fn builtin_call(
+        &mut self,
+        e: &'a Expr,
+        name: &str,
+        args: &'a [Arg],
+        dst: Option<Value>,
+    ) -> Res {
         match name {
             "ok" | "err" => self.result_ctor(e, name == "err", args, dst),
             _ => self.intrinsic_by_name(e, name, args, dst),
@@ -446,11 +522,6 @@ impl<'a> Lowerer<'a> {
     fn construct(&mut self, e: &'a Expr, def: DefId, args: &'a [Arg], dst: Option<Value>) -> Res {
         let _ = (def, args, dst);
         self.unsupported(e.span, "constructing with `init`")
-    }
-
-    fn call_value(&mut self, e: &'a Expr, callee: &'a Expr, args: &'a [Arg], dst: Option<Value>) -> Res {
-        let _ = (callee, args, dst);
-        self.unsupported(e.span, "calling a function value")
     }
 }
 
