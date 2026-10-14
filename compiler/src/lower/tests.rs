@@ -359,25 +359,34 @@ fn output_of(src: &str) -> String {
 }
 
 /// The third column of the differential test: the native build prints the same, leaks nothing and
-/// exits with status 0 (Linux on x86-64 only).
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+/// exits with status 0. It runs on Linux x86-64 for Linux, and for Windows through Wine (or directly
+/// on Windows) where that is available; the Windows program is built from the plain IR only.
 fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
-    let opts = crate::native::gen::Options { leak_check: true };
-    let image = match crate::native::gen::compile(m, "main", &opts) {
-        Ok(i) => i,
-        Err(e) => panic!("the native build ({what}) failed: {e}\n{src}"),
-    };
-    let r = crate::native::exec::run_image(&image).unwrap();
-    assert_eq!(r.out, want, "native output ({what}) differs in {src}");
-    assert_eq!(
-        (r.err.as_str(), r.code),
-        ("", 0),
-        "native run ({what}) in {src}"
-    );
+    use crate::native::{exec, gen, Os};
+    for os in [Os::Linux, Os::Windows] {
+        if !exec::can_run(os) || (os == Os::Windows && what != "plain") {
+            continue;
+        }
+        let opts = gen::Options {
+            leak_check: true,
+            target: os,
+        };
+        let image = match gen::compile(m, "main", &opts) {
+            Ok(i) => i,
+            Err(e) => panic!("the native build ({what}, {os:?}) failed: {e}\n{src}"),
+        };
+        let r = exec::run_image(os, &image).unwrap();
+        assert_eq!(
+            r.out, want,
+            "native output ({what}, {os:?}) differs in {src}"
+        );
+        assert_eq!(
+            (r.err.as_str(), r.code),
+            ("", 0),
+            "native run ({what}, {os:?}) in {src}"
+        );
+    }
 }
-
-#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
-fn native_must_agree(_: &crate::ir::Module, _: &str, _: &str, _: &str) {}
 
 #[test]
 fn printing_basic_values() {
@@ -1248,35 +1257,42 @@ fn main() {
 
 /// The program does the same natively as in the interpreter: same output, and the same stop (message
 /// on standard error, status 1) or a clean exit.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn agree(src: &str) {
+    use crate::native::{exec, gen, Os};
     let l = lowered(src);
     let o = run_full(&l.module, "main", &[]);
-    let opts = crate::native::gen::Options { leak_check: false };
-    for (what, m) in [
-        ("plain", l.module.clone()),
-        ("optimised", {
-            let mut m = l.module.clone();
-            crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
-            crate::ir::opt::prune(&mut m, &["main"]);
-            m
-        }),
+    let optimised = {
+        let mut m = l.module.clone();
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        crate::ir::opt::prune(&mut m, &["main"]);
+        m
+    };
+    for (what, os, m) in [
+        ("plain", Os::Linux, &l.module),
+        ("optimised", Os::Linux, &optimised),
+        ("plain", Os::Windows, &l.module),
     ] {
-        let image = crate::native::gen::compile(&m, "main", &opts).unwrap();
-        let r = crate::native::exec::run_image(&image).unwrap();
-        assert_eq!(r.out, o.output, "{what}: output differs in {src}");
+        if !exec::can_run(os) {
+            continue;
+        }
+        let opts = gen::Options {
+            leak_check: false,
+            target: os,
+        };
+        let image = gen::compile(m, "main", &opts).unwrap();
+        let r = exec::run_image(os, &image).unwrap();
+        assert_eq!(r.out, o.output, "{what} {os:?}: output differs in {src}");
         match &o.result {
-            Ok(_) => assert_eq!((r.err.as_str(), r.code), ("", 0), "{what}: {src}"),
+            Ok(_) => assert_eq!((r.err.as_str(), r.code), ("", 0), "{what} {os:?}: {src}"),
             Err(msg) => assert_eq!(
                 (r.err.as_str(), r.code),
                 (format!("stopped: {msg}\n").as_str(), 1),
-                "{what}: {src}"
+                "{what} {os:?}: {src}"
             ),
         }
     }
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn native_agrees_on_the_edge_cases() {
     let programs = [

@@ -10,7 +10,7 @@
 //! (file end) section headers, symbols        (for gdb and objdump; the loader ignores them)
 //! ```
 
-use super::x86::Asm;
+use super::x86::{Asm, SectAddrs};
 
 pub const BASE: u64 = 0x40_0000;
 const PAGE: u64 = 0x1000;
@@ -105,7 +105,12 @@ pub fn write(
     syms: &[Symbol],
 ) -> Result<Vec<u8>, String> {
     let lay = layout(asm.code.len(), rodata.bytes.len(), data.bytes.len());
-    let text = asm.finish(lay.text, lay.rodata, lay.data)?;
+    let text = asm.finish(SectAddrs {
+        text: lay.text,
+        rodata: lay.rodata,
+        data: lay.data,
+        idata: 0,
+    })?;
     let ro_off = lay.rodata - BASE;
     let data_off = lay.data - BASE;
     let seg1_size = ro_off + rodata.bytes.len() as u64;

@@ -51,6 +51,17 @@ pub enum Sect {
     Text,
     Rodata,
     Data,
+    /// The import address table of a Windows image.
+    Idata,
+}
+
+/// The virtual addresses of the sections of the final image.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SectAddrs {
+    pub text: u64,
+    pub rodata: u64,
+    pub data: u64,
+    pub idata: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -525,6 +536,11 @@ impl Asm {
         self.op(None, false, &[0xFF], 2, Rm::Reg(r.0), false, 0);
     }
 
+    /// `call [rip + section + offset]`: through a pointer stored in memory (a Windows import).
+    pub fn call_mem_sect(&mut self, s: Sect, off: u32) {
+        self.op(None, false, &[0xFF], 2, Rm::RipSect(s, off), false, 0);
+    }
+
     pub fn jmp_reg(&mut self, r: Reg) {
         self.op(None, false, &[0xFF], 4, Rm::Reg(r.0), false, 0);
     }
@@ -619,7 +635,13 @@ impl Asm {
 
     /// Resolves every reference. `text`, `rodata` and `data` are the virtual addresses the sections
     /// will have; the code itself starts at `text`.
-    pub fn finish(&self, text: u64, rodata: u64, data: u64) -> Result<Vec<u8>, String> {
+    pub fn finish(&self, addrs: SectAddrs) -> Result<Vec<u8>, String> {
+        let SectAddrs {
+            text,
+            rodata,
+            data,
+            idata,
+        } = addrs;
         let mut out = self.code.clone();
         for f in &self.fixups {
             let end = text as i64 + f.at as i64 + 4 + f.extra as i64;
@@ -634,6 +656,7 @@ impl Asm {
                         Sect::Text => text,
                         Sect::Rodata => rodata,
                         Sect::Data => data,
+                        Sect::Idata => idata,
                     };
                     base as i64 + off as i64
                 }

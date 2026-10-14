@@ -1,6 +1,6 @@
 Id: A-09
 Title: Native backend: x86-64 machine code and ELF straight from the IR
-Column: Doing (N1 to N3 done, N4 mostly; Windows next)
+Column: Doing (N1 to N4 and the Windows target done; register allocation N5 next)
 Order: 1 (track A)
 Depends on: nothing open (the IR, the interpreter and the optimiser exist)
 Size: XL, in seven stages (N1 to N7), each testable on its own
@@ -87,6 +87,7 @@ the shelf items that need real machine features (S-01 measured maps, S-02 thread
 | **N4** (mostly: `build`, `run --native`; `--emit asm` left) | CLI: `pelago build`, `pelago run --native`, `--emit asm` (a listing for reading). Docs: `docs/design/backend.md`. | A user can build and run an example from the command line. |
 | **N5** | Linear-scan register allocation; `--opt` on by default for `build`. | All tests green; `benches/*.pel` at least 5x faster than N2; numbers recorded in the card. |
 | **N6** | Speed work found by measuring: buffered `print`, inline `MemCopy` for small sizes, shared stop blocks, branch layout. | Benchmarks recorded; a table "ours vs the interpreter vs C (gcc -O2 on the same program)" in `docs/design/backend.md`. |
+| **W** (done) | Windows PE target: `native/pe.rs`, a Windows runtime, `--target=windows`, a `windows-latest` CI job, `PELAGO_WINE=1` for local runs under Wine. | All tests green in the Windows column (Wine) and the CI job. |
 | **N7** | Later, not part of the first milestone: DWARF line table, real threads (S-02: `clone` and atomics), AArch64, PE and Mach-O writers. | Each its own card. |
 
 # Tests

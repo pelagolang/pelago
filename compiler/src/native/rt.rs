@@ -14,10 +14,41 @@
 
 use super::elf::Blob;
 use super::x86::*;
+use super::Os;
 
 pub const STATE_SIZE: usize = 128;
 const CHUNK: i64 = 1 << 20;
 const STACK: i64 = 1 << 30;
+/// The stack on Windows is committed up front, so it is smaller.
+const STACK_WIN: i64 = 1 << 28;
+
+/// The kernel32 functions the Windows image imports, in the order of its import table.
+pub const IMPORTS: [&str; 5] = [
+    "GetStdHandle",
+    "WriteFile",
+    "ExitProcess",
+    "VirtualAlloc",
+    "VirtualFree",
+];
+const IMP_GET_STD_HANDLE: usize = 0;
+const IMP_WRITE_FILE: usize = 1;
+const IMP_EXIT_PROCESS: usize = 2;
+const IMP_VIRTUAL_ALLOC: usize = 3;
+const IMP_VIRTUAL_FREE: usize = 4;
+
+/// Calls an imported Windows function with the arguments already in `rcx rdx r8 r9`: aligns the
+/// stack, makes the shadow space, lets `setup` store further arguments (the fifth is at `[rsp + 32]`),
+/// and restores the stack afterwards. Only `rbp` is used for that, and it is restored.
+fn win_call(a: &mut Asm, import: usize, setup: impl FnOnce(&mut Asm)) {
+    a.push(RBP);
+    a.mov_rr(RBP, RSP, 8);
+    a.alu_ri(Alu::And, RSP, -16, 8);
+    a.alu_ri(Alu::Sub, RSP, 48, 8);
+    setup(a);
+    a.call_mem_sect(Sect::Idata, super::pe::iat_slot(import));
+    a.mov_rr(RSP, RBP, 8);
+    a.pop(RBP);
+}
 /// The largest block served from the free lists: header plus payload.
 const SMALL_MAX: i32 = 64 * 1024;
 const LARGE_CLASS: i32 = 255;
@@ -45,7 +76,15 @@ fn state(a: &mut Asm, r: Reg, off: u32) {
 /// Emits `_start` (at offset 0 of the code) and the routines. `main` is called with no arguments;
 /// its result is ignored. With `leak_check`, the live-block count is checked after `main` returns:
 /// a leak prints `leaked N allocation(s)` to standard error and exits with status 3.
-pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check: bool) -> Runtime {
+pub fn emit(
+    a: &mut Asm,
+    ro: &mut Blob,
+    data: &mut Blob,
+    main: Label,
+    leak_check: bool,
+    target: Os,
+) -> Runtime {
+    let win = target == Os::Windows;
     let state_at = data.add_zero(STATE_SIZE, 16);
     assert_eq!(state_at, 0, "the runtime state must come first in .data");
     let rt = Runtime {
@@ -64,20 +103,31 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
 
     // ---- _start ------------------------------------------------------------------------------------
     a.alu_rr(Alu::Xor, RBP, RBP, 4);
-    // A big stack of our own (1 GiB, taken lazily), so deep recursion works like it does in the
+    // A big stack of our own, taken lazily, so deep recursion works like it does in the
     // interpreter; if the mapping fails, the stack the system gave us stays.
-    a.mov_ri(RAX, 9);
-    a.alu_rr(Alu::Xor, RDI, RDI, 4);
-    a.mov_ri(RSI, STACK);
-    a.mov_ri(RDX, 3);
-    a.mov_ri(R10, 0x4022); // private, anonymous, no reservation
-    a.mov_ri(R8, -1);
-    a.alu_rr(Alu::Xor, R9, R9, 4);
-    a.syscall();
     let keep = a.new_label();
-    a.alu_ri(Alu::Cmp, RAX, -4095, 8);
-    a.jcc(Cc::Ae, keep);
-    a.lea(RSP, mem(RAX, STACK as i32));
+    if win {
+        a.alu_rr(Alu::Xor, RCX, RCX, 4);
+        a.mov_ri(RDX, STACK_WIN);
+        a.mov_ri(R8, 0x3000); // commit and reserve
+        a.mov_ri(R9, 4); // read and write
+        win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::E, keep);
+        a.lea(RSP, mem(RAX, STACK_WIN as i32));
+    } else {
+        a.mov_ri(RAX, 9);
+        a.alu_rr(Alu::Xor, RDI, RDI, 4);
+        a.mov_ri(RSI, STACK);
+        a.mov_ri(RDX, 3);
+        a.mov_ri(R10, 0x4022); // private, anonymous, no reservation
+        a.mov_ri(R8, -1);
+        a.alu_rr(Alu::Xor, R9, R9, 4);
+        a.syscall();
+        a.alu_ri(Alu::Cmp, RAX, -4095, 8);
+        a.jcc(Cc::Ae, keep);
+        a.lea(RSP, mem(RAX, STACK as i32));
+    }
     a.bind(keep);
     a.alu_ri(Alu::And, RSP, -16, 8);
     a.call(main);
@@ -108,27 +158,78 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
 
     // ---- rt_exit -----------------------------------------------------------------------------------
     a.bind(rt.exit);
-    a.mov_ri(RAX, 231);
-    a.syscall();
+    if win {
+        a.mov_rr(RCX, RDI, 4);
+        win_call(a, IMP_EXIT_PROCESS, |_| {});
+    } else {
+        a.mov_ri(RAX, 231);
+        a.syscall();
+    }
     a.ud2();
 
     // ---- rt_write ----------------------------------------------------------------------------------
     a.bind(rt.write_fd);
-    let (wloop, wdone) = (a.new_label(), a.new_label());
-    a.bind(wloop);
-    a.test_rr(RDX, RDX, 8);
-    a.jcc(Cc::E, wdone);
-    a.mov_ri(RAX, 1);
-    a.syscall();
-    a.alu_ri(Alu::Cmp, RAX, -4, 8); // interrupted: try again
-    a.jcc(Cc::E, wloop);
-    a.test_rr(RAX, RAX, 8);
-    a.jcc(Cc::Le, wdone);
-    a.alu_rr(Alu::Add, RSI, RAX, 8);
-    a.alu_rr(Alu::Sub, RDX, RAX, 8);
-    a.jmp(wloop);
-    a.bind(wdone);
-    a.ret();
+    if win {
+        // GetStdHandle once, then WriteFile until everything is written. `rbx`, `r12`, `r13` hold the
+        // handle, the pointer and the count across the calls; the caller's values are kept on the stack.
+        a.push(RBX);
+        a.push(R12);
+        a.push(R13);
+        a.alu_ri(Alu::Sub, RSP, 16, 8); // room for the count `WriteFile` reports
+        a.mov_rr(R12, RSI, 8);
+        a.mov_rr(R13, RDX, 8);
+        let (std_out, have) = (a.new_label(), a.new_label());
+        a.alu_ri(Alu::Cmp, RDI, 1, 8);
+        a.jcc(Cc::E, std_out);
+        a.mov_ri(RCX, -12); // standard error
+        a.jmp(have);
+        a.bind(std_out);
+        a.mov_ri(RCX, -11); // standard output
+        a.bind(have);
+        win_call(a, IMP_GET_STD_HANDLE, |_| {});
+        a.mov_rr(RBX, RAX, 8);
+        let (wloop, wdone) = (a.new_label(), a.new_label());
+        a.bind(wloop);
+        a.test_rr(R13, R13, 8);
+        a.jcc(Cc::E, wdone);
+        a.mov_rr(RCX, RBX, 8);
+        a.mov_rr(RDX, R12, 8);
+        a.mov_rr(R8, R13, 4);
+        a.lea(R9, mem(RSP, 0));
+        win_call(a, IMP_WRITE_FILE, |a| {
+            a.store_imm(mem(RSP, 32), 0, 8); // no overlapped I/O
+        });
+        a.test_rr(RAX, RAX, 4);
+        a.jcc(Cc::E, wdone);
+        a.load(RAX, mem(RSP, 0), 4);
+        a.test_rr(RAX, RAX, 4);
+        a.jcc(Cc::E, wdone);
+        a.alu_rr(Alu::Add, R12, RAX, 8);
+        a.alu_rr(Alu::Sub, R13, RAX, 8);
+        a.jmp(wloop);
+        a.bind(wdone);
+        a.alu_ri(Alu::Add, RSP, 16, 8);
+        a.pop(R13);
+        a.pop(R12);
+        a.pop(RBX);
+        a.ret();
+    } else {
+        let (wloop, wdone) = (a.new_label(), a.new_label());
+        a.bind(wloop);
+        a.test_rr(RDX, RDX, 8);
+        a.jcc(Cc::E, wdone);
+        a.mov_ri(RAX, 1);
+        a.syscall();
+        a.alu_ri(Alu::Cmp, RAX, -4, 8); // interrupted: try again
+        a.jcc(Cc::E, wloop);
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::Le, wdone);
+        a.alu_rr(Alu::Add, RSI, RAX, 8);
+        a.alu_rr(Alu::Sub, RDX, RAX, 8);
+        a.jmp(wloop);
+        a.bind(wdone);
+        a.ret();
+    }
 
     // ---- rt_write_u64 ------------------------------------------------------------------------------
     a.bind(rt.write_u64);
@@ -233,12 +334,11 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
     a.jcc(Cc::Be, carve);
     a.push(RAX);
     a.push(RSI);
-    emit_mmap(a, CHUNK);
+    emit_mmap(a, CHUNK, win);
     a.mov_rr(RDX, RAX, 8);
     a.pop(RSI);
     a.pop(RAX);
-    a.alu_ri(Alu::Cmp, RDX, -4095, 8);
-    a.jcc(Cc::Ae, oom);
+    map_failed(a, RDX, oom, win);
     a.store(mem(RSI, 0), RDX, 8);
     a.lea(RCX, mem(RDX, 0));
     a.mov_ri(RDI, CHUNK);
@@ -254,10 +354,9 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
     a.lea(RSI, mem(RBX, 4095));
     a.alu_ri(Alu::And, RSI, -4096, 8);
     a.mov_rr(R12, RSI, 8);
-    emit_mmap_reg(a, RSI);
+    emit_mmap_reg(a, RSI, win);
     a.mov_rr(RDX, RAX, 8);
-    a.alu_ri(Alu::Cmp, RDX, -4095, 8);
-    a.jcc(Cc::Ae, oom);
+    map_failed(a, RDX, oom, win);
     a.store_imm(mem(RDX, 0), LARGE_CLASS, 8);
     a.store(mem(RDX, 8), R12, 8);
     a.bind(out);
@@ -288,23 +387,39 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
     a.bind(fdone);
     a.ret();
     a.bind(flarge);
-    a.load(RSI, mem(RDX, 8), 8);
-    a.mov_rr(RDI, RDX, 8);
-    a.mov_ri(RAX, 11);
-    a.syscall();
+    if win {
+        a.mov_rr(RCX, RDX, 8);
+        a.alu_rr(Alu::Xor, RDX, RDX, 4);
+        a.mov_ri(R8, 0x8000); // release
+        win_call(a, IMP_VIRTUAL_FREE, |_| {});
+    } else {
+        a.load(RSI, mem(RDX, 8), 8);
+        a.mov_rr(RDI, RDX, 8);
+        a.mov_ri(RAX, 11);
+        a.syscall();
+    }
     a.ret();
     rt
 }
 
-/// `mmap(0, len, read|write, private|anonymous, -1, 0)`: the address (or a negative error) in `rax`.
-fn emit_mmap(a: &mut Asm, len: i64) {
+/// Takes `len` bytes of fresh zeroed memory (`mmap` on Linux, `VirtualAlloc` on Windows): the address
+/// in `rax`, or an error value that [`map_failed`] recognises.
+fn emit_mmap(a: &mut Asm, len: i64, win: bool) {
     a.mov_ri(RSI, len);
-    emit_mmap_reg(a, RSI);
+    emit_mmap_reg(a, RSI, win);
 }
 
 /// The same with the length already in `rsi`.
-fn emit_mmap_reg(a: &mut Asm, len: Reg) {
+fn emit_mmap_reg(a: &mut Asm, len: Reg, win: bool) {
     debug_assert_eq!(len, RSI);
+    if win {
+        a.alu_rr(Alu::Xor, RCX, RCX, 4);
+        a.mov_rr(RDX, RSI, 8);
+        a.mov_ri(R8, 0x3000); // commit and reserve
+        a.mov_ri(R9, 4); // read and write
+        win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+        return;
+    }
     a.mov_ri(RAX, 9);
     a.alu_rr(Alu::Xor, RDI, RDI, 4);
     a.mov_ri(RDX, 3);
@@ -312,4 +427,15 @@ fn emit_mmap_reg(a: &mut Asm, len: Reg) {
     a.mov_ri(R8, -1);
     a.alu_rr(Alu::Xor, R9, R9, 4);
     a.syscall();
+}
+
+/// Jumps to `oom` when the mapping call that left its result in `r` failed.
+fn map_failed(a: &mut Asm, r: Reg, oom: Label, win: bool) {
+    if win {
+        a.test_rr(r, r, 8);
+        a.jcc(Cc::E, oom);
+    } else {
+        a.alu_ri(Alu::Cmp, r, -4095, 8);
+        a.jcc(Cc::Ae, oom);
+    }
 }

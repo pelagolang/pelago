@@ -66,7 +66,7 @@ fn main() {
                 None => {
                     eprintln!("usage: pelago {cmd} [--opt] [--stats] <file or directory>");
                     eprintln!("       pelago run --native <path>      build natively and run");
-                    eprintln!("       pelago build [--opt] [--leak-check] [-o out] <path>");
+                    eprintln!("       pelago build [--opt] [--leak-check] [--target=linux|windows] [-o out] <path>");
                     std::process::exit(2);
                 }
             }
@@ -312,8 +312,22 @@ fn native_build(
     flags: &[&str],
     out_name: Option<String>,
 ) {
+    let os = match flags.iter().find_map(|f| f.strip_prefix("--target=")) {
+        Some("windows") => pelago::native::Os::Windows,
+        Some("linux") => pelago::native::Os::Linux,
+        Some(other) => {
+            eprintln!("unknown target `{other}` (use --target=linux or --target=windows)");
+            std::process::exit(2);
+        }
+        None => pelago::native::Os::host().unwrap_or(pelago::native::Os::Linux),
+    };
+    if !build && Some(os) != pelago::native::Os::host() {
+        eprintln!("this program was built for another system; use `pelago build` and run it there");
+        std::process::exit(2);
+    }
     let opts = pelago::native::gen::Options {
         leak_check: flags.contains(&"--leak-check"),
+        target: os,
     };
     let image = match pelago::native::gen::compile(module, "main", &opts) {
         Ok(i) => i,
@@ -330,9 +344,21 @@ fn native_build(
             let stem = std::path::Path::new(path)
                 .file_stem()
                 .map_or("a".to_string(), |s| s.to_string_lossy().into_owned());
-            std::path::PathBuf::from(stem)
+            std::path::PathBuf::from(if os == pelago::native::Os::Windows {
+                format!("{stem}.exe")
+            } else {
+                stem
+            })
         }
-        (None, false) => std::env::temp_dir().join(format!("pelago-run-{}", std::process::id())),
+        (None, false) => std::env::temp_dir().join(format!(
+            "pelago-run-{}{}",
+            std::process::id(),
+            if os == pelago::native::Os::Windows {
+                ".exe"
+            } else {
+                ""
+            }
+        )),
     };
     if let Err(e) = std::fs::write(&target, &image) {
         eprintln!("cannot write `{}`: {e}", target.display());

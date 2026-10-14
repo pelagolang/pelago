@@ -10,6 +10,7 @@
 use super::elf::{self, Blob, Symbol};
 use super::rt::{self, Runtime};
 use super::x86::*;
+use super::{pe, Os};
 use crate::ir::{
     BinOp, CastKind, CmpOp, Const, Func, FuncId, Inst, IrTy, Module, Op, Target, Term, Value,
 };
@@ -22,6 +23,7 @@ const MAX_FLOAT_REGS: usize = 8;
 pub struct Options {
     /// Report leaked blocks at exit (status 3): for tests.
     pub leak_check: bool,
+    pub target: Os,
 }
 
 /// Compiles the module to an executable whose entry runs the function named `entry`.
@@ -39,6 +41,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         &mut g.data,
         main_label,
         opts.leak_check,
+        opts.target,
     );
     g.rt = Some(rt);
     g.place_data();
@@ -53,7 +56,10 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
             size: (g.a.here() - start) as u64,
         });
     }
-    elf::write(&g.a, &g.ro, &g.data, 0, &syms)
+    match opts.target {
+        Os::Linux => elf::write(&g.a, &g.ro, &g.data, 0, &syms),
+        Os::Windows => pe::write(&g.a, &g.ro, &g.data, 0),
+    }
 }
 
 struct Gen<'m> {

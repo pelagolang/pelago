@@ -72,7 +72,14 @@ mod run {
     pub fn program(leak: bool, body: impl FnOnce(&mut Asm, &mut Blob, &Runtime)) -> Vec<u8> {
         let (mut a, mut ro, mut data) = (Asm::new(), Blob::default(), Blob::default());
         let main = a.new_label();
-        let rt = rt::emit(&mut a, &mut ro, &mut data, main, leak);
+        let rt = rt::emit(
+            &mut a,
+            &mut ro,
+            &mut data,
+            main,
+            leak,
+            super::super::Os::Linux,
+        );
         a.bind(main);
         body(&mut a, &mut ro, &rt);
         elf::write(&a, &ro, &data, 0, &[]).unwrap()
@@ -81,7 +88,7 @@ mod run {
     pub use super::super::exec::Ran;
 
     pub fn run(image: &[u8]) -> Ran {
-        super::super::exec::run_image(image).unwrap()
+        super::super::exec::run_image(super::super::Os::Linux, image).unwrap()
     }
 
     /// Code that writes `text` to standard output.
