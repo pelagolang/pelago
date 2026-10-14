@@ -367,24 +367,29 @@ fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
         if !exec::can_run(os) || (os == Os::Windows && what != "plain") {
             continue;
         }
-        let opts = gen::Options {
-            leak_check: true,
-            target: os,
-        };
-        let image = match gen::compile(m, "main", &opts) {
-            Ok(i) => i,
-            Err(e) => panic!("the native build ({what}, {os:?}) failed: {e}\n{src}"),
-        };
-        let r = exec::run_image(os, &image).unwrap();
-        assert_eq!(
-            r.out, want,
-            "native output ({what}, {os:?}) differs in {src}"
-        );
-        assert_eq!(
-            (r.err.as_str(), r.code),
-            ("", 0),
-            "native run ({what}, {os:?}) in {src}"
-        );
+        // The frame-only generator and the one with registers must both be right.
+        for regalloc in [false, true] {
+            if os == Os::Windows && !regalloc {
+                continue;
+            }
+            let opts = gen::Options {
+                leak_check: true,
+                target: os,
+                regalloc,
+            };
+            let image = match gen::compile(m, "main", &opts) {
+                Ok(i) => i,
+                Err(e) => panic!("the native build ({what}, {os:?}) failed: {e}\n{src}"),
+            };
+            let r = exec::run_image(os, &image).unwrap();
+            let how = format!("{what}, {os:?}, regalloc {regalloc}");
+            assert_eq!(r.out, want, "native output ({how}) differs in {src}");
+            assert_eq!(
+                (r.err.as_str(), r.code),
+                ("", 0),
+                "native run ({how}) in {src}"
+            );
+        }
     }
 }
 
@@ -1267,10 +1272,11 @@ fn agree(src: &str) {
         crate::ir::opt::prune(&mut m, &["main"]);
         m
     };
-    for (what, os, m) in [
-        ("plain", Os::Linux, &l.module),
-        ("optimised", Os::Linux, &optimised),
-        ("plain", Os::Windows, &l.module),
+    for (what, os, m, regalloc) in [
+        ("plain", Os::Linux, &l.module, false),
+        ("plain", Os::Linux, &l.module, true),
+        ("optimised", Os::Linux, &optimised, true),
+        ("plain", Os::Windows, &l.module, true),
     ] {
         if !exec::can_run(os) {
             continue;
@@ -1278,6 +1284,7 @@ fn agree(src: &str) {
         let opts = gen::Options {
             leak_check: false,
             target: os,
+            regalloc,
         };
         let image = gen::compile(m, "main", &opts).unwrap();
         let r = exec::run_image(os, &image).unwrap();
@@ -1348,6 +1355,8 @@ fn native_agrees_on_the_edge_cases() {
         "fn main() { const z = 0.0\n print(1.0 / z, -1.0 / z, z / z) }",
         "fn main() { const x: float32 = 1.5\n const y: float32 = 0.25\n print(x + y, x * y, x - y, x / y, x < y, -x) }",
         "fn main() { const x: float32 = 2.5\n print(x to float, (x to float) + 0.5, 3 to float32) }",
+        "fn main() { const a = 7.5\n const b = 2.0\n const z = 0.0\n print(a % b, -a % b, a % -b, 1e300 % 3.0, a % z, 5.5 % 5.5, 0.1 % 0.03) }",
+        "fn main() { const a: float32 = 7.5\n const b: float32 = 2.0\n print(a % b, -a % b) }",
         // Booleans and control flow.
         "fn main() { const t = true\n const f = false\n print(!t, !f, t && f, t || f, t == f, t != f) }",
         "fn main() { var s = 0\n for i of 0..1000 { if i % 3 == 0 || i % 5 == 0 { s += i } }\n print(s) }",

@@ -631,6 +631,35 @@ impl Asm {
         self.sse(Some(0x66), wide, &[0x0F, 0x7E], src.0, Rm::Reg(dst.0));
     }
 
+    // ---- x87 (only for the floating-point remainder) ---------------------------------------------------
+
+    /// `fld` of a 4- or 8-byte float onto the x87 stack.
+    pub fn x87_load(&mut self, m: Mem, double: bool) {
+        let op = if double { 0xDD } else { 0xD9 };
+        self.op(None, false, &[op], 0, Rm::Mem(m), false, 0);
+    }
+
+    /// `fstp`: store the top of the x87 stack and pop it.
+    pub fn x87_store_pop(&mut self, m: Mem, double: bool) {
+        let op = if double { 0xDD } else { 0xD9 };
+        self.op(None, false, &[op], 3, Rm::Mem(m), false, 0);
+    }
+
+    /// `fprem`: partial remainder of `st0 / st1`; repeat while the C2 flag of the status word is set.
+    pub fn x87_prem(&mut self) {
+        self.bytes(&[0xD9, 0xF8]);
+    }
+
+    /// `fnstsw ax`
+    pub fn x87_status_ax(&mut self) {
+        self.bytes(&[0xDF, 0xE0]);
+    }
+
+    /// `fstp st(1)`: drop the second entry of the x87 stack.
+    pub fn x87_drop_second(&mut self) {
+        self.bytes(&[0xDD, 0xD9]);
+    }
+
     // ---- Finishing ----------------------------------------------------------------------------------
 
     /// Resolves every reference. `text`, `rodata` and `data` are the virtual addresses the sections

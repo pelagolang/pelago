@@ -29,6 +29,7 @@ pub mod elf;
 pub mod exec;
 pub mod gen;
 pub mod pe;
+pub mod regs;
 pub mod rt;
 pub mod x86;
 

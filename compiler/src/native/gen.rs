@@ -24,6 +24,18 @@ pub struct Options {
     /// Report leaked blocks at exit (status 3): for tests.
     pub leak_check: bool,
     pub target: Os,
+    /// Keep the most used integer values in registers (stage N5) instead of all in the frame.
+    pub regalloc: bool,
+}
+
+/// The registers values can live in: callee-saved, so calls leave them alone.
+const VALUE_REGS: [Reg; 5] = [RBX, R12, R13, R14, R15];
+
+/// Where a value lives.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Where {
+    Mem(i32),
+    Reg(Reg),
 }
 
 /// Compiles the module to an executable whose entry runs the function named `entry`.
@@ -34,6 +46,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         .position(|f| f.name == entry)
         .ok_or_else(|| format!("no function `{entry}`"))?;
     let mut g = Gen::new(m);
+    g.regalloc = opts.regalloc;
     let main_label = g.funcs[main_fn];
     let rt = rt::emit(
         &mut g.a,
@@ -74,8 +87,11 @@ struct Gen<'m> {
     stop_shift: Label,
     stop_overflow: Label,
     stop_unreachable: Label,
-    /// Per function: frame offset of each value and of each `Slot`.
-    val_off: Vec<i32>,
+    regalloc: bool,
+    /// Per function: where each value lives, the frame offset of each `Slot`, and where the
+    /// callee-saved registers in use are kept.
+    loc: Vec<Where>,
+    saves: Vec<(Reg, i32)>,
     slot_off: HashMap<usize, i32>,
     frame: i32,
     block_labels: Vec<Label>,
@@ -146,7 +162,9 @@ impl<'m> Gen<'m> {
             stop_shift: s,
             stop_overflow: o,
             stop_unreachable: u,
-            val_off: Vec::new(),
+            regalloc: true,
+            loc: Vec::new(),
+            saves: Vec::new(),
             slot_off: HashMap::new(),
             frame: 0,
             block_labels: Vec::new(),
@@ -186,17 +204,39 @@ impl<'m> Gen<'m> {
 
     // ---- Frames --------------------------------------------------------------------------------------
 
+    /// The frame address of a value that lives in memory (floats always do).
     fn vmem(&self, v: Value) -> Mem {
-        mem(RBP, self.val_off[v.0 as usize])
+        match self.loc[v.0 as usize] {
+            Where::Mem(off) => mem(RBP, off),
+            Where::Reg(r) => panic!("value {} is in {r:?}, not in memory", v.0),
+        }
     }
 
     fn layout(&mut self, f: &Func) {
-        self.val_off.clear();
         self.slot_off.clear();
+        let regs = if self.regalloc {
+            super::regs::assign(f, &VALUE_REGS)
+        } else {
+            vec![None; f.values.len()]
+        };
         let mut at = 0i32;
-        for _ in 0..f.values.len() {
-            at += 8;
-            self.val_off.push(-at);
+        self.loc.clear();
+        for r in &regs {
+            self.loc.push(match r {
+                Some(r) => Where::Reg(*r),
+                None => {
+                    at += 8;
+                    Where::Mem(-at)
+                }
+            });
+        }
+        // Room to keep the callee-saved registers this function uses.
+        self.saves.clear();
+        for r in VALUE_REGS {
+            if regs.contains(&Some(r)) {
+                at += 8;
+                self.saves.push((r, -at));
+            }
         }
         for b in &f.blocks {
             for &i in &b.insts {
@@ -213,20 +253,41 @@ impl<'m> Gen<'m> {
     // ---- Loads and stores of values -------------------------------------------------------------------
 
     fn ld(&mut self, r: Reg, v: Value) {
-        let m = self.vmem(v);
-        self.a.load(r, m, 8);
+        match self.loc[v.0 as usize] {
+            Where::Reg(x) => {
+                if x != r {
+                    self.a.mov_rr(r, x, 8);
+                }
+            }
+            Where::Mem(off) => self.a.load(r, mem(RBP, off), 8),
+        }
     }
 
     /// The value widened to 64 bits with its sign or with zeros.
     fn ld_ext(&mut self, r: Reg, v: Value, f: &Func, signed: bool) {
-        let m = self.vmem(v);
         let t = f.ty(v);
-        self.a.load_ext(r, m, size(t), signed, true);
+        match self.loc[v.0 as usize] {
+            // A register holds the zero-extended value.
+            Where::Reg(x) => {
+                if signed && size(t) < 8 {
+                    self.a.extend_rr(r, x, size(t), true, true);
+                } else if x != r {
+                    self.a.mov_rr(r, x, 8);
+                }
+            }
+            Where::Mem(off) => self.a.load_ext(r, mem(RBP, off), size(t), signed, true),
+        }
     }
 
     fn st(&mut self, v: Value, r: Reg) {
-        let m = self.vmem(v);
-        self.a.store(m, r, 8);
+        match self.loc[v.0 as usize] {
+            Where::Reg(x) => {
+                if x != r {
+                    self.a.mov_rr(x, r, 8);
+                }
+            }
+            Where::Mem(off) => self.a.store(mem(RBP, off), r, 8),
+        }
     }
 
     fn ldf(&mut self, x: Xmm, v: Value, f: &Func) {
@@ -266,14 +327,20 @@ impl<'m> Gen<'m> {
         let entry = f.entry();
         let params: Vec<Value> = f.block_params(entry).to_vec();
         let tys: Vec<IrTy> = params.iter().map(|p| f.ty(*p)).collect();
+        // Keep the callee-saved registers this function uses.
+        for (r, off) in self.saves.clone() {
+            self.a.store(mem(RBP, off), r, 8);
+        }
         for (p, loc) in params.iter().zip(classify(&tys)) {
-            let m = self.vmem(*p);
             match loc {
-                Loc::Int(i) => self.a.store(m, INT_REGS[i], 8),
-                Loc::Float(i) => self.a.fstore(m, Xmm(i as u8), true),
+                Loc::Int(i) => self.st(*p, INT_REGS[i]),
+                Loc::Float(i) => {
+                    let m = self.vmem(*p);
+                    self.a.fstore(m, Xmm(i as u8), true);
+                }
                 Loc::Stack(k) => {
                     self.a.load(RAX, mem(RBP, 16 + 8 * k as i32), 8);
-                    self.a.store(m, RAX, 8);
+                    self.st(*p, RAX);
                 }
             }
         }
@@ -292,6 +359,9 @@ impl<'m> Gen<'m> {
     }
 
     fn epilogue(&mut self) {
+        for (r, off) in self.saves.clone() {
+            self.a.load(r, mem(RBP, off), 8);
+        }
         self.a.mov_rr(RSP, RBP, 8);
         self.a.pop(RBP);
         self.a.ret();
@@ -339,11 +409,11 @@ impl<'m> Gen<'m> {
     /// parameter of the target (a swap), everything goes through the stack first.
     fn edge(&mut self, f: &Func, tg: &Target) {
         let params = f.block_params(tg.block).to_vec();
-        let conflict = tg
-            .args
-            .iter()
-            .enumerate()
-            .any(|(i, a)| params.iter().position(|p| p == a).is_some_and(|j| j != i));
+        // A copy would clobber a source that a later copy still needs.
+        let conflict = (0..params.len()).any(|i| {
+            (i + 1..tg.args.len())
+                .any(|k| self.loc[params[i].0 as usize] == self.loc[tg.args[k].0 as usize])
+        });
         if conflict {
             for a in &tg.args {
                 self.ld(RAX, *a);
@@ -355,9 +425,14 @@ impl<'m> Gen<'m> {
             }
         } else {
             for (p, a) in params.iter().zip(&tg.args) {
-                if p != a {
-                    self.ld(RAX, *a);
-                    self.st(*p, RAX);
+                if self.loc[p.0 as usize] != self.loc[a.0 as usize] {
+                    match self.loc[p.0 as usize] {
+                        Where::Reg(r) => self.ld(r, *a),
+                        Where::Mem(_) => {
+                            self.ld(RAX, *a);
+                            self.st(*p, RAX);
+                        }
+                    }
                 }
             }
         }
@@ -590,7 +665,25 @@ impl<'m> Gen<'m> {
                 BinOp::Sub => Sse::Sub,
                 BinOp::Mul => Sse::Mul,
                 BinOp::Div => Sse::Div,
-                _ => return Err("the native backend does not do float remainder yet".to_string()),
+                BinOp::Rem => {
+                    // x87 `fprem` is exactly C's `fmod`: the sign of the dividend, NaN for a zero divisor.
+                    let d = t == IrTy::F64;
+                    let (ma, mb) = (self.vmem(a), self.vmem(b));
+                    self.a.x87_load(mb, d);
+                    self.a.x87_load(ma, d);
+                    let again = self.a.new_label();
+                    self.a.bind(again);
+                    self.a.x87_prem();
+                    self.a.x87_status_ax();
+                    self.a.shift_imm(Shift::Shr, RAX, 10, 4);
+                    self.a.alu_ri(Alu::And, RAX, 1, 4);
+                    self.a.jcc(Cc::Ne, again);
+                    self.a.x87_drop_second();
+                    let mr = self.vmem(r);
+                    self.a.x87_store_pop(mr, d);
+                    return Ok(());
+                }
+                _ => return Err("not a float operation".to_string()),
             };
             self.ldf(Xmm(0), a, f);
             self.ldf(Xmm(1), b, f);

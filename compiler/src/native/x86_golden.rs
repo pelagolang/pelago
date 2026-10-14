@@ -337,5 +337,20 @@ pub fn golden() -> Vec<Case> {
         ("movq xmm9, r10", "66 4d 0f 6e ca", |a| {
             a.movq_to_xmm(Xmm(9), R10, true)
         }),
+        ("fld qword ptr [rax]", "dd 00", |a| {
+            a.x87_load(mem(RAX, 0), true)
+        }),
+        ("fld dword ptr [rbp-8]", "d9 45 f8", |a| {
+            a.x87_load(mem(RBP, -8), false)
+        }),
+        ("fstp qword ptr [rsp+8]", "dd 5c 24 08", |a| {
+            a.x87_store_pop(mem(RSP, 8), true)
+        }),
+        ("fstp dword ptr [rax]", "d9 18", |a| {
+            a.x87_store_pop(mem(RAX, 0), false)
+        }),
+        ("fprem", "d9 f8", |a| a.x87_prem()),
+        ("fnstsw ax", "df e0", |a| a.x87_status_ax()),
+        ("fstp st(1)", "dd d9", |a| a.x87_drop_second()),
     ]
 }

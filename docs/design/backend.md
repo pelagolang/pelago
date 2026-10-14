@@ -79,3 +79,25 @@ the runtime does not depend on the alignment of its caller. Our own functions ke
 How it is tested: where Windows programs can run, `native_must_agree` and `native_agrees_on_the_edge_cases` also build and run the Windows executable.
 Directly on Windows (the `windows` job in `.github/workflows/ci.yml`, on `windows-latest`), and on Linux through Wine when `PELAGO_WINE=1 cargo test` is set (Wine is
 slower, so it is opt-in; `apt-get install wine64` is enough). With Wine all 391 tests pass, including the Windows column.
+
+## 6. Registers (N5) and first measurements
+
+`native/regs.rs` keeps the most used integer, boolean and pointer values in the callee-saved registers `rbx r12 r13 r14 r15` for their whole life; every other value (and every
+float) stays in its frame slot. Liveness is the usual backward dataflow over the blocks (a block's parameters are defined at its start, a jump's arguments are used by the jump);
+each value gets one interval, and two values share a register only when their intervals are disjoint. The values are taken heaviest first, weighted by `10^loop depth`.
+Callee-saved registers survive calls, so nothing is saved around a call; the function saves the ones it uses in its prologue and restores them before every return. Copies for
+block parameters compare locations (a copy that would clobber a source needed by a later copy goes through the stack). `--no-regalloc` turns it off; the tests run both ways.
+
+Measured on this container (collatz steps for 1 to 300,000 and `fib(35)`, `compiler/benches`-style program):
+
+| Build | Time |
+|---|---|
+| IR interpreter (`pelago run --opt`) | about 7 s |
+| native, frame only (N2) | 0.73 s |
+| native, registers (N5) | 0.53 s |
+| native, optimised IR and registers | 0.45 s |
+| C, `gcc -O0` | 0.23 s |
+| C, `gcc -O2` | 0.10 s |
+
+What is still slow, in order of likely payoff: every checked operation and bounds check is a compare and branch, the calling convention goes through memory for every
+float, small `MemCopy` uses `rep movsb`, and no value is split between a register and memory (a value too rarely used for a register still pays a load and a store per use).

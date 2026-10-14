@@ -328,6 +328,7 @@ fn native_build(
     let opts = pelago::native::gen::Options {
         leak_check: flags.contains(&"--leak-check"),
         target: os,
+        regalloc: !flags.contains(&"--no-regalloc"),
     };
     let image = match pelago::native::gen::compile(module, "main", &opts) {
         Ok(i) => i,

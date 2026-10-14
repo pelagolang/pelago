@@ -91,6 +91,9 @@ CASES = [
  ("movq xmm0, rax", "a.movq_to_xmm(Xmm(0), RAX, true)"), ("movd xmm1, ecx", "a.movq_to_xmm(Xmm(1), RCX, false)"),
  ("movq rax, xmm0", "a.movq_from_xmm(RAX, Xmm(0), true)"), ("movd ecx, xmm1", "a.movq_from_xmm(RCX, Xmm(1), false)"),
  ("movq xmm9, r10", "a.movq_to_xmm(Xmm(9), R10, true)"),
+ ("fld qword ptr [rax]", "a.x87_load(mem(RAX, 0), true)"), ("fld dword ptr [rbp-8]", "a.x87_load(mem(RBP, -8), false)"),
+ ("fstp qword ptr [rsp+8]", "a.x87_store_pop(mem(RSP, 8), true)"), ("fstp dword ptr [rax]", "a.x87_store_pop(mem(RAX, 0), false)"),
+ ("fprem", "a.x87_prem()"), ("fnstsw ax", "a.x87_status_ax()"), ("fstp st(1)", "a.x87_drop_second()"),
 ]
 
 def assemble(text):
