@@ -357,7 +357,13 @@ impl<'p> Checker<'p> {
             ExprKind::Continue { .. } => self.tt.never,
             ExprKind::Become(call) => self.become_expr(e, call),
             ExprKind::Defer(inner) => {
-                self.check_expr(inner, Exp::Discard);
+                let t = self.check_expr(inner, Exp::Discard);
+                if matches!(self.kind_of(t), TyKind::Result(..)) {
+                    self.err(
+                        inner.span,
+                        "this returns a result, and `defer` has nowhere to send the error; handle it inside the deferred code",
+                    );
+                }
                 self.tt.void
             }
             ExprKind::Meta(inner) => self.check_expr(inner, exp),
@@ -1322,11 +1328,14 @@ impl<'p> Checker<'p> {
                     TyKind::Result(_, ret_err) => {
                         // The error may widen into `error` (or, later, through `converts`).
                         let to_catch_all = matches!(self.kind_of(ret_err), TyKind::Error);
-                        if !to_catch_all && !self.tt.unify(err, ret_err) {
+                        if !to_catch_all
+                            && !self.tt.unify(err, ret_err)
+                            && !self.converts_to(err, ret_err)
+                        {
                             let (a, b) = (self.show(err), self.show(ret_err));
                             self.err(
                                 e.span,
-                                format!("`?` would return an error of type `{a}`, but this function returns `{b}`; convert it or return `error`"),
+                                format!("`?` would return an error of type `{a}`, but this function returns `{b}`; write `impl converts<{b}> for {a}` or return `error`"),
                             );
                         }
                     }
@@ -1414,6 +1423,9 @@ impl<'p> Checker<'p> {
             (TyKind::Unknown, _) | (_, TyKind::Unknown) => true,
             _ => false,
         };
+        if !ok && self.converts_to(vt, target) {
+            return target;
+        }
         if !ok {
             let (a, b) = (self.show(vt), self.show(target));
             let vk = self.num_class(vt);

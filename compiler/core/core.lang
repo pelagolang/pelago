@@ -28,6 +28,12 @@ pub interface clone {
     fn clone(self) -> Self
 }
 
+/// Lets `?` and `to` turn one error type into another: `impl converts<app_error> for parse_error`.
+/// (`converts` is a placeholder name.)
+pub interface converts<E> {
+    fn convert(self) -> E
+}
+
 /// One interface per operator: `impl add for vec2 { fn add(self, other: vec2) -> vec2 ... }`.
 pub interface add {
     fn add(self, other: Self) -> Self

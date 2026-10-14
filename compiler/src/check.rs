@@ -515,6 +515,16 @@ impl Visitor for Checker<'_> {
             ExprKind::Become(call) if !matches!(call.kind, ExprKind::Call { .. }) => {
                 self.error(call.span, "`become` takes a function call: `become f(x)`");
             }
+            ExprKind::Defer(inner) => {
+                let mut f = Escapes { found: Vec::new() };
+                f.visit_expr(inner);
+                for (span, what) in f.found {
+                    self.error(
+                        span,
+                        format!("`defer` runs when the scope ends, so it cannot use {what}"),
+                    );
+                }
+            }
             ExprKind::Assign { op, lhs, .. } => {
                 if !is_place(lhs, *op == crate::token::Punct::Eq) {
                     self.error(lhs.span, "this cannot be assigned to; use a name, a field, an index or a tuple position");
@@ -617,5 +627,26 @@ impl Visitor for Checker<'_> {
         }
         visit::walk_expr(self, e);
         self.loops = saved;
+    }
+}
+
+/// Finds the ways code inside `defer` could leave the scope early.
+struct Escapes {
+    found: Vec<(Span, &'static str)>,
+}
+
+impl Visitor for Escapes {
+    fn visit_expr(&mut self, e: &Expr) {
+        match &e.kind {
+            // A closure has its own `return` and `?`.
+            ExprKind::Closure(_) => return,
+            ExprKind::Return(_) => self.found.push((e.span, "`return`")),
+            ExprKind::Try(_) => self.found.push((e.span, "`?`")),
+            ExprKind::Break { .. } => self.found.push((e.span, "`break`")),
+            ExprKind::Continue { .. } => self.found.push((e.span, "`continue`")),
+            ExprKind::Become(_) => self.found.push((e.span, "`become`")),
+            _ => {}
+        }
+        visit::walk_expr(self, e);
     }
 }

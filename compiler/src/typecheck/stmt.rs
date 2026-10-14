@@ -126,7 +126,14 @@ impl<'p> Checker<'p> {
         let mut branches: Vec<(Ty, Span)> = Vec::new();
         let mut counted: Vec<&'p Pattern> = Vec::new();
         let mut has_default = false;
+        let mut arms: Vec<exhaust::ArmInfo<'p>> = Vec::new();
         for arm in &s.arms {
+            arms.push(exhaust::ArmInfo {
+                pats: arm.patterns.iter().collect(),
+                guarded: arm.guard.is_some(),
+                is_default: arm.is_default,
+                span: arm.span,
+            });
             for p in &arm.patterns {
                 self.check_pattern(p, st);
                 if arm.guard.is_none() {
@@ -149,6 +156,7 @@ impl<'p> Checker<'p> {
             kind: exhaust::MatchKind::Switch,
             pats: counted,
             has_default,
+            arms,
         });
         if branches.is_empty() {
             return self.tt.void;

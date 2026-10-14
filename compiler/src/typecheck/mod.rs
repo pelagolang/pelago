@@ -82,6 +82,7 @@ pub fn check(program: &Program, resolved: &Resolved) -> Typed {
     c.index_all();
     c.prepare_impls();
     c.check_impls();
+    c.check_entry();
     c.check_all();
     c.finish()
 }
@@ -147,8 +148,9 @@ pub(crate) struct ImplInfo<'p> {
     /// The type the methods are for.
     self_ty: Ty,
     methods: HashMap<String, DefId>,
-    /// The interface of `impl iface for type`.
+    /// The interface of `impl iface for type`, and its type arguments (`converts<app_error>`).
     iface: Option<DefId>,
+    iface_args: Vec<Ty>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -580,6 +582,7 @@ impl<'p> Checker<'p> {
                     self_ty: self.tt.unknown,
                     methods: HashMap::new(),
                     iface: None,
+                    iface_args: Vec::new(),
                 });
                 self.register_generics(file, &im.generics, &im.where_);
                 for m in &im.members {
@@ -713,6 +716,13 @@ impl<'p> Checker<'p> {
                 }
                 self.file = saved;
             }
+            let iface_args = match &decl.target.kind {
+                TypeKind::Path { args, .. } if iface.is_some() => {
+                    self.with_ctx(file, scope, None, |c| c.lower_generic_args(args))
+                }
+                _ => Vec::new(),
+            };
+            self.impls[i].iface_args = iface_args;
             self.impls[i].iface = iface;
             self.impls[i].generics = generics;
             self.impls[i].self_ty = self_ty;

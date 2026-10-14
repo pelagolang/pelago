@@ -33,6 +33,15 @@ pub(crate) struct PendingMatch<'p> {
     pub pats: Vec<&'p Pattern>,
     /// An arm without a pattern (`default`).
     pub has_default: bool,
+    /// Every arm in order, to find the ones that can never match.
+    pub arms: Vec<ArmInfo<'p>>,
+}
+
+pub(crate) struct ArmInfo<'p> {
+    pub pats: Vec<&'p Pattern>,
+    pub guarded: bool,
+    pub is_default: bool,
+    pub span: Span,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -85,6 +94,7 @@ impl<'p> Checker<'p> {
             kind: MatchKind::Binding,
             pats: vec![p],
             has_default: false,
+            arms: Vec::new(),
         });
     }
 
@@ -120,7 +130,36 @@ impl<'p> Checker<'p> {
                 };
                 self.err(m.span, msg);
             }
+            if matches!(m.kind, MatchKind::Switch) {
+                self.unreachable_arms(&m, ty);
+            }
             self.file = saved;
+        }
+    }
+
+    /// Arms whose every value is matched by the arms above them.
+    fn unreachable_arms(&mut self, m: &PendingMatch<'p>, ty: Ty) {
+        let mut prev: Vec<Vec<Pat>> = Vec::new();
+        for arm in &m.arms {
+            let mut rows: Vec<(Vec<Pat>, Span)> = Vec::new();
+            if arm.is_default {
+                rows.push((vec![Pat::Wild], arm.span));
+            }
+            for p in &arm.pats {
+                let lowered = self.lower_pat(p, ty);
+                rows.push((vec![lowered], p.span));
+            }
+            for (row, span) in &rows {
+                if !self.useful(&prev, row, &[ty], 0) {
+                    self.err(
+                        *span,
+                        "this case can never match: the cases above already cover it",
+                    );
+                }
+            }
+            if !arm.guarded {
+                prev.extend(rows.into_iter().map(|(r, _)| r));
+            }
         }
     }
 
@@ -416,6 +455,103 @@ impl<'p> Checker<'p> {
                 let mut out = vec!["_".to_string()];
                 out.extend(w);
                 Some(out)
+            }
+        }
+    }
+}
+
+impl<'p> Checker<'p> {
+    /// Does the pattern row `q` match some value that none of `rows` matches?
+    fn useful(&mut self, rows: &[Vec<Pat>], q: &[Pat], tys: &[Ty], depth: u32) -> bool {
+        if q.is_empty() {
+            return rows.is_empty();
+        }
+        if rows.is_empty() || depth > 40 {
+            return true;
+        }
+        let rest_tys = &tys[1..];
+        let default_rows = |rows: &[Vec<Pat>]| -> Vec<Vec<Pat>> {
+            rows.iter()
+                .filter(|r| matches!(r[0], Pat::Wild))
+                .map(|r| r[1..].to_vec())
+                .collect()
+        };
+        match &q[0] {
+            Pat::Opaque => {
+                let d = default_rows(rows);
+                self.useful(&d, &q[1..], rest_tys, depth + 1)
+            }
+            Pat::Ctor(c, subs) => {
+                let Sig::Ctors(ctors) = self.signature(tys[0]) else {
+                    return true;
+                };
+                let Some((_, _, args)) = ctors.into_iter().find(|(k, _, _)| k == c) else {
+                    return true;
+                };
+                let sp: Vec<Vec<Pat>> = rows
+                    .iter()
+                    .filter_map(|r| specialize(r, c, args.len()))
+                    .collect();
+                let mut nq = subs.clone();
+                nq.resize(args.len(), Pat::Wild);
+                nq.extend_from_slice(&q[1..]);
+                let mut nt = args;
+                nt.extend_from_slice(rest_tys);
+                self.useful(&sp, &nq, &nt, depth + 1)
+            }
+            Pat::List { .. } | Pat::Wild => {
+                let longest = rows
+                    .iter()
+                    .chain(std::iter::once(&q.to_vec()))
+                    .map(|r| match &r[0] {
+                        Pat::List { prefix, suffix, .. } => prefix.len() + suffix.len(),
+                        _ => 0,
+                    })
+                    .max()
+                    .unwrap_or(0);
+                match self.signature(tys[0]) {
+                    Sig::List(elem) => {
+                        for n in 0..=longest + 1 {
+                            let Some(nq) = specialize_list(q, n) else {
+                                continue;
+                            };
+                            let sp: Vec<Vec<Pat>> = rows
+                                .iter()
+                                .filter_map(|r| specialize_list(r, n))
+                                .collect();
+                            let mut nt = vec![elem; n];
+                            nt.extend_from_slice(rest_tys);
+                            if self.useful(&sp, &nq, &nt, depth + 1) {
+                                return true;
+                            }
+                        }
+                        false
+                    }
+                    Sig::Ctors(ctors) if matches!(q[0], Pat::Wild) => {
+                        if rows.iter().all(|r| matches!(r[0], Pat::Wild)) {
+                            let d = default_rows(rows);
+                            return self.useful(&d, &q[1..], rest_tys, depth + 1);
+                        }
+                        for (c, _, args) in ctors {
+                            let sp: Vec<Vec<Pat>> = rows
+                                .iter()
+                                .filter_map(|r| specialize(r, &c, args.len()))
+                                .collect();
+                            let mut nq = vec![Pat::Wild; args.len()];
+                            nq.extend_from_slice(&q[1..]);
+                            let mut nt = args;
+                            nt.extend_from_slice(rest_tys);
+                            if self.useful(&sp, &nq, &nt, depth + 1) {
+                                return true;
+                            }
+                        }
+                        false
+                    }
+                    _ => {
+                        let d = default_rows(rows);
+                        self.useful(&d, &q[1..], rest_tys, depth + 1)
+                    }
+                }
             }
         }
     }

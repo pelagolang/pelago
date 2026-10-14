@@ -542,6 +542,85 @@ impl<'p> Checker<'p> {
         }
     }
 
+    /// Can a `from` become a `to` through `impl converts<to> for from`? Used by `?` and `to`.
+    pub(crate) fn converts_to(&mut self, from: Ty, to: Ty) -> bool {
+        let Some(conv) = self.core_iface("converts") else {
+            return false;
+        };
+        let Some(h) = self.head_of(from) else {
+            return false;
+        };
+        for idx in self.impl_by_head.get(&h).cloned().unwrap_or_default() {
+            if self.impls[idx].iface != Some(conv) || self.impls[idx].iface_args.len() != 1 {
+                continue;
+            }
+            let span = self.def(conv).span;
+            let gens = self.impls[idx].generics.clone();
+            let map: HashMap<DefId, Ty> = gens.iter().map(|g| (*g, self.var(span))).collect();
+            let inst = self.tt.subst(self.impls[idx].self_ty, &map);
+            let target = self.tt.subst(self.impls[idx].iface_args[0], &map);
+            let mark = self.tt.snapshot();
+            let ok = self.tt.unify(inst, from) && self.tt.unify(target, to);
+            self.tt.rollback(mark);
+            if ok {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// `fn main()`, `fn main(args: [string])`, and a result `void ! E` for either.
+    pub(crate) fn check_entry(&mut self) {
+        let program = self.program;
+        for m in &program.modules {
+            for s in &m.file.stmts {
+                let StmtKind::Item(it) = &s.kind else {
+                    continue;
+                };
+                let ItemKind::Fn(f) = &it.kind else {
+                    continue;
+                };
+                if f.kind != FnKind::Fn || m.src[f.name.span.start as usize..f.name.span.end as usize] != *"main" {
+                    continue;
+                }
+                let saved = self.file;
+                self.file = m.id;
+                self.check_main(f);
+                self.file = saved;
+            }
+        }
+    }
+
+    fn check_main(&mut self, f: &'p FnDecl) {
+        if !f.generics.params.is_empty() {
+            self.err(f.name.span, "`main` cannot be generic");
+        }
+        match f.params.len() {
+            0 => {}
+            1 => {
+                if let Some(t) = &f.params[0].ty {
+                    let ty = self.lower_type(t);
+                    let want = self.tt.list(self.tt.string);
+                    if !self.tt.is_unknown(ty) && !self.tt.unify(ty, want) {
+                        self.err(t.span, "`main` takes no parameters or `args: [string]`");
+                    }
+                }
+            }
+            _ => self.err(f.name.span, "`main` takes no parameters or `args: [string]`"),
+        }
+        if let Some(r) = &f.ret {
+            let ty = self.lower_type(r);
+            let ok = match self.kind_of(ty) {
+                TyKind::Void | TyKind::Unknown => true,
+                TyKind::Result(a, _) => matches!(self.kind_of(a), TyKind::Void),
+                _ => false,
+            };
+            if !ok {
+                self.err(r.span, "`main` returns nothing, or `void ! error` so that `?` works at the top level");
+            }
+        }
+    }
+
     // ---- impl checks ------------------------------------------------------------------------------------
 
     /// Completeness of `impl iface for type` and of types that list interfaces, and the orphan rule.
@@ -555,7 +634,8 @@ impl<'p> Checker<'p> {
             self.file = file;
             self.orphan_rule(idx);
             if let Some(i) = self.impls[idx].iface {
-                self.conforms(self_ty, i, decl.target.span);
+                let args = self.impls[idx].iface_args.clone();
+                self.conforms(self_ty, i, &args, decl.target.span);
             }
             self.file = saved;
         }
@@ -581,7 +661,7 @@ impl<'p> Checker<'p> {
             self.file = file;
             let span = self.def(d).span;
             for i in ifaces {
-                self.conforms(own, i, span);
+                self.conforms(own, i, &[], span);
             }
             self.file = saved;
         }
@@ -606,13 +686,16 @@ impl<'p> Checker<'p> {
             TyKind::Unknown => return,
             _ => false,
         };
+        let args_local = self.impls[idx].iface_args.clone().iter().any(|a| {
+            matches!(self.kind_of(*a), TyKind::Adt(d, _) if local(self, d))
+        });
         match iface {
             Some(i) => {
-                if !local(self, i) && !head_local {
+                if !local(self, i) && !head_local && !args_local {
                     let (i, t) = (self.def(i).name.clone(), self.show(self_ty));
                     self.err(
                         decl.target.span,
-                        format!("cannot write `impl {i} for {t}`: neither `{i}` nor `{t}` is defined in this package"),
+                        format!("cannot write `impl {i} for {t}`: neither `{i}`, `{t}` nor a type argument of `{i}` is defined in this package"),
                     );
                 }
             }
@@ -631,7 +714,7 @@ impl<'p> Checker<'p> {
     }
 
     /// Does the type have what the interface promises?
-    fn conforms(&mut self, self_ty: Ty, iface: DefId, span: Span) {
+    fn conforms(&mut self, self_ty: Ty, iface: DefId, args: &[Ty], span: Span) {
         if self.tt.is_unknown(self_ty) {
             return;
         }
@@ -650,6 +733,26 @@ impl<'p> Checker<'p> {
         let members: Vec<DefId> = self.def(iface).members.clone();
         let mut imap = HashMap::new();
         imap.insert(iface, self_ty);
+        let gens = self.adt_generics(iface);
+        if gens.len() != args.len() {
+            if !gens.is_empty() && args.is_empty() {
+                return; // the written type arguments are not known here
+            }
+            self.err(
+                span,
+                format!(
+                    "`{inn}` takes {} type argument{}, but {} {} given",
+                    gens.len(),
+                    if gens.len() == 1 { "" } else { "s" },
+                    args.len(),
+                    if args.len() == 1 { "was" } else { "were" }
+                ),
+            );
+            return;
+        }
+        for (g, a) in gens.iter().zip(args.iter()) {
+            imap.insert(*g, *a);
+        }
         for m in members {
             if self.def(m).kind != DefKind::Fn {
                 continue;
