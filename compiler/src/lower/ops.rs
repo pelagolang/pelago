@@ -120,4 +120,176 @@ impl<'a> Lowerer<'a> {
             _ => self.into(v, dst, t),
         }
     }
+
+    // ---- `?.` ---------------------------------------------------------------------------------------------
+
+    /// Tests an optional base; on `none` writes `none` to `dst` and jumps to `done`. Gives the address
+    /// of the payload when the base is there. The caller continues in the `some` block.
+    fn opt_base(
+        &mut self,
+        base: &'a Expr,
+        dst: Value,
+        t: Ty,
+        done: BlockId,
+    ) -> Option<(Value, Ty)> {
+        let sp = base.span;
+        let (p, bt) = self.scrutinee(base)?;
+        let TyKind::Option(inner) = self.kind(bt) else {
+            self.unsupported(sp, "`?.` on a value that is not an option");
+            return None;
+        };
+        let binfo = self.enum_info(bt)?;
+        let tinfo = self.enum_info(t)?;
+        let tag = self.load_at(p, 0, binfo.tag);
+        let zero = self.konst(binfo.tag, Const::Int(0), sp);
+        let is_none = self.emit(Op::Cmp(CmpOp::Eq, tag, zero), Some(IrTy::Bool), sp)?;
+        let none_b = self.new_block(&[]);
+        let some_b = self.new_block(&[]);
+        self.branch(is_none, none_b, some_b);
+        self.start(none_b);
+        let z = self.konst(tinfo.tag, Const::Int(0), sp);
+        self.store_at(dst, 0, z);
+        self.jump(done, vec![]);
+        self.start(some_b);
+        let off = binfo.variants.get(1)?.first()?.off;
+        Some((self.addr(p, off), inner))
+    }
+
+    /// `a?.b`: the field of the value inside `a`, or `none`.
+    pub(crate) fn opt_field(
+        &mut self,
+        e: &'a Expr,
+        base: &'a Expr,
+        name: &Ident,
+        dst: Value,
+        t: Ty,
+    ) -> Res {
+        let sp = e.span;
+        let done = self.new_block(&[]);
+        let Some((q, inner)) = self.opt_base(base, dst, t, done) else {
+            return Res::Never;
+        };
+        let TyKind::Adt(d, _) = self.kind(inner) else {
+            return self.unsupported(sp, "`?.` on this type");
+        };
+        let fname = self.src_text(name.span).to_string();
+        let Some(idx) = self
+            .typed
+            .adts
+            .get(&d)
+            .and_then(|a| a.fields.iter().position(|(fd, _)| self.res.def(*fd).name == fname))
+        else {
+            return self.unsupported(name.span, "an unknown field");
+        };
+        let fs = self.struct_fields(inner);
+        let Some(f) = fs.get(idx).copied() else {
+            return Res::Never;
+        };
+        let obj = self.res.def(d).kind == DefKind::Obj;
+        let fbase = if obj {
+            let o = self.load_at(q, 0, IrTy::Ptr);
+            self.addr(o, super::obj::OBJ_HEADER)
+        } else {
+            q
+        };
+        let faddr = self.addr(fbase, f.off);
+        self.some_from(faddr, f.ty, dst, t);
+        self.jump(done, vec![]);
+        self.start(done);
+        Res::Unit
+    }
+
+    /// Writes `some(copy of the value at src)` to `dst` (or the value itself when it is already an option).
+    fn some_from(&mut self, src: Value, ft: Ty, dst: Value, t: Ty) {
+        let sp = Span::new(0, 0);
+        if matches!(self.kind(ft), TyKind::Option(_)) {
+            self.clone_into(src, dst, ft);
+            return;
+        }
+        if let Some(info) = self.enum_info(t) {
+            if let Some(pf) = info.variants.get(1).and_then(|v| v.first()) {
+                let p = self.addr(dst, pf.off);
+                self.clone_into(src, p, ft);
+            }
+            let one = self.konst(info.tag, Const::Int(1), sp);
+            self.store_at(dst, 0, one);
+        }
+    }
+
+    /// `a?.method(args)`: calls the method on the value inside `a`, or gives `none`.
+    pub(crate) fn opt_call(
+        &mut self,
+        e: &'a Expr,
+        base: &'a Expr,
+        args: &'a [Arg],
+        dst: Option<Value>,
+    ) -> Res {
+        let sp = e.span;
+        let Some(t) = self.ty_of(e) else {
+            return self.unsupported(sp, "`?.` call of unknown type");
+        };
+        let Some((def, map)) = self.call_target(sp) else {
+            return self.unsupported(sp, "a `?.` call the checker did not record");
+        };
+        let d = match dst {
+            Some(d) => d,
+            None => self.slot_for(t),
+        };
+        let done = self.new_block(&[]);
+        let Some((q, _inner)) = self.opt_base(base, d, t, done) else {
+            return Res::Never;
+        };
+        let Some(info) = self.typed.fn_infos.get(&def).cloned() else {
+            return self.unsupported(sp, "a function without a signature");
+        };
+        let ret = self.conc_with(info.ret, &map);
+        let mut srcs = vec![ArgSource::Addr(q)];
+        match self.match_args(&info, def, args, sp) {
+            Some(mut v) => srcs.append(&mut v),
+            None => return Res::Never,
+        }
+        let Some(tinfo) = self.enum_info(t) else {
+            return Res::Never;
+        };
+        let wrapped = !matches!(self.kind(ret), TyKind::Option(_));
+        let payload = tinfo.variants.get(1).and_then(|v| v.first()).copied();
+        let target = if wrapped {
+            payload.map(|pf| self.addr(d, pf.off))
+        } else {
+            Some(d)
+        };
+        match self.repr(ret) {
+            Repr::Mem(_) => {
+                if let Res::Never = self.call_with(e, def, &map, srcs, target) {
+                    return Res::Never;
+                }
+            }
+            Repr::Scalar(_) => match self.call_with(e, def, &map, srcs, None) {
+                Res::Val(v) => {
+                    if let Some(p) = target {
+                        self.emit(Op::Store(p, v), None, sp);
+                    }
+                }
+                _ => return Res::Never,
+            },
+            Repr::Zst => {
+                if let Res::Never = self.call_with(e, def, &map, srcs, None) {
+                    return Res::Never;
+                }
+            }
+        }
+        if wrapped {
+            let one = self.konst(tinfo.tag, Const::Int(1), sp);
+            self.store_at(d, 0, one);
+        }
+        self.jump(done, vec![]);
+        self.start(done);
+        match dst {
+            Some(_) => Res::Unit,
+            None => {
+                self.own(d, t, false);
+                Res::Val(d)
+            }
+        }
+    }
 }

@@ -63,7 +63,7 @@ impl<'a> Lowerer<'a> {
                     return self.call_def(e, def, None, args, mark, dst);
                 }
                 if *optional {
-                    return self.unsupported(e.span, "`?.` calls");
+                    return self.opt_call(e, base, args, dst);
                 }
                 self.method_call(e, base, name, args, mark, dst)
             }

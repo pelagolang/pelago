@@ -291,6 +291,13 @@ impl<'a> Lowerer<'a> {
             ExprKind::Str(parts) => self.string_lit(e, parts, dst, t),
             ExprKind::List(items) => self.list_lit(e, items, dst, t),
             ExprKind::None => self.none_lit(e, dst, t),
+            ExprKind::Field {
+                base,
+                name,
+                optional: true,
+            } if self.res.use_at(self.f.file, name.span.start).is_none() => {
+                self.opt_field(e, base, name, dst, t)
+            }
             ExprKind::Name(_) | ExprKind::DotName(_) | ExprKind::Field { .. } => {
                 self.variant_value(e, dst, t)
             }
@@ -409,8 +416,12 @@ impl<'a> Lowerer<'a> {
                 let def = self.res.use_at(self.f.file, e.span.start)?;
                 self.local_place(def)
             }
-            ExprKind::Field { base, name, .. } => {
-                if self.res.use_at(self.f.file, name.span.start).is_some() {
+            ExprKind::Field {
+                base,
+                name,
+                optional,
+            } => {
+                if *optional || self.res.use_at(self.f.file, name.span.start).is_some() {
                     return None;
                 }
                 self.field_place(e, base, name)
@@ -448,10 +459,13 @@ impl<'a> Lowerer<'a> {
                 return self.rvalue_expr(e);
             }
         }
-        if let ExprKind::Field { name, .. } = &e.kind {
+        if let ExprKind::Field { name, optional, .. } = &e.kind {
             if self.res.use_at(self.f.file, name.span.start).is_some() {
                 // A path such as `shape.empty` or `util.limit`.
                 return self.global_or_variant(e);
+            }
+            if *optional {
+                return self.rvalue_expr(e);
             }
         }
         let Some(t) = self.ty_of(e) else {
