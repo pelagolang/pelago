@@ -2,7 +2,7 @@
 
 ## Done
 
-- Design drafts in `docs/design/`: `modules`, `checker`, `basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `memory`, `lexer`, `parser`, `samples`.
+- Design drafts in `docs/design/`: `modules`, `checker`, `basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `memory`, `ir`, `lexer`, `parser`, `samples`.
 - `ROADMAP.md` holds the decisions table and the phases.
 - `compiler/` (Rust, no dependencies): keyword table, tokens, spans, the lexer, the syntax tree and the parser, with tests and CI.
 - `examples/` holds source files that must lex cleanly.
