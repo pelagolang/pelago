@@ -34,7 +34,7 @@ miss a few cases; the highlighter is the reference.
 
 ## Not done yet
 
-In progress: a Tree-sitter grammar and the Zed extension (`docs/plans/cards/S-05-zed-and-tree-sitter.md`; repositories `pelagolang/tree-sitter-pelago` and `pelagolang/zed-pelago`).
+Built, waiting for a try-out in Zed: a Tree-sitter grammar and the Zed extension (`docs/plans/cards/S-05-zed-and-tree-sitter.md`; repositories `pelagolang/tree-sitter-pelago` and `pelagolang/zed-pelago`).
 Built: `pelago lsp`, the language server (`S-06`). Any editor that can start a command and speak LSP over stdio can use it; VS Code needs a small client extension (not written: it would need the `vscode-languageclient` npm package).
 
 GitHub colouring (needs a Linguist registration once the language is public), a Tree-sitter grammar for Neovim, Helix and Zed, and

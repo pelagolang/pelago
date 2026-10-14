@@ -1,12 +1,21 @@
 Id: S-05
 Title: Tree-sitter grammar and the Zed extension
-Column: Shelf
+Column: Review (grammar and extension built; not yet tried inside Zed)
 Order: -
 Depends on: nothing in the compiler (the syntax is settled); the owner's approval of the tools below
 Size: M for the grammar, S for the extension
 Revisit when: the owner wants Zed (or Neovim, Helix) support, or before the first public release
 
-# Parked on purpose (owner decision)
+# Status
+
+Built on the branch `claude/programming-language-design-psjufd-3` of both repositories: the grammar (`grammar.js`, an external scanner in C, queries, 71 corpus tests; all examples
+and `core.pel` parse with no error nodes; commit `05899d4`) and the Zed extension (`extension.toml` pinning that commit, the language config, the queries, a Rust crate that starts
+`pelago lsp`; it builds for `wasm32-wasip1`). **Not done:** trying it inside Zed itself (nobody has opened it in the editor yet), publishing to the Zed extensions registry,
+and a licence for both repositories (the owner's choice). Known: the generated `parser.c` is about 17 MB (9,300 states); the compiled parser is a few MB. Differences from the
+compiler's parser are listed in the grammar's README (`break name` is always a label, a touching `<` is generic only if `>` and `(`, `{` or `.` follow on the line, the
+grammar is more forgiving than the compiler and does not run `check.rs`).
+
+# Original shelving note (kept for the history)
 
 The owner created two empty repositories under the `pelagolang` organisation and chose to shelve this work until the backend (A-09) is under way.
 

@@ -24,7 +24,6 @@ Nothing is waiting on this track.
 | [S-01](cards/S-01-map-storage.md) | Our own map and set storage: O(1) removal, still insertion-ordered | A benchmark shows removal or iteration is slow, or the backend exists |
 | [S-02](cards/S-02-real-threads.md) | Real threads for tasks | The machine-code backend can emit atomics and thread start |
 | [S-03](cards/S-03-limits.md) | Smaller limits: many-call closures, static tables, a few more | Each line names its own trigger |
-| [S-05](cards/S-05-zed-and-tree-sitter.md) | Tree-sitter grammar and the Zed extension (repos `pelagolang/tree-sitter-pelago`, `pelagolang/zed-pelago` exist, empty) | The owner wants Zed/Neovim/Helix, or before the first public release |
 | [S-04](cards/S-04-async-suspension.md) | async: suspension in the middle of a body (state machines) | Real threads exist, or a program needs many concurrent waits |
 
 ## Done
@@ -49,8 +48,9 @@ Nothing is waiting on this track.
 
 ## Doing
 
-- [S-05](cards/S-05-zed-and-tree-sitter.md): Tree-sitter grammar in `pelagolang/tree-sitter-pelago` (a helper agent is writing it), then the Zed extension in `pelagolang/zed-pelago`.
+Nothing right now.
 
 ## Review
 
+- [S-05](cards/S-05-zed-and-tree-sitter.md): Tree-sitter grammar (`pelagolang/tree-sitter-pelago`) and Zed extension (`pelagolang/zed-pelago`) built; not yet tried in Zed.
 - [S-06](cards/S-06-language-server.md): `pelago lsp` built (L1 to L5); the owner reviews.
