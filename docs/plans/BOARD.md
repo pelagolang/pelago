@@ -2,13 +2,15 @@
 
 Last updated when every card on the first list was finished (A-01 to A-08 and B-03). What is left is on the shelf: it waits for the backend or for a measured need.
 
-**Order of work.** Nothing is open on tracks A and B. The next real step is the machine-code backend (a new card when the owner decides how to start it: from the IR in `docs/design/ir.md`), which also unlocks S-01, S-02 and S-04 on the shelf.
+**Order of work.** The next real step is the machine-code backend: card [A-09](cards/A-09-native-backend.md) is under way (owner's answers recorded in the card): x86-64 machine code for Linux and Windows. Done: N1 to N4 and the Windows target; next N5 (register allocation). The editor work (S-05, S-06) is built and in Review.
 
 ## Track A: compiler
 
 | Column | Card | Title | Size |
 |---|---|---|---|
-| (empty) | | | |
+| Needs decision | [A-10](cards/A-10-aarch64.md) | AArch64 (64-bit ARM) backend: Linux first, then Windows on ARM and macOS | L |
+| Needs decision | [A-11](cards/A-11-native-speed.md) | Native speed: constants, checks, real register allocation (4.5 times slower than C -O2 today) | XL |
+| Doing | [A-09](cards/A-09-native-backend.md) | Native backend: x86-64 machine code, ELF and PE, straight from the IR (N1 to N4 and Windows done; N5 next) | XL |
 
 ## Track B: tooling and identity
 
@@ -52,4 +54,5 @@ Nothing right now.
 
 ## Review
 
-Nothing right now.
+- [S-05](cards/S-05-zed-and-tree-sitter.md): Tree-sitter grammar (`pelagolang/tree-sitter-pelago`) and Zed extension (`pelagolang/zed-pelago`) built; not yet tried in Zed.
+- [S-06](cards/S-06-language-server.md): `pelago lsp` built (L1 to L5); the owner reviews.

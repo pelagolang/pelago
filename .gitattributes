@@ -1,0 +1,8 @@
+# Source files keep Unix line endings on every system, so the golden trees and byte offsets match.
+* text=auto eol=lf
+*.pel text eol=lf
+*.ast text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.scm text eol=lf
+*.vsix binary

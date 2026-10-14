@@ -353,7 +353,44 @@ fn output_of(src: &str) -> String {
         "output changed by the optimiser in {src}"
     );
     assert_eq!(p.leaked, 0, "the optimiser caused a leak in {src}");
+    native_must_agree(&l.module, "plain", src, &o.output);
+    native_must_agree(&m, "optimised", src, &o.output);
     o.output
+}
+
+/// The third column of the differential test: the native build prints the same, leaks nothing and
+/// exits with status 0. It runs on Linux x86-64 for Linux, and for Windows through Wine (or directly
+/// on Windows) where that is available; the Windows program is built from the plain IR only.
+fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
+    use crate::native::{exec, gen, Os};
+    for os in [Os::Linux, Os::Windows] {
+        if !exec::can_run(os) || (os == Os::Windows && what != "plain") {
+            continue;
+        }
+        // The frame-only generator and the one with registers must both be right.
+        for regalloc in [false, true] {
+            if os == Os::Windows && !regalloc {
+                continue;
+            }
+            let opts = gen::Options {
+                leak_check: true,
+                target: os,
+                regalloc,
+            };
+            let image = match gen::compile(m, "main", &opts) {
+                Ok(i) => i,
+                Err(e) => panic!("the native build ({what}, {os:?}) failed: {e}\n{src}"),
+            };
+            let r = exec::run_image(os, &image).unwrap();
+            let how = format!("{what}, {os:?}, regalloc {regalloc}");
+            assert_eq!(r.out, want, "native output ({how}) differs in {src}");
+            assert_eq!(
+                (r.err.as_str(), r.code),
+                ("", 0),
+                "native run ({how}) in {src}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -725,6 +762,7 @@ fn example_programs_run() {
         assert_eq!(o.result.clone().map(|_| ()), Ok(()), "{name}");
         assert_eq!(o.leaked, 0, "{name} leaks");
         assert!(!o.output.is_empty(), "{name} printed nothing");
+        native_must_agree(&l.module, "plain", name, &o.output);
         let mut m = l.module.clone();
         crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
         crate::ir::opt::prune(&mut m, &["main"]);
@@ -1218,4 +1256,119 @@ fn main() {
 }
 "#;
     assert_eq!(output_of(src), "some(4) 4 true false 5\n11\n");
+}
+
+// ---- The native build on the edge cases of `docs/design/backend.md` -------------------------------------
+
+/// The program does the same natively as in the interpreter: same output, and the same stop (message
+/// on standard error, status 1) or a clean exit.
+fn agree(src: &str) {
+    use crate::native::{exec, gen, Os};
+    let l = lowered(src);
+    let o = run_full(&l.module, "main", &[]);
+    let optimised = {
+        let mut m = l.module.clone();
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        crate::ir::opt::prune(&mut m, &["main"]);
+        m
+    };
+    for (what, os, m, regalloc) in [
+        ("plain", Os::Linux, &l.module, false),
+        ("plain", Os::Linux, &l.module, true),
+        ("optimised", Os::Linux, &optimised, true),
+        ("plain", Os::Windows, &l.module, true),
+    ] {
+        if !exec::can_run(os) {
+            continue;
+        }
+        let opts = gen::Options {
+            leak_check: false,
+            target: os,
+            regalloc,
+        };
+        let image = gen::compile(m, "main", &opts).unwrap();
+        let r = exec::run_image(os, &image).unwrap();
+        assert_eq!(r.out, o.output, "{what} {os:?}: output differs in {src}");
+        match &o.result {
+            Ok(_) => assert_eq!((r.err.as_str(), r.code), ("", 0), "{what} {os:?}: {src}"),
+            Err(msg) => assert_eq!(
+                (r.err.as_str(), r.code),
+                (format!("stopped: {msg}\n").as_str(), 1),
+                "{what} {os:?}: {src}"
+            ),
+        }
+    }
+}
+
+#[test]
+fn native_agrees_on_the_edge_cases() {
+    let programs = [
+        // Division and remainder.
+        "fn main() { const z = 0\n print(10 / z) }",
+        "fn main() { const z = 0\n print(10 % z) }",
+        "fn main() { const m = -9223372036854775807 - 1\n const d = -1\n print(m / d) }",
+        "fn main() { const m = -9223372036854775807 - 1\n const d = -1\n print(m % d) }",
+        "fn main() { const a = -7\n const b = 2\n print(a / b, a % b, 7 / -2, 7 % -2) }",
+        "fn main() { const a: uint = 18446744073709551615\n const b: uint = 10\n print(a / b, a % b) }",
+        "fn main() { const a: int8 = -128\n const b: int8 = -1\n print(a / b, a % b) }",
+        "fn main() { const a: int32 = -2147483648\n const b: int32 = -1\n print(a / b, a % b) }",
+        // Shifts.
+        "fn main() { const n = 64\n print(1 << n) }",
+        "fn main() { const n = 63\n print(1 << n, -1 >> n, 1 << 3, -16 >> 2) }",
+        "fn main() { const a: uint = 18446744073709551615\n print(a >> 60, a << 60) }",
+        "fn main() { const a: uint8 = 255\n const n = 8\n print(a >> n) }",
+        "fn main() { const a: int8 = -128\n print(a >> 7, a >> 1) }",
+        // Checked arithmetic at every width.
+        "fn main() { const a: int8 = 127\n print(a + 1) }",
+        "fn main() { const a: int16 = -32768\n print(a - 1) }",
+        "fn main() { const a: int32 = 2147483647\n print(a * 2) }",
+        "fn main() { const a = 9223372036854775807\n print(a + 1) }",
+        "fn main() { const a = 9223372036854775807\n print(a * 2) }",
+        "fn main() { const a = -9223372036854775807 - 1\n print(a - 1) }",
+        "fn main() { const a: uint8 = 255\n print(a + 1) }",
+        "fn main() { const a: uint8 = 0\n print(a - 1) }",
+        "fn main() { const a: uint16 = 65535\n print(a * 2) }",
+        "fn main() { const a: uint32 = 4294967295\n print(a + 1) }",
+        "fn main() { const a: uint = 18446744073709551615\n print(a + 1) }",
+        "fn main() { const a: uint = 0\n print(a - 1) }",
+        "fn main() { const a: uint = 4294967296\n print(a * a) }",
+        "fn main() { const a: int8 = 100\n const b: int8 = 27\n print(a + b, a - b, b * 4) }",
+        // Wrapping arithmetic.
+        "fn main() { const a: int8 = 127\n print(a +% 1) }",
+        "fn main() { const a: uint8 = 255\n print(a +% 1, a *% 2, a -% 255 -% 1) }",
+        "fn main() { const a = 9223372036854775807\n print(a +% 1, a *% 3) }",
+        "fn main() { var h: uint = 14695981039346656037\n for c of 0..100 { h = (h ^ (c to uint)) *% 1099511628211 }\n print(h) }",
+        // Comparisons.
+        "fn main() { const a: int8 = -5\n const b: int8 = 3\n print(a < b, a > b, a == b, a <= b, a >= b, a != b) }",
+        "fn main() { const a: uint8 = 200\n const b: uint8 = 100\n print(a < b, a > b, a == b) }",
+        "fn main() { const a: int32 = -1\n const b: int32 = 1\n print(a < b, a > b) }",
+        "fn main() { const a: uint = 18446744073709551615\n const b: uint = 1\n print(a < b, a > b) }",
+        // Bit operations and conversions.
+        "fn main() { const a: uint8 = 0b1010_1010\n print(a & 0x0F, a | 0x0F, a ^ 0xFF, ~a) }",
+        "fn main() { const a: int8 = -5\n print(a to int, a to int32, a to int16, a to float) }",
+        "fn main() { const a = 300\n print(a to float, a to int64, a to int) }",
+        "fn main() { const a: uint8 = 200\n print(a to int, a to uint64, a to uint32) }",
+        "fn main() { const x = 3.99\n const y = -2.5\n print(x.floor(), x.ceil(), y.floor(), y.ceil(), y.round(), x.sqrt(), x.abs(), y.abs(), 1e10.floor()) }",
+        // Floats.
+        "fn main() { const n = 0.0 / 0.0\n print(n == n, n != n, n < 1.0, n > 1.0, n <= n, n >= n) }",
+        "fn main() { const a = 1.5\n const b = 2.5\n print(a < b, a > b, a <= b, a >= b, a == b, a != b, -a, a / b, a * b, a - b) }",
+        "fn main() { const z = 0.0\n print(1.0 / z, -1.0 / z, z / z) }",
+        "fn main() { const x: float32 = 1.5\n const y: float32 = 0.25\n print(x + y, x * y, x - y, x / y, x < y, -x) }",
+        "fn main() { const x: float32 = 2.5\n print(x to float, (x to float) + 0.5, 3 to float32) }",
+        "fn main() { const a = 7.5\n const b = 2.0\n const z = 0.0\n print(a % b, -a % b, a % -b, 1e300 % 3.0, a % z, 5.5 % 5.5, 0.1 % 0.03) }",
+        "fn main() { const a: float32 = 7.5\n const b: float32 = 2.0\n print(a % b, -a % b) }",
+        // Booleans and control flow.
+        "fn main() { const t = true\n const f = false\n print(!t, !f, t && f, t || f, t == f, t != f) }",
+        "fn main() { var s = 0\n for i of 0..1000 { if i % 3 == 0 || i % 5 == 0 { s += i } }\n print(s) }",
+        // Many arguments, floats and integers mixed (stack passing).
+        "fn f(a: int, b: int, c: int, d: int, e: int, g: int, h: int, i: int, j: int) -> int = a + 2*b + 3*c + 4*d + 5*e + 6*g + 7*h + 8*i + 9*j\nfn main() { print(f(1, 2, 3, 4, 5, 6, 7, 8, 9)) }",
+        "fn f(a: float, b: float, c: float, d: float, e: float, g: float, h: float, i: float, j: float, k: float) -> float = a + b*2.0 + c*3.0 + d*4.0 + e*5.0 + g*6.0 + h*7.0 + i*8.0 + j*9.0 + k*10.0\nfn main() { print(f(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0)) }",
+        "fn f(a: int, x: float, b: int, y: float) -> float = (a to float) * x + (b to float) * y\nfn main() { print(f(2, 1.5, 3, 0.5)) }",
+        // Deep recursion.
+        "fn d(n: int) -> int { if n == 0 { 0 } else { 1 + d(n - 1) } }\nfn main() { print(d(100000)) }",
+        "fn fib(n: int) -> int = n < 2 ? n : fib(n - 1) + fib(n - 2)\nfn main() { print(fib(25)) }",
+    ];
+    for p in programs {
+        agree(p);
+    }
 }

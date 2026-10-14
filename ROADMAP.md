@@ -21,6 +21,7 @@ A serious, self-hosting systems language:
 | Syntax family | Braces, TS/Rust-like, no significant indentation | decided |
 | Memory safety | Value semantics (read-only by default, plus `inout` / `sink` access modes; second-class references) | decided, pending the paper test below |
 | Backend | One backend, our own, from day one | decided |
+| First native target | x86-64 Linux static ELF, no libc, no linker, own encoder; Windows PE right after the test suite passes natively (tested in `windows-latest` CI); simple code generator first, register allocation later; System V-shaped internal calling convention (`docs/design/backend.md`, card A-09) | decided |
 | Bootstrap | Stage 0 compiler in Rust, then rewritten in the language itself | decided |
 | OO | Structs and interfaces, plus an `obj` kind with single inheritance (written with `:`) from the start (heap-allocated, singly owned, closed unless `open`). First feature to cut if compile speed or the safety model suffers | decided |
 | Compile-time code | `meta` | decided |
@@ -129,6 +130,8 @@ No compiler code yet. Everything here is cheap to change.
 
 ## Phase 3: Own backend
 
+Plan: `docs/plans/cards/A-09-native-backend.md` (stages N1 to N7; waits for the owner's answers; first target x86-64 Linux ELF, no linker, no libc).
+
 - [ ] x86-64 instruction selection
 - [ ] Register allocation (linear scan first, because it is fast to compile)
 - [ ] Emit object files / ELF directly
@@ -156,7 +159,7 @@ No compiler code yet. Everything here is cheap to change.
 
 - [ ] Optimizer that uses no-alias facts from value semantics (inlining, loop optimizations, vectorization)
 - [ ] Benchmarks against Rust and C, published and tracked
-- [ ] More targets: AArch64, then RISC-V
+- [ ] More targets: AArch64 (plan: `docs/plans/cards/A-10-aarch64.md`), then RISC-V; native speed plan: `docs/plans/cards/A-11-native-speed.md`
 - [ ] Compile-time profiling and speedups
 
 ## Phase 7: Tooling and community
