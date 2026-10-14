@@ -15,10 +15,13 @@
 
 mod agg;
 mod call;
+mod cmp;
 mod expr;
 mod func;
 mod glue;
+mod intr;
 mod pat;
+mod seq;
 mod stubs;
 mod ty;
 
@@ -116,6 +119,7 @@ pub(crate) struct Lowerer<'a> {
     pub diags: Vec<Diagnostic>,
     pub fns: HashMap<DefId, FnEntry<'a>>,
     pub globals: HashMap<DefId, GlobalEntry<'a>>,
+    pub core_fns: HashMap<String, DefId>,
     pub field_defaults: HashMap<DefId, (ModuleId, &'a Expr)>,
     pub instances: HashMap<(DefId, Vec<(DefId, Ty)>), FuncId>,
     pub jobs: Vec<Job>,
@@ -140,6 +144,7 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         diags: Vec::new(),
         fns: HashMap::new(),
         globals: HashMap::new(),
+        core_fns: HashMap::new(),
         field_defaults: HashMap::new(),
         instances: HashMap::new(),
         jobs: Vec::new(),

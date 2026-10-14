@@ -287,3 +287,73 @@ fn generics_are_specialised() {
     let src = "struct pair<T> { a: T, b: T\n fn sum(self) -> int = 0 }\nfn f() -> int { const p = pair { a: 3, b: 4 }\n p.a + p.b }";
     assert_eq!(eval(src, "f", &[]), Ok(7));
 }
+
+// ---- Text, lists, printing, ownership --------------------------------------------------------------------
+
+use crate::ir::{run_full, Outcome};
+
+/// Runs `main` and gives what it wrote and whether it leaked.
+fn run_main(src: &str) -> Outcome {
+    let l = lowered(src);
+    run_full(&l.module, "main", &[])
+}
+
+fn output_of(src: &str) -> String {
+    let o = run_main(src);
+    assert_eq!(o.result.clone().map(|_| ()), Ok(()), "{src}");
+    assert_eq!(o.leaked, 0, "leaked memory in {src}");
+    o.output
+}
+
+#[test]
+fn printing_basic_values() {
+    assert_eq!(output_of("fn main() { print(\"hello\") }"), "hello\n");
+    assert_eq!(output_of("fn main() { print(1, 2.5, true, 'x', \"s\") }"), "1 2.5 true x s\n");
+    assert_eq!(output_of("fn main() { print(-42, 0, 9223372036854775807) }"), "-42 0 9223372036854775807\n");
+    assert_eq!(output_of("fn main() { print(0.1 + 0.2, 100.0, 1.0 / 3.0) }"), "0.3 100 0.333333\n");
+}
+
+#[test]
+fn interpolation_and_joining() {
+    assert_eq!(output_of("fn main() { const name = \"Ann\"\n print(\"hi #name, #(1 + 2)!\") }"), "hi Ann, 3!\n");
+    assert_eq!(output_of("fn main() { const a = \"foo\"\n const b = \"bar\"\n print(a + b + \"!\") }"), "foobar!\n");
+    assert_eq!(output_of("fn main() { var s = \"a\"\n s += \"b\"\n s += \"c\"\n print(s) }"), "abc\n");
+    assert_eq!(output_of("fn main() { print(\"tab\\there \\\"q\\\"\") }"), "tab\there \"q\"\n");
+}
+
+#[test]
+fn text_comparison_and_slices() {
+    assert_eq!(output_of("fn main() { print(\"a\" == \"a\", \"a\" == \"b\", \"a\" < \"b\", \"b\" <= \"a\") }"), "true false true false\n");
+    assert_eq!(output_of("fn main() { const s = \"hello\"\n print(s[1..3], s[..2], s[3..]) }"), "el he lo\n");
+    assert_eq!(output_of("fn f(s: str) -> int { switch s { case \"a\": 1\n case \"b\": 2\n default: 0 } }\nfn main() { print(f(\"a\"), f(\"b\"), f(\"z\")) }"), "1 2 0\n");
+}
+
+#[test]
+fn lists() {
+    assert_eq!(output_of("fn main() { var xs: [int] = []\n xs.push!(3)\n xs.push!(4)\n print(xs.len(), xs) }"), "2 [3, 4]\n");
+    assert_eq!(output_of("fn main() { const xs = [1, 2, 3]\n var t = 0\n for x of xs { t += x }\n print(t, xs[1]) }"), "6 2\n");
+    assert_eq!(output_of("fn main() { var xs = [5, 3, 9, 1]\n xs.sort!()\n print(xs, xs.reversed()) }"), "[1, 3, 5, 9] [9, 5, 3, 1]\n");
+    assert_eq!(output_of("fn main() { var xs = [1, 2, 3]\n const p = xs.pop!()\n print(p, xs, xs.first(), xs.last(), xs.get(7)) }"), "some(3) [1, 2] some(1) some(2) none\n");
+    assert_eq!(output_of("fn main() { const xs = [10, 20, 30]\n for i, x of xs { print(i, x) } }"), "0 10\n1 20\n2 30\n");
+    assert_eq!(output_of("fn main() { var xs = [1, 2, 3]\n xs.insert!(1, 9)\n const r = xs.remove!(0)\n print(xs, r, xs.contains(9), xs.contains(7)) }"), "[9, 2, 3] 1 true false\n");
+    let o = run_main("fn main() { const xs = [1, 2, 3]\n print(xs[5]) }");
+    assert_eq!(o.result, Err("index out of range".to_string()));
+}
+
+#[test]
+fn owning_values_are_dropped_exactly_once() {
+    let src = "fn make(n: int) -> [string] {\n var out: [string] = []\n for i of 0..n { out.push!(\"item #i\") }\n out\n}\nfn main() { const xs = make(3)\n print(xs, xs.len()) }";
+    assert_eq!(output_of(src), "[\"item 0\", \"item 1\", \"item 2\"] 3\n");
+    let src = "fn main() { var a = \"x\"\n var b = a\n b += \"y\"\n print(b) }";
+    assert_eq!(output_of(src), "xy\n");
+    let src = "struct person { name: string, tags: [string] }\nfn main() { var p = person { name: \"Al\", tags: [\"a\", \"b\"] }\n p.tags.push!(\"c\")\n print(p.name, p.tags) }";
+    assert_eq!(output_of(src), "Al [\"a\", \"b\", \"c\"]\n");
+    // A moved value is not dropped twice, and a replaced one is dropped.
+    let src = "fn take(sink s: string) -> int = s.len()\nfn main() { var a = \"hello\" + \"!\"\n const n = take(sink a)\n a = \"again\" + \"!\"\n print(n, a) }";
+    assert_eq!(output_of(src), "6 again!\n");
+    // Early return and loops.
+    let src = "fn f(n: int) -> int {\n const s = \"x\" + \"y\"\n if n > 1 { return n }\n s.len()\n}\nfn main() { print(f(5), f(0)) }";
+    assert_eq!(output_of(src), "5 2\n");
+    let src = "fn main() { var t = 0\n for i of 0..3 { const s = \"v\" + \"w\"\n if i == 1 { continue }\n t += s.len() }\n print(t) }";
+    assert_eq!(output_of(src), "4\n");
+}
