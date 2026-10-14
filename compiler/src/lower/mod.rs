@@ -16,6 +16,7 @@
 mod agg;
 mod call;
 mod cmp;
+mod ctl;
 mod expr;
 mod func;
 mod glue;

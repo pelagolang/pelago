@@ -357,3 +357,37 @@ fn owning_values_are_dropped_exactly_once() {
     let src = "fn main() { var t = 0\n for i of 0..3 { const s = \"v\" + \"w\"\n if i == 1 { continue }\n t += s.len() }\n print(t) }";
     assert_eq!(output_of(src), "4\n");
 }
+
+#[test]
+fn question_mark_and_defaults() {
+    let src = "fn quarter(n: int) -> int ! parse_error {\n const h = parse(\"8\")?\n ok(h + n)\n}\nfn parse(s: str) -> int ! parse_error = s.parse_int()\nfn main() { print(quarter(1), parse(\"x\")) }";
+    assert_eq!(output_of(src), "ok(9) err(bad digit at position 0)\n");
+    let src = "fn f(o: int?) -> int? {\n const v = o?\n v + 1\n}\nfn main() { print(f(5), f(none)) }";
+    assert_eq!(output_of(src), "some(6) none\n");
+    let src = "fn main() { const a: int? = none\n const b: int? = 4\n print(a ?? 9, b ?? 9) }";
+    assert_eq!(output_of(src), "9 4\n");
+    let src = "fn main() { const names: [string?] = [\"a\", none]\n print(names[0] ?? \"-\", names[1] ?? \"-\") }";
+    assert_eq!(output_of(src), "a -\n");
+    let src = "fn load(s: str) -> int ! error {\n const n = s.parse_int()?\n ok(n * 2)\n}\nfn main() { print(load(\"21\"), load(\"zz\")) }";
+    assert_eq!(output_of(src), "ok(42) err(bad digit at position 0)\n");
+}
+
+#[test]
+fn copy_and_in() {
+    let src = "fn main() { const a = [\"x\", \"y\"]\n var b = copy a\n b.push!(\"z\")\n print(a, b) }";
+    assert_eq!(output_of(src), "[\"x\", \"y\"] [\"x\", \"y\", \"z\"]\n");
+    let src = "fn main() { print(3 in 1..5, 5 in 1..5, 5 in 1..=5, 2 in [1, 2, 3], \"ell\" in \"hello\", 9 in [1, 2]) }";
+    assert_eq!(output_of(src), "true false true true true false\n");
+}
+
+#[test]
+fn text_methods() {
+    let src = "fn main() { const s = \"  Hello, World  \"\n print(s.trim(), s.trim().to_upper(), s.to_lower().trim(), s.contains(\"World\"), s.trim().starts_with(\"Hello\"), s.trim().ends_with(\"d\")) }";
+    assert_eq!(output_of(src), "Hello, World HELLO, WORLD hello, world true true true\n");
+    let src = "fn main() { const parts = \"a,b,,c\".split(\",\").to_list()\n print(parts, parts.len()) }";
+    assert_eq!(output_of(src), "[\"a\", \"b\", \"\", \"c\"] 4\n");
+    let src = "fn main() { print(\"hello world\".replace(\"o\", \"0\"), \"héllo\".chars().count()) }";
+    assert_eq!(output_of(src), "hell0 w0rld 5\n");
+    let src = "fn main() { print(\"42\".parse_int(), \"-7\".parse_int(), \"4x\".parse_int(), \"3.5\".parse_float()) }";
+    assert_eq!(output_of(src), "ok(42) ok(-7) err(bad digit at position 1) ok(3.5)\n");
+}

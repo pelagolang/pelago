@@ -59,6 +59,10 @@ pub struct parse_error {
     pub message: string
 }
 
+impl show for parse_error {
+    fn show(self) -> string = copy self.message
+}
+
 pub ext fn print(...values: any show)
 pub ext fn assert(condition: bool)
 pub ext fn panic(message: string) -> never
@@ -182,6 +186,29 @@ fn rt_sort(base: ptr, n: int, size: int, cmp: ptr) {
     }
     if rt_addr_int(from) != rt_addr_int(base) { rt_copy(base, from, n * size) }
     rt_free(tmp)
+}
+
+/// Is the value at `probe` equal to one of the `size`-byte elements of the list at `h`?
+fn rt_list_contains(h: ptr, probe: ptr, size: int, eq: ptr) -> bool {
+    var i = 0
+    const n = rt_hdr_len(h)
+    while i < n {
+        if rt_call_bool2(eq, rt_offset(rt_hdr_data(h), i * size), probe) { return true }
+        i += 1
+    }
+    false
+}
+
+/// Does the text at `h` contain the text (or character) at `p`?
+fn rt_str_contains(h: ptr, p: ptr) -> bool {
+    const n = rt_hdr_len(h)
+    const pn = rt_hdr_len(p)
+    var i = 0
+    while i + pn <= n {
+        if rt_bytes_eq(rt_offset(rt_hdr_data(h), i), rt_hdr_data(p), pn) { return true }
+        i += 1
+    }
+    pn == 0
 }
 
 impl<T: eq> list<T> {

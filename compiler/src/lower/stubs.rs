@@ -3,9 +3,6 @@
 use super::*;
 
 impl<'a> Lowerer<'a> {
-    pub(crate) fn default_expr(&mut self, e: &'a Expr, _l: &'a Expr, _r: &'a Expr, _dst: Option<Value>, _t: Ty) -> Res {
-        self.unsupported(e.span, "`??`")
-    }
     pub(crate) fn closure_value(&mut self, e: &'a Expr, _c: &'a Closure, _dst: Value, _t: Ty) -> Res {
         self.unsupported(e.span, "a closure")
     }
@@ -30,12 +27,6 @@ impl<'a> Lowerer<'a> {
     pub(crate) fn user_operator_into(&mut self, _e: &'a Expr, _dst: Value) -> Option<Res> {
         None
     }
-    pub(crate) fn try_expr(&mut self, e: &'a Expr, _i: &'a Expr, _dst: Option<Value>) -> Res {
-        self.unsupported(e.span, "`?`")
-    }
-    pub(crate) fn copy_expr(&mut self, e: &'a Expr, _i: &'a Expr, _dst: Option<Value>) -> Res {
-        self.unsupported(e.span, "`copy`")
-    }
     pub(crate) fn coerce_to_any(&mut self, _e: &'a Expr, _have: Ty, _dst: Value, _iface: DefId) -> Option<Res> {
         None
     }
@@ -50,5 +41,8 @@ impl<'a> Lowerer<'a> {
     }
     pub(crate) fn show_collection(&mut self, _v: Value, _out: Value, _ty: Ty) {
         self.unsupported(Span::new(0, 0), "printing a map or set");
+    }
+    pub(crate) fn in_collection(&mut self, e: &'a Expr, _l: &'a Expr, _r: &'a Expr, _lt: Ty, _rt: Ty) -> Res {
+        self.unsupported(e.span, "`in` on this type")
     }
 }

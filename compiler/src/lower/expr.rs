@@ -112,6 +112,7 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Convert { value, checked: false, .. } => self.convert(e, value),
             ExprKind::Is { value, pattern } => self.is_expr(e, value, pattern),
+            ExprKind::In { lhs, rhs } => self.in_expr(e, lhs, rhs),
             ExprKind::Field { .. } | ExprKind::TupleIndex { .. } | ExprKind::Index { .. } => self.place_expr(e),
             _ => self.rvalue_expr(e),
         }
@@ -239,6 +240,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Guard { cond, else_ } => self.guard_expr(cond, else_),
             ExprKind::Try(inner) => self.try_expr(e, inner, None),
             ExprKind::Copy(inner) => self.copy_expr(e, inner, None),
+            ExprKind::Binary { op: Punct::QuestionQuestion, lhs, rhs } => self.default_expr(e, lhs, rhs, None, want),
             ExprKind::Binary { .. } | ExprKind::Unary { .. } => self.expr(e),
             _ => self.unsupported(e.span, "this kind of expression"),
         }
