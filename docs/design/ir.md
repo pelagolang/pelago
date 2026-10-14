@@ -48,7 +48,7 @@ fn sum(xs: [int]) -> int {
 - **Memory** is explicit: `alloc` / `free` for the heap, `slot` for stack space, `load` / `store`, `field` / `index` addresses.
 - **Index-based storage** (functions, blocks and instructions in flat vectors, referred to by number), as the arena discussion
   already pointed toward. Cheap to build, cheap to free, friendly to caches.
-- **A printer** (`langc ir <file>`) and a **verifier** come first, before any lowering, so each step is testable.
+- **A printer** (`pelago ir <file>`) and a **verifier** come first, before any lowering, so each step is testable.
 
 ## 3. How each part of the language lowers
 
@@ -120,7 +120,7 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 - Step 1 (IR types, printer, verifier) is built: `compiler/src/ir/` (`mod.rs` data and builder, `print.rs`, `verify.rs`). The verifier checks
   one terminator per block, single assignment, definitions that dominate their uses, and types of operands, jumps, calls and returns.
 - Step 2 (the first lowering) and the IR interpreter (IR2) are built: `compiler/src/lower/` and `compiler/src/ir/interp.rs`, with
-  `langc ir <path>` to print the IR of a program. It handles functions over integers, floats and `bool`: parameters, `const` and `var`
+  `pelago ir <path>` to print the IR of a program. It handles functions over integers, floats and `bool`: parameters, `const` and `var`
   (a `var` lives in a stack slot; a later pass can turn slots into values), checked arithmetic, wrapping operators, comparisons,
   `&&` / `||`, `if` / `unless`, `?:`, `while`, `loop` (with `break value`), `for` over a range, labels, `continue`, `return`,
   `to` conversions and calls. Division and remainder stop on zero; shifts stop at the width; `+ - *` stop on overflow.
@@ -129,7 +129,7 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 - Tests lower source, verify the IR and run it in the interpreter (recursion, loops, labels, narrow and unsigned integers, floats,
   every kind of stop).
 - Step 3 (the rest of the language) is built, in `compiler/src/lower/` (monomorphised: one IR function per generic instance).
-  `langc run <path>` lowers a program and runs `main` in the interpreter; the tests run about sixty programs this way, and each one
+  `pelago run <path>` lowers a program and runs `main` in the interpreter; the tests run about sixty programs this way, and each one
   also has to finish with no leaked or double-freed memory (the interpreter checks).
   Everything the checker accepts is lowered, with the limits listed below.
 
@@ -141,7 +141,7 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
   eager list), maps and sets (4 words, below), function values (`code, env`), `any` (`data, table`).
 - **IR10** Ownership is run with drop flags: every owned value has a flag byte, set when it is made and cleared when it moves or is
   dropped. Glue functions (drop, copy, equal, order, hash, print) are generated once per type and shared.
-- **IR11** The library is written in the language (`compiler/core/core.lang`) over `rt_*` intrinsics (`rt_alloc`, `rt_read<T>`, `rt_size_of<T>`,
+- **IR11** The library is written in the language (`compiler/core/core.pel`) over `rt_*` intrinsics (`rt_alloc`, `rt_read<T>`, `rt_size_of<T>`,
   `rt_clone<T>`, `rt_drop_at<T>`, ...): lists, text, `option` / `result` methods, maps, sets, ranges, tasks, channels, `shared`, `lock`. The
   lowering only calls them.
 - **IR12** Maps and sets keep insertion order: a block of keys (then values), a length, a capacity and an open-addressing index table of

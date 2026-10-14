@@ -522,13 +522,10 @@ fn syntax_errors_are_reported_too() {
 
 #[test]
 fn the_tour_resolves_apart_from_the_standard_library() {
-    // `tour.lang` imports a library that does not exist yet and calls many library functions.
+    // `tour.pel` imports a library that does not exist yet and calls many library functions.
     // Everything else must resolve.
-    let src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../examples/tour.lang"
-    ))
-    .unwrap();
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/tour.pel"))
+        .unwrap();
     let mut program = Program::new();
     program.add_package("app", &[("tour", &src)]);
     let r = resolve(&program);
@@ -539,11 +536,9 @@ fn the_tour_resolves_apart_from_the_standard_library() {
 
 #[test]
 fn resolving_never_panics_on_damaged_input() {
-    let tour = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../examples/tour.lang"
-    ))
-    .unwrap();
+    let tour =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/tour.pel"))
+            .unwrap();
     let chars: Vec<char> = tour.chars().collect();
     let mut state = 0x1234_5678_9ABC_DEF1u64;
     let mut next = |n: usize| {

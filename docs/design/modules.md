@@ -9,8 +9,8 @@ matter. **Parser today:** `import std.io` and `import a, b from std.io` as place
 
 ## 1. Files, modules, packages
 
-- **A file is a module.** Its name is the file name: `geometry.lang` is the module `geometry`. A directory of files is
-  a module too, with its files as submodules (`shapes/circle.lang` is `shapes.circle`). No `mod name` line is needed;
+- **A file is a module.** Its name is the file name: `geometry.pel` is the module `geometry`. A directory of files is
+  a module too, with its files as submodules (`shapes/circle.pel` is `shapes.circle`). No `mod name` line is needed;
   if it is written (`mod tour`), it must match the file name, so a copied file cannot silently change its name.
 - **`mod name { ... }`** declares a small module inside a file, for grouping and for tests.
 - **A package** (`pkg`, reserved) is a directory tree that is built and shared as one unit, with a manifest. It is the
@@ -112,7 +112,7 @@ starts with the package name, so moving a file does not break the imports of oth
 - **IM8** The orphan rule for `impl`.
 
 - **IM3** A file is a module and its file name is the module name; directories are parent modules, and a front file
-  (`shapes.lang` next to `shapes/`) can re-export its children. A `mod` line, if written, must match the file name.
+  (`shapes.pel` next to `shapes/`) can re-export its children. A `mod` line, if written, must match the file name.
 - **IM4** Relative paths with leading dots stay. They are relative to the importing file's directory: `.sibling`
   is a module in the same directory, `..util` one directory up, `...x` two up. (In module terms: the directory is
   the file module's parent, so `.x` is a sibling of the current module.) Children of the current module are
@@ -142,7 +142,7 @@ The serious alternative is **Go-style: a directory is a module and all its files
 | Parallel unit | file | file (parse), directory (collect names) |
 | Renaming a file | breaks importers | harmless |
 
-I suggest keeping **file = module**, with directories as parent modules whose front file (`shapes.lang` next to
+I suggest keeping **file = module**, with directories as parent modules whose front file (`shapes.pel` next to
 `shapes/`) can re-export its children: it matches what you already know from TypeScript and Rust, and `pub import`
 makes the facade cheap. The Go style is the better answer if you expect very large modules and want to split them
 without ceremony. A third option, **a declared name that is free of the file name** (`mod geometry` inside any file),

@@ -4,7 +4,7 @@ Column: Shelf
 Order: -
 Revisit when: a benchmark shows removal or iteration slow, the backend exists (so measurements mean something), or a program removes from large maps often.
 Size: M
-Touches: `compiler/core/core.lang` (all `rt_map_*`), lowering for map iteration, glue
+Touches: `compiler/core/core.pel` (all `rt_map_*`), lowering for map iteration, glue
 
 # 1. Today's design and its one weakness
 

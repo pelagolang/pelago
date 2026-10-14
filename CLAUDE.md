@@ -4,8 +4,8 @@ Guide for working in this repository.
 
 ## What this is
 
-A new self-hosting systems language. The name is undecided: the working name is `lang`, and the
-compiler crate is `langc`. We are in Phase 0 (design on paper) with the first Phase 1 code started.
+A new self-hosting systems language called **Pelago** (from *pelagos*, "the open sea"). Source files end in `.pel`.
+The crate and the one tool are both called `pelago` (the lexer, parser and checker are its parts). We are in Phase 0 (design on paper) with the first Phase 1 code started.
 Read `README.md`, then `ROADMAP.md` (vision, decisions table, phases), then `docs/NEXT.md` (where we
 stopped and what comes next).
 
@@ -31,9 +31,9 @@ CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pus
 
 ## Layout
 
-- `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `ast.rs`, `ast_print.rs`, `visit.rs`, `check.rs`, `package.rs`, `parser/`, `resolve/`, `types.rs`, `typecheck/`, `values/`, `ir/`, `lower/`, `main.rs`; the library `compiler/core/core.lang`).
-- `compiler/tests/`: integration tests. Every file in `examples/*.lang` must lex and parse without errors and match its golden tree.
-- `examples/`: sample source files. Keep `tour.lang` in step with the syntax decisions. `examples/programs/` holds real programs that must type check cleanly.
+- `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `ast.rs`, `ast_print.rs`, `visit.rs`, `check.rs`, `package.rs`, `parser/`, `resolve/`, `types.rs`, `typecheck/`, `values/`, `ir/`, `lower/`, `main.rs`; the library `compiler/core/core.pel`).
+- `compiler/tests/`: integration tests. Every file in `examples/*.pel` must lex and parse without errors and match its golden tree.
+- `examples/`: sample source files. Keep `tour.pel` in step with the syntax decisions. `examples/programs/` holds real programs that must type check cleanly.
 - `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `lexer`, `parser`, `modules`, `checker`, `ir`, `memory`, `samples`).
 - `docs/plans/`: the task board (Kanban) and one plan card per piece of work; start at `docs/plans/README.md`.
 - `ROADMAP.md`: the decisions table and the phases. `NAMES.md`: name brainstorm.
@@ -43,7 +43,7 @@ CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pus
 - `docs/design/keywords.md` and `compiler/src/keyword.rs` describe the same list. Change both together.
 - A new operator needs an entry in the `puncts!` table in `token.rs` **and** the match in `Lexer::punct`
   in `lexer.rs`. The test `every_punctuation_lexes_alone` enforces this.
-- New syntax needs: the parser (`parser/`), the printer (`ast_print.rs`), the tree walker (`visit.rs`), any syntax rule (`check.rs`), a line in `examples/tour.lang`, a test in
+- New syntax needs: the parser (`parser/`), the printer (`ast_print.rs`), the tree walker (`visit.rs`), any syntax rule (`check.rs`), a line in `examples/tour.pel`, a test in
   `parser/tests.rs`, and `BLESS=1 cargo test` to refresh the golden trees (review the diff).
 - When a decision is made, record it in the relevant design doc and in the `ROADMAP.md` decisions table
   in the same commit.
@@ -75,7 +75,7 @@ inheritance written `:`; one `switch` for pattern matching; `~>` closures; `#nam
   questions. Record the answers in the docs.
 - The owner wants a language with its own voice, not a copy of another one, but also familiarity where it
   helps. Be honest about costs, push back with reasons once, then follow the decision.
-- For names, search the web for clashes before proposing, and avoid nature-themed names.
+- The name Pelago is settled (see `NAMES.md`). For any new name (a package, a tool, a release), search the web for clashes before proposing.
 - Keep chat answers short and well organised; the owner reads the docs for detail.
 - The owner is budget-conscious. Do not start large work (for example the parser) unless asked.
 

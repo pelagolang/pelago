@@ -3,8 +3,7 @@
 Last updated with the plans written after the lowering milestone (IR9 to IR20 in `docs/design/ir.md`).
 
 **Order of work.** Track A goes strictly in this order: `A-01`, `A-02` (box), `A-03` (temporaries), `A-04` (IR optimiser),
-`A-05` (meta), `A-06` (soa), then `A-07` (async) only after the compiler is self-hosting. `A-08` is a small checker fix and should be taken right after `A-02`. Track B is independent of A and runs
-in its own order: `B-01` (name), `B-02` (extension), `B-03` (highlighter), `B-04` (rename the crate and docs).
+`A-05` (meta), `A-06` (soa), then `A-07` (async) only after the compiler is self-hosting. `A-08` is a small checker fix and should be taken right after `A-02`. Track B is independent of A: the name and extension are settled (Pelago, `.pel`), so only `B-03` (highlighter) is left.
 
 ## Track A: compiler
 
@@ -23,12 +22,9 @@ in its own order: `B-01` (name), `B-02` (extension), `B-03` (highlighter), `B-04
 
 | Column | Card | Title | Size |
 |---|---|---|---|
-| **Needs decision** | [B-01](cards/B-01-name.md) | Choose the language name (research done; shortlist inside) | S |
-| **Inbox** | [B-02](cards/B-02-extension.md) | Choose the file extension (after B-01) | S |
-| **Ready** | [B-03](cards/B-03-highlighter.md) | Syntax highlighter: TextMate grammar, VS Code extension, `langc highlight` | M |
-| **Inbox** | B-04 | Rename crate, binary, docs and examples to the chosen name (mechanical; after B-01 and B-02) | S |
+| **Ready** | [B-03](cards/B-03-highlighter.md) | Syntax highlighter for `.pel`: TextMate grammar, VS Code extension, `pelago highlight` | M |
 
-`B-03` can start before the name is final: it uses the placeholder extension `.lang`, and renaming it later is one search and replace.
+`B-03` has no blockers.
 
 ## Shelf (parked on purpose)
 
@@ -43,7 +39,10 @@ in its own order: `B-01` (name), `B-02` (extension), `B-03` (highlighter), `B-04
 
 | Card | What | Where |
 |---|---|---|
-| [D-01](cards/D-01-lowering.md) | Lowering of the whole checked language to IR, interpreter, `langc run`, leak checks | `compiler/src/lower/`, `docs/design/ir.md` IR9 to IR20 |
+| [B-01](cards/B-01-name.md) | Name chosen: **Pelago** | `NAMES.md` |
+| B-02 | Extension chosen: **`.pel`** | `NAMES.md` |
+| B-04 | Rename done: crate, binary, library, examples, docs | this commit |
+| [D-01](cards/D-01-lowering.md) | Lowering of the whole checked language to IR, interpreter, `pelago run`, leak checks | `compiler/src/lower/`, `docs/design/ir.md` IR9 to IR20 |
 | D-02 | Checker stages 1 to 6, value semantics, exhaustiveness | `docs/design/checker.md` |
 | D-03 | Lexer, parser, printer, visitors, golden tests | `docs/design/lexer.md`, `parser.md` |
 

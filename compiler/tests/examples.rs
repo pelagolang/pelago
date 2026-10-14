@@ -1,14 +1,14 @@
 //! Every file in `examples/` must lex and parse without errors.
 
-use langc::lexer::tokenize;
-use langc::token::TokenKind;
+use pelago::lexer::tokenize;
+use pelago::token::TokenKind;
 
 fn examples() -> Vec<(String, String)> {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../examples");
     let mut found = Vec::new();
     for entry in std::fs::read_dir(dir).expect("examples directory") {
         let path = entry.unwrap().path();
-        if path.extension().and_then(|e| e.to_str()) == Some("lang") {
+        if path.extension().and_then(|e| e.to_str()) == Some("pel") {
             let text = std::fs::read_to_string(&path).unwrap();
             found.push((path.display().to_string(), text));
         }
@@ -31,11 +31,8 @@ fn examples_lex_without_errors() {
 
 #[test]
 fn tour_uses_the_interesting_tokens() {
-    let src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../examples/tour.lang"
-    ))
-    .unwrap();
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/tour.pel"))
+        .unwrap();
     let out = tokenize(&src);
     let has = |kind: TokenKind| out.tokens.iter().any(|t| t.kind == kind);
     assert!(has(TokenKind::DocBlockComment));
@@ -48,7 +45,7 @@ fn tour_uses_the_interesting_tokens() {
 #[test]
 fn examples_parse_without_errors() {
     for (path, src) in examples() {
-        let (out, lex_errors) = langc::parser::parse_and_check(&src);
+        let (out, lex_errors) = pelago::parser::parse_and_check(&src);
         assert!(lex_errors.is_empty(), "{path}: {lex_errors:?}");
         assert!(out.errors.is_empty(), "{path}: {:?}", out.errors);
     }
@@ -60,8 +57,8 @@ fn examples_parse_without_errors() {
 fn examples_match_their_golden_trees() {
     let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/golden");
     for (path, src) in examples() {
-        let (out, _) = langc::parser::parse_source(&src);
-        let printed = langc::ast_print::print_file(&out.file, &src) + "\n";
+        let (out, _) = pelago::parser::parse_source(&src);
+        let printed = pelago::ast_print::print_file(&out.file, &src) + "\n";
         let name = std::path::Path::new(&path)
             .file_stem()
             .and_then(|s| s.to_str())
@@ -88,7 +85,7 @@ fn programs_check_cleanly() {
     let mut count = 0;
     for entry in std::fs::read_dir(dir).expect("examples/programs") {
         let path = entry.unwrap().path();
-        if path.extension().and_then(|e| e.to_str()) != Some("lang") {
+        if path.extension().and_then(|e| e.to_str()) != Some("pel") {
             continue;
         }
         let src = std::fs::read_to_string(&path).unwrap();
@@ -97,12 +94,12 @@ fn programs_check_cleanly() {
             .and_then(|s| s.to_str())
             .unwrap()
             .to_string();
-        let mut program = langc::package::Program::with_core();
+        let mut program = pelago::package::Program::with_core();
         program.add_package("app", &[(name.as_str(), src.as_str())]);
-        let resolved = langc::resolve::resolve(&program);
-        let typed = langc::typecheck::check(&program, &resolved);
+        let resolved = pelago::resolve::resolve(&program);
+        let typed = pelago::typecheck::check(&program, &resolved);
         let mut all = typed.diagnostics.clone();
-        all.extend(langc::values::check(&program, &resolved, &typed));
+        all.extend(pelago::values::check(&program, &resolved, &typed));
         let messages: Vec<String> = all
             .iter()
             .map(|d| format!("{}: {}", name, d.message))

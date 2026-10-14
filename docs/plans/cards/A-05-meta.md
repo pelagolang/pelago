@@ -31,7 +31,7 @@ From `docs/design/functions.md` section 15 and decision G3:
 The IR interpreter already runs any lowered function and checks memory. A `meta` expression is evaluated like this:
 
 1. **Collect** the functions the expression reaches (the lowering already discovers callees through `request_fn`).
-2. **Lower** them into a fresh temporary IR module (with `core.lang` as usual).
+2. **Lower** them into a fresh temporary IR module (with `core.pel` as usual).
 3. **Run** the entry function in the interpreter with a **step budget** (new interpreter option; default 10 million steps, configurable with an attribute or flag).
 4. **Read the result** out of interpreter memory and turn it into a **compile-time value** (section 4).
 5. **Bake it in**: scalar results become literals; strings, lists, structs and arrays become **static data** in the output module plus a lowering of "load from that data".
@@ -53,7 +53,7 @@ ownership), structs and enums of bakeable values, `option`/`result`. Not bakeabl
 - **Only the chosen branch is checked and lowered.** The other is parsed (so syntax errors still show) but not name-resolved and not type-checked: this is what lets Linux-only code mention Linux-only functions.
 - Allowed at module level (selects declarations) and inside function bodies (selects statements).
 - Tests: both branches select correctly; the unselected branch may contain an unknown name without error; a non-constant condition is an error; nested `meta if`; `meta if` inside a generic function.
-- Library use: split a platform-specific part of `core.lang` (none today, but the backend will need it).
+- Library use: split a platform-specific part of `core.pel` (none today, but the backend will need it).
 
 ## Stage M2: value parameters `meta N: int`
 
@@ -83,7 +83,7 @@ ownership), structs and enums of bakeable values, `option`/`result`. Not bakeabl
 # 5. Design risks
 
 - **Two behaviours:** if the interpreter and the future backend disagree on anything (overflow, float formatting), compile-time results differ from run-time results. The differential test from A-04 (interpreter before/after) does not cover this; once the backend exists, add "same result at compile time and run time" tests for every operation.
-- **Compile-time cost:** every `meta` run lowers a module. Cache the lowered `core.lang` once per compilation (a shared immutable lowering of the library), not once per `meta` expression.
+- **Compile-time cost:** every `meta` run lowers a module. Cache the lowered `core.pel` once per compilation (a shared immutable lowering of the library), not once per `meta` expression.
 - **Types that depend on values** make inference harder; keep `meta N` to arrays and `soa` at first.
 
 # Done means (whole card)

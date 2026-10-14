@@ -800,11 +800,9 @@ fn random_token_soup_never_panics_or_hangs() {
 
 #[test]
 fn damaged_real_files_never_panic_or_hang() {
-    let tour = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../examples/tour.lang"
-    ))
-    .unwrap();
+    let tour =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/tour.pel"))
+            .unwrap();
     let chars: Vec<char> = tour.chars().collect();
     let mut rng = Rng(0xDEAD_BEEF_CAFE_F00D);
     for _ in 0..600 {
@@ -830,11 +828,9 @@ fn damaged_real_files_never_panic_or_hang() {
 
 #[test]
 fn truncated_real_files_never_panic_or_hang() {
-    let tour = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../examples/tour.lang"
-    ))
-    .unwrap();
+    let tour =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/tour.pel"))
+            .unwrap();
     let mut cut = 0;
     while cut < tour.len() {
         if tour.is_char_boundary(cut) {

@@ -4,9 +4,9 @@ Column: Done
 Order: -
 Depends on: -
 Size: XL
-Touches: lower, ir, typecheck, core.lang
+Touches: lower, ir, typecheck, core.pel
 
-Built: `compiler/src/lower/` (about 20 files), the IR interpreter, `langc run`, `compiler/core/core.lang` (list, text, map, set,
+Built: `compiler/src/lower/` (about 20 files), the IR interpreter, `pelago run`, `compiler/core/core.pel` (list, text, map, set,
 range, option, result, task, channel, shared, lock), about 65 lowering tests with leak checks. Design record: `docs/design/ir.md`, IR9 to IR20.
 
 Known limits carried forward: tasks run in sequence (S-02), map removal is O(n) (S-01), values that are never bound can leak (A-03),

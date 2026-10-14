@@ -1,4 +1,4 @@
-//! Stage 0 compiler for the language (name to be decided).
+//! Stage 0 compiler for Pelago.
 //!
 //! This crate is deliberately dependency-free: a language that cares about
 //! compile speed should start with a compiler that builds fast.

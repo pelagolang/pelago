@@ -1,7 +1,7 @@
 //! Functions the compiler supplies: the `rt_*` intrinsics the library is written over, and the
 //! built-in `print`, `assert`, `panic`, `todo` and `unreachable`.
 //!
-//! The library (`compiler/core/core.lang`) implements lists, text, maps and so on in the language
+//! The library (`compiler/core/core.pel`) implements lists, text, maps and so on in the language
 //! itself, on top of a small set of operations: raw memory (`rt_alloc`, `rt_load_*`, `rt_offset`, ...),
 //! knowledge about a type (`rt_size_of<T>`, `rt_drop_fn<T>`, ...) and moving values in and out of
 //! memory (`rt_write`, `rt_read`). Each is expanded inline where it is called.

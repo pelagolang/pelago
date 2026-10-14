@@ -38,7 +38,7 @@ Column: Ready
 Order: 2           (position inside its track; lower goes first)
 Depends on: A-01
 Size: L            (S under a day, M a few days, L about a week, XL more)
-Touches: checker, values pass, lowering, core.lang, docs
+Touches: checker, values pass, lowering, core.pel, docs
 ```
 
 ### Rules for working a card

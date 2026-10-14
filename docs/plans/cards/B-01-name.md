@@ -1,6 +1,6 @@
 Id: B-01
 Title: Choose the language name
-Column: Needs decision
+Column: Done (Pelago chosen)
 Order: 1 (track B)
 Depends on: nothing
 Size: S

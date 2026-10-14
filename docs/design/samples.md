@@ -17,7 +17,7 @@ Defaults used throughout:
 - Types follow the name: `x: int`.
 - Parameters are read-only by default. `inout` means exclusive mutable access for the call. `sink` takes the value away from the caller.
 - `if` and `match` are expressions.
-- Files use the placeholder extension `.lang`.
+- Files use the placeholder extension `.pel`.
 
 ---
 

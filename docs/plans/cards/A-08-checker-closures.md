@@ -21,4 +21,4 @@ Touches: parser (closure parameters), checker (closures, calls), tests
 
 # Done means
 
-- Both examples work end to end through `langc run`; `S-03` lines 7 and 8 are removed; tests green.
+- Both examples work end to end through `pelago run`; `S-03` lines 7 and 8 are removed; tests green.

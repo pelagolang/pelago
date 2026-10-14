@@ -15,7 +15,7 @@ becomes an error token plus an entry in the error list, and lexing carries on.
   lexer finds the real end of the string even with nested strings inside `#(...)`.
 - Operators use longest match, so `>>=` is one token.
 
-Speed on the first benchmark (10 MB, release build, `langc lex-bench`): about 214 MB/s, 59 million tokens a second.
+Speed on the first benchmark (10 MB, release build, `pelago lex-bench`): about 214 MB/s, 59 million tokens a second.
 
 ## Is the lexer final?
 

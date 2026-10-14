@@ -1,6 +1,6 @@
-# lang
+# Pelago
 
-A self-hosting systems language, name to be decided. Compiled natively with its own backend, no GC and no runtime, memory safe through value semantics, with a TypeScript-like feel.
+Pelago is a self-hosting systems language (*pelagos*, Greek for "the open sea"; source files end in `.pel`). Compiled natively with its own backend, no GC and no runtime, memory safe through value semantics, with a TypeScript-like feel.
 
 - [ROADMAP.md](ROADMAP.md): vision, decisions and phases
 - [docs/design/samples.md](docs/design/samples.md): sample programs in the imagined syntax
@@ -10,13 +10,13 @@ A self-hosting systems language, name to be decided. Compiled natively with its 
 - [NAMES.md](NAMES.md): name brainstorm
 
 Status: **Phase 0 (design on paper) with the first Phase 1 code started.**
-`compiler/` holds the stage 0 compiler in Rust: so far the keyword table, tokens, spans, the lexer, the syntax tree, the parser, name resolution and the type checker (`langc check`).
+`compiler/` holds the stage 0 compiler in Rust: so far the keyword table, tokens, spans, the lexer, the syntax tree, the parser, name resolution and the type checker (`pelago check`).
 `examples/` holds sample source files.
 
 ```
 cargo test
 cargo run -- keywords
-cargo run -- lex examples/tour.lang
-cargo run -- parse examples/tour.lang
+cargo run -- lex examples/tour.pel
+cargo run -- parse examples/tour.pel
 cargo run -- check <file or directory>
 ```

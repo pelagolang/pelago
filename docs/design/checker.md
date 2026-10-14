@@ -25,7 +25,7 @@ that lowering to IR (Phase 2, last bullets) reads.
 Input: a `Program` of parsed modules. Output: a table of definitions (`Def`), a map from each use of a name to its
 definition, and diagnostics.
 
-- **Files, packages, modules.** A file is a module named after the file; `geometry/shapes.lang` is `geometry.shapes`;
+- **Files, packages, modules.** A file is a module named after the file; `geometry/shapes.pel` is `geometry.shapes`;
   a made-up empty parent exists when only the directory does. Each package has a root; imports start at your own
   package's top-level modules or at another package.
 - **Scopes.** Local scopes (blocks, loops, closures, `switch` arms, builders) over the module scope over the prelude.
@@ -42,7 +42,7 @@ definition, and diagnostics.
   labels, struct-literal field names.
 - **Helpful errors:** "did you mean ...?" from edit distance, and the hints for words from other languages (`null`, `this`).
 
-Tests: about 30 resolution tests, random damaged input, and `langc check` on a directory.
+Tests: about 30 resolution tests, random damaged input, and `pelago check` on a directory.
 
 ## Stage 2: types (done)
 
@@ -65,7 +65,7 @@ What it does:
 - **Patterns:** bindings get types; enum cases (`.circle`, `type.case`, `ok`, `err`, `some`), tuples, lists with `...`, ranges,
   struct patterns (a left-out field needs `..`), `x is dog`.
 - **Generics:** type parameters on functions, structs and enums, with inference at calls and `f<int>(...)`. Bounds are checked in stage 3.
-- **The library** is written in the language: `compiler/core/core.lang` is the package `core`, loaded by `Program::with_core()`. Its
+- **The library** is written in the language: `compiler/core/core.pel` is the package `core`, loaded by `Program::with_core()`. Its
   `pub` names are in scope everywhere. Functions that the backend provides are `ext fn` without a body, for example
   `impl<T> list<T> { ext fn push(inout self, sink item: T) }`.
 - **`Unknown`** is a quiet type for things not modelled yet (the `scope` handle, `chan`, ...). It unifies with everything so one gap
@@ -86,7 +86,7 @@ What it does:
 
 ## Stage 3: interfaces (done)
 
-Where it lives: `typecheck/iface.rs`. The library interfaces are in `core.lang`: `show`, `eq`, `order : eq`, `hash : eq`, `clone`,
+Where it lives: `typecheck/iface.rs`. The library interfaces are in `core.pel`: `show`, `eq`, `order : eq`, `hash : eq`, `clone`,
 and one per operator (`add`, `sub`, `mul`, `div`, `rem`, `neg`).
 
 - **What a type provides.** An interface is provided when the type lists it after `:`, has an `impl iface for type`, or has
@@ -156,7 +156,7 @@ Where it lives: `values/` (its own pass after the types, reading `Typed`). It fo
   one of its own owning locals (`const s = a + b; s.trim()` is an error; `s to string` is not).
 - **VS9. `spawn`.** A closure given to `spawn` must move in what it uses: an owning outer variable needs `[sink x]` (or `copy x`
   first), plain values are copied, and `[inout x]` is an error (use `lock`). `spawn`, `chan`, `task`, `shared`, `lock` are in the
-  library (`core.lang`); `for x of rx` loops over a receiver; more senders come from `copy tx`.
+  library (`core.pel`); `for x of rx` loops over a receiver; more senders come from `copy tx`.
 - **VS10. `linear` types.** A `linear` struct, obj or enum must be consumed exactly once: on every path out of its scope (end of
   block, `return`, `?`, `break`, `continue`) a variable holding one must have been moved (a `sink` call, a `!!` call, `_ = x`,
   destructuring); dropping it by assignment or by ignoring a call's result is an error. It cannot have `deinit`, and a non-linear type
@@ -167,7 +167,7 @@ Where it lives: `values/` (its own pass after the types, reading `Typed`). It fo
   values, and a container of linear values is linear. `linear` is not an interface, so the resolver skips it as a bound.
 - **VS14. Linear values and closures.** A closure consumes an outer linear variable only if it captures it with `[sink x]`, and then it
   must consume it before the closure ends.
-- **VS15. Warnings.** Diagnostics now have a severity. An unreachable `switch` arm is a warning; `langc check` prints it and does not
+- **VS15. Warnings.** Diagnostics now have a severity. An unreachable `switch` arm is a warning; `pelago check` prints it and does not
   fail on it. Everything else stays an error. (Tests count warnings as unexpected output, so they stay at zero.)
 - **`async`** stays deferred (G5): the words are reserved, and nothing in the checker needs it.
 - **VS11. `defer`.** Code in `defer` cannot `return`, `?`, `break`, `continue` or `become`, and its result cannot be a `result`

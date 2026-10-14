@@ -1,4 +1,4 @@
-//! Prints a syntax tree as s-expressions, for tests and for `langc parse`.
+//! Prints a syntax tree as s-expressions, for tests and for `pelago parse`.
 //!
 //! Short nodes stay on one line; long ones break after the head. Literals print as their source
 //! text, operators as their symbol, and the shape follows the tree one to one, so a golden file is

@@ -687,7 +687,7 @@ fn example_programs_run() {
     for name in ["shapes", "words", "stack"] {
         let mut program = Program::with_core();
         program
-            .add_package_from_path(&dir.join(format!("{name}.lang")))
+            .add_package_from_path(&dir.join(format!("{name}.pel")))
             .unwrap();
         let res = resolve(&program);
         let typed = check(&program, &res);

@@ -1,9 +1,9 @@
 //! Command-line entry point. Only inspection commands exist so far.
 
-use langc::keyword::{Keyword, Strength};
-use langc::lexer::tokenize;
-use langc::span::LineIndex;
-use langc::token::{Punct, TokenKind};
+use pelago::keyword::{Keyword, Strength};
+use pelago::lexer::tokenize;
+use pelago::span::LineIndex;
+use pelago::token::{Punct, TokenKind};
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -13,7 +13,7 @@ fn main() {
         Some("lex-bench") => match args.next() {
             Some(path) => lex_bench(&path),
             None => {
-                eprintln!("usage: langc lex-bench <file>");
+                eprintln!("usage: pelago lex-bench <file>");
                 std::process::exit(2);
             }
         },
@@ -21,48 +21,48 @@ fn main() {
             Some(flag) if flag == "--no-docs" => match args.next() {
                 Some(path) => parse_file(&path, false),
                 None => {
-                    eprintln!("usage: langc parse [--no-docs] <file>");
+                    eprintln!("usage: pelago parse [--no-docs] <file>");
                     std::process::exit(2);
                 }
             },
             Some(path) => parse_file(&path, true),
             None => {
-                eprintln!("usage: langc parse <file>");
+                eprintln!("usage: pelago parse <file>");
                 std::process::exit(2);
             }
         },
         Some("check") => match args.next() {
             Some(path) => check_path(&path),
             None => {
-                eprintln!("usage: langc check <file or directory>");
+                eprintln!("usage: pelago check <file or directory>");
                 std::process::exit(2);
             }
         },
         Some("ir") => match args.next() {
             Some(path) => ir_path(&path),
             None => {
-                eprintln!("usage: langc ir <file or directory>");
+                eprintln!("usage: pelago ir <file or directory>");
                 std::process::exit(2);
             }
         },
         Some("run") => match args.next() {
             Some(path) => run_path(&path),
             None => {
-                eprintln!("usage: langc run <file or directory>");
+                eprintln!("usage: pelago run <file or directory>");
                 std::process::exit(2);
             }
         },
         Some("parse-bench") => match args.next() {
             Some(path) => parse_bench(&path),
             None => {
-                eprintln!("usage: langc parse-bench <file>");
+                eprintln!("usage: pelago parse-bench <file>");
                 std::process::exit(2);
             }
         },
         Some("lex") => match args.next() {
             Some(path) => lex_file(&path),
             None => {
-                eprintln!("usage: langc lex <file>");
+                eprintln!("usage: pelago lex <file>");
                 std::process::exit(2);
             }
         },
@@ -76,7 +76,7 @@ fn main() {
 }
 
 fn usage() {
-    eprintln!("usage: langc <command>");
+    eprintln!("usage: pelago <command>");
     eprintln!();
     eprintln!("commands:");
     eprintln!("  keywords   list every keyword, hard ones first");
@@ -85,7 +85,7 @@ fn usage() {
     eprintln!("  parse [--no-docs] <file>  print the syntax tree and any errors (`-` reads standard input)");
     eprintln!("  ir <path>  check, lower to the IR, verify and print it");
     eprintln!("  run <path>  lower to the IR and run `main` in the interpreter");
-    eprintln!("  check <path>  parse and resolve names of a file or a directory of `.lang` files");
+    eprintln!("  check <path>  parse and resolve names of a file or a directory of `.pel` files");
     eprintln!("  parse-bench <file>  time lexing plus parsing on a file");
     eprintln!("  lex <file> print the tokens of a source file (`-` reads standard input)");
 }
@@ -114,15 +114,15 @@ fn print_punct() {
 }
 
 fn check_path(path: &str) {
-    let mut program = langc::package::Program::with_core();
+    let mut program = pelago::package::Program::with_core();
     if let Err(e) = program.add_package_from_path(std::path::Path::new(path)) {
         eprintln!("{e}");
         std::process::exit(2);
     }
-    let resolved = langc::resolve::resolve(&program);
-    let typed = langc::typecheck::check(&program, &resolved);
+    let resolved = pelago::resolve::resolve(&program);
+    let typed = pelago::typecheck::check(&program, &resolved);
     let mut diags = typed.diagnostics.clone();
-    diags.extend(langc::values::check(&program, &resolved, &typed));
+    diags.extend(pelago::values::check(&program, &resolved, &typed));
     diags.sort_by_key(|d| (d.module, d.span.start));
     diags.dedup();
     for d in &diags {
@@ -161,15 +161,15 @@ fn run_path(path: &str) {
 }
 
 fn ir_or_run(path: &str, run: bool) {
-    let mut program = langc::package::Program::with_core();
+    let mut program = pelago::package::Program::with_core();
     if let Err(e) = program.add_package_from_path(std::path::Path::new(path)) {
         eprintln!("{e}");
         std::process::exit(2);
     }
-    let resolved = langc::resolve::resolve(&program);
-    let typed = langc::typecheck::check(&program, &resolved);
+    let resolved = pelago::resolve::resolve(&program);
+    let typed = pelago::typecheck::check(&program, &resolved);
     let mut diags = typed.diagnostics.clone();
-    diags.extend(langc::values::check(&program, &resolved, &typed));
+    diags.extend(pelago::values::check(&program, &resolved, &typed));
     let mut failed = false;
     for d in diags.iter().filter(|d| !d.warning) {
         let module = program.module(d.module);
@@ -181,14 +181,14 @@ fn ir_or_run(path: &str, run: bool) {
     if failed {
         std::process::exit(1);
     }
-    let lowered = langc::lower::lower(&program, &resolved, &typed);
+    let lowered = pelago::lower::lower(&program, &resolved, &typed);
     for d in &lowered.diagnostics {
         let module = program.module(d.module);
         let index = LineIndex::new(&module.src);
         let (line, col) = index.line_col(&module.src, d.span.start);
         eprintln!("{}:{line}:{col}: note: {}", module.path, d.message);
     }
-    for e in langc::ir::verify_module(&lowered.module) {
+    for e in pelago::ir::verify_module(&lowered.module) {
         eprintln!("ir error: {e}");
         failed = true;
     }
@@ -196,7 +196,7 @@ fn ir_or_run(path: &str, run: bool) {
         if failed {
             std::process::exit(1);
         }
-        let out = langc::ir::run_full(&lowered.module, "main", &[]);
+        let out = pelago::ir::run_full(&lowered.module, "main", &[]);
         print!("{}", out.output);
         if let Err(e) = out.result {
             eprintln!("stopped: {e}");
@@ -207,7 +207,7 @@ fn ir_or_run(path: &str, run: bool) {
         }
         return;
     }
-    print!("{}", langc::ir::print_module(&lowered.module));
+    print!("{}", pelago::ir::print_module(&lowered.module));
     if failed {
         std::process::exit(1);
     }
@@ -232,8 +232,8 @@ fn read_source(path: &str) -> String {
 fn parse_file(path: &str, keep_docs: bool) {
     let src = read_source(path);
     let (out, lex_errors) =
-        langc::parser::parse_and_check_with(&src, langc::parser::ParseOptions { keep_docs });
-    println!("{}", langc::ast_print::print_file(&out.file, &src));
+        pelago::parser::parse_and_check_with(&src, pelago::parser::ParseOptions { keep_docs });
+    println!("{}", pelago::ast_print::print_file(&out.file, &src));
     let index = LineIndex::new(&src);
     for error in &lex_errors {
         let (line, col) = index.line_col(&src, error.span.start);
@@ -261,9 +261,9 @@ fn parse_bench(path: &str) {
         let t0 = Instant::now();
         let lexed = tokenize(&src);
         let t1 = Instant::now();
-        let out = langc::parser::parse(&src, &lexed.tokens);
+        let out = pelago::parser::parse(&src, &lexed.tokens);
         let t2 = Instant::now();
-        let errors = langc::check::check_file(&out.file, &src);
+        let errors = pelago::check::check_file(&out.file, &src);
         let t3 = Instant::now();
         std::hint::black_box(&errors);
         drop(out);

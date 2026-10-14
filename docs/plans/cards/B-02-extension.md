@@ -1,10 +1,10 @@
 Id: B-02
 Title: Choose the file extension
-Column: Inbox (blocked by B-01)
+Column: Done (`.pel` chosen)
 Order: 2 (track B)
 Depends on: B-01
 Size: S
-Touches: `README.md`, `examples/`, `compiler/src/package.rs` (the `.lang` suffix check), docs, B-03
+Touches: `README.md`, `examples/`, `compiler/src/package.rs` (the `.pel` suffix check), docs, B-03
 
 # What to decide
 
@@ -19,12 +19,12 @@ A short extension, free of clashes, that looks right in an editor tab and a file
 
 # Known clashes to avoid
 
-`.pl` Perl/Prolog, `.ml` OCaml, `.md` Markdown, `.rs` Rust, `.go`, `.zig`, `.nim`, `.tl` Teal, `.pc` pkg-config, `.pac` proxy config, `.atl` Eclipse ATL, `.th` various, `.lang` (our placeholder; also used for localisation
+`.pl` Perl/Prolog, `.ml` OCaml, `.md` Markdown, `.rs` Rust, `.go`, `.zig`, `.nim`, `.tl` Teal, `.pc` pkg-config, `.pac` proxy config, `.atl` Eclipse ATL, `.th` various, `.lang` (our old placeholder; also used for localisation
 files in games, which is another reason to replace it).
 
 # Where the extension appears in this repository
 
-- `compiler/src/package.rs` (finding source files by suffix), tests that read `*.lang`, `examples/*.lang`, `examples/programs/*.lang`, `compiler/core/core.lang`, `compiler/tests/examples.rs`, `.github/workflows/ci.yml` if it globs, `CLAUDE.md`, `README.md`, design docs that name files, and the editor files from B-03.
+- `compiler/src/package.rs` (finding source files by suffix), tests that read `*.pel`, `examples/*.pel`, `examples/programs/*.pel`, `compiler/core/core.pel`, `compiler/tests/examples.rs`, `.github/workflows/ci.yml` if it globs, `CLAUDE.md`, `README.md`, design docs that name files, and the editor files from B-03.
 
 # Done means
 

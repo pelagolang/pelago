@@ -4,7 +4,7 @@ Column: Inbox (design decided in `memory.md` M1 to M3; build plan here)
 Order: 6
 Depends on: A-02 (box is not needed, but recursive types are), A-04 (the optimiser makes columns fast), A-05 stage M2 for `soa<T, N>`
 Size: L
-Touches: types, checker, lowering, `core.lang`, docs
+Touches: types, checker, lowering, `core.pel`, docs
 
 # 1. What and why
 
@@ -44,10 +44,10 @@ Blocked `soa<T, N>`: element `i` lives in block `i / N`, lane `i % N`; each bloc
 # 4. Work
 
 1. **Types** (`types.rs`, resolver): `soa<T>` and `soa<T, N>` as built-in type constructors (keyword exists). `TyKind::Soa(Ty, ArrayLen)`.
-2. **Checker**: element type rules; methods declared in `core.lang` as `impl<T> soa<T>`; literal `soa []` and `soa [a, b]`; indexing yields `T` view; `points.x` column access = field lookup on the element struct returns `[F]` view; `for` patterns bind element views; `inout` loops.
+2. **Checker**: element type rules; methods declared in `core.pel` as `impl<T> soa<T>`; literal `soa []` and `soa [a, b]`; indexing yields `T` view; `points.x` column access = field lookup on the element struct returns `[F]` view; `for` patterns bind element views; `inout` loops.
 3. **Value pass**: `points[i].x = v` is an `inout` use of `points`; `points.x` is a read use of the whole collection (cannot be changed while a column view lives); exclusivity as for lists.
 4. **Lowering**:
-   - layout and header; `push`/`pop`/`insert`/`remove` written in `core.lang` over `rt_*` intrinsics generalised by a **field-loop**: the lowering unrolls "for each field" while generating the instance (this needs a small new intrinsic form, `rt_soa_each_field<T>(...)`, or generate the instance bodies in Rust like the glue functions; **recommend glue-style generation in Rust**, since the library language has no reflection yet);
+   - layout and header; `push`/`pop`/`insert`/`remove` written in `core.pel` over `rt_*` intrinsics generalised by a **field-loop**: the lowering unrolls "for each field" while generating the instance (this needs a small new intrinsic form, `rt_soa_each_field<T>(...)`, or generate the instance bodies in Rust like the glue functions; **recommend glue-style generation in Rust**, since the library language has no reflection yet);
    - element view: a pseudo-place `(soa ptr, index)`; `points[i].x` becomes `column_x[i]` directly (no struct is built). When a whole element is needed as a value (`const p = points[i]`), build it by loading each field.
    - drop, clone, eq, show glue.
 5. **`for` loops** over `soa<T>`: iterate the index, bind `p` as an element place; `p.x` compiles to `column_x[i]`.

@@ -4,7 +4,7 @@ Column: Needs decision (6 numbered questions at the end)
 Order: 2
 Depends on: A-01 (small), nothing else
 Size: L
-Touches: resolver, checker (expressions, calls, types), value pass, lowering, `core.lang`, docs
+Touches: resolver, checker (expressions, calls, types), value pass, lowering, `core.pel`, docs
 
 # 1. Why this comes first
 
@@ -71,10 +71,10 @@ in real code.
 ## 4.1 Checker
 
 1. **Making a box.** The resolver currently treats `box` only as a type name. A call `box(x)` must resolve to a built-in constructor:
-   type `fn<T>(sink T) -> box<T>`. Implementation choice: declare `pub struct box<T>` in `core.lang`? No: `box` is already a built-in type kind (`TyKind::Box`) used by
+   type `fn<T>(sink T) -> box<T>`. Implementation choice: declare `pub struct box<T>` in `core.pel`? No: `box` is already a built-in type kind (`TyKind::Box`) used by
    the layout and glue code. So add a **built-in function entry** (like `ok` / `err`, which are `DefKind::BuiltinFn`): `box`. Inference: the argument's type gives `T`; an expected type `box<U>` (from an annotation or a parameter)
    unifies first, as `check_coerce` does for lists.
-2. **Methods.** `get`, `set`, `take` are declared in `core.lang` as `impl<T> box<T> { ... }` with `ext fn` bodies (the compiler supplies them), exactly how `option` and `list`
+2. **Methods.** `get`, `set`, `take` are declared in `core.pel` as `impl<T> box<T> { ... }` with `ext fn` bodies (the compiler supplies them), exactly how `option` and `list`
    methods were first declared. `get` is special: the checker records its result as a *place rooted at the receiver*, not a fresh value. Mechanism: in the value pass (`values/mod.rs`), the
    place analysis already knows `a.b.c` and `a[i]`; add the case "method call named `get` on a `box<T>`" to the same function, producing a path element `Deref`.
 3. **Auto-deref.** In `field_expr`, `method_call` and `index_expr` (checker `expr.rs` / `call.rs`): if the receiver type is `box<T>` and lookup on `box<T>` itself fails, retry on `T`
@@ -139,17 +139,17 @@ Lowering tests (`lower/tests.rs`, each also checks no leaks via `output_of`):
 # 6. Steps
 
 1. Owner answers the six questions below. Record answers in `types.md` (new section "box"), `checker.md` (rule list VS16+ if the value pass changes), `ROADMAP.md`.
-2. Checker: built-in `box` constructor, `impl<T> box<T>` declarations in `core.lang`, auto-deref, recursion size check, interface provision. Tests 1 to 7.
+2. Checker: built-in `box` constructor, `impl<T> box<T>` declarations in `core.pel`, auto-deref, recursion size check, interface provision. Tests 1 to 7.
 3. Value pass: `get` place element, `take` consumption. Tests 5 to 7.
-4. Lowering and `core.lang` intrinsics (`rt_box_new<T>`, or expand inline). Tests 8 to 15.
-5. Docs: `types.md`, `checker.md`, `ir.md` (a new IR decision for the layout: "a box is a bare pointer to the value, no header"), `examples/tour.lang` (one line each for `box(...)`, `get`, `take`), `BLESS=1 cargo test` if the tour changes.
-6. Add a real program to `examples/programs/` (`tree.lang`: insert, search, in-order walk) and to the `example_programs_run` test.
+4. Lowering and `core.pel` intrinsics (`rt_box_new<T>`, or expand inline). Tests 8 to 15.
+5. Docs: `types.md`, `checker.md`, `ir.md` (a new IR decision for the layout: "a box is a bare pointer to the value, no header"), `examples/tour.pel` (one line each for `box(...)`, `get`, `take`), `BLESS=1 cargo test` if the tour changes.
+6. Add a real program to `examples/programs/` (`tree.pel`: insert, search, in-order walk) and to the `example_programs_run` test.
 
 # Done means
 
 - All fifteen tests above pass, fmt and clippy are clean.
-- `examples/programs/tree.lang` type-checks and runs with no leak.
-- `docs/design/types.md`, `checker.md`, `ir.md`, `ROADMAP.md` and `tour.lang` record the decisions.
+- `examples/programs/tree.pel` type-checks and runs with no leak.
+- `docs/design/types.md`, `checker.md`, `ir.md`, `ROADMAP.md` and `tour.pel` record the decisions.
 - The line "Still not lowered: ... `box<T>` values" is gone from `ROADMAP.md` and `ir.md` (IR20 edited).
 
 # Rejected options

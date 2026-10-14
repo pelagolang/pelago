@@ -19,7 +19,7 @@ Larger items already have their own cards (S-01 maps, S-02 threads, A-03 tempora
 | 9 | `to?` works only for `obj` downcasts, not for `any` interfaces. | Compare the table pointer to the table for the target type; return the data pointer wrapped in `option`. | No. | A program wants `x to? dog` on an `any`. |
 | 10 | `==`, `<`, `hash` on `any` values are not lowered. | Add `eq`/`hash` slots to the table when the interface requires them. | No. | A program compares `any` values. |
 | 11 | Tasks that were never joined run at the end of `main`, after `main`'s locals are gone. | Real threads (S-02) make the question disappear; until then it is documented behaviour. | - | S-02. |
-| 12 | Stage-0 `print` of floats prints the shortest form of 6 digits (`0.333333`), not the shortest round-trip form. | Implement shortest round-trip printing (Ryu or Grisu style) in `core.lang`. | Slightly slower printing, better output. | Before the first public release, or when a test needs exact floats. |
+| 12 | Stage-0 `print` of floats prints the shortest form of 6 digits (`0.333333`), not the shortest round-trip form. | Implement shortest round-trip printing (Ryu or Grisu style) in `core.pel`. | Slightly slower printing, better output. | Before the first public release, or when a test needs exact floats. |
 | 13 | Every function's parameters of `let` mode that are strings or lists are passed by address and read in place: correct, but a callee that is passed a *temporary* keeps it alive until the call ends. | Covered by A-03 (temporaries die at the end of the statement). | - | A-03. |
 | 14 | `@inline`, `@noinline`, `@cold` hints are parsed but ignored. | Carry them into `Func` and use them in A-04's inliner. | None. | A-04 stage 6. |
 

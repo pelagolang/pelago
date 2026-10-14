@@ -3,7 +3,7 @@ Title: Real threads for tasks, channels and locks
 Column: Shelf
 Revisit when: the machine-code backend can emit atomic instructions and start a thread (Phase 3), or when someone needs a benchmark that must use several cores.
 Size: L
-Touches: backend runtime layer, `core.lang` (task, channel, shared, lock), the interpreter (optional)
+Touches: backend runtime layer, `core.pel` (task, channel, shared, lock), the interpreter (optional)
 
 # Why tasks do not run in parallel today
 

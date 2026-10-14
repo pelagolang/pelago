@@ -4,7 +4,7 @@ Column: Ready
 Order: 4
 Depends on: A-03 (not strictly; the ledger removes many flags first, the optimiser removes the rest)
 Size: XL (do it in the stages below; each stage ships on its own)
-Touches: `compiler/src/ir/` (new `opt/` folder), `langc` (`--opt` flag), tests, `docs/design/ir.md`
+Touches: `compiler/src/ir/` (new `opt/` folder), `pelago` (`--opt` flag), tests, `docs/design/ir.md`
 
 # 1. Why now
 
@@ -82,7 +82,7 @@ compiler/src/ir/opt/inline.rs      // inliner
 compiler/src/ir/opt/stats.rs       // counters: instructions, slots, loads, stores, calls, flags
 ```
 
-`langc ir --opt <path>` prints the optimised IR, `langc run --opt <path>` runs it, `langc ir --stats <path>` prints the counters before and after. Default stays unoptimised until
+`pelago ir --opt <path>` prints the optimised IR, `pelago run --opt <path>` runs it, `pelago ir --stats <path>` prints the counters before and after. Default stays unoptimised until
 the differential tests have run clean for a while; then `--opt` becomes the default and `--no-opt` the escape hatch.
 
 # 4. Stages (each is a shippable commit set)
@@ -107,14 +107,14 @@ Measured on the sample programs and the benchmark set below, **per function, aft
 - Total instruction count of the sample programs drops by at least half.
 - The differential tests show zero behaviour change.
 
-Add three **micro-benchmarks** to `compiler/benches/` (plain `fn main` programs timed by `langc run --time`): fib(30), a nested loop sum of 10^7, and building and summing a list of 10^6 ints. The interpreter's
+Add three **micro-benchmarks** to `compiler/benches/` (plain `fn main` programs timed by `pelago run --time`): fib(30), a nested loop sum of 10^7, and building and summing a list of 10^6 ints. The interpreter's
 step counter (instructions executed) is the metric, because wall time in an interpreter is noisy.
 
 # 6. Things that must not be broken
 
 - The interpreter's leak, double-free and use-after-free checks run on optimised code too. A pass that removes a drop breaks them, which is the intended safety net.
 - Panics, `Stop` messages and checked arithmetic keep their order relative to side effects. Never hoist a checked operation above a store or a call, and never delete one whose result is unused unless it cannot stop (a plain `Add` can be deleted; `AddChecked` cannot).
-- Debuggability: keep the function and block names; `langc ir --opt` output must stay readable.
+- Debuggability: keep the function and block names; `pelago ir --opt` output must stay readable.
 
 # 7. Extra items for the list (not in the first cut)
 
@@ -126,7 +126,7 @@ step counter (instructions executed) is the metric, because wall time in an inte
 
 # Done means
 
-- Stages 1 to 8 are finished; `langc run --opt` is the default; fmt, clippy and tests green.
+- Stages 1 to 8 are finished; `pelago run --opt` is the default; fmt, clippy and tests green.
 - The targets in section 5 are met and the table is in `ir.md` (decision IR22: "the pipeline and its order").
 - Differential tests cover every lowering test and example program.
 - A short "how to add a pass" note is at the top of `compiler/src/ir/opt/mod.rs`.

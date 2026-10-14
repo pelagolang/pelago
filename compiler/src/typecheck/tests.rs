@@ -804,11 +804,9 @@ fn print_accepts_anything() {
 
 #[test]
 fn checking_never_panics_on_damaged_input() {
-    let tour = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../examples/tour.lang"
-    ))
-    .unwrap();
+    let tour =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/tour.pel"))
+            .unwrap();
     let chars: Vec<char> = tour.chars().collect();
     let mut state = 0xABCD_EF01_2345_6789u64;
     let mut next = |n: usize| {
@@ -845,11 +843,8 @@ fn checking_never_panics_on_damaged_input() {
 
 #[test]
 fn the_tour_checks_without_panicking() {
-    let src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../examples/tour.lang"
-    ))
-    .unwrap();
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/tour.pel"))
+        .unwrap();
     let mut program = Program::with_core();
     program.add_package("app", &[("tour", src.as_str())]);
     let res = resolve(&program);

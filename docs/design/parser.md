@@ -1,12 +1,12 @@
 # Parser (draft 2)
 
 The stage 0 parser is in `compiler/src/parser/` and the tree in `compiler/src/ast.rs`. It parses every
-construct decided in the other design docs, and everything in `examples/tour.lang`. This page lists
+construct decided in the other design docs, and everything in `examples/tour.pel`. This page lists
 the grammar rules the parser needed that the other docs did not spell out, so you can confirm or change them.
 
 ```
-cargo run -- parse examples/tour.lang       # print the tree and any errors
-cargo run -- parse-bench big.lang           # lex + parse speed
+cargo run -- parse examples/tour.pel       # print the tree and any errors
+cargo run -- parse-bench big.pel           # lex + parse speed
 BLESS=1 cargo test                          # rewrite compiler/tests/golden/*.ast after an intended change
 ```
 
@@ -18,7 +18,7 @@ BLESS=1 cargo test                          # rewrite compiler/tests/golden/*.as
 - **The tree is plain `Box` / `Vec`** and names are spans of the source (no copying). An arena and interned names
   are a later speed-up that touches only `ast.rs` and the parser.
 - Tests: about 45 test functions covering several hundred snippets, a golden tree for each example, and random-input tests (token soup, damaged
-  and truncated copies of `tour.lang`) that must not panic or hang.
+  and truncated copies of `tour.pel`) that must not panic or hang.
 
 ## Operator order (loosest first)
 
@@ -117,11 +117,11 @@ The `-> Type` goes after the parameter list, as in a function. It needs the pare
 `///` lines and `///* ... *///` blocks that sit right before a declaration are kept in the tree (`docs` on items,
 fields and enum cases) and `doc_text` turns them into plain text. A doc comment on the same line as code before it
 belongs to nothing. Doc comments never reach the compiled program; they exist only for tools. A plain compile
-skips them: `ParseOptions::compile()` (or `langc parse --no-docs`) does not even collect them. Comments elsewhere are still dropped; the formatter will keep ordinary comments later.
+skips them: `ParseOptions::compile()` (or `pelago parse --no-docs`) does not even collect them. Comments elsewhere are still dropped; the formatter will keep ordinary comments later.
 
 ## Syntax checks (`check.rs`)
 
-The parser accepts a little more than the language allows. `parse_and_check` (used by `langc parse`) also runs
+The parser accepts a little more than the language allows. `parse_and_check` (used by `pelago parse`) also runs
 these rules, built on the tree walker in `visit.rs`:
 
 | Area | Rule |
@@ -144,7 +144,7 @@ belong to the type checker.
 
 ## Speed
 
-Measured on 10 MB made from repeated copies of `tour.lang` (release build, best of 10, this container):
+Measured on 10 MB made from repeated copies of `tour.pel` (release build, best of 10, this container):
 
 | Stage | Time | Speed |
 |---|---|---|

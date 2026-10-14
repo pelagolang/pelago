@@ -177,11 +177,9 @@ fn control_flow_does_not_confuse_moves() {
 
 #[test]
 fn checking_never_panics_on_damaged_input() {
-    let tour = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../examples/tour.lang"
-    ))
-    .unwrap();
+    let tour =
+        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/tour.pel"))
+            .unwrap();
     let chars: Vec<char> = tour.chars().collect();
     let mut state = 0x1357_9BDF_2468_ACE0u64;
     let mut next = |n: usize| {
@@ -219,11 +217,8 @@ fn checking_never_panics_on_damaged_input() {
 
 #[test]
 fn the_tour_runs_through_without_panicking() {
-    let src = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../examples/tour.lang"
-    ))
-    .unwrap();
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/tour.pel"))
+        .unwrap();
     let e = errors(&src);
     assert!(!e.is_empty());
 }

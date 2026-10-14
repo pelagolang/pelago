@@ -1,8 +1,8 @@
 //! Packages and modules: the source files of a program, parsed.
 //!
 //! A file is a module and its file name is the module name (`docs/design/modules.md`). A directory
-//! is a parent module: `geometry.lang` is `geometry`, `geometry/shapes.lang` is `geometry.shapes`,
-//! and a front file `geometry.lang` next to the directory `geometry/` is the parent of what is
+//! is a parent module: `geometry.pel` is `geometry`, `geometry/shapes.pel` is `geometry.shapes`,
+//! and a front file `geometry.pel` next to the directory `geometry/` is the parent of what is
 //! inside it. A parent without a front file is an empty module made up for the occasion.
 
 use crate::ast::File;
@@ -66,7 +66,7 @@ impl Program {
     /// Adds the always-available library as the package `core`; its `pub` names are in scope
     /// in every module.
     pub fn add_core(&mut self) -> PackageId {
-        self.add_package("core", &[("core", include_str!("../core/core.lang"))])
+        self.add_package("core", &[("core", include_str!("../core/core.pel"))])
     }
 
     /// A program that already contains the core library.
@@ -186,8 +186,8 @@ impl Program {
         m.src = src;
     }
 
-    /// Reads a package from disk. `root` is a directory (every `.lang` file below it is a module)
-    /// or a single `.lang` file (a package of one module).
+    /// Reads a package from disk. `root` is a directory (every `.pel` file below it is a module)
+    /// or a single `.pel` file (a package of one module).
     pub fn add_package_from_path(&mut self, root: &Path) -> Result<PackageId, String> {
         let mut files: Vec<(String, String)> = Vec::new();
         let name;
@@ -209,7 +209,7 @@ impl Program {
             files.push((stem.to_string(), src));
         }
         if files.is_empty() {
-            return Err(format!("no `.lang` files in `{}`", root.display()));
+            return Err(format!("no `.pel` files in `{}`", root.display()));
         }
         files.sort();
         let refs: Vec<(&str, &str)> = files
@@ -227,7 +227,7 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) -> Re
         let path = entry.map_err(|e| e.to_string())?.path();
         if path.is_dir() {
             collect_files(root, &path, out)?;
-        } else if path.extension().and_then(|e| e.to_str()) == Some("lang") {
+        } else if path.extension().and_then(|e| e.to_str()) == Some("pel") {
             let rel = path.strip_prefix(root).unwrap_or(&path).with_extension("");
             let module_path = rel
                 .components()
