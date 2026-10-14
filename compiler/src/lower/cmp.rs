@@ -125,6 +125,17 @@ impl<'a> Lowerer<'a> {
                 });
                 ok
             }
+            TyKind::Array(e, len) => {
+                let n = self.array_len(len);
+                let nv = self.i64c(n);
+                let esize = self.layout(e).size;
+                let mut ok = true;
+                self.each_elem(a, nv, esize, |s, p, off| {
+                    let q = s.emit(Op::PtrAdd(b, off), Some(IrTy::Ptr), sp).unwrap_or(b);
+                    ok &= s.eq_part(p, q, e, fail);
+                });
+                ok
+            }
             TyKind::Set(_) | TyKind::Map(..) => self.eq_collection(a, b, ty, fail),
             _ => false,
         }
@@ -487,6 +498,20 @@ impl<'a> Lowerer<'a> {
                 let data = self.load_at(v, 0, IrTy::Ptr);
                 let esize = self.layout(e).size;
                 self.each_elem(data, len, esize, |s, p, off| {
+                    let zero = s.i64c(0);
+                    if let Some(c) = s.emit(Op::Cmp(CmpOp::Ne, off, zero), Some(IrTy::Bool), sp) {
+                        s.if_then_pub(c, |s| s.push_static(out, b", "));
+                    }
+                    s.show_at(p, e, out, true);
+                });
+                self.push_static(out, b"]");
+            }
+            TyKind::Array(e, len) => {
+                self.push_static(out, b"[");
+                let n = self.array_len(len);
+                let nv = self.i64c(n);
+                let esize = self.layout(e).size;
+                self.each_elem(v, nv, esize, |s, p, off| {
                     let zero = s.i64c(0);
                     if let Some(c) = s.emit(Op::Cmp(CmpOp::Ne, off, zero), Some(IrTy::Bool), sp) {
                         s.if_then_pub(c, |s| s.push_static(out, b", "));

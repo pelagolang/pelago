@@ -1,7 +1,7 @@
 //! Operators written by the program (`impl add for vec`), the pipe operator and conversions.
 
-use super::*;
 use super::call::ArgSource;
+use super::*;
 
 impl<'a> Lowerer<'a> {
     /// `a + b`, `-a` or `a += b` on a user type: a call to the operator's method, when the checker
@@ -65,7 +65,12 @@ impl<'a> Lowerer<'a> {
     // ---- Conversions: `x to T` ----------------------------------------------------------------------------
 
     /// A conversion the program wrote with `converts`: a call to its method.
-    pub(crate) fn user_convert(&mut self, e: &'a Expr, value: &'a Expr, dst: Option<Value>) -> Option<Res> {
+    pub(crate) fn user_convert(
+        &mut self,
+        e: &'a Expr,
+        value: &'a Expr,
+        dst: Option<Value>,
+    ) -> Option<Res> {
         let (def, map) = self.call_target(e.span)?;
         let srcs = vec![ArgSource::Expr(value)];
         Some(self.call_with(e, def, &map, srcs, dst))
@@ -94,7 +99,11 @@ impl<'a> Lowerer<'a> {
             (_, TyKind::String) => {
                 let z = self.i64c(0);
                 let np = self
-                    .emit(Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr), Some(IrTy::Ptr), e.span)
+                    .emit(
+                        Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr),
+                        Some(IrTy::Ptr),
+                        e.span,
+                    )
                     .unwrap_or(dst);
                 self.store_at(dst, 0, np);
                 let z1 = self.i64c(0);
@@ -173,12 +182,11 @@ impl<'a> Lowerer<'a> {
             return self.unsupported(sp, "`?.` on this type");
         };
         let fname = self.src_text(name.span).to_string();
-        let Some(idx) = self
-            .typed
-            .adts
-            .get(&d)
-            .and_then(|a| a.fields.iter().position(|(fd, _)| self.res.def(*fd).name == fname))
-        else {
+        let Some(idx) = self.typed.adts.get(&d).and_then(|a| {
+            a.fields
+                .iter()
+                .position(|(fd, _)| self.res.def(*fd).name == fname)
+        }) else {
             return self.unsupported(name.span, "an unknown field");
         };
         let fs = self.struct_fields(inner);

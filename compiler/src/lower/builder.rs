@@ -8,7 +8,11 @@ impl<'a> Lowerer<'a> {
         let sp = e.span;
         let z = self.i64c(0);
         let np = self
-            .emit(Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr), Some(IrTy::Ptr), sp)
+            .emit(
+                Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr),
+                Some(IrTy::Ptr),
+                sp,
+            )
             .unwrap_or(dst);
         self.store_at(dst, 0, np);
         for off in [8, 16] {
@@ -149,7 +153,8 @@ impl<'a> Lowerer<'a> {
                     ..
                 }) = pats.last()
                 {
-                    if let Some(def) = self.res.decls.get(&(self.f.file, name.span.start)).copied() {
+                    if let Some(def) = self.res.decls.get(&(self.f.file, name.span.start)).copied()
+                    {
                         if let Some(Local::Slot { ptr, .. }) = self.f.locals.get(&def).copied() {
                             self.clone_into(ptr, p, elem);
                             return Res::Unit;

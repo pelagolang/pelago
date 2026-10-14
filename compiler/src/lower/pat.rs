@@ -278,6 +278,7 @@ impl<'a> Lowerer<'a> {
 
     /// Tests the tag, then the patterns for the payload of that case.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::explicit_counter_loop)]
     fn test_payload(
         &mut self,
         p: &'a Pattern,

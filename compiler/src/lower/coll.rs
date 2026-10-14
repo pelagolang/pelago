@@ -16,7 +16,11 @@ impl<'a> Lowerer<'a> {
     fn empty_table(&mut self, dst: Value) {
         let z = self.i64c(0);
         let np = self
-            .emit(Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr), Some(IrTy::Ptr), Span::new(0, 0))
+            .emit(
+                Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr),
+                Some(IrTy::Ptr),
+                Span::new(0, 0),
+            )
             .unwrap_or(dst);
         self.store_at(dst, 0, np);
         for off in [8, 16] {
@@ -86,7 +90,11 @@ impl<'a> Lowerer<'a> {
 
     pub(crate) fn clone_collection(&mut self, s: Value, d: Value, ty: Ty) {
         if let Some((is_map, tys)) = self.collection_args(ty) {
-            let name = if is_map { "rt_map_clone" } else { "rt_set_clone" };
+            let name = if is_map {
+                "rt_map_clone"
+            } else {
+                "rt_set_clone"
+            };
             self.call_core_g(name, &tys, vec![s, d]);
         }
     }
@@ -113,7 +121,14 @@ impl<'a> Lowerer<'a> {
     }
 
     /// `item in set` and `key in map`: a lookup in the table.
-    pub(crate) fn in_collection(&mut self, e: &'a Expr, l: &'a Expr, r: &'a Expr, lt: Ty, rt: Ty) -> Res {
+    pub(crate) fn in_collection(
+        &mut self,
+        e: &'a Expr,
+        l: &'a Expr,
+        r: &'a Expr,
+        lt: Ty,
+        rt: Ty,
+    ) -> Res {
         let key = match self.kind(rt) {
             TyKind::Set(t) => t,
             TyKind::Map(k, _) => k,

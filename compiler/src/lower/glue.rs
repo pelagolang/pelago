@@ -115,6 +115,13 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    pub(crate) fn array_len(&self, len: crate::types::ArrayLen) -> i64 {
+        match len {
+            crate::types::ArrayLen::Known(n) => n as i64,
+            _ => 0,
+        }
+    }
+
     // ---- Small IR helpers for glue ---------------------------------------------------------------------------------
 
     /// Calls the drop glue of `ty` on the value at `p` (nothing when the type owns nothing).
@@ -253,6 +260,12 @@ impl<'a> Lowerer<'a> {
             TyKind::Error => {
                 let s = self.types.string;
                 self.drop_at(p, s);
+            }
+            TyKind::Array(e, len) => {
+                let n = self.array_len(len);
+                let esize = self.layout(e).size;
+                let nv = self.i64c(n);
+                self.each_elem(p, nv, esize, |s, ep, _| s.drop_at(ep, e));
             }
             TyKind::Tuple(_) => self.drop_fields(p, ty),
             TyKind::Adt(d, args) => match self.res.def(d).kind {
@@ -427,6 +440,17 @@ impl<'a> Lowerer<'a> {
                 let s = self.types.string;
                 self.clone_body(src, dst, s);
             }
+            TyKind::Array(e, len) => {
+                let n = self.array_len(len);
+                let esize = self.layout(e).size;
+                let nv = self.i64c(n);
+                self.each_elem(src, nv, esize, |s, sp, off| {
+                    let dp = s
+                        .emit(Op::PtrAdd(dst, off), Some(IrTy::Ptr), Span::new(0, 0))
+                        .unwrap_or(dst);
+                    s.clone_into(sp, dp, e);
+                });
+            }
             TyKind::Tuple(_) => self.clone_fields(src, dst, ty),
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Obj => self.clone_object(src, dst, ty),
@@ -504,7 +528,11 @@ impl<'a> Lowerer<'a> {
         let o = self.load_at(p, 0, IrTy::Ptr);
         let vt = self.load_at(o, 0, IrTy::Ptr);
         let f = self.load_at(vt, 0, IrTy::Ptr);
-        self.emit(Op::CallPtr(vec![IrTy::Ptr], IrTy::Void, f, vec![o]), None, sp);
+        self.emit(
+            Op::CallPtr(vec![IrTy::Ptr], IrTy::Void, f, vec![o]),
+            None,
+            sp,
+        );
     }
 
     /// Copies an object through its table.

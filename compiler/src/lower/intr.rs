@@ -268,15 +268,15 @@ impl<'a> Lowerer<'a> {
                         }
                         Res::Val(self.load_at(slot, 0, sb))
                     }
-                    (Repr::Scalar(_), Repr::Mem(_)) => self.with_dst(dst, b, |s, d| {
-                        match s.consume_scalar(&arg.value) {
+                    (Repr::Scalar(_), Repr::Mem(_)) => {
+                        self.with_dst(dst, b, |s, d| match s.consume_scalar(&arg.value) {
                             Some(v) => {
                                 s.store_scalar_ty(d, v);
                                 Res::Unit
                             }
                             None => Res::Never,
-                        }
-                    }),
+                        })
+                    }
                     (Repr::Scalar(sa), Repr::Scalar(sb)) => match self.consume_scalar(&arg.value) {
                         Some(v) if sa == sb => Res::Val(v),
                         Some(v) if sa == IrTy::Ptr && matches!(sb, IrTy::Int(_)) => {

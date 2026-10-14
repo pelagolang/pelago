@@ -46,6 +46,17 @@ impl<'a> Lowerer<'a> {
                 // An object used as its base: the same address.
                 Some(self.into_exact(e, dst, have))
             }
+            (TyKind::Array(_, len), TyKind::List(_) | TyKind::Iter(_)) => {
+                // A fixed array used as a list: a view of its elements.
+                let n = self.array_len(len);
+                let (p, _) = self.scrutinee(e)?;
+                let nv = self.i64c(n);
+                let zero = self.i64c(0);
+                self.store_at(dst, 0, p);
+                self.store_at(dst, 8, nv);
+                self.store_at(dst, 16, zero);
+                Some(Res::Unit)
+            }
             (_, TyKind::Any(iface)) => self.coerce_to_any(e, have, dst, iface),
             _ => None,
         }
@@ -326,6 +337,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Evaluates the arguments of a case into its payload fields.
+    #[allow(clippy::explicit_counter_loop)]
     fn fill_payload(
         &mut self,
         e: &'a Expr,

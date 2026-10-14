@@ -55,6 +55,9 @@ pub struct FnInfo {
     pub self_ty: Option<Ty>,
 }
 
+/// An enum case with the label and type of each value it carries.
+pub type VariantInfo = (DefId, Vec<(Option<String>, Ty)>);
+
 /// What the lowering needs to know about a struct, obj, enum or interface.
 #[derive(Clone, Debug, Default)]
 pub struct AdtInfo {
@@ -62,7 +65,7 @@ pub struct AdtInfo {
     /// Fields in memory order (the fields of an `obj`'s bases first), with types in terms of `generics`.
     pub fields: Vec<(DefId, Ty)>,
     /// The cases of an enum with their payload types.
-    pub variants: Vec<(DefId, Vec<(Option<String>, Ty)>)>,
+    pub variants: Vec<VariantInfo>,
     /// The `obj` base, when there is one.
     pub base: Option<Ty>,
 }

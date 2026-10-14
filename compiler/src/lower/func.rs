@@ -55,6 +55,11 @@ pub(crate) enum ScopeItem<'a> {
 }
 
 pub(crate) struct FnState<'a> {
+    /// Names of the `scope s { ... }` blocks being lowered.
+    pub scope_names: Vec<DefId>,
+    /// The function being lowered, and the block a tail call to it jumps to (when it can).
+    pub cur_def: Option<DefId>,
+    pub tail_head: Option<BlockId>,
     pub func: Func,
     pub file: ModuleId,
     pub cur: Option<BlockId>,
@@ -74,6 +79,9 @@ pub(crate) struct FnState<'a> {
 impl<'a> FnState<'a> {
     pub fn empty(void: Ty) -> FnState<'a> {
         FnState {
+            scope_names: Vec::new(),
+            cur_def: None,
+            tail_head: None,
             func: Func::new("", &[], IrTy::Void),
             file: ModuleId(0),
             cur: None,

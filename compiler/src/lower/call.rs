@@ -65,6 +65,14 @@ impl<'a> Lowerer<'a> {
                 if *optional {
                     return self.opt_call(e, base, args, dst);
                 }
+                // `s.spawn(task)` inside `scope s { ... }`: the task runs right here.
+                if let ExprKind::Name(id) = &strip_parens(base).kind {
+                    if let Some(d) = self.res.use_at(self.f.file, id.span.start) {
+                        if self.f.scope_names.contains(&d) && args.len() == 1 {
+                            return self.run_scope_task(e, &args[0].value);
+                        }
+                    }
+                }
                 self.method_call(e, base, name, args, mark, dst)
             }
             _ => self.call_value(e, callee, args, dst),
@@ -177,7 +185,9 @@ impl<'a> Lowerer<'a> {
         };
         let info = self.fn_info_for(def, &info);
         let sig = self.sig_of(&info, map);
-        let any_slot = if info.has_self && matches!(sig.params.first(), Some((_, t, _)) if matches!(self.kind(*t), TyKind::Any(_))) {
+        let any_slot = if info.has_self
+            && matches!(sig.params.first(), Some((_, t, _)) if matches!(self.kind(*t), TyKind::Any(_)))
+        {
             self.any_slot(def)
         } else {
             None
@@ -369,11 +379,6 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    pub(crate) fn unsupported_none(&mut self, span: Span, what: &str) -> Option<Value> {
-        self.unsupported(span, what);
-        None
-    }
-
     /// Matches the arguments of a call to the declared parameters: by label, then by position, with
     /// defaults filling the gaps.
     pub(crate) fn match_args(
@@ -432,7 +437,8 @@ impl<'a> Lowerer<'a> {
                     } else if info.params[i].has_default {
                         match self.default_arg(def, i) {
                             Some(e) => {
-                                let file = self.fns.get(&def).map(|x| x.file).unwrap_or(self.f.file);
+                                let file =
+                                    self.fns.get(&def).map(|x| x.file).unwrap_or(self.f.file);
                                 out.push(ArgSource::Default(file, e));
                             }
                             None => {

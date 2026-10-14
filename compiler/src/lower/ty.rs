@@ -35,7 +35,6 @@ pub(crate) struct Field {
 #[derive(Debug)]
 pub(crate) struct EnumInfo {
     pub tag: IrTy,
-    pub payload_off: u32,
     /// The fields of each case, in case order.
     pub variants: Vec<Vec<Field>>,
     pub layout: Layout,
@@ -89,7 +88,7 @@ impl<'a> Lowerer<'a> {
             TyKind::Void | TyKind::Never => Repr::Zst,
             TyKind::Ptr | TyKind::Box(_) => Repr::Scalar(IrTy::Ptr),
             TyKind::Adt(d, _) if self.res.def(d).kind == DefKind::Obj => Repr::Scalar(IrTy::Ptr),
-            TyKind::Unknown | TyKind::Var(_) | TyKind::Param(_) | TyKind::Error => {
+            TyKind::Unknown | TyKind::Var(_) | TyKind::Param(_) => {
                 // Not a concrete type: the lowering cannot go on.
                 Repr::Zst
             }
@@ -298,7 +297,6 @@ impl<'a> Lowerer<'a> {
         }
         let info = Rc::new(EnumInfo {
             tag,
-            payload_off,
             variants,
             layout: Layout {
                 size: align_up(end, max_align),
@@ -361,7 +359,6 @@ impl<'a> Lowerer<'a> {
             }
             TyKind::Tuple(ts) => ts.into_iter().any(|x| self.needs_drop(x)),
             TyKind::Array(e, _) => self.needs_drop(e),
-            TyKind::Fn(..) => false,
             _ => false,
         };
         self.drop_cache.insert(t, r);

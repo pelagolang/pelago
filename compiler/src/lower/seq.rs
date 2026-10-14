@@ -38,7 +38,12 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Calls a generic library function with its type arguments (in declaration order).
-    pub(crate) fn call_core_g(&mut self, name: &str, tys: &[Ty], args: Vec<Value>) -> Option<Value> {
+    pub(crate) fn call_core_g(
+        &mut self,
+        name: &str,
+        tys: &[Ty],
+        args: Vec<Value>,
+    ) -> Option<Value> {
         let Some(def) = self.core_fn(name) else {
             self.unsupported(Span::new(0, 0), &format!("the library function `{name}`"));
             return None;
@@ -446,6 +451,16 @@ impl<'a> Lowerer<'a> {
         dst: Value,
         t: Ty,
     ) -> Res {
+        if let TyKind::Array(elem, _) = self.kind(t) {
+            let esize = self.layout(elem).size;
+            for (i, it) in items.iter().enumerate() {
+                let p = self.addr(dst, i as u32 * esize);
+                if let Res::Never = self.into(&it.value, p, elem) {
+                    return Res::Never;
+                }
+            }
+            return Res::Unit;
+        }
         let elem = match self.kind(t) {
             TyKind::List(x) | TyKind::Iter(x) => x,
             _ => return self.unsupported(e.span, "a list literal of this type"),
@@ -502,7 +517,7 @@ impl<'a> Lowerer<'a> {
         e: &'a Expr,
         items: &'a [ListItem],
         dst: Value,
-        t: Ty,
+        _t: Ty,
         elem: Ty,
     ) -> Res {
         let z = self.i64c(0);
@@ -558,6 +573,19 @@ impl<'a> Lowerer<'a> {
         dst: Value,
         t: Ty,
     ) -> Res {
+        if let TyKind::Array(elem, len) = self.kind(t) {
+            // An array lives in place: the value is cloned into each slot.
+            let tmp = self.slot_for(elem);
+            if let Res::Never = self.into(value, tmp, elem) {
+                return Res::Never;
+            }
+            let n = self.array_len(len);
+            let nv = self.i64c(n);
+            let esize = self.layout(elem).size;
+            self.each_elem(dst, nv, esize, |s, p, _| s.clone_into(tmp, p, elem));
+            self.drop_at(tmp, elem);
+            return Res::Unit;
+        }
         let elem = match self.kind(t) {
             TyKind::List(x) => x,
             _ => return self.unsupported(e.span, "a repeated list of this type"),
@@ -704,8 +732,13 @@ impl<'a> Lowerer<'a> {
             return self.unsupported(iter.span, "looping over a value of unknown type");
         };
         let mut val_ty = None;
+        let mut array_len = None;
         let elem = match self.kind(it) {
             TyKind::List(x) | TyKind::Iter(x) | TyKind::Set(x) => x,
+            TyKind::Array(x, len) => {
+                array_len = Some(self.array_len(len));
+                x
+            }
             TyKind::Map(k, v) => {
                 val_ty = Some(v);
                 k
@@ -718,8 +751,10 @@ impl<'a> Lowerer<'a> {
             return Res::Never;
         };
         let esize = self.layout(elem).size as i64;
-        let len = self.load_at(h, 8, IrTy::I64);
-        let data = self.load_at(h, 0, IrTy::Ptr);
+        let (len, data) = match array_len {
+            Some(n) => (self.i64c(n), h),
+            None => (self.load_at(h, 8, IrTy::I64), self.load_at(h, 0, IrTy::Ptr)),
+        };
         let head = self.new_block(&[IrTy::I64]);
         let body_b = self.new_block(&[]);
         let step = self.new_block(&[]);
@@ -793,7 +828,8 @@ impl<'a> Lowerer<'a> {
                 }
             }
             ([pk, pv], Some((vp, vt))) => {
-                if !self.pat_test(pk, ep, elem, bind_fail) || !self.pat_test(pv, vp, vt, bind_fail) {
+                if !self.pat_test(pk, ep, elem, bind_fail) || !self.pat_test(pv, vp, vt, bind_fail)
+                {
                     return Res::Never;
                 }
             }

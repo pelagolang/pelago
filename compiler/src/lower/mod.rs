@@ -18,8 +18,8 @@ mod any;
 mod builder;
 mod call;
 mod closure;
-mod coll;
 mod cmp;
+mod coll;
 mod ctl;
 mod expr;
 mod func;
@@ -212,6 +212,26 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
     }
 }
 
+/// Does the body use `become`?
+fn has_become(decl: &FnDecl) -> bool {
+    struct Find(bool);
+    impl crate::visit::Visitor for Find {
+        fn visit_expr(&mut self, e: &Expr) {
+            if matches!(e.kind, ExprKind::Become(_)) {
+                self.0 = true;
+            }
+            crate::visit::walk_expr(self, e);
+        }
+    }
+    let mut f = Find(false);
+    match &decl.body {
+        FnBody::Block(b) => crate::visit::walk_block(&mut f, b),
+        FnBody::Expr(e) => crate::visit::Visitor::visit_expr(&mut f, e),
+        FnBody::None => {}
+    }
+    f.0
+}
+
 impl<'a> Lowerer<'a> {
     // ---- Index --------------------------------------------------------------------------------------
 
@@ -353,14 +373,16 @@ impl<'a> Lowerer<'a> {
     /// The IR signature of a function for these type arguments.
     /// The signature `init` and `deinit` really have: they work on an implicit `self`.
     pub(crate) fn fn_info_for(&mut self, def: DefId, info: &FnInfo) -> FnInfo {
-        let kind = self.fns.get(&def).map(|e| e.decl.kind).unwrap_or(FnKind::Fn);
+        let kind = self
+            .fns
+            .get(&def)
+            .map(|e| e.decl.kind)
+            .unwrap_or(FnKind::Fn);
         let mut i = info.clone();
         if kind == FnKind::Fn {
             return i;
         }
-        let is_obj = info
-            .self_ty
-            .is_some_and(|t| self.obj_def_raw(t).is_some());
+        let is_obj = info.self_ty.is_some_and(|t| self.obj_def_raw(t).is_some());
         match kind {
             FnKind::Deinit => {
                 i.has_self = true;
@@ -559,6 +581,7 @@ impl<'a> Lowerer<'a> {
         state.cur = Some(state.func.entry());
         state.subst = subst;
         state.ret_ty = sig.ret;
+        state.cur_def = Some(def);
         self.f = state;
         let r = self.lower_body(decl, &info, &sig);
         let st = std::mem::replace(&mut self.f, FnState::empty(void));
@@ -589,9 +612,36 @@ impl<'a> Lowerer<'a> {
             self.f.sret = Some(ir_params[0]);
             next = 1;
         }
+        // A function that ends in `become` on itself, with plain number parameters, loops instead.
+        let mut head_params: Option<Vec<Value>> = None;
+        if has_become(decl)
+            && sig.params.iter().all(|(p, t, m)| {
+                matches!(p, Pass::Val(_)) && *m != Some(Mode::Sink) && !self.needs_drop(*t)
+            })
+        {
+            let tys: Vec<IrTy> = sig.ir_params[next..].to_vec();
+            let head = self.new_block(&tys);
+            let args: Vec<Value> = ir_params[next..].to_vec();
+            self.jump(head, args);
+            self.start(head);
+            self.f.tail_head = Some(head);
+            head_params = Some(self.f.func.block_params(head).to_vec());
+        }
+        let ir_params: Vec<Value> = match head_params {
+            Some(hp) => {
+                let mut v = ir_params[..next].to_vec();
+                v.extend(hp);
+                v
+            }
+            None => ir_params,
+        };
         self.push_scope();
         // The program's `main`: tasks nobody waited for run before it ends.
-        let in_core = self.program.package(self.program.module(self.f.file).package).name == "core";
+        let in_core = self
+            .program
+            .package(self.program.module(self.f.file).package)
+            .name
+            == "core";
         if !in_core
             && decl.kind == FnKind::Fn
             && info.self_ty.is_none()

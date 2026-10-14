@@ -501,3 +501,209 @@ fn maps_and_sets() {
     let src = "fn main() { var total = 0\n for (var i = 0; i < 4; i += 1) { total += i }\n print(total, [1, 2].iter().to_set(), [\"a\", \"b\"].join(\"-\"), [0, ...[1, 2], 3]) }";
     assert_eq!(output_of(src), "6 {1, 2} a-b [0, 1, 2, 3]\n");
 }
+
+#[test]
+fn program_op() {
+    let src = "struct vec { x: int, y: int }\nimpl add for vec { fn add(self, o: vec) -> vec = vec { x: self.x + o.x, y: self.y + o.y } }\nfn main() { const a = vec { x: 1, y: 2 }\n const b = a + a\n print(b.x, b.y) }\n";
+    assert_eq!(output_of(src), "2 4\n");
+}
+
+#[test]
+fn program_conv() {
+    let src = "struct meters { v: float }\nstruct feet { v: float }\nimpl converts<meters> for feet { fn convert(self) -> meters = meters { v: self.v * 0.3048 } }\nfn main() { const n = 42\n const s = n to string\n const f = n to float\n const m = (feet { v: 10.0 }) to meters\n print(s, f, m.v, 'a' to int, true to int, \"x\" to string) }\n";
+    assert_eq!(output_of(src), "42 42 3.048 97 1 x\n");
+}
+
+#[test]
+fn program_init() {
+    let src = "struct acct { id: int, bal: int = 100\n init(id: int) { self.id = id } }\nstruct rng { lo: int, hi: int\n init(lo: int, hi: int) -> Self ! string {\n  if lo > hi { return err(\"bad\") }\n  self.lo = lo\n  self.hi = hi } }\nobj res { n: int\n init(n: int) { self.n = n }\n deinit { print(\"closed #(self.n)\") } }\nfn main() { const a = acct(5)\n print(a.id, a.bal)\n print(rng(1, 5).is_ok(), rng(5, 1).is_ok())\n const r = res(7)\n print(r.n) }\n";
+    assert_eq!(output_of(src), "5 100\ntrue false\n7\nclosed 7\n");
+}
+
+#[test]
+fn program_optchain() {
+    let src = "struct p { name: string, age: int\n fn greet(self) -> string = \"hi #(self.name)\"\n fn bump(self) -> int = self.age + 1 }\nfn main() { const o: p? = p { name: \"x\", age: 4 }\n const n: p? = none\n print(o?.name, n?.name, o?.name ?? \"-\", n?.name ?? \"-\")\n print(o?.greet(), n?.greet(), o?.bump(), n?.bump()) }\n";
+    assert_eq!(
+        output_of(src),
+        "some(\"x\") none x -\nsome(\"hi x\") none some(5) none\n"
+    );
+}
+
+#[test]
+fn program_range() {
+    let src = "fn main() { const r = 1..5\n print(r.contains(3), r.contains(5), (1..=5).contains(5), r.iter().to_list(), 2.5.min(1.0))\n for i of (1..4).iter() { print(i) } }\n";
+    assert_eq!(output_of(src), "true false true [1, 2, 3, 4] 1\n1\n2\n3\n");
+}
+
+#[test]
+fn program_step() {
+    let src = "fn main() { for i of 0..7 step 3 { print(i) }\n for i of 5..0 step -2 { print(i) } \n for i of 0..=2 { print(i) } }\n";
+    assert_eq!(output_of(src), "0\n3\n6\n5\n3\n1\n0\n1\n2\n");
+}
+
+#[test]
+fn program_obj() {
+    let src = "open obj animal { name: string\n open fn speak(self) -> string = \"...\"\n fn hello(self) -> string = \"hi #(self.name) says #(self.speak())\" }\nobj dog : animal { tricks: int = 3\n override fn speak(self) -> string = \"woof\"\n deinit { print(\"dog gone\") } }\nobj cat : animal { override fn speak(self) -> string = \"meow\" }\nfn describe(a: animal) -> string = a.hello()\nfn main() { const d = dog { name: \"rex\" }\n const c: animal = cat { name: \"tom\" }\n print(d.name, d.tricks, d.speak())\n print(describe(c))\n print(c is cat, c is dog, c is animal)\n print(describe(d)) }\n";
+    assert_eq!(
+        output_of(src),
+        "rex 3 woof\nhi tom says meow\ntrue false true\nhi rex says woof\ndog gone\n"
+    );
+}
+
+#[test]
+fn program_iface() {
+    let src = "interface shape { fn area(self) -> float\n fn describe(self) -> string = \"shape with area #(self.area())\" }\nstruct sq { s: float }\nimpl shape for sq { fn area(self) -> float = self.s * self.s }\nstruct ci { r: float }\nimpl shape for ci { fn area(self) -> float = 3.0 * self.r * self.r\n fn describe(self) -> string = \"circle\" }\nfn total(xs: [any shape]) -> float { var t = 0.0\n for x of xs { t += x.area() }\n t }\nfn show_it(s: any shape) { print(s.describe()) }\nfn generic<T: shape>(x: T) -> float = x.area()\nfn main() { const xs: [any shape] = [sq { s: 2.0 }, ci { r: 1.0 }]\n print(total(xs), generic(sq { s: 3.0 }))\n show_it(sq { s: 1.0 })\n show_it(ci { r: 1.0 }) }\n";
+    assert_eq!(output_of(src), "7 9\nshape with area 1\ncircle\n");
+}
+
+#[test]
+fn program_builder() {
+    let src = "fn main() { const xs = [1, 2, 3, 4, 5, 6]\n print([x of xs if x % 2 == 0 ~> x * 10])\n print([x of xs if x > 4])\n print([i, x of xs if i < 2 ~> \"#i:#x\"])\n print([x of 0..3, y of 0..2 ~> (x, y)])\n print(set { x of xs ~> x % 3 })\n print(map { x of 1..4 ~> x : x * x })\n print(xs.map(x ~> x + 1).to_list()) }\n";
+    assert_eq!(output_of(src), "[20, 40, 60]\n[5, 6]\n[\"0:1\", \"1:2\"]\n[(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]\n{1, 2, 0}\n{1: 1, 2: 4, 3: 9}\n[2, 3, 4, 5, 6, 7]\n");
+}
+
+#[test]
+fn program_sp1() {
+    let src = "fn main() { const t = spawn(() ~> 41 + 1)\n print(t.join!!()) }\n";
+    assert_eq!(output_of(src), "42\n");
+}
+
+#[test]
+fn program_sp2() {
+    let src = "fn main() { const (tx, rx) = chan<int>()\n const p = spawn([sink tx] ~> { for i of 0..3 { tx.send(i * 10) } })\n for v of rx.iter() { print(v) }\n p.join!!() }\n";
+    assert_eq!(output_of(src), "0\n10\n20\n");
+}
+
+#[test]
+fn program_sh2() {
+    let src = "fn main() { const s = shared(5)\n const s2 = copy s\n print(s.get(), s2.get()) }\n";
+    assert_eq!(output_of(src), "5 5\n");
+}
+
+#[test]
+fn program_assign() {
+    let src =
+        "fn main() { var a: int? = none\n a ??= 5\n var t = (1, 2)\n t.0 = 9\n print(a, t) }\n";
+    assert_eq!(output_of(src), "some(5) (9, 2)\n");
+}
+
+#[test]
+fn program_globals() {
+    let src = "const limit = 10\nvar counter = 0\nfn bump() { counter += 1 }\nfn main() { bump()\n bump()\n print(counter, limit) }\n";
+    assert_eq!(output_of(src), "2 10\n");
+}
+
+#[test]
+fn program_variadic() {
+    let src = "fn sum(...xs: int) -> int { var t = 0\n for x of xs { t += x }\n t }\nfn main() { print(sum(1, 2, 3), sum()) }\n";
+    assert_eq!(output_of(src), "6 0\n");
+}
+
+#[test]
+fn program_defaults() {
+    let src = "fn greet(name: string, greeting: string = \"hi\") -> string = \"#greeting #name\"\nfn main() { print(greet(\"a\"), greet(\"b\", greeting: \"yo\")) }\n";
+    assert_eq!(output_of(src), "hi a yo b\n");
+}
+
+#[test]
+fn program_f1() {
+    let src = "fn main() { const a = [1, 2, 3]\n var b = [0; 4]\n b[1] = 7\n print(a, b, b.len())\n var arr: [int; 3] = [1, 2, 3]\n arr[0] = 9\n print(arr, arr[0]) }\n";
+    assert_eq!(output_of(src), "[1, 2, 3] [0, 7, 0, 0] 4\n[9, 2, 3] 9\n");
+}
+
+#[test]
+fn program_f2() {
+    let src = "fn sum(xs: [int]) -> int { var t = 0\n for x of xs { t += x }\n t }\nfn total(xs: [int]) -> int { var l = 0\n var r = 0\n const mid = xs.len() / 2\n scope s { s.spawn([inout l] ~> l = sum(xs[..mid]))\n  s.spawn([inout r] ~> r = sum(xs[mid..])) }\n l + r }\nfn main() { print(total([1, 2, 3, 4])) }\n";
+    assert_eq!(output_of(src), "10\n");
+}
+
+#[test]
+fn program_f3() {
+    let src = "fn loop_to(n: int, acc: int) -> int { if n == 0 { return acc }\n become loop_to(n - 1, acc + n) }\nfn main() { print(loop_to(100000, 0)) }\n";
+    assert_eq!(output_of(src), "5000050000\n");
+}
+
+#[test]
+fn program_f4() {
+    let src = "const names = [\"a\", \"b\"]\nconst limit = 3\nstruct cfg { port: int = 80, name: string = \"x\" }\nconst dflt = cfg {}\nfn main() { print(names, limit, dflt.port, dflt.name)\n const c = cfg { port: 1, ...dflt }\n print(c.port, c.name) }\n";
+    assert_eq!(output_of(src), "[\"a\", \"b\"] 3 80 x\n1 x\n");
+}
+
+#[test]
+fn program_e4c() {
+    let src = "fn p(s: str) -> int ! parse_error = s.parse_int()\nfn run2() -> int ! error { const b = p(\"x\")?\n ok(b) }\nfn main() { switch run2() { case ok(_): print(\"ok\")\n case err(e): { print(e)\n  print(\"failed: #e\") } }\n const r = run2()\n switch r { case err(e): print(e)\n default: print(\"?\") } }\n";
+    assert_eq!(
+        output_of(src),
+        "bad digit at position 0\nfailed: bad digit at position 0\nbad digit at position 0\n"
+    );
+}
+
+#[test]
+fn program_e6() {
+    let src = "struct stack<T> { items: [T]\n fn push(inout self, sink x: T) { self.items.push!(x) }\n fn pop(inout self) -> T? = self.items.pop!()\n fn size(self) -> int = self.items.len() }\nfn main() { var s = stack<int> { items: [] }\n s.push!(1)\n s.push!(2)\n print(s.pop!(), s.size())\n var t = stack<string> { items: [] }\n t.push!(\"a\")\n print(t.pop!(), t.pop!()) }\n";
+    assert_eq!(output_of(src), "some(2) 1\nsome(\"a\") none\n");
+}
+
+#[test]
+fn program_e8() {
+    let src = "fn main() { const names = [\"bob\", \"al\"]\n const lens = map { n of names ~> n : n.len() }\n for k, v of lens { print(\"#k=#v\") }\n const o = switch 5 { case 0: \"zero\"\n  case n if n > 3: \"big\"\n  default: \"small\" }\n print(o)\n guard names.len() > 1 else { return }\n print(names[0] + names[1]) }\n";
+    assert_eq!(output_of(src), "bob=3\nal=2\nbig\nbobal\n");
+}
+
+#[test]
+fn program_pipe() {
+    let src = "fn dbl(x: int) -> int = x * 2\nfn main() { print(3 |> dbl) }\n";
+    assert_eq!(output_of(src), "6\n");
+}
+
+#[test]
+fn program_localfn() {
+    let src = "fn main() { fn sq(x: int) -> int = x * x\n print(sq(4)) }\n";
+    assert_eq!(output_of(src), "16\n");
+}
+
+#[test]
+fn program_defer() {
+    let src = "fn main() { defer print(\"bye\")\n print(\"hi\") }\n";
+    assert_eq!(output_of(src), "bye\nhi\n");
+}
+
+#[test]
+fn program_typetest() {
+    let src = "fn main() { const xs = [1, 2, 3, 4, 5]\n switch xs { case [a, b, ...rest]: print(a, b, rest)\n  default: print(\"no\") } \n const o: int? = 5\n if o is some(v) { print(v) } }\n";
+    assert_eq!(output_of(src), "1 2 [3, 4, 5]\n5\n");
+}
+
+#[test]
+fn program_generic() {
+    let src = "fn first<T>(xs: [T]) -> T? { if xs.len() == 0 { none } else { xs[0] } }\nfn pair<A, B>(a: A, b: B) -> (A, B) = (a, b)\nfn main() { print(first([1, 2]), first([\"a\"]), pair(1, \"x\")) }\n";
+    assert_eq!(output_of(src), "some(1) some(\"a\") (1, \"x\")\n");
+}
+
+/// The sample programs run to the end without stopping or leaking.
+#[test]
+fn example_programs_run() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/programs");
+    for name in ["shapes", "words", "stack"] {
+        let mut program = Program::with_core();
+        program
+            .add_package_from_path(&dir.join(format!("{name}.lang")))
+            .unwrap();
+        let res = resolve(&program);
+        let typed = check(&program, &res);
+        assert!(
+            typed.diagnostics.iter().all(|d| d.warning),
+            "{name} does not check"
+        );
+        let l = lower(&program, &res, &typed);
+        assert!(l.diagnostics.is_empty(), "{name}: {:?}", l.diagnostics);
+        assert!(
+            verify_module(&l.module).is_empty(),
+            "{name} does not verify"
+        );
+        let o = crate::ir::run_full(&l.module, "main", &[]);
+        assert_eq!(o.result.clone().map(|_| ()), Ok(()), "{name}");
+        assert_eq!(o.leaked, 0, "{name} leaks");
+        assert!(!o.output.is_empty(), "{name} printed nothing");
+    }
+}

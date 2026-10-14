@@ -186,7 +186,11 @@ impl<'a> Lowerer<'a> {
         let data = self.load_at(p, 0, IrTy::Ptr);
         let vt = self.load_at(p, 8, IrTy::Ptr);
         let f = self.load_at(vt, 0, IrTy::Ptr);
-        self.emit(Op::CallPtr(vec![IrTy::Ptr], IrTy::Void, f, vec![data]), None, sp);
+        self.emit(
+            Op::CallPtr(vec![IrTy::Ptr], IrTy::Void, f, vec![data]),
+            None,
+            sp,
+        );
     }
 
     pub(crate) fn clone_any(&mut self, _s: Value, _d: Value, _ty: Ty) {
@@ -231,7 +235,11 @@ impl<'a> Lowerer<'a> {
     /// Is this address not null?
     pub(crate) fn nonnull(&mut self, p: Value) -> Option<Value> {
         let sp = Span::new(0, 0);
-        let n = self.emit(Op::Cast(CastKind::PtrToInt, p, IrTy::I64), Some(IrTy::I64), sp)?;
+        let n = self.emit(
+            Op::Cast(CastKind::PtrToInt, p, IrTy::I64),
+            Some(IrTy::I64),
+            sp,
+        )?;
         let zero = self.i64c(0);
         self.emit(Op::Cmp(CmpOp::Ne, n, zero), Some(IrTy::Bool), sp)
     }
@@ -240,12 +248,18 @@ impl<'a> Lowerer<'a> {
     pub(crate) fn drop_fn_value(&mut self, p: Value) {
         let sp = Span::new(0, 0);
         let env = self.load_at(p, 8, IrTy::Ptr);
-        let Some(has_env) = self.nonnull(env) else { return };
+        let Some(has_env) = self.nonnull(env) else {
+            return;
+        };
         self.if_then_pub(has_env, |s| {
             let hdr = s.load_at(env, 0, IrTy::Ptr);
             if let Some(owns) = s.nonnull(hdr) {
                 s.if_then_pub(owns, |s| {
-                    s.emit(Op::CallPtr(vec![IrTy::Ptr], IrTy::Void, hdr, vec![env]), None, sp);
+                    s.emit(
+                        Op::CallPtr(vec![IrTy::Ptr], IrTy::Void, hdr, vec![env]),
+                        None,
+                        sp,
+                    );
                 });
             }
         });
@@ -260,7 +274,9 @@ impl<'a> Lowerer<'a> {
                 let hdr = s.load_at(env, 0, IrTy::Ptr);
                 if let Some(owns) = s.nonnull(hdr) {
                     s.if_then_pub(owns, |s| {
-                        s.terminate(Term::Stop("a closure that owns data cannot be copied".to_string()));
+                        s.terminate(Term::Stop(
+                            "a closure that owns data cannot be copied".to_string(),
+                        ));
                         let b = s.new_block(&[]);
                         s.start(b);
                     });

@@ -120,6 +120,15 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Continue { label } => self.continue_expr(e, label.as_ref()),
             ExprKind::Return(v) => self.return_expr(e, v.as_deref()),
+            // A tail call: here it is a call followed by `return`.
+            ExprKind::Become(call) => self.become_expr(e, call),
+            ExprKind::Scope { name, body } => {
+                if let Some(d) = self.res.decls.get(&(self.f.file, name.span.start)).copied() {
+                    self.f.scope_names.push(d);
+                }
+                let void = self.types.void;
+                self.block(body, None, void)
+            }
             ExprKind::Defer(inner) => {
                 if let Some(s) = self.f.scopes.last_mut() {
                     s.push(ScopeItem::Defer(inner));
@@ -135,6 +144,10 @@ impl<'a> Lowerer<'a> {
             ExprKind::In { lhs, rhs } => self.in_expr(e, lhs, rhs),
             ExprKind::Field { .. } | ExprKind::TupleIndex { .. } | ExprKind::Index { .. } => {
                 self.place_expr(e)
+            }
+            // A call the checker could not give a type (`s.spawn(...)` in a `scope`).
+            ExprKind::Call { callee, args, mark } if self.ty_of(e).is_none() => {
+                self.call(e, callee, args, *mark, None)
             }
             _ => self.rvalue_expr(e),
         }
@@ -180,6 +193,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// `into` when the destination holds exactly the expression's type.
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn into_exact(&mut self, e: &'a Expr, dst: Value, t: Ty) -> Res {
         match self.repr(t) {
             Repr::Zst => self.expr(e),
@@ -206,6 +220,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Copies (or moves) the value in a place to `dst`.
+    #[allow(clippy::wrong_self_convention)]
     fn into_from_place(&mut self, e: &'a Expr, dst: Value, t: Ty) -> Res {
         let Some(p) = self.place(e) else {
             if self.failed() {
@@ -1521,7 +1536,13 @@ impl<'a> Lowerer<'a> {
             ForHead::Of { pats, iter } => (pats, iter, false),
             ForHead::In { pat, iter } => (std::slice::from_ref(pat), iter, true),
             ForHead::C { init, cond, step } => {
-                return self.c_for(label, init.as_deref(), cond.as_ref(), step.as_ref(), &f.body)
+                return self.c_for(
+                    label,
+                    init.as_deref(),
+                    cond.as_ref(),
+                    step.as_ref(),
+                    &f.body,
+                )
             }
         };
         if let ExprKind::Range {
@@ -1785,6 +1806,40 @@ impl<'a> Lowerer<'a> {
         self.exit_scopes(depth);
         self.jump(to, vec![]);
         Res::Never
+    }
+
+    /// `become f(args)`: a call that ends the function. A call to the function itself with plain number
+    /// parameters becomes a jump back to the top; any other is a call followed by `return`.
+    fn become_expr(&mut self, e: &'a Expr, call: &'a Expr) -> Res {
+        if let (Some(head), ExprKind::Call { callee, args, .. }) = (self.f.tail_head, &call.kind) {
+            if let (Some((target, _)), ExprKind::Name(_)) =
+                (self.call_target(call.span), &strip_parens(callee).kind)
+            {
+                if Some(target) == self.f.cur_def {
+                    let Some(info) = self.typed.fn_infos.get(&target).cloned() else {
+                        return self.unsupported(e.span, "`become` of this call");
+                    };
+                    let Some(srcs) = self.match_args(&info, target, args, call.span) else {
+                        return Res::Never;
+                    };
+                    let sig_params: Vec<(Pass, Ty, Option<Mode>)> = {
+                        let map = self.f.subst.clone();
+                        self.sig_of(&info, &map).params
+                    };
+                    let mut vals = Vec::new();
+                    for ((pass, ty, mode), src) in sig_params.iter().zip(srcs) {
+                        match self.lower_arg(*pass, *ty, *mode, src, call.span) {
+                            Some(v) => vals.push(v),
+                            None => return Res::Never,
+                        }
+                    }
+                    self.exit_scopes(0);
+                    self.jump(head, vals);
+                    return Res::Never;
+                }
+            }
+        }
+        self.return_expr(e, Some(call))
     }
 
     fn return_expr(&mut self, e: &'a Expr, v: Option<&'a Expr>) -> Res {

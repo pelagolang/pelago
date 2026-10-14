@@ -7,6 +7,7 @@
 //! unchanging scalar, or the value itself when captured with `sink`.
 
 use super::call::ArgSource;
+use super::expr::strip_parens;
 use super::*;
 use crate::visit::{self, Visitor};
 
@@ -198,7 +199,11 @@ impl<'a> Lowerer<'a> {
             }
         } else {
             let np = self
-                .emit(Op::Cast(CastKind::IntToPtr, zero, IrTy::Ptr), Some(IrTy::Ptr), e.span)
+                .emit(
+                    Op::Cast(CastKind::IntToPtr, zero, IrTy::Ptr),
+                    Some(IrTy::Ptr),
+                    e.span,
+                )
                 .unwrap_or(env);
             self.store_at(env, 0, np);
         }
@@ -603,5 +608,28 @@ impl<'a> Lowerer<'a> {
                 Res::Unit
             }
         }
+    }
+
+    /// `s.spawn(closure)` inside a `scope`: the task has no value to give back and runs at once.
+    pub(crate) fn run_scope_task(&mut self, e: &'a Expr, arg: &'a Expr) -> Res {
+        let sp = e.span;
+        let ExprKind::Closure(c) = &strip_parens(arg).kind else {
+            return self.call_value_with(e, arg, Vec::new(), None);
+        };
+        let void = self.types.void;
+        let t = self.types.mk(TyKind::Fn(Vec::new(), void));
+        let slot = self.slot_for(t);
+        if let Res::Never = self.closure_value(arg, c, slot, t) {
+            return Res::Never;
+        }
+        let code = self.load_at(slot, 0, IrTy::Ptr);
+        let env = self.load_at(slot, 8, IrTy::Ptr);
+        self.emit(
+            Op::CallPtr(vec![IrTy::Ptr], IrTy::Void, code, vec![env]),
+            None,
+            sp,
+        );
+        self.drop_at(slot, t);
+        Res::Unit
     }
 }
