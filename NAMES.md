@@ -170,6 +170,26 @@ A habit worth deciding on now: the newer languages ship **one tool** named after
 as an internal part. If we do that, the `c` suffix goes away and the name only needs to work as a
 command. Until a name is chosen, `langc` is a single line in `compiler/Cargo.toml`, so renaming is cheap.
 
+## Round 7: oceans and vast water
+
+You asked for a name that feels like a vast expanse (Pacific, Atlantic). This round follows that request, so it is an
+exception to the rule "avoid nature-themed names" in `CLAUDE.md` (update that line if an ocean name is chosen).
+Full research, the Wikipedia findings and the review table are in `docs/plans/cards/B-01-name.md`. Web check, October 2026.
+
+| Name | Meaning | Check |
+|------|---------|-------|
+| **Thalassa** | Greek "sea" | ✅ No language found. Distinct and searchable. ⭐ |
+| **Pontus** | Greek primordial sea god | ✅ No language found. Short. ⭐ |
+| **Panthalassa** | "All sea", the one ancient ocean | ✅ No language, ⚠️ a 2026 wave-energy company shares the name. |
+| **Pacific** | The ocean | ✅ No language found, ⚠️ very hard to search ("Pacific language" means human languages). |
+| **Atlantic** | The ocean | ✅ No language found, ⚠️ "Atlantic languages" is a linguistic family; `.atl` is Eclipse ATL. |
+| **Atoll**, **Pelago**, **Offing**, **Nereid**, **Oceanus** | | ✅ none found (Oceanus: ⚠️ a Tencent Cloud product name). |
+| ~~Tethys~~ | | ❌ A toy language and a mission DSL already use it. |
+| ~~Fathom~~ | | ❌ A binary-format language (yeslogic/fathom) and a Rust crate. |
+| ~~Kai~~ | Hawaiian "sea" | ❌ A self-hosted systems language named Kai exists. |
+| ~~Halcyon~~ | | ❌ Two language projects. |
+| **Gyre** | Ocean current | ⚠️ A compiler IR project by that name (inactive). |
+
 ## Picking criteria
 - [ ] Sounds good said out loud ("I wrote it in ___")
 - [ ] Not an existing popular language/framework

@@ -35,6 +35,7 @@ CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pus
 - `compiler/tests/`: integration tests. Every file in `examples/*.lang` must lex and parse without errors and match its golden tree.
 - `examples/`: sample source files. Keep `tour.lang` in step with the syntax decisions. `examples/programs/` holds real programs that must type check cleanly.
 - `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `lexer`, `parser`, `modules`, `checker`, `ir`, `memory`, `samples`).
+- `docs/plans/`: the task board (Kanban) and one plan card per piece of work; start at `docs/plans/README.md`.
 - `ROADMAP.md`: the decisions table and the phases. `NAMES.md`: name brainstorm.
 
 ## Keeping things in step
