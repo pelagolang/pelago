@@ -528,6 +528,11 @@ fn items() {
         "(fn double ((x : int)) -> int = (* x 2))"
     );
     assert_eq!(one("pub fn f() { }"), "(fn pub f () (block))");
+    assert_eq!(one("pub pkg fn f() { }"), "(fn pub pkg f () (block))");
+    assert_eq!(
+        one("struct s { pub pkg x: int }"),
+        "(struct s (field pub pkg x : int))"
+    );
     assert_eq!(one("@inline fn f() { }"), "(fn (@ inline) f () (block))");
     assert_eq!(
         one("@derive(eq, hash)\nstruct id { value: int }"),

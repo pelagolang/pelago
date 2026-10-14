@@ -111,13 +111,14 @@ starts with the package name, so moving a file does not break the imports of oth
   once name resolution exists; the parser does not know `pub pkg` yet.)
 - **IM8** The orphan rule for `impl`.
 
-## Still open (waiting on the answer about how a file becomes a module)
+- **IM3** A file is a module and its file name is the module name; directories are parent modules, and a front file
+  (`shapes.lang` next to `shapes/`) can re-export its children. A `mod` line, if written, must match the file name.
+- **IM4** Relative paths with leading dots stay. They are relative to the importing file's directory: `.sibling`
+  is a module in the same directory, `..util` one directory up, `...x` two up. (In module terms: the directory is
+  the file module's parent, so `.x` is a sibling of the current module.) Children of the current module are
+  reached by their full path, `geometry.shapes`.
 
-- **IM3** What decides a module's name: the file name, a declared name, or the directory.
-- **IM4** Relative paths with leading dots (`.sibling`, `..parent.x`). The parser accepts them already; whether
-  they stay depends on IM3.
-
-### Why "file name = module name", and the alternatives
+## Why "file name = module name", and the alternatives
 
 It is not a Java idea (Java is one *class* per file). Whole-file namespaces named after the file are how JavaScript,
 Python, Rust, Zig and Swift work. The reasons to like it here:
@@ -146,6 +147,3 @@ I suggest keeping **file = module**, with directories as parent modules whose fr
 makes the facade cheap. The Go style is the better answer if you expect very large modules and want to split them
 without ceremony. A third option, **a declared name that is free of the file name** (`mod geometry` inside any file),
 is the most flexible and costs the directory scan above.
-
-**IM3 (again).** Which one: file = module (suggested), directory = module, or declared name?
-**IM4 (again).** After IM3, keep leading-dot relative paths?

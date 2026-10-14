@@ -76,6 +76,8 @@ pub enum Vis {
     #[default]
     Default,
     Pub,
+    /// `pub pkg`: visible inside the package, not outside.
+    PubPkg,
     Priv,
     /// `export`, the alternative spelling of `pub`.
     Export,

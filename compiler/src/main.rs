@@ -31,6 +31,13 @@ fn main() {
                 std::process::exit(2);
             }
         },
+        Some("check") => match args.next() {
+            Some(path) => check_path(&path),
+            None => {
+                eprintln!("usage: langc check <file or directory>");
+                std::process::exit(2);
+            }
+        },
         Some("parse-bench") => match args.next() {
             Some(path) => parse_bench(&path),
             None => {
@@ -62,6 +69,7 @@ fn usage() {
     eprintln!("  tokens     list operators and punctuation");
     eprintln!("  lex-bench <file>  time the lexer alone on a file");
     eprintln!("  parse [--no-docs] <file>  print the syntax tree and any errors (`-` reads standard input)");
+    eprintln!("  check <path>  parse and resolve names of a file or a directory of `.lang` files");
     eprintln!("  parse-bench <file>  time lexing plus parsing on a file");
     eprintln!("  lex <file> print the tokens of a source file (`-` reads standard input)");
 }
@@ -87,6 +95,36 @@ fn print_punct() {
     let texts: Vec<&str> = Punct::ALL.iter().map(|p| p.as_str()).collect();
     println!("{} tokens", texts.len());
     println!("  {}", texts.join(" "));
+}
+
+fn check_path(path: &str) {
+    let mut program = langc::package::Program::new();
+    if let Err(e) = program.add_package_from_path(std::path::Path::new(path)) {
+        eprintln!("{e}");
+        std::process::exit(2);
+    }
+    let resolved = langc::resolve::resolve(&program);
+    let mut diags = resolved.diagnostics.clone();
+    diags.sort_by_key(|d| (d.module, d.span.start));
+    diags.dedup();
+    for d in &diags {
+        let module = program.module(d.module);
+        let index = LineIndex::new(&module.src);
+        let (line, col) = index.line_col(&module.src, d.span.start);
+        eprintln!("{}:{line}:{col}: error: {}", module.path, d.message);
+    }
+    let modules = program.modules.len();
+    println!(
+        "{} module{}, {} definitions, {} error{}",
+        modules,
+        if modules == 1 { "" } else { "s" },
+        resolved.defs.len(),
+        diags.len(),
+        if diags.len() == 1 { "" } else { "s" }
+    );
+    if !diags.is_empty() {
+        std::process::exit(1);
+    }
 }
 
 fn read_source(path: &str) -> String {

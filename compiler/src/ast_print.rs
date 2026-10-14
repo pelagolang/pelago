@@ -702,6 +702,7 @@ impl Printer<'_> {
         match m.vis {
             Vis::Default => {}
             Vis::Pub => v.push(atom("pub")),
+            Vis::PubPkg => v.push(atom("pub pkg")),
             Vis::Priv => v.push(atom("priv")),
             Vis::Export => v.push(atom("export")),
         }
@@ -782,7 +783,9 @@ impl Printer<'_> {
                 for a in &f.attrs {
                     v.push(self.attr(a));
                 }
-                if f.vis == Vis::Pub {
+                if f.vis == Vis::PubPkg {
+                    v.push(atom("pub pkg"));
+                } else if f.vis == Vis::Pub {
                     v.push(atom("pub"));
                 } else if f.vis == Vis::Priv {
                     v.push(atom("priv"));

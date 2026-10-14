@@ -21,6 +21,7 @@ cargo run -- lex <file>          # print tokens, report lexer errors (`-` reads 
 cargo run -- lex-bench <file>    # time the lexer alone
 cargo run -- parse <file>        # print the syntax tree, report errors
 cargo run -- parse-bench <file>  # time lexing plus parsing
+cargo run -- check <path>        # parse and resolve names of a file or a directory
 BLESS=1 cargo test               # rewrite compiler/tests/golden/*.ast after an intended syntax change
 ```
 
@@ -28,10 +29,10 @@ CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pus
 
 ## Layout
 
-- `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `ast.rs`, `ast_print.rs`, `visit.rs`, `check.rs`, `parser/`, `main.rs`).
+- `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `ast.rs`, `ast_print.rs`, `visit.rs`, `check.rs`, `package.rs`, `parser/`, `resolve/`, `main.rs`).
 - `compiler/tests/`: integration tests. Every file in `examples/*.lang` must lex and parse without errors and match its golden tree.
 - `examples/`: sample source files. Keep `tour.lang` in step with the syntax decisions.
-- `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `lexer`, `parser`, `modules`, `memory`, `samples`).
+- `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `lexer`, `parser`, `modules`, `checker`, `memory`, `samples`).
 - `ROADMAP.md`: the decisions table and the phases. `NAMES.md`: name brainstorm.
 
 ## Keeping things in step

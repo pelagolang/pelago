@@ -143,7 +143,13 @@ impl Parser<'_> {
         loop {
             let t = self.tok();
             match t.kind {
-                TokenKind::Keyword(Keyword::Pub) => m.vis = Vis::Pub,
+                TokenKind::Keyword(Keyword::Pub) => {
+                    m.vis = Vis::Pub;
+                    if self.peek_sig(1).kind == TokenKind::Keyword(Keyword::Pkg) {
+                        self.bump();
+                        m.vis = Vis::PubPkg;
+                    }
+                }
                 TokenKind::Keyword(Keyword::Priv) => m.vis = Vis::Priv,
                 TokenKind::Keyword(Keyword::Export) => m.vis = Vis::Export,
                 TokenKind::Keyword(Keyword::Meta)

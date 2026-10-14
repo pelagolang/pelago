@@ -39,7 +39,8 @@ A serious, self-hosting systems language:
 | Concurrency | `docs/design/concurrency.md` decisions CC1 to CC9: threads with `sink`/copy capture, scopes, `chan<T>` pairs, `select`, `shared`/`lock`/`atomic`; async still deferred; `par_for` helper; global `var` forbidden | decided |
 | List patterns | `docs/design/list-patterns.md` LP1 to LP8: `[first, ...rest]` with `...`, rest is a view, `some(v)` for options, patterns over text, `sink` elements revisited later | decided |
 | Parser | `docs/design/parser.md` P1 to P10 decided: top-level statements, `loop` values, loop labels (`outer: for ...`, `break outer`), closure return types (`(x: int) -> int ~> ...`), doc comments kept, syntax checks pass | decided |
-| Imports | Imports are bindings: `import std.io`, `import fmt = std.io`, `import { a, b: c, ... } = path`; cycles allowed, top-level only, `pub pkg` middle visibility, orphan rule (`docs/design/modules.md`). Open: what names a module (IM3), relative paths (IM4) | decided, two open |
+| Checker | `docs/design/checker.md` draft 1: stages (names done, then types, generics and interfaces, patterns, value semantics); questions TC1 to TC8 | draft |
+| Imports | Imports are bindings: `import std.io`, `import fmt = std.io`, `import { a, b: c, ... } = path`; cycles allowed, top-level only, `pub pkg` middle visibility, orphan rule (`docs/design/modules.md`). A file is a module named after the file; relative paths with leading dots stay | decided |
 | Maps | `map { "a": 1 }`, empty map `{:}` | decided |
 | Closures | `x ~> x * 2` and `~> it * 2` | decided |
 | Null | None. Absence is `none` in `option<T>` | decided |
@@ -114,7 +115,7 @@ No compiler code yet. Everything here is cheap to change.
 
 ## Phase 2: Meaning
 
-- [ ] Name resolution and modules
+- [x] Name resolution and modules (`compiler/src/resolve/`, `package.rs`; `langc check`); see `docs/design/checker.md`
 - [ ] **Type checker** with local inference, structs, enums, generics and interfaces
 - [ ] **Value-semantics checker:** exclusivity of `inout` access, moves vs copies, `sink`
 - [ ] Pattern-match exhaustiveness
