@@ -222,7 +222,11 @@ impl Program {
     }
 }
 
-fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) -> Result<(), String> {
+pub(crate) fn collect_files(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<(String, String)>,
+) -> Result<(), String> {
     let entries =
         std::fs::read_dir(dir).map_err(|e| format!("cannot read `{}`: {e}", dir.display()))?;
     for entry in entries {

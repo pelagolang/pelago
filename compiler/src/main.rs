@@ -61,6 +61,7 @@ fn main() {
                 }
             }
         }
+        Some("lsp") => std::process::exit(pelago::lsp::run_stdio()),
         Some("parse-bench") => match args.next() {
             Some(path) => parse_bench(&path),
             None => {

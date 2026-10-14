@@ -12,6 +12,7 @@ pub mod ir;
 pub mod keyword;
 pub mod lexer;
 pub mod lower;
+pub mod lsp;
 pub mod meta;
 pub mod package;
 pub mod parser;

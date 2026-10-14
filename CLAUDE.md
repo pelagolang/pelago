@@ -25,6 +25,7 @@ cargo run -- check <path>        # parse, resolve names and check types of a fil
 cargo run -- ir <path>           # check, lower to the IR, verify and print it
 cargo run -- run <path>          # lower and run `main` in the IR interpreter (`--opt` optimises first, `--stats` counts)
 cargo run -- highlight <file>    # colour a `.pel` file (`--ansi`, `--html`, `--html-page`, `--plain`, `--theme dark|light`)
+cargo run -- lsp                  # the language server (stdio); see docs/plans/cards/S-06-language-server.md
 cargo run -- grammar             # print the generated TextMate grammar; `keywords --json` prints the word lists
 BLESS=1 cargo test editors       # regenerate editors/textmate and editors/vscode/syntaxes after a keyword change
 BLESS=1 cargo test               # rewrite compiler/tests/golden/*.ast after an intended syntax change
@@ -34,7 +35,7 @@ CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pus
 
 ## Layout
 
-- `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `ast.rs`, `ast_print.rs`, `visit.rs`, `check.rs`, `package.rs`, `parser/`, `resolve/`, `types.rs`, `typecheck/`, `values/`, `ir/`, `lower/`, `main.rs`; the library `compiler/core/core.pel`).
+- `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `ast.rs`, `ast_print.rs`, `visit.rs`, `check.rs`, `package.rs`, `parser/`, `resolve/`, `types.rs`, `typecheck/`, `values/`, `ir/`, `lower/`, `lsp/`, `main.rs`; the library `compiler/core/core.pel`).
 - `compiler/tests/`: integration tests. Every file in `examples/*.pel` must lex and parse without errors and match its golden tree.
 - `examples/`: sample source files. Keep `tour.pel` in step with the syntax decisions. `examples/programs/` holds real programs that must type check cleanly.
 - `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `lexer`, `parser`, `modules`, `checker`, `ir`, `memory`, `samples`).

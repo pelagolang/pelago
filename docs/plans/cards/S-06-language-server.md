@@ -1,14 +1,25 @@
 Id: S-06
 Title: `pelago lsp`: a language server inside the compiler
-Column: Shelf
+Column: Review (L1 to L5 built; L6 left)
 Order: -
 Depends on: nothing blocking; S-05 is the Zed side of it
 Size: L, in stages
 Revisit when: the owner wants editor features beyond colours (errors as you type, hover, go to definition), or after the backend's N3.
 
-# Parked on purpose (owner decision)
+# Status
 
-Shelved together with S-05. The notes below are the plan so that nobody has to rediscover it.
+The owner took it off the shelf ("tackle the tree-sitter and lsp first"). **Built:** `pelago lsp` (`compiler/src/lsp/`: `json.rs`, `analysis.rs`, `mod.rs`, `tests.rs`), no
+external crates, 13 tests (JSON round trip and random input, framing, UTF-16 positions, every feature, a two-file workspace, the examples as a robustness run).
+It offers diagnostics (all stages, cleared when fixed), hover (function signature, struct/enum shape, local and field types, or the type of the expression), go to
+definition (across files of the package), find references, the document outline, semantic tokens (the highlighter's classes refined by the resolver: function,
+method, parameter, property, struct, enum, enumMember, with `declaration`, `defaultLibrary` and `readonly` modifiers) and completion (keywords, declarations, the locals
+of the enclosing item, and the members of the expression's type after a dot; not scope-exact).
+
+**Left:** L6 (rename, formatting, code actions), signature help, doc comments in hover, completion of imports and of members from `impl`s for generic types, an incremental
+checker (today every change re-checks the whole package), a VS Code client (needs the `vscode-languageclient` npm package: the owner's call), and the Zed hookup (S-05).
+Hover shows `(local) x`, not `const`/`var`, for locals because the resolver does not record which it was.
+
+# Original plan
 
 # Design
 
