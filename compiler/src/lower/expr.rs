@@ -121,6 +121,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Continue { label } => self.continue_expr(e, label.as_ref()),
             ExprKind::Return(v) => self.return_expr(e, v.as_deref()),
             // A tail call: here it is a call followed by `return`.
+            ExprKind::Select(arms) => self.select_expr(e, arms),
             ExprKind::Become(call) => self.become_expr(e, call),
             ExprKind::Scope { name, body } => {
                 if let Some(d) = self.res.decls.get(&(self.f.file, name.span.start)).copied() {

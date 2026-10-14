@@ -1575,6 +1575,17 @@ pub fn rt_run_pending() {
     rt_pending = []
 }
 
+/// Runs one task that is still waiting; false when there is none.
+pub fn rt_run_one_pending() -> bool {
+    if rt_pending.len() == 0 { return false }
+    const addr = rt_pending.remove!(0)
+    rt_task_run(rt_cast<int, ptr>(addr))
+    true
+}
+
+/// Can a receive on this channel finish now: a value is queued, or no sender is left?
+pub fn rt_chan_ready(ch: ptr) -> bool = rt_hdr_len(ch) > 0 || rt_load_int(rt_offset(ch, 24)) == 0
+
 fn rt_task_body<T>(s: ptr, f: fn() -> T) {
     rt_write<T>(rt_offset(s, 40), f())
     if rt_load_int(s) == 3 {

@@ -23,6 +23,7 @@ cargo run -- parse <file>        # print the syntax tree, report errors
 cargo run -- parse-bench <file>  # time lexing plus parsing
 cargo run -- check <path>        # parse, resolve names and check types of a file or a directory
 cargo run -- ir <path>           # check, lower to the IR, verify and print it
+cargo run -- run <path>          # lower and run `main` in the IR interpreter
 BLESS=1 cargo test               # rewrite compiler/tests/golden/*.ast after an intended syntax change
 ```
 

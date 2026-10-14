@@ -707,3 +707,39 @@ fn example_programs_run() {
         assert!(!o.output.is_empty(), "{name} printed nothing");
     }
 }
+
+#[test]
+fn program_g1() {
+    let src = "@derive(eq, hash, show)\nenum color { red, green }\n@derive(eq, hash, show)\nstruct key { c: color, n: int }\nfn main() { var m: map<key, string> = {:}\n m.insert!(key { c: .red, n: 1 }, \"a\")\n m.insert!(key { c: .green, n: 2 }, \"b\")\n print(m[key { c: .red, n: 1 }], m.len(), color.red == color.green)\n print(m) }\n";
+    assert_eq!(
+        output_of(src),
+        "a 2 false\n{key { c: red, n: 1 }: \"a\", key { c: green, n: 2 }: \"b\"}\n"
+    );
+}
+
+#[test]
+fn program_g2() {
+    let src = "fn main() { const (tx, rx) = chan<int>()\n const (tx2, rx2) = chan<string>()\n tx.send(1)\n tx2.send(\"hi\")\n select { case v = rx.recv() { print(\"int #v\") }\n  case s = rx2.recv() { print(\"str #s\") } }\n select { case v = rx.recv() { print(\"again #v\") }\n  default { print(\"nothing\") } }\n select { case s = rx2.recv() { print(\"str #s\") }\n  default { print(\"nothing\") } }\n const p = spawn([sink tx] ~> { tx.send(7) })\n select { case v = rx.recv() { print(\"late #v\") } }\n p.join!!() }\n";
+    assert_eq!(
+        output_of(src),
+        "int some(1)\nnothing\nstr some(\"hi\")\nlate some(7)\n"
+    );
+}
+
+#[test]
+fn program_g3() {
+    let src = "fn maybe(n: int) -> int? { if n > 0 { n } else { none } }\nfn both(a: int, b: int) -> int? { const x = maybe(a)?\n const y = maybe(b)?\n x + y }\nfn main() { print(both(1, 2), both(0, 2))\n var o: int? = 3\n if o is some(v) { print(v) }\n o = none\n print(o ?? -1, o.is_none()) \n const nested = [[1, 2], [3]]\n print(nested, nested[0][1])\n var grid = [[0; 2]; 2]\n print(grid) }\n";
+    assert_eq!(
+        output_of(src),
+        "some(3) none\n3\n-1 true\n[[1, 2], [3]] 2\n[[0, 0], [0, 0]]\n"
+    );
+}
+
+#[test]
+fn program_f5() {
+    let src = "fn main() { const s = \"héllo\"\n for c of s.chars() { print(c) }\n print(s[0..2], 'a' to int, 3.7.floor(), 10 / 3, 10 % 3, 2.0 * 3.5)\n print(1_000 + 0xff + 0b101, -5 % 3, 1 << 4, 6 & 3, 6 | 1, 6 ^ 3) }\n";
+    assert_eq!(
+        output_of(src),
+        "h\né\nl\nl\no\nh� 97 3 3 1 7\n1260 -2 16 2 7 5\n"
+    );
+}

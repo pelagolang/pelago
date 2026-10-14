@@ -128,4 +128,42 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
   function whose signature is not simple (lists, strings, `inout`, generics) is left out of the module for now.
 - Tests lower source, verify the IR and run it in the interpreter (recursion, loops, labels, narrow and unsigned integers, floats,
   every kind of stop).
-- Next, step 3: aggregates (structs, tuples, enums, `option`, `result`, `?`) and `switch` as decision trees.
+- Step 3 (the rest of the language) is built, in `compiler/src/lower/` (monomorphised: one IR function per generic instance).
+  `langc run <path>` lowers a program and runs `main` in the interpreter; the tests run about sixty programs this way, and each one
+  also has to finish with no leaked or double-freed memory (the interpreter checks).
+  Everything the checker accepts is lowered, with the limits listed below.
+
+### How things are laid out (implementation decisions, IR9 to IR20)
+
+- **IR9** Numbers, `bool`, `char`, `ptr`, `box<T>` and `obj` references are SSA scalars. Everything else lives in memory and is passed by
+  address: structs (fields in order, padded), tuples, enums (a tag byte, then the payload of the case), `option` / `result` (enums), fixed arrays
+  (inline), `string` (`ptr, len, cap`; a capacity of 0 means "not owned"), `str` (`ptr, len`), lists and `iter` (`ptr, len, cap`; an `iter` is an
+  eager list), maps and sets (4 words, below), function values (`code, env`), `any` (`data, table`).
+- **IR10** Ownership is run with drop flags: every owned value has a flag byte, set when it is made and cleared when it moves or is
+  dropped. Glue functions (drop, copy, equal, order, hash, print) are generated once per type and shared.
+- **IR11** The library is written in the language (`compiler/core/core.lang`) over `rt_*` intrinsics (`rt_alloc`, `rt_read<T>`, `rt_size_of<T>`,
+  `rt_clone<T>`, `rt_drop_at<T>`, ...): lists, text, `option` / `result` methods, maps, sets, ranges, tasks, channels, `shared`, `lock`. The
+  lowering only calls them.
+- **IR12** Maps and sets keep insertion order: a block of keys (then values), a length, a capacity and an open-addressing index table of
+  positions. Removing shifts the entries down (O(n)) and rebuilds the index. `==` ignores order.
+- **IR13** Closures capture by address (views), by value (a copy of an unchanging number) or by `sink` (moved in). The environment starts with
+  two words: a drop function (null while it lives on the stack) and a flag that says the body took over the moved-in values. A closure with a
+  `sink` capture has its environment on the heap and may leave its function; function values therefore need dropping. A closure that owns data
+  cannot be copied and is called once.
+- **IR14** An `obj` is a heap block: a table pointer, then the fields (the base's first). The table is static data built on first use: drop, copy,
+  the ancestors list (for `is` and `to?`), and the `open` / `override` methods in hierarchy order. Calls to those methods go through the
+  table. `to?` moves the object into the `option` when the test passes.
+- **IR15** `any I` is a heap copy of the value plus a table for the pair (type, interface): a drop function and one entry per interface method.
+  An entry takes the address of the copy where the method wants `self`, and loads it first when the type passes `self` by value.
+- **IR16** `init` builds a struct in the return slot (or in a temporary when it can fail); for an `obj` the caller allocates the block and `init`
+  gets its address. `deinit` runs before the fields are dropped. Fields with defaults are filled before `init` runs.
+- **IR17** Module-level `const` values are evaluated where they are used; a module-level `var` is static data, set up the first time it is reached.
+- **IR18** Tasks run one after another (stage 0 has no threads): `spawn` queues the task; it runs when it is joined, when a `recv` finds the
+  channel empty, when a `select` has nothing ready, or at the end of `main`. Channels are queues with sender counts, `shared` is a counted
+  box, `lock` runs its closure at once. `scope s { s.spawn(...) }` runs each task right where it is spawned. Two tasks that must talk back and
+  forth need real threads (a later stage).
+- **IR19** `become f(...)` on the function itself with plain number parameters is a jump to the top (no stack growth); any other `become` is a
+  call followed by `return`.
+- **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa`, `async`, and `box<T>` values (the checker has no way to make or
+  open a box yet; recursive types through `box` wait for that design).
+

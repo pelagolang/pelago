@@ -28,6 +28,7 @@ mod intr;
 mod obj;
 mod ops;
 mod pat;
+mod select;
 mod seq;
 mod stubs;
 mod ty;

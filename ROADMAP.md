@@ -119,10 +119,11 @@ No compiler code yet. Everything here is cheap to change.
 - [x] **Type checker, stage 2**: local inference, structs, enums, patterns, methods, closures, basic generics (`compiler/src/typecheck/`, `types.rs`, `compiler/core/core.lang`). Interfaces, bounds and exhaustiveness are stage 3 and 4 of `docs/design/checker.md`
 - [x] **Interfaces and bounds, exhaustiveness, value semantics** (`typecheck/iface.rs`, `typecheck/exhaust.rs`, `values/`): bounds, `impl` completeness, operators, orphan rule; `switch` coverage; moves, `inout` exclusivity, `const` depth. Stage 6 done: `converts`, `main` forms, `defer`; also `become`, `linear`, view escape, `spawn` captures (VS7 to VS15, including `T: linear` and warnings)
 - [x] Pattern-match exhaustiveness (`typecheck/exhaust.rs`)
-- [ ] Generics via monomorphization
+- [x] Generics via monomorphization (`compiler/src/lower/`: one IR function per instance)
 - [x] IR data types, printer and verifier (`compiler/src/ir/`, `docs/design/ir.md`, IR1 to IR8 decided)
 - [x] First lowering (numbers, control flow, calls) and the IR interpreter (`compiler/src/lower/`, `langc ir`)
-- [ ] Lowering of aggregates, `switch`, ownership and drops, monomorphisation
+- [x] Lowering of aggregates, `switch`, ownership and drops, monomorphisation, closures, maps and sets, `obj` and `any`, `init`, tasks and channels; `langc run` runs programs in the interpreter (IR9 to IR20 in `docs/design/ir.md`)
+- [ ] Still not lowered: `meta`, `soa`, `async`, `box<T>` values (needs checker support first)
 
 **Milestone:** programs are type-checked and lowered to IR, and the checker rejects the unsafe examples.
 
