@@ -1,4 +1,4 @@
-# The checker: names, types and value semantics (draft 1)
+# The checker: names, types and value semantics (draft 3)
 
 How the front end after the parser is built, in stages that each end with something testable.
 
@@ -11,7 +11,7 @@ cargo run -- check <file or directory>     # parse + resolve names; later: + typ
 | Stage | What it adds | State |
 |---|---|---|
 | 1. Names | modules, imports, scopes: what every name refers to | **done** (`compiler/src/resolve/`, `package.rs`) |
-| 2. Types | a type for every expression, local inference, method lookup, operators | next |
+| 2. Types | a type for every expression, local inference, method lookup, operators | **done** (`compiler/src/types.rs`, `typeck/`) |
 | 3. Generics and interfaces | bounds, `impl` lookup, `any`, the orphan rule | after 2 |
 | 4. Patterns | typing of patterns, exhaustiveness of `switch`, list-pattern lengths | after 2 |
 | 5. Value semantics | `let` / `inout` / `sink` exclusivity, moves, `copy`, second-class references, `const` depth, `become` | after 3 and 4 |
@@ -44,53 +44,61 @@ definition, and diagnostics.
 
 Tests: about 30 resolution tests, random damaged input, and `langc check` on a directory.
 
-## Stage 2: types (next)
+## Stage 2: types (done)
 
-Design in outline, so you can object early:
+`cargo run -- check file-or-directory` now parses, resolves names and checks types. About 40 tests plus three real programs in
+`examples/programs/` (`shapes`, `words`, `stack`) that must check cleanly.
 
-- **Types are interned small ids**; equal types have equal ids, so comparing is a number compare. Type variables for
-  inference live in a union-find table.
-- **Signatures first, bodies second.** First every function, field, variant and `impl` gets its signature (needs no
-  bodies). Then bodies are checked, one function at a time; that is also the unit of parallelism later.
-- **Local inference only.** Function parameters and return types are always written, so inference never crosses a function
-  boundary. Inside a body, `const x = 5` infers; closure parameters are inferred from where the closure is passed.
-- **Bidirectional checking**: expressions are checked against an expected type when there is one (so `[]`, `{:}`, `none`,
-  `.circle(...)`, integer literals and closures get their meaning from context) and synthesise one otherwise.
-- **Operators** go through interfaces (`add`, `eq`, `order`, ...) with built-in implementations for numbers, so user types
-  can have them and generic code can ask for them.
-- **Method lookup**: fields and inherent methods of the type, then methods from interfaces it implements, then `obj`
-  base types. More than one candidate is an error; write the interface name to choose.
-- **Output**: a table from each expression to its type (keyed by file and position until tree nodes have ids), plus
-  resolved method and field targets.
+What it does:
 
-## Questions the checker needs answered (TC1 to TC8)
+- **Types** are interned ids (`Ty`) with inference variables solved by unification and undone with a trail
+  (`types.rs`). Number literals are special variables: any integer type (default `int`) or any float type (default `float`),
+  and a literal that does not fit its final type is an error (`300` as a `uint8`).
+- **Signatures first, bodies second.** Parameters, fields, enum cases and `impl`s are typed without looking at any body.
+- **Bidirectional checking.** The expected type flows into `[]`, `none`, `.circle(...)`, number literals, closures and
+  `ok(...)` / `err(...)`. Anything still open at the end of a function ("cannot work out the type here") is an error.
+- **Expressions:** operators, comparisons, `??`, `?.`, `?`, conversions (`to`, `to?`), ranges, indexing, tuples, lists, sets, maps,
+  builders, struct literals (defaults, spreads, shorthand, privacy), calls (positional, named, variadic, defaults, generics),
+  closures (`it`, captures, return types), `if` / `switch` / ternary joins, `loop` values, labeled breaks.
+- **Methods:** fields and methods of a type and of its `obj` bases, then `impl` blocks. Receiver marks are checked: `!` exactly
+  when the method takes `inout self`, `!!` when it takes `sink self`.
+- **Patterns:** bindings get types; enum cases (`.circle`, `type.case`, `ok`, `err`, `some`), tuples, lists with `...`, ranges,
+  struct patterns (a left-out field needs `..`), `x is dog`.
+- **Generics:** type parameters on functions, structs and enums, with inference at calls and `f<int>(...)`. Bounds are not checked yet.
+- **The library** is written in the language: `compiler/core/core.lang` is the package `core`, loaded by `Program::with_core()`. Its
+  `pub` names are in scope everywhere. Functions that the backend provides are `ext fn` without a body, for example
+  `impl<T> list<T> { ext fn push(inout self, sink item: T) }`.
+- **`Unknown`** is a quiet type for things not modelled yet (the `scope` handle, `chan`, ...). It unifies with everything so one gap
+  does not flood the output.
 
-**TC1. Numeric literals.** `5` is an `int` unless the context asks for another integer type (`const b: uint8 = 5` is fine, and
-`300` there is a compile error); `2.5` is a `float` unless the context says `float32`. Is `float` the same as `float64`
-(as `int` is always 64 bits)? I suggest yes.
+Not yet (later stages): interface bounds and `impl` completeness, operators for user types, `==` requirements, exhaustiveness of
+`switch`, and everything about `inout` exclusivity, moves and `const` depth.
 
-**TC2. Implicit conversions.** Only two: a value to `option` of its type (`int` to `int?`, decided earlier) and an `obj`
-to its base `obj` or to an interface it implements (`dog` to `animal`). Everything else needs `to` (no silent widening
-from `int32` to `int`, no `int` to `float`). Fine?
+### Choices made while building it (TC9 to TC13)
 
-**TC3. Same-scope redeclaration.** `const a = 1` then `const a = 2` in one block is an error today (shadowing in an
-inner block is allowed). Rust allows both; TypeScript allows neither. Keep the error?
+- **TC9. `sink` at a call site.** A variable passed to a `sink` parameter is written `sink x` (it moves). A temporary needs no mark
+  (`xs.push!(2)`). `inout x` must be a variable, never a temporary.
+- **TC10. `void ! E` ends with success.** A function returning `void ! E` (and every `init`) may fall off the end, which means `ok`.
+  `return err(...)` still exits early. This also makes `fn main() -> void ! error { ... }` natural.
+- **TC11. `to`.** Allowed when nothing can be lost: wider integers of the same signedness, unsigned to a wider signed, any integer or
+  `float32` to `float`, `char` to a 32-bit or wider integer, `bool` to an integer, anything to `string`, `string` and `str`, an
+  `obj` to its base. Float to integer and narrowing do not use `to`.
+- **TC12. Methods on number literals.** `1.max(2)` and `xs.first()?.abs()` settle the literal to `int` (or `float`) at the call.
+- **TC13. Rules for text.** `"literal"` is a `string`; it converts to a `str` view where one is wanted; `+` joins text; text cannot be
+  indexed by position, only sliced by range.
 
-**TC4. Closure types.** A closure that captures variables cannot be a plain function pointer. I suggest `fn(int) -> int`
-is a *view* type, like a slice: it can be passed down (to `map`, `each`, `spawn` with `sink`), but not stored in a
-struct or returned, unless it is boxed: `box<fn(int) -> int>`. That fits second-class references and needs no hidden
-allocation. Alternative: every `fn` type is a pointer plus an environment pointer and closures may be stored freely
-(costs an allocation when it captures). Which?
+## Decisions from draft 1 (TC1 to TC8)
 
-**TC5. Empty literals.** `[]`, `{:}`, `set {}` and `none` need a type from context or an annotation; `const xs = []` alone
-is an error ("what is this a list of?"). Fine?
-
-**TC6. Division and overflow.** Integer `/` truncates toward zero, `%` has the sign of the left side (like C, Rust, Java), and
-dividing by zero stops the program like overflow does. Shifts by the width or more also stop. OK?
-
-**TC7. Equality.** `==` on floats follows IEEE (so `nan != nan`); `==` on lists, strings, tuples and plain structs compares
-contents; `==` on `obj`s needs the type to provide `eq`. Fine?
-
-**TC8. Order of the work.** Stage 2 (types) in full before stage 3 and 4, with generics and interfaces limited at first to
-the built-in ones (`option`, `result`, lists, maps)? That gets small real programs checked soonest. Or generics in the
-same pass as stage 2?
+- **TC1** `5` is an `int` unless the context asks for another integer type (`const b: uint8 = 5` is fine, `300` there is a
+  compile error). `2.5` is a `float` unless the context says `float32`. `float` is `float64`, as `int` is `int64`.
+- **TC2** Only two implicit conversions: a value to `option` of its type (`int` to `int?`), and an `obj` to its base `obj` or to
+  an interface it implements. Everything else needs `to`: no silent widening and no `int` to `float`.
+- **TC3** Declaring a name twice in one scope is an error; shadowing in an inner block is allowed.
+- **TC4** `fn(int) -> int` is a view type, like a slice: it can be passed down but not stored in a struct or returned, unless it is
+  boxed (`box<fn(int) -> int>`). No hidden allocation.
+- **TC5** Empty literals (`[]`, `{:}`, `set {}`, `none`) get their type from context or an annotation; otherwise it is an error.
+- **TC6** Integer `/` truncates toward zero, `%` takes the sign of the left side, dividing by zero stops the program, and shifting
+  by the width or more stops it too.
+- **TC7** `==` on floats follows IEEE (`nan != nan`); on lists, strings, tuples and plain structs it compares contents; on `obj`s
+  the type must provide `eq`.
+- **TC8** Stage 2 (types) comes first in full, with generics and interfaces covered next in stage 3.

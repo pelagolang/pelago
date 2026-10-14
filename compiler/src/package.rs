@@ -61,6 +61,19 @@ impl Program {
         Program::default()
     }
 
+    /// Adds the always-available library as the package `core`; its `pub` names are in scope
+    /// in every module.
+    pub fn add_core(&mut self) -> PackageId {
+        self.add_package("core", &[("core", include_str!("../core/core.lang"))])
+    }
+
+    /// A program that already contains the core library.
+    pub fn with_core() -> Program {
+        let mut p = Program::new();
+        p.add_core();
+        p
+    }
+
     pub fn module(&self, id: ModuleId) -> &Module {
         &self.modules[id.0 as usize]
     }

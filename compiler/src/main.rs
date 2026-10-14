@@ -98,13 +98,14 @@ fn print_punct() {
 }
 
 fn check_path(path: &str) {
-    let mut program = langc::package::Program::new();
+    let mut program = langc::package::Program::with_core();
     if let Err(e) = program.add_package_from_path(std::path::Path::new(path)) {
         eprintln!("{e}");
         std::process::exit(2);
     }
     let resolved = langc::resolve::resolve(&program);
-    let mut diags = resolved.diagnostics.clone();
+    let typed = langc::typeck::check(&program, &resolved);
+    let mut diags = typed.diagnostics.clone();
     diags.sort_by_key(|d| (d.module, d.span.start));
     diags.dedup();
     for d in &diags {

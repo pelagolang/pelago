@@ -121,7 +121,14 @@ pub struct Resolved {
     /// Each declaration of a name, keyed the same way.
     pub decls: HashMap<(ModuleId, u32), DefId>,
     pub diagnostics: Vec<Diagnostic>,
+    /// The definition made for each function, type, module or constant item, keyed by the file
+    /// and the start of the item.
+    pub item_defs: HashMap<(ModuleId, u32), DefId>,
+    /// The implicit `it` of each closure without parameters, keyed by the closure's start.
+    pub closure_it: HashMap<(ModuleId, u32), DefId>,
     members: HashMap<(DefId, String), DefId>,
+    scope_parent: Vec<Option<usize>>,
+    scope_package: Vec<PackageId>,
 }
 
 impl Resolved {
@@ -131,6 +138,24 @@ impl Resolved {
 
     pub fn use_at(&self, file: ModuleId, start: u32) -> Option<DefId> {
         self.uses.get(&(file, start)).copied()
+    }
+
+    /// Is something declared with `vis` in scope `owner` visible from scope `from`?
+    pub fn visible(&self, vis: Vis, owner: usize, from: usize) -> bool {
+        match vis {
+            Vis::Pub | Vis::Export => true,
+            Vis::PubPkg => self.scope_package[owner] == self.scope_package[from],
+            Vis::Priv | Vis::Default => {
+                let mut cur = Some(from);
+                while let Some(i) = cur {
+                    if i == owner {
+                        return true;
+                    }
+                    cur = self.scope_parent[i];
+                }
+                false
+            }
+        }
     }
 
     /// A field, method or enum case of a type, by name.
@@ -199,6 +224,7 @@ pub(crate) struct Resolver<'p> {
     prelude: HashMap<String, DefId>,
     members: HashMap<(DefId, String), DefId>,
     item_defs: HashMap<(ModuleId, u32), DefId>,
+    closure_it: HashMap<(ModuleId, u32), DefId>,
     uses: HashMap<(ModuleId, u32), DefId>,
     decls: HashMap<(ModuleId, u32), DefId>,
     diags: Vec<Diagnostic>,
@@ -211,18 +237,21 @@ pub(crate) struct Resolver<'p> {
     self_param: Vec<Option<DefId>>,
     /// Inside a `meta if`: duplicate names between branches are allowed for now.
     in_meta: u32,
+    /// Walking a pattern whose names already have definitions (module-level `const`).
+    keep_defs: bool,
 }
 
 /// Resolves every module of the program.
 pub fn resolve(program: &Program) -> Resolved {
     let mut r = Resolver::new(program);
     r.collect_all();
+    r.fill_prelude_from_core();
     r.resolve_imports();
     r.resolve_all_bodies();
     r.finish()
 }
 
-fn edit_distance(a: &str, b: &str) -> usize {
+pub(crate) fn edit_distance(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     let mut prev: Vec<usize> = (0..=b.len()).collect();
@@ -247,6 +276,7 @@ impl<'p> Resolver<'p> {
             prelude: HashMap::new(),
             members: HashMap::new(),
             item_defs: HashMap::new(),
+            closure_it: HashMap::new(),
             uses: HashMap::new(),
             decls: HashMap::new(),
             diags: Vec::new(),
@@ -257,6 +287,7 @@ impl<'p> Resolver<'p> {
             self_ty: Vec::new(),
             self_param: Vec::new(),
             in_meta: 0,
+            keep_defs: false,
         };
         r.build_prelude();
         r
@@ -270,7 +301,11 @@ impl<'p> Resolver<'p> {
             uses: self.uses,
             decls: self.decls,
             diagnostics,
+            item_defs: self.item_defs,
+            closure_it: self.closure_it,
             members: self.members,
+            scope_parent: self.scopes.iter().map(|s| s.parent).collect(),
+            scope_package: self.scopes.iter().map(|s| s.package).collect(),
         }
     }
 
@@ -307,13 +342,33 @@ impl<'p> Resolver<'p> {
             let id = r.new_def(kind, name, None, Span::new(0, 0), Vis::Pub, None);
             r.prelude.insert(name.to_string(), id);
         };
-        for t in PRELUDE_TYPES.iter().chain(["list"].iter()) {
+        for t in PRELUDE_TYPES.iter().chain(["list", "iter"].iter()) {
             add(self, t, DefKind::BuiltinType);
         }
         for f in PRELUDE_FUNCTIONS.iter().chain(["ok", "err"].iter()) {
             add(self, f, DefKind::BuiltinFn);
         }
         add(self, "some", DefKind::BuiltinCase);
+    }
+
+    /// The `pub` names of the `core` package become part of the prelude.
+    fn fill_prelude_from_core(&mut self) {
+        let Some(core) = self.program.find_package("core") else {
+            return;
+        };
+        let root = self.package_roots[core.0 as usize];
+        let Some(&m) = self.scopes[root].children.get("core") else {
+            return;
+        };
+        let names: Vec<(String, DefId)> = self.scopes[m]
+            .names
+            .iter()
+            .filter(|(_, e)| e.origin == Origin::Local && matches!(e.vis, Vis::Pub | Vis::Export))
+            .map(|(n, e)| (n.clone(), e.def))
+            .collect();
+        for (n, d) in names {
+            self.prelude.insert(n, d);
+        }
     }
 
     fn error(&mut self, span: Span, message: impl Into<String>) {
@@ -573,6 +628,26 @@ impl<'p> Resolver<'p> {
                 };
                 let def = simple(self, kind, &d.name);
                 self.define_members(scope, def, &d.members);
+            }
+            ItemKind::Impl(im) => {
+                // Methods of an `impl` belong to no type definition; the checker finds them
+                // through the impl.
+                for m in &im.members {
+                    if let Member::Item(i) = m {
+                        if let ItemKind::Fn(f) = &i.kind {
+                            let name = self.text(file, &f.name).to_string();
+                            let d = self.new_def(
+                                DefKind::Fn,
+                                &name,
+                                Some(scope),
+                                f.name.span,
+                                i.mods.vis,
+                                None,
+                            );
+                            self.item_defs.insert((file, i.span.start), d);
+                        }
+                    }
+                }
             }
             ItemKind::Enum(e) => {
                 let def = simple(self, DefKind::Enum, &e.name);
@@ -839,7 +914,7 @@ impl<'p> Resolver<'p> {
     }
 
     /// Is a member declared with `vis` in scope `owner` visible from scope `from`?
-    fn visible(&self, vis: Vis, owner: usize, from: usize) -> bool {
+    pub(crate) fn visible(&self, vis: Vis, owner: usize, from: usize) -> bool {
         match vis {
             Vis::Pub | Vis::Export => true,
             Vis::PubPkg => self.scopes[owner].package == self.scopes[from].package,

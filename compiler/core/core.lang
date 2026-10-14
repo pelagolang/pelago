@@ -1,0 +1,166 @@
+/// The always-available library. Names declared `pub` here are in scope in every module.
+///
+/// Functions declared `ext` have no body here: the backend provides them. The signatures are what
+/// the checker needs.
+
+/// Anything that can be printed and put into a `#( )` string.
+pub interface show {}
+
+/// A failed text-to-number conversion.
+pub struct parse_error {
+    pub message: string
+}
+
+pub ext fn print(...values: any show)
+pub ext fn assert(condition: bool)
+pub ext fn panic(message: string) -> never
+pub ext fn todo() -> never
+pub ext fn unreachable() -> never
+
+impl<T> list<T> {
+    ext fn len(self) -> int
+    ext fn is_empty(self) -> bool
+    ext fn get(self, index: int) -> T?
+    ext fn first(self) -> T?
+    ext fn last(self) -> T?
+    ext fn contains(self, item: T) -> bool
+    ext fn push(inout self, sink item: T)
+    ext fn pop(inout self) -> T?
+    ext fn insert(inout self, index: int, sink item: T)
+    ext fn remove(inout self, index: int) -> T
+    ext fn clear(inout self)
+    ext fn reverse(inout self)
+    ext fn sort(inout self)
+    ext fn swap(inout self, a: int, b: int)
+    ext fn extend(inout self, other: list<T>)
+    ext fn sorted(self) -> list<T>
+    ext fn reversed(self) -> list<T>
+    ext fn iter(self) -> iter<T>
+    ext fn map<U>(self, f: fn(T) -> U) -> iter<U>
+    ext fn filter(self, f: fn(T) -> bool) -> iter<T>
+    ext fn each(self, f: fn(T))
+    ext fn to_list(self) -> list<T>
+}
+
+impl list<string> {
+    ext fn join(self, separator: str) -> string
+}
+
+impl<T> iter<T> {
+    ext fn map<U>(self, f: fn(T) -> U) -> iter<U>
+    ext fn filter(self, f: fn(T) -> bool) -> iter<T>
+    ext fn each(self, f: fn(T))
+    ext fn count(self) -> int
+    ext fn first(self) -> T?
+    ext fn to_list(self) -> list<T>
+    ext fn to_set(self) -> set<T>
+}
+
+impl iter<int> {
+    ext fn sum(self) -> int
+}
+
+impl iter<float> {
+    ext fn sum(self) -> float
+}
+
+impl<K, V> map<K, V> {
+    ext fn len(self) -> int
+    ext fn is_empty(self) -> bool
+    ext fn get(self, key: K) -> V?
+    ext fn contains_key(self, key: K) -> bool
+    ext fn insert(inout self, sink key: K, sink value: V) -> V?
+    ext fn remove(inout self, key: K) -> V?
+    ext fn clear(inout self)
+    ext fn keys(self) -> iter<K>
+    ext fn values(self) -> iter<V>
+}
+
+impl<T> set<T> {
+    ext fn len(self) -> int
+    ext fn is_empty(self) -> bool
+    ext fn contains(self, item: T) -> bool
+    ext fn insert(inout self, sink item: T) -> bool
+    ext fn remove(inout self, item: T) -> bool
+    ext fn clear(inout self)
+    ext fn iter(self) -> iter<T>
+}
+
+impl str {
+    ext fn len(self) -> int
+    ext fn is_empty(self) -> bool
+    ext fn chars(self) -> iter<char>
+    ext fn split(self, separator: str) -> iter<str>
+    ext fn trim(self) -> str
+    ext fn starts_with(self, prefix: str) -> bool
+    ext fn ends_with(self, suffix: str) -> bool
+    ext fn contains(self, part: str) -> bool
+    ext fn to_upper(self) -> string
+    ext fn to_lower(self) -> string
+    ext fn replace(self, from: str, to: str) -> string
+    ext fn parse_int(self) -> int ! parse_error
+    ext fn parse_float(self) -> float ! parse_error
+}
+
+impl string {
+    ext fn push_str(inout self, text: str)
+    ext fn clear(inout self)
+}
+
+impl<T> option<T> {
+    ext fn is_some(self) -> bool
+    ext fn is_none(self) -> bool
+    ext fn unwrap_or(self, fallback: T) -> T
+    ext fn map<U>(self, f: fn(T) -> U) -> U?
+    ext fn or_err<E>(self, e: E) -> T ! E
+}
+
+impl<T, E> result<T, E> {
+    ext fn ok(self) -> T?
+    ext fn is_ok(self) -> bool
+    ext fn is_err(self) -> bool
+    ext fn or(self, fallback: T) -> T
+    ext fn map_err<F>(self, f: fn(E) -> F) -> T ! F
+    ext fn context(self, message: str) -> T ! error
+}
+
+impl<T> range<T> {
+    ext fn iter(self) -> iter<T>
+    ext fn contains(self, item: T) -> bool
+}
+
+impl int {
+    ext fn abs(self) -> int
+    ext fn min(self, other: int) -> int
+    ext fn max(self, other: int) -> int
+    ext fn pow(self, exponent: int) -> int
+    ext fn checked_add(self, other: int) -> int?
+    ext fn checked_sub(self, other: int) -> int?
+    ext fn checked_mul(self, other: int) -> int?
+    ext fn wrapping_add(self, other: int) -> int
+    ext fn wrapping_sub(self, other: int) -> int
+    ext fn wrapping_mul(self, other: int) -> int
+    ext fn saturating_add(self, other: int) -> int
+    ext fn saturating_sub(self, other: int) -> int
+}
+
+impl float {
+    ext fn abs(self) -> float
+    ext fn sqrt(self) -> float
+    ext fn floor(self) -> float
+    ext fn ceil(self) -> float
+    ext fn round(self) -> float
+    ext fn min(self, other: float) -> float
+    ext fn max(self, other: float) -> float
+    ext fn pow(self, exponent: float) -> float
+}
+
+impl char {
+    ext fn is_digit(self) -> bool
+    ext fn is_alpha(self) -> bool
+    ext fn is_upper(self) -> bool
+    ext fn is_lower(self) -> bool
+    ext fn is_space(self) -> bool
+    ext fn to_upper(self) -> char
+    ext fn to_lower(self) -> char
+}

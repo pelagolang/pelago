@@ -43,7 +43,7 @@ pub struct File {
 }
 
 /// How a name is bound: the three access modes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Mode {
     Let,
     Inout,

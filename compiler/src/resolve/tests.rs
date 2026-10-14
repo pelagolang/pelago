@@ -577,3 +577,21 @@ fn resolving_never_panics_on_damaged_input() {
         let _ = resolve(&program);
     }
 }
+
+#[test]
+fn the_core_library_parses_and_resolves() {
+    let program = Program::with_core();
+    let r = resolve(&program);
+    assert!(r.diagnostics.is_empty(), "{:?}", messages(&r));
+}
+
+#[test]
+fn core_names_are_in_every_module() {
+    let mut program = Program::with_core();
+    program.add_package(
+        "app",
+        &[("main", "fn f() { print(1) }\nfn g(e: parse_error) {}")],
+    );
+    let r = resolve(&program);
+    assert!(r.diagnostics.is_empty(), "{:?}", messages(&r));
+}

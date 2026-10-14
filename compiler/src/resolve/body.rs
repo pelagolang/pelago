@@ -48,7 +48,9 @@ impl<'p> Resolver<'p> {
             names: HashMap::new(),
             barrier: false,
         });
+        self.keep_defs = true;
         self.bind_pattern(p, DefKind::Local, false);
+        self.keep_defs = false;
         self.frames.pop();
     }
 
@@ -67,6 +69,11 @@ impl<'p> Resolver<'p> {
 
     /// Defines a local name in the innermost frame.
     fn define_local(&mut self, id: &Ident, kind: DefKind, allow_dup: bool) -> DefId {
+        if self.keep_defs {
+            if let Some(&d) = self.decls.get(&(self.cur_file, id.span.start)) {
+                return d;
+            }
+        }
         let name = self.text(self.cur_file, id).to_string();
         if let Some(frame) = self.frames.last() {
             if let Some(&existing) = frame.names.get(&name) {
@@ -274,6 +281,10 @@ impl<'p> Resolver<'p> {
         // Parameters and the body: a barrier, so a nested fn cannot reach these.
         self.push_frame(true);
         let mut self_def = None;
+        if f.kind != FnKind::Fn {
+            // `init` and `deinit` work on the value being made or dropped, called `self`.
+            self_def = Some(self.define_named("self", f.name.span, DefKind::Param));
+        }
         for p in &f.params {
             if p.is_self {
                 let d = self.define_named("self", p.name.span, DefKind::Param);
@@ -987,7 +998,12 @@ impl<'p> Resolver<'p> {
                     self.bind_pattern(&p.pattern, DefKind::Param, false);
                 }
                 if c.params.is_empty() {
-                    self.define_named("it", Span::new(e.span.start, e.span.start), DefKind::Param);
+                    let it = self.define_named(
+                        "it",
+                        Span::new(e.span.start, e.span.start),
+                        DefKind::Param,
+                    );
+                    self.closure_it.insert((self.cur_file, e.span.start), it);
                 }
                 if let Some(r) = &c.ret {
                     self.resolve_type(r);

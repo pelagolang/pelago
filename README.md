@@ -10,7 +10,7 @@ A self-hosting systems language, name to be decided. Compiled natively with its 
 - [NAMES.md](NAMES.md): name brainstorm
 
 Status: **Phase 0 (design on paper) with the first Phase 1 code started.**
-`compiler/` holds the stage 0 compiler in Rust: so far the keyword table, tokens, spans, the lexer, the syntax tree, the parser, and name resolution.
+`compiler/` holds the stage 0 compiler in Rust: so far the keyword table, tokens, spans, the lexer, the syntax tree, the parser, name resolution and the type checker (`langc check`).
 `examples/` holds sample source files.
 
 ```

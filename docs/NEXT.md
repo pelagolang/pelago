@@ -14,7 +14,7 @@
    **Imports and modules** are decided (`docs/design/modules.md`) and implemented.
 2. **Collections** (including builders) and **list patterns** are decided (`collections.md`, `list-patterns.md`). Revisit `sink` list patterns once the checker exists.
 3. **Errors** are decided (`docs/design/errors.md`). **Concurrency** is decided (`docs/design/concurrency.md`, CC1 to CC9).
-4. **Name resolution is done** (`docs/design/checker.md`, stage 1). **Next: stage 2, types.** It waits for the answers TC1 to TC8 in that page.
+4. **Name resolution is done** (`docs/design/checker.md`, stage 1). **Stage 2, types, is done** (`langc check`). **Next: stage 3, generics and interfaces** (bounds, `impl` lookup for operators and `==`, `any`, the orphan rule), then stage 4 (exhaustiveness).
 
 ## Open questions for the owner
 

@@ -80,3 +80,34 @@ fn examples_match_their_golden_trees() {
         );
     }
 }
+
+/// Real programs in `examples/programs/` must type check cleanly.
+#[test]
+fn programs_check_cleanly() {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../examples/programs");
+    let mut count = 0;
+    for entry in std::fs::read_dir(dir).expect("examples/programs") {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("lang") {
+            continue;
+        }
+        let src = std::fs::read_to_string(&path).unwrap();
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap()
+            .to_string();
+        let mut program = langc::package::Program::with_core();
+        program.add_package("app", &[(name.as_str(), src.as_str())]);
+        let resolved = langc::resolve::resolve(&program);
+        let typed = langc::typeck::check(&program, &resolved);
+        let messages: Vec<String> = typed
+            .diagnostics
+            .iter()
+            .map(|d| format!("{}: {}", name, d.message))
+            .collect();
+        assert!(messages.is_empty(), "{path:?}: {messages:?}");
+        count += 1;
+    }
+    assert!(count >= 3, "expected the sample programs");
+}
