@@ -38,20 +38,21 @@ fn main() {
                 std::process::exit(2);
             }
         },
-        Some("ir") => match args.next() {
-            Some(path) => ir_path(&path),
-            None => {
-                eprintln!("usage: pelago ir <file or directory>");
-                std::process::exit(2);
+        Some(cmd @ ("ir" | "run")) => {
+            let rest: Vec<String> = args.collect();
+            let flags: Vec<&str> = rest
+                .iter()
+                .filter(|a| a.starts_with("--"))
+                .map(|a| a.as_str())
+                .collect();
+            match rest.iter().find(|a| !a.starts_with("--")) {
+                Some(path) => ir_or_run(path, cmd == "run", &flags),
+                None => {
+                    eprintln!("usage: pelago {cmd} [--opt] [--stats] <file or directory>");
+                    std::process::exit(2);
+                }
             }
-        },
-        Some("run") => match args.next() {
-            Some(path) => run_path(&path),
-            None => {
-                eprintln!("usage: pelago run <file or directory>");
-                std::process::exit(2);
-            }
-        },
+        }
         Some("parse-bench") => match args.next() {
             Some(path) => parse_bench(&path),
             None => {
@@ -152,15 +153,7 @@ fn check_path(path: &str) {
 }
 
 /// Checks the program, lowers it to the IR, verifies it and prints it.
-fn ir_path(path: &str) {
-    ir_or_run(path, false)
-}
-
-fn run_path(path: &str) {
-    ir_or_run(path, true)
-}
-
-fn ir_or_run(path: &str, run: bool) {
+fn ir_or_run(path: &str, run: bool, flags: &[&str]) {
     let mut program = pelago::package::Program::with_core();
     if let Err(e) = program.add_package_from_path(std::path::Path::new(path)) {
         eprintln!("{e}");
@@ -192,12 +185,25 @@ fn ir_or_run(path: &str, run: bool) {
         eprintln!("ir error: {e}");
         failed = true;
     }
+    let mut module = lowered.module;
+    let before = pelago::ir::opt::stats_of(&module);
+    if flags.contains(&"--opt") {
+        pelago::ir::opt::optimize(&mut module, pelago::ir::opt::Options::default());
+    }
+    if flags.contains(&"--stats") {
+        let after = pelago::ir::opt::stats_of(&module);
+        eprintln!("before: {before:?}");
+        eprintln!("after:  {after:?}");
+    }
     if run {
         if failed {
             std::process::exit(1);
         }
-        let out = pelago::ir::run_full(&lowered.module, "main", &[]);
+        let out = pelago::ir::run_full(&module, "main", &[]);
         print!("{}", out.output);
+        if flags.contains(&"--stats") {
+            eprintln!("steps: {}", out.steps);
+        }
         if let Err(e) = out.result {
             eprintln!("stopped: {e}");
             std::process::exit(1);
@@ -207,7 +213,7 @@ fn ir_or_run(path: &str, run: bool) {
         }
         return;
     }
-    print!("{}", pelago::ir::print_module(&lowered.module));
+    print!("{}", pelago::ir::print_module(&module));
     if failed {
         std::process::exit(1);
     }

@@ -330,9 +330,19 @@ fn run_main(src: &str) -> Outcome {
 }
 
 fn output_of(src: &str) -> String {
-    let o = run_main(src);
+    let l = lowered(src);
+    let o = run_full(&l.module, "main", &[]);
     assert_eq!(o.result.clone().map(|_| ()), Ok(()), "{src}");
     assert_eq!(o.leaked, 0, "leaked memory in {src}");
+    // Differential test: the optimised program must do exactly the same.
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let v = verify_module(&m);
+    assert!(v.is_empty(), "the optimised IR does not verify: {v:?} in {src}");
+    let p = run_full(&m, "main", &[]);
+    assert_eq!(p.result, o.result, "result changed by the optimiser in {src}");
+    assert_eq!(p.output, o.output, "output changed by the optimiser in {src}");
+    assert_eq!(p.leaked, 0, "the optimiser caused a leak in {src}");
     o.output
 }
 

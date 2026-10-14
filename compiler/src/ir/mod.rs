@@ -8,6 +8,7 @@
 //! structs and enums.
 
 mod interp;
+pub mod opt;
 mod print;
 #[cfg(test)]
 mod tests;

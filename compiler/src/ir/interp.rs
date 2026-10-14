@@ -92,6 +92,8 @@ pub struct Outcome {
     pub result: Result<Val, String>,
     pub output: String,
     pub leaked: usize,
+    /// Instructions executed: the metric for the optimiser.
+    pub steps: u64,
 }
 
 /// Runs the function called `name`. `Err` holds the message of a stop.
@@ -105,6 +107,7 @@ pub fn run_full(m: &Module, name: &str, args: &[Val]) -> Outcome {
             result: Err(format!("no function `{name}`")),
             output: String::new(),
             leaked: 0,
+            steps: 0,
         };
     };
     let mut mem = vec![0u8; 16];
@@ -154,6 +157,7 @@ pub fn run_full(m: &Module, name: &str, args: &[Val]) -> Outcome {
         result,
         output: String::from_utf8_lossy(&mc.out).into_owned(),
         leaked,
+        steps: mc.steps,
     }
 }
 
