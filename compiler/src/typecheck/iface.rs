@@ -40,10 +40,13 @@ impl<'p> Checker<'p> {
                 continue;
             }
             if let Some(&d) = self.res.decls.get(&(file, p.name.span.start)) {
-                self.param_bounds
-                    .entry(d)
-                    .or_default()
-                    .extend(p.bounds.iter());
+                for b in &p.bounds {
+                    if self.is_linear_word(file, b) {
+                        self.linear.insert(d);
+                    } else {
+                        self.param_bounds.entry(d).or_default().push(b);
+                    }
+                }
             }
         }
         for w in where_ {
@@ -59,6 +62,15 @@ impl<'p> Checker<'p> {
                         .extend(w.bounds.iter());
                 }
             }
+        }
+    }
+
+    fn is_linear_word(&self, file: ModuleId, t: &Type) -> bool {
+        match &t.kind {
+            TypeKind::Path { path, args } if args.is_empty() && path.segments.len() == 1 => {
+                self.text_in(file, &path.segments[0]) == "linear"
+            }
+            _ => false,
         }
     }
 
@@ -357,6 +369,9 @@ impl<'p> Checker<'p> {
     /// Queues the bounds of type parameters that now stand for `map[g]`.
     pub(crate) fn queue_bounds(&mut self, gens: &[DefId], tys: &[Ty], span: Span) {
         for (g, ty) in gens.iter().zip(tys.iter()) {
+            if !self.linear.contains(g) && !self.is_core_def(*g) {
+                self.pending_nonlinear.push((self.file, span, *ty, *g));
+            }
             for b in self.direct_bounds(*g) {
                 self.pending_bounds.push(PendingBound {
                     file: self.file,
@@ -370,6 +385,21 @@ impl<'p> Checker<'p> {
     }
 
     pub(crate) fn flush_bounds(&mut self) {
+        let nonlinear = std::mem::take(&mut self.pending_nonlinear);
+        for (file, span, ty, param) in nonlinear {
+            if linear_in(&self.tt, &self.linear, ty) {
+                let saved = self.file;
+                self.file = file;
+                let (t, p) = (self.show(ty), self.def(param).name.clone());
+                self.err(
+                    span,
+                    format!(
+                        "`{t}` is `linear`, so it cannot be used for `{p}`; declare `{p}: linear`"
+                    ),
+                );
+                self.file = saved;
+            }
+        }
         let pending = std::mem::take(&mut self.pending_bounds);
         let mut seen: Vec<(ModuleId, u32, DefId)> = Vec::new();
         for p in pending {
@@ -568,6 +598,7 @@ impl<'p> Checker<'p> {
             | TyKind::Box(_)
             | TyKind::Iter(_)
             | TyKind::Any(_) => true,
+            TyKind::Param(g) => self.linear.contains(g),
             TyKind::Array(e, _) | TyKind::Option(e) | TyKind::Range(e) => self.owns(*e, owning),
             TyKind::Tuple(ts) | TyKind::AltTuple(ts, _) => ts.iter().any(|x| self.owns(*x, owning)),
             TyKind::Result(a, b) => self.owns(*a, owning) || self.owns(*b, owning),

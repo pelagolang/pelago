@@ -329,3 +329,67 @@ fn linear_values_are_consumed_exactly_once() {
     );
     flagged(&format!("{tx}fn t() -> int ! error {{ const t = begin()\n const n = \"1\".parse_int()?\n t.commit!!()\n ok(n) }}"), "before `?` can return");
 }
+
+const TXN: &str = "linear struct txn { id: int\n fn commit(sink self) { _ = self } }\nfn begin() -> txn = txn { id: 1 }\n";
+
+#[test]
+fn linear_type_parameters() {
+    // A plain type parameter cannot hold a linear value.
+    flagged(
+        &format!(
+            "{TXN}fn keep<T>(x: T) -> T = x\nfn t() {{ const a = keep(begin())\n a.commit!!() }}"
+        ),
+        "is `linear`, so it cannot be used for `T`",
+    );
+    clean(&format!("{TXN}fn keep<T: linear>(sink x: T) -> T = x\nfn t() {{ const a = keep(sink begin())\n a.commit!!() }}"));
+    clean(&format!(
+        "{TXN}fn keep<T>(x: T) -> T = x\nfn t() {{ const a = keep(1)\n print(a) }}"
+    ));
+    // Inside, a `T: linear` value must be consumed.
+    flagged("fn drop_it<T: linear>(sink x: T) { }", "must be consumed");
+    clean("fn pass<T: linear>(sink x: T) -> T = x");
+    clean(
+        "fn pass<T>(x: T) -> T where T: linear = x"
+            .replace("(x: T)", "(sink x: T)")
+            .as_str(),
+    );
+    // Containers of linear values are linear.
+    flagged(
+        &format!("{TXN}fn t() {{ var xs: [txn] = []\n xs.push!(begin()) }}"),
+        "must be consumed",
+    );
+}
+
+#[test]
+fn linear_values_and_closures() {
+    clean(&format!(
+        "{TXN}fn t() {{ const a = begin()\n const f = [sink a] ~> a.commit!!()\n f() }}"
+    ));
+    flagged(
+        &format!("{TXN}fn t() {{ const a = begin()\n const f = [sink a] ~> print(1)\n f() }}"),
+        "must be consumed before the closure ends",
+    );
+    flagged(
+        &format!("{TXN}fn t() {{ const a = begin()\n const f = ~> a.commit!!()\n f() }}"),
+        "capture it with `[sink a]`",
+    );
+}
+
+#[test]
+fn unreachable_arms_are_warnings() {
+    let mut program = crate::package::Program::with_core();
+    program.add_package(
+        "app",
+        &[(
+            "main",
+            "fn t(n: int) -> int { switch n { case x: 1\n case 5: 2 } }",
+        )],
+    );
+    let res = resolve(&program);
+    let typed = typecheck(&program, &res);
+    assert!(typed
+        .diagnostics
+        .iter()
+        .any(|d| d.warning && d.message.contains("can never match")));
+    assert!(typed.diagnostics.iter().all(|d| d.warning));
+}

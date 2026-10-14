@@ -376,6 +376,7 @@ impl<'p> Resolver<'p> {
             module: self.cur_file,
             span,
             message: message.into(),
+            warning: false,
         });
     }
 
@@ -384,6 +385,7 @@ impl<'p> Resolver<'p> {
             module: file,
             span,
             message: message.into(),
+            warning: false,
         });
     }
 

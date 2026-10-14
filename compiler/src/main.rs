@@ -113,8 +113,11 @@ fn check_path(path: &str) {
         let module = program.module(d.module);
         let index = LineIndex::new(&module.src);
         let (line, col) = index.line_col(&module.src, d.span.start);
-        eprintln!("{}:{line}:{col}: error: {}", module.path, d.message);
+        let kind = if d.warning { "warning" } else { "error" };
+        eprintln!("{}:{line}:{col}: {kind}: {}", module.path, d.message);
     }
+    let warnings = diags.iter().filter(|d| d.warning).count();
+    let diags: Vec<_> = diags.into_iter().filter(|d| !d.warning).collect();
     let modules = program.modules.len();
     println!(
         "{} module{}, {} definitions, {} error{}",
@@ -124,6 +127,9 @@ fn check_path(path: &str) {
         diags.len(),
         if diags.len() == 1 { "" } else { "s" }
     );
+    if warnings > 0 {
+        println!("{warnings} warning{}", if warnings == 1 { "" } else { "s" });
+    }
     if !diags.is_empty() {
         std::process::exit(1);
     }

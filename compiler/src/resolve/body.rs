@@ -249,16 +249,29 @@ impl<'p> Resolver<'p> {
         }
         for p in &g.params {
             for b in &p.bounds {
-                self.resolve_type(b);
+                self.resolve_bound(b);
             }
         }
+    }
+
+    /// A bound is an interface, or the word `linear` (the type parameter may hold a `linear` value).
+    fn resolve_bound(&mut self, b: &'p Type) {
+        if let TypeKind::Path { path, args } = &b.kind {
+            if args.is_empty() && path.segments.len() == 1 {
+                let id = &path.segments[0];
+                if self.text(self.cur_file, id) == "linear" {
+                    return;
+                }
+            }
+        }
+        self.resolve_type(b);
     }
 
     fn resolve_where(&mut self, w: &'p [WherePred]) {
         for p in w {
             self.resolve_type(&p.ty);
             for b in &p.bounds {
-                self.resolve_type(b);
+                self.resolve_bound(b);
             }
         }
     }

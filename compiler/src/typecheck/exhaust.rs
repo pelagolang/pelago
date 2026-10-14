@@ -151,7 +151,7 @@ impl<'p> Checker<'p> {
             }
             for (row, span) in &rows {
                 if !self.useful(&prev, row, &[ty], 0) {
-                    self.err(
+                    self.warn(
                         *span,
                         "this case can never match: the cases above already cover it",
                     );

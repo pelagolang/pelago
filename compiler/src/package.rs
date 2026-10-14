@@ -23,6 +23,8 @@ pub struct Diagnostic {
     pub module: ModuleId,
     pub span: Span,
     pub message: String,
+    /// A warning does not stop compilation.
+    pub warning: bool,
 }
 
 pub struct Module {
@@ -168,6 +170,7 @@ impl Program {
                 module: id,
                 span: e.span,
                 message: e.kind.message().to_string(),
+                warning: false,
             });
         }
         for e in out.errors {
@@ -175,6 +178,7 @@ impl Program {
                 module: id,
                 span: e.span,
                 message: e.message,
+                warning: false,
             });
         }
         let m = &mut self.modules[id.0 as usize];

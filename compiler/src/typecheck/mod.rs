@@ -65,6 +65,7 @@ impl Typed {
             | TyKind::Box(_)
             | TyKind::Iter(_)
             | TyKind::Any(_) => true,
+            TyKind::Param(g) => self.linear.contains(g),
             TyKind::Array(e, _) | TyKind::Option(e) | TyKind::Range(e) => self.is_owning(*e),
             TyKind::Tuple(ts) | TyKind::AltTuple(ts, _) => ts.iter().any(|x| self.is_owning(*x)),
             TyKind::Result(a, b) => self.is_owning(*a) || self.is_owning(*b),
@@ -298,6 +299,7 @@ pub(crate) struct Checker<'p> {
     pending_sinks: Vec<(ModuleId, Span, String)>,
     owning_cache: Option<std::collections::HashSet<DefId>>,
     linear: std::collections::HashSet<DefId>,
+    pending_nonlinear: Vec<(ModuleId, Span, Ty, DefId)>,
 }
 
 fn int_text(text: &str) -> Option<u128> {
@@ -353,6 +355,7 @@ impl<'p> Checker<'p> {
             pending_sinks: Vec::new(),
             owning_cache: None,
             linear: std::collections::HashSet::new(),
+            pending_nonlinear: Vec::new(),
         }
     }
 
@@ -394,6 +397,17 @@ impl<'p> Checker<'p> {
             module: self.file,
             span,
             message: message.into(),
+            warning: false,
+        });
+    }
+
+    /// Something worth fixing that does not stop compilation.
+    pub(crate) fn warn(&mut self, span: Span, message: impl Into<String>) {
+        self.diags.push(Diagnostic {
+            module: self.file,
+            span,
+            message: message.into(),
+            warning: true,
         });
     }
 
@@ -1434,6 +1448,7 @@ pub(crate) struct UnitState {
 pub(crate) fn linear_in(tt: &TypeTable, linear: &std::collections::HashSet<DefId>, t: Ty) -> bool {
     let t = tt.shallow(t);
     match tt.kind(t) {
+        TyKind::Param(g) => linear.contains(g),
         TyKind::Adt(d, args) => {
             linear.contains(d) || args.iter().any(|a| linear_in(tt, linear, *a))
         }

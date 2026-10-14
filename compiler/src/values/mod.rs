@@ -195,6 +195,7 @@ impl<'a> Walker<'a> {
             module: self.file,
             span,
             message,
+            warning: false,
         });
     }
 
@@ -661,7 +662,17 @@ impl<'a> Walker<'a> {
             ),
             Bind::View | Bind::ViewInout => {}
             Bind::Var | Bind::Const | Bind::Sink | Bind::Owned => {
-                if !self.declared_outside_closure(d) {
+                let captured_by_sink = self.closures.last().is_some_and(|c| {
+                    c.caps.iter().any(|(cd, m)| *cd == d && *m == Some(Mode::Sink))
+                });
+                if self.declared_outside_closure(d) && self.is_linear_def(d) && !captured_by_sink {
+                    self.report(
+                        span,
+                        "linear",
+                        format!("`{n}` is a `linear` value from outside this closure; capture it with `[sink {n}]` to consume it here"),
+                    );
+                }
+                if !self.declared_outside_closure(d) || captured_by_sink {
                     self.state.moved.insert(d, span);
                     self.state.held.remove(&d);
                 }
@@ -1207,6 +1218,18 @@ impl<'a> Walker<'a> {
             self.bind_pattern(&p.pattern, Bind::View);
         }
         self.expr(&c.body, Ctx::Consume);
+        let owned: Vec<DefId> = self
+            .closures
+            .last()
+            .map(|f| {
+                f.caps
+                    .iter()
+                    .filter(|(_, m)| *m == Some(Mode::Sink))
+                    .map(|(d, _)| *d)
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.report_held(&owned, e.span, "the closure ends");
         self.closures.pop();
         self.state = after_captures;
     }

@@ -160,8 +160,16 @@ Where it lives: `values/` (its own pass after the types, reading `Typed`). It fo
 - **VS10. `linear` types.** A `linear` struct, obj or enum must be consumed exactly once: on every path out of its scope (end of
   block, `return`, `?`, `break`, `continue`) a variable holding one must have been moved (a `sink` call, a `!!` call, `_ = x`,
   destructuring); dropping it by assignment or by ignoring a call's result is an error. It cannot have `deinit`, and a non-linear type
-  cannot hold one. `sink` parameters of a linear type count as variables. Not yet: `T: linear` bounds, so generic code treats `T` as
-  never linear; linear values inside closures.
+  cannot hold one. `sink` parameters of a linear type count as variables.
+- **VS13. `T: linear`.** A type parameter may hold a linear value only if it says so (`<T: linear>` or `where T: linear`); instantiating a
+  plain `T` with a linear type is an error ("`txn` is `linear`, so it cannot be used for `T`; declare `T: linear`"). Inside such a
+  function a `T` value is tracked like any linear value. The library's own generics (`list<T>`, `option<T>`, ...) accept linear
+  values, and a container of linear values is linear. `linear` is not an interface, so the resolver skips it as a bound.
+- **VS14. Linear values and closures.** A closure consumes an outer linear variable only if it captures it with `[sink x]`, and then it
+  must consume it before the closure ends.
+- **VS15. Warnings.** Diagnostics now have a severity. An unreachable `switch` arm is a warning; `langc check` prints it and does not
+  fail on it. Everything else stays an error. (Tests count warnings as unexpected output, so they stay at zero.)
+- **`async`** stays deferred (G5): the words are reserved, and nothing in the checker needs it.
 - **VS11. `defer`.** Code in `defer` cannot `return`, `?`, `break`, `continue` or `become`, and its result cannot be a `result`
   (nowhere to send the error). Names it uses are checked where the `defer` is written; what it moves happens at scope end.
 - **VS12. Plain values need no `sink`.** The `sink` mark at a call is required only for values that own something; `tx.send(i)` with an
@@ -176,7 +184,7 @@ Where it lives: `values/` (its own pass after the types, reading `Typed`). It fo
 - **Overflow.** `+%`, `-%`, `*%` and their assignment forms are for integers (checked in stage 2); plain `+ - *` stop the program on
   overflow at run time.
 - **`defer`** rules are VS11 above.
-- **Unreachable `switch` arms** are errors: "this case can never match: the cases above already cover it" (there are no warnings yet).
+- **Unreachable `switch` arms** are warnings (VS15): "this case can never match: the cases above already cover it".
 
 ## Decisions from draft 1 (TC1 to TC8)
 
