@@ -790,3 +790,17 @@ fn box_inside_an_option_field() {
     let src = "struct pt { x: int }\nstruct holder { next: box<pt>? }\nfn main() { const h = holder { next: box(pt { x: 5 }) }\n if h.next is some(q) { print(q.x) }\n const e = holder { next: none }\n print(e.next.is_none()) }\n";
     assert_eq!(output_of(src), "5\ntrue\n");
 }
+
+// ---- A-08: `inout` closure parameters and the `scope` handle ------------------------------------
+
+#[test]
+fn inout_closure_parameters() {
+    let src = "fn twice(inout x: int, f: fn(inout int)) { f(inout x)\n f(inout x) }\nfn main() { const h = lock(0)\n h.with(inout n ~> { n += 5 })\n print(h.with((inout n) ~> { n += 0\n n }))\n var k = 1\n twice(inout k, inout n ~> { n *= 3 })\n twice(inout k, n ~> { n += 1 })\n print(k) }\n";
+    assert_eq!(output_of(src), "5\n11\n");
+}
+
+#[test]
+fn scope_tasks_finish_with_the_scope() {
+    let src = "fn main() { var a = 0\n var b = 0\n scope s { s.spawn([inout a] ~> { a += 1 })\n s.spawn([inout b] ~> { b += 2 })\n print(\"spawned\") }\n print(a, b) }\n";
+    assert_eq!(output_of(src), "spawned\n1 2\n");
+}

@@ -317,7 +317,19 @@ impl<'p> Checker<'p> {
             ExprKind::MetaIf(i) => self.if_expr(i, exp, false),
             ExprKind::Switch(s) => self.switch_expr(e, s, exp),
             ExprKind::Select(arms) => self.select_expr(arms, exp),
-            ExprKind::Scope { body, .. } => {
+            ExprKind::Scope { name, body } => {
+                // The handle `s` is a library value, so `s.spawn(...)` is an ordinary method call.
+                let handle = (0..self.res.defs.len() as u32).map(DefId).find(|d| {
+                    let def = self.def(*d);
+                    def.kind == DefKind::Struct
+                        && def.name == "scope_handle"
+                        && self.is_core_def(*d)
+                });
+                let decl = self.res.decls.get(&(self.file, name.span.start)).copied();
+                if let (Some(h), Some(d)) = (handle, decl) {
+                    let ht = self.own_adt_ty(h);
+                    self.local_tys.insert(d, ht);
+                }
                 let t = self.check_block(body, Exp::Discard);
                 let _ = t;
                 self.tt.void

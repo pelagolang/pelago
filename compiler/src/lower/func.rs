@@ -56,7 +56,6 @@ pub(crate) enum ScopeItem<'a> {
 
 pub(crate) struct FnState<'a> {
     /// Names of the `scope s { ... }` blocks being lowered.
-    pub scope_names: Vec<DefId>,
     /// A closure written right at a call that only reads its function parameter: it cannot outlive the call, so its environment may live on the stack.
     pub stack_env: Option<(u32, u32)>,
     /// The function being lowered, and the block a tail call to it jumps to (when it can).
@@ -81,7 +80,6 @@ pub(crate) struct FnState<'a> {
 impl<'a> FnState<'a> {
     pub fn empty(void: Ty) -> FnState<'a> {
         FnState {
-            scope_names: Vec::new(),
             stack_env: None,
             cur_def: None,
             tail_head: None,

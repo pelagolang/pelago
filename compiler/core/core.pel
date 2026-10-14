@@ -1559,8 +1559,10 @@ var rt_pending: [int] = []
 
 /// Runs a task block once (the closure at offset 8 moves out and runs). A detached task frees itself.
 fn rt_task_run(s: ptr) {
-    if rt_load_int(s) != 0 { return }
-    rt_store_int(s, 1)
+    const state = rt_load_int(s)
+    // 0: waiting, 3: waiting and detached (the task frees itself when done); anything else already ran.
+    if state != 0 && state != 3 { return }
+    if state == 0 { rt_store_int(s, 1) }
     const g = rt_read<fn()>(rt_offset(s, 8))
     g()
 }
@@ -1627,6 +1629,15 @@ pub fn spawn<T>(sink f: fn() -> T) -> task<T> {
     rt_write<fn()>(rt_offset(s, 8), sink runner)
     rt_pending.push!(rt_addr_int(s))
     task<T> { state: s }
+}
+
+/// The handle of `scope s { ... }`. `s.spawn(task)` starts a task that is finished when the scope ends.
+pub struct scope_handle {
+    id: int
+}
+
+impl scope_handle {
+    fn spawn<T>(self, sink f: fn() -> T) -> task<T> = spawn(sink f)
 }
 
 // A channel block: [queue: list 24 bytes][senders: int][receiver alive: int].

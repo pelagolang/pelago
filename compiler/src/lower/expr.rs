@@ -125,10 +125,28 @@ impl<'a> Lowerer<'a> {
             ExprKind::Become(call) => self.become_expr(e, call),
             ExprKind::Scope { name, body } => {
                 if let Some(d) = self.res.decls.get(&(self.f.file, name.span.start)).copied() {
-                    self.f.scope_names.push(d);
+                    if let Some(ht) = self.typed.local_tys.get(&d).copied() {
+                        let ht = self.conc(ht);
+                        let ptr = self.slot_for(ht);
+                        let zero = self.i64c(0);
+                        self.store_scalar_ty(ptr, zero);
+                        self.f.locals.insert(
+                            d,
+                            Local::Slot {
+                                ptr,
+                                ty: ht,
+                                flag: None,
+                            },
+                        );
+                    }
                 }
                 let void = self.types.void;
-                self.block(body, None, void)
+                let r = self.block(body, None, void);
+                // Every task started in the scope is finished when it ends.
+                if !matches!(r, Res::Never) {
+                    self.call_core("rt_run_pending", Vec::new());
+                }
+                r
             }
             ExprKind::Defer(inner) => {
                 if let Some(s) = self.f.scopes.last_mut() {

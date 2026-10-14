@@ -74,14 +74,6 @@ impl<'a> Lowerer<'a> {
                 if *optional {
                     return self.opt_call(e, base, args, dst);
                 }
-                // `s.spawn(task)` inside `scope s { ... }`: the task runs right here.
-                if let ExprKind::Name(id) = &strip_parens(base).kind {
-                    if let Some(d) = self.res.use_at(self.f.file, id.span.start) {
-                        if self.f.scope_names.contains(&d) && args.len() == 1 {
-                            return self.run_scope_task(e, &args[0].value);
-                        }
-                    }
-                }
                 self.method_call(e, base, name, args, mark, dst)
             }
             _ => self.call_value(e, callee, args, dst),

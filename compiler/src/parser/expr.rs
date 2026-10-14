@@ -574,6 +574,21 @@ impl Parser<'_> {
     }
 
     fn parse_arg(&mut self) -> Arg {
+        // `inout n ~> ...`: the mode belongs to the closure's parameter, not to the argument.
+        if matches!(
+            self.kind(),
+            TokenKind::Keyword(Keyword::Inout | Keyword::Sink)
+        ) && self.peek_sig(1).kind == TokenKind::Ident
+            && self.peek_sig(2).kind == TokenKind::Punct(Punct::TildeArrow)
+        {
+            let value = self.parse_closure_from_params();
+            return Arg {
+                mode: None,
+                label: None,
+                spread: false,
+                value,
+            };
+        }
         let mode = match self.kind() {
             TokenKind::Keyword(Keyword::Inout | Keyword::Sink) => self.parse_mode(),
             _ => None,

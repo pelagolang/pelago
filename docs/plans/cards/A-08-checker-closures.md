@@ -1,6 +1,6 @@
 Id: A-08
 Title: Checker: `inout` closure parameters and the `scope` handle type
-Column: Inbox
+Column: Done
 Order: after A-02
 Depends on: nothing
 Size: S
