@@ -95,7 +95,8 @@ fn merge_blocks(f: &mut Func) -> bool {
                 continue;
             }
             let params = f.blocks[bi].params.clone();
-            let map: HashMap<Value, Value> = params.into_iter().zip(t.args.iter().copied()).collect();
+            let map: HashMap<Value, Value> =
+                params.into_iter().zip(t.args.iter().copied()).collect();
             let insts = std::mem::take(&mut f.blocks[bi].insts);
             let term = f.blocks[bi].term.take();
             f.blocks[bi].params.clear();

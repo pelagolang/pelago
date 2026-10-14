@@ -171,6 +171,8 @@ impl Machine<'_> {
         let frame = self.sp;
         let mut vals: Vec<Val> = vec![Val::Unit; f.values.len()];
         let mut block = 0usize;
+        // A slot is one piece of the frame: executed again (in a loop), it is zeroed, not allocated anew.
+        let mut slot_at: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
         for (p, a) in f.blocks[0].params.iter().zip(args.iter()) {
             vals[p.0 as usize] = *a;
         }
@@ -182,7 +184,28 @@ impl Machine<'_> {
                     return Err("the step limit was reached".to_string());
                 }
                 let inst = &f.insts[id];
-                let v = self.exec(f, &vals, &inst.op)?;
+                let v = match &inst.op {
+                    Op::Slot(size, align) => {
+                        let at = match slot_at.get(&id) {
+                            Some(at) => {
+                                for b in &mut self.mem[*at..*at + *size as usize] {
+                                    *b = 0;
+                                }
+                                *at
+                            }
+                            None => {
+                                let Val::Ptr(at) = self.exec(f, &vals, &inst.op)? else {
+                                    return Err("a slot gave no address".to_string());
+                                };
+                                slot_at.insert(id, at);
+                                at
+                            }
+                        };
+                        let _ = align;
+                        Val::Ptr(at)
+                    }
+                    op => self.exec(f, &vals, op)?,
+                };
                 if let Some(r) = inst.result {
                     vals[r.0 as usize] = v;
                 }

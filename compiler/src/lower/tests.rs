@@ -337,11 +337,21 @@ fn output_of(src: &str) -> String {
     // Differential test: the optimised program must do exactly the same.
     let mut m = l.module.clone();
     crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    crate::ir::opt::prune(&mut m, &["main"]);
     let v = verify_module(&m);
-    assert!(v.is_empty(), "the optimised IR does not verify: {v:?} in {src}");
+    assert!(
+        v.is_empty(),
+        "the optimised IR does not verify: {v:?} in {src}"
+    );
     let p = run_full(&m, "main", &[]);
-    assert_eq!(p.result, o.result, "result changed by the optimiser in {src}");
-    assert_eq!(p.output, o.output, "output changed by the optimiser in {src}");
+    assert_eq!(
+        p.result, o.result,
+        "result changed by the optimiser in {src}"
+    );
+    assert_eq!(
+        p.output, o.output,
+        "output changed by the optimiser in {src}"
+    );
     assert_eq!(p.leaked, 0, "the optimiser caused a leak in {src}");
     o.output
 }
@@ -715,6 +725,16 @@ fn example_programs_run() {
         assert_eq!(o.result.clone().map(|_| ()), Ok(()), "{name}");
         assert_eq!(o.leaked, 0, "{name} leaks");
         assert!(!o.output.is_empty(), "{name} printed nothing");
+        let mut m = l.module.clone();
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        crate::ir::opt::prune(&mut m, &["main"]);
+        let p = crate::ir::run_full(&m, "main", &[]);
+        assert_eq!(
+            p.output, o.output,
+            "{name}: the optimiser changed the output"
+        );
+        assert_eq!(p.leaked, 0, "{name}: the optimiser caused a leak");
+        assert!(p.steps < o.steps, "{name}: no faster");
     }
 }
 

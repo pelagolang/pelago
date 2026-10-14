@@ -11,6 +11,8 @@
 //! without the pipeline and compare the results, so a wrong pass shows up there. In debug and test
 //! builds the verifier runs after every pass.
 
+#![allow(clippy::needless_range_loop)]
+
 mod cfg;
 mod dce;
 mod inline;
@@ -21,6 +23,7 @@ mod stats;
 #[cfg(test)]
 mod tests;
 
+pub use inline::prune;
 pub use stats::{stats_of, Stats};
 
 use super::*;
@@ -112,9 +115,12 @@ impl Op {
                 f(*a);
                 f(*b);
             }
-            Op::Neg(a) | Op::Not(a) | Op::Cast(_, a, _) | Op::Load(_, a) | Op::Alloc(a) | Op::Free(a) => {
-                f(*a)
-            }
+            Op::Neg(a)
+            | Op::Not(a)
+            | Op::Cast(_, a, _)
+            | Op::Load(_, a)
+            | Op::Alloc(a)
+            | Op::Free(a) => f(*a),
             Op::MemCopy(a, b, c) => {
                 f(*a);
                 f(*b);
@@ -141,9 +147,12 @@ impl Op {
                 *a = f(*a);
                 *b = f(*b);
             }
-            Op::Neg(a) | Op::Not(a) | Op::Cast(_, a, _) | Op::Load(_, a) | Op::Alloc(a) | Op::Free(a) => {
-                *a = f(*a)
-            }
+            Op::Neg(a)
+            | Op::Not(a)
+            | Op::Cast(_, a, _)
+            | Op::Load(_, a)
+            | Op::Alloc(a)
+            | Op::Free(a) => *a = f(*a),
             Op::MemCopy(a, b, c) => {
                 *a = f(*a);
                 *b = f(*b);

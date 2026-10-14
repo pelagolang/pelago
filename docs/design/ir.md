@@ -165,6 +165,14 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 - **IR19** `become f(...)` on the function itself with plain number parameters is a jump to the top (no stack growth); any other `become` is a
   call followed by `return`.
 - **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa` and `async` (see the plans in `docs/plans/`).
+- **IR23** **The optimiser** (`compiler/src/ir/opt/`, `pelago run --opt`, `pelago ir --opt --stats`). Per function, repeated until nothing
+  changes: simplify the CFG (fold branches, skip empty blocks, merge blocks), dead code, promote slots to values (Braun et al., block
+  parameters), split slots at constant offsets (SROA), sparse conditional constant propagation. Then inlining (callees first; small
+  functions or single call sites; never recursive ones) and the per-function passes again. Drop flags need no pass of their own: once their
+  slot is a value, constant propagation folds the test. Every lowering test runs the program with and without the pipeline and compares
+  output, result and leaks. Measured on the sample programs (interpreter steps, before to after): shapes 3658 to 2384, stack 780 to 534,
+  tree 7458 to 5462, words 8735 to 5594; slots 31 to 5, 22 to 5, 45 to 16, 96 to 21. `fib` has no slots and no flags. Not yet: whole-slot
+  copies between two slots, redundant check removal, common subexpressions, escape analysis (see card A-04, section 7).
 - **IR22** **The ledger.** A fresh owning value that is an SSA scalar (an `obj`, a `box`: a call result, an object literal or constructor)
   is *entered* in the ledger when it is made: it is owed a drop at the end of the statement that made it. A consumer that takes it
   (binding, a `sink` argument, a field, `return`, a push, a closure capture, a block's or branch's result) *settles* it. Anything still

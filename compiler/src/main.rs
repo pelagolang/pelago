@@ -189,6 +189,7 @@ fn ir_or_run(path: &str, run: bool, flags: &[&str]) {
     let before = pelago::ir::opt::stats_of(&module);
     if flags.contains(&"--opt") {
         pelago::ir::opt::optimize(&mut module, pelago::ir::opt::Options::default());
+        pelago::ir::opt::prune(&mut module, &["main"]);
     }
     if flags.contains(&"--stats") {
         let after = pelago::ir::opt::stats_of(&module);

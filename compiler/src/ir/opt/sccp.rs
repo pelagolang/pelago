@@ -150,7 +150,9 @@ fn apply(f: &mut Func, lat: &[Lat], exec: &[bool]) -> bool {
             continue;
         }
         for ii in f.blocks[bi].insts.clone() {
-            let Some(r) = f.insts[ii].result else { continue };
+            let Some(r) = f.insts[ii].result else {
+                continue;
+            };
             if matches!(f.insts[ii].op, Op::Const(..)) {
                 continue;
             }
