@@ -1,10 +1,22 @@
 Id: A-09
 Title: Native backend: x86-64 machine code and ELF straight from the IR
-Column: Needs decision
+Column: Doing (N1 under way)
 Order: 1 (track A)
 Depends on: nothing open (the IR, the interpreter and the optimiser exist)
 Size: XL, in seven stages (N1 to N7), each testable on its own
 Touches: new `compiler/src/native/`, `main.rs` (`pelago build`), tests, `docs/design/backend.md` (to be written at N1), `ROADMAP.md` Phase 3
+
+# Decisions (the owner answered "yes" to the recommendations)
+
+1. First target **x86-64 Linux, static ELF64**. **Windows (PE) follows right after N3**, tested by a `windows-latest` job in CI (the owner runs Windows 11 without WSL, so a Windows executable matters).
+2. **No linker, no libc** in version 1: our own ELF writer; direct system calls.
+3. **Simple code generator first**, then linear-scan register allocation (N5).
+4. **Our own System V-shaped calling convention.** (On Windows the calls into `kernel32` use Microsoft's convention; ours stays internal.)
+5. **Emitted size-class allocator** now; a library allocator in Phase 4.
+6. **`stopped: msg` on stderr, exit status 1** for a stop, like the interpreter.
+7. **Start now with N1.**
+
+Also decided: the owner wants `main` left alone while coding (work goes on feature branches); the editor work (S-05, S-06) is built and in Review.
 
 # Why
 
@@ -93,7 +105,7 @@ the shelf items that need real machine features (S-01 measured maps, S-02 thread
 - **Effort.** N1 to N4 is the milestone "hello world is a native binary" (ROADMAP Phase 3). N5 is where the speed comes from. Do not start N5 before N3 is green.
 - **Windows owner.** The owner's machine is Windows; native output is Linux ELF until a PE writer exists. WSL covers it in the meantime. Say so in the README when N4 lands.
 
-# Questions for the owner (recommendation first)
+# Questions for the owner (answered, see Decisions)
 
 1. First target x86-64 Linux ELF (recommended), or Windows PE first because that is your machine?
 2. No linker and no libc in version 1, our own ELF writer (recommended), or emit object files for the system linker?

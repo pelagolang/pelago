@@ -21,6 +21,7 @@ A serious, self-hosting systems language:
 | Syntax family | Braces, TS/Rust-like, no significant indentation | decided |
 | Memory safety | Value semantics (read-only by default, plus `inout` / `sink` access modes; second-class references) | decided, pending the paper test below |
 | Backend | One backend, our own, from day one | decided |
+| First native target | x86-64 Linux static ELF, no libc, no linker, own encoder; Windows PE right after the test suite passes natively (tested in `windows-latest` CI); simple code generator first, register allocation later; System V-shaped internal calling convention (`docs/design/backend.md`, card A-09) | decided |
 | Bootstrap | Stage 0 compiler in Rust, then rewritten in the language itself | decided |
 | OO | Structs and interfaces, plus an `obj` kind with single inheritance (written with `:`) from the start (heap-allocated, singly owned, closed unless `open`). First feature to cut if compile speed or the safety model suffers | decided |
 | Compile-time code | `meta` | decided |

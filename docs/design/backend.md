@@ -1,0 +1,49 @@
+# Backend: native x86-64 code from the IR
+
+Plan and status: `docs/plans/cards/A-09-native-backend.md`. This page is the design that the code in `compiler/src/native/` follows.
+The input is the verified (and optionally optimised) IR of `docs/design/ir.md`: 22 operations, 5 terminators, SSA with block parameters.
+The first target is **x86-64 Linux, a static ELF64 executable, no libc, no linker**.
+
+## 1. Decisions
+
+- Our own encoder (`native/x86.rs`), ELF writer (`native/elf.rs`) and runtime (`native/rt.rs`). No external crates, no assembler or linker at build time.
+- Version 1 generates code the simple way: every IR value has a stack slot (`native/gen.rs`, stage N2). Register allocation comes later (N5).
+- **Calling convention**, ours but shaped like System V: integers and pointers in `rdi rsi rdx rcx r8 r9`, floats in `xmm0` to `xmm7`, further arguments on the
+  stack (pushed right to left, 8 bytes each), result in `rax` or `xmm0`; callee-saved `rbx rbp r12 to r15`; the stack is 16-byte aligned at a `call`.
+  `sret` is an ordinary pointer parameter in the IR, so it needs no rule here.
+- **Process start**: `_start` aligns the stack, calls the program's entry function (`main`) and ends with `exit_group(0)`.
+- **System calls used**: `write` (1), `mmap` (9), `munmap` (11), `exit_group` (231). Nothing else in version 1.
+
+## 2. Semantics the native code must share with the interpreter
+
+The interpreter (`ir/interp.rs`) is the specification. Every row is a test (card A-09, tests).
+
+| Case | Required behaviour | Native code |
+|---|---|---|
+| `Div`, `Rem`, `UDiv`, `URem` by zero | stop `division by zero` | compare the divisor with 0 and branch to the stop block (the CPU would raise `SIGFPE`) |
+| signed `MIN / -1` and `MIN % -1` | wraps: `MIN` and `0` | compare with -1 and branch around `idiv` (the CPU traps) |
+| `Shl`, `Shr`, `UShr` by the type's width or more | stop `shifted by the width or more` | compare the count and branch (x86 masks it silently) |
+| `Checked` add, sub, mul | stop on overflow | `add`/`sub`/`imul` then `jo` (signed) or `jc` (unsigned) to the stop block |
+| plain `Add`, `Sub`, `Mul` | wrap around at the type's width | the bare instruction at the right operand size |
+| `Cmp` on floats with NaN | like Rust: `==` false, `!=` true, ordered comparisons false | `ucomisd` flags with the parity flag checked |
+| `IntToFloat` | sign-extend from the source width, then convert | `movsx`, then `cvtsi2sd` |
+| `FloatToInt` | the interpreter converts with saturation to `i128` and then cuts to the target width | `cvttsd2si` (64-bit) then cut; **differs outside the `i64` range: open item, the lowering must range-check first** |
+| `Trunc`, `ZExt`, `SExt` | as the names say | `mov`, `movzx`, `movsx`/`movsxd` |
+| `Load`, `Store` | little-endian, any alignment | plain `mov` |
+| `MemCopy` | non-overlapping copy of n bytes | `rep movsb` (small constant sizes inline later) |
+| `Print` | bytes to standard output | a loop of `write(1, ...)` calls until all bytes are written |
+| `Stop(msg)` | print `stopped: msg` to standard error, exit status 1 | jump to the shared runtime routine with the message |
+| `Alloc`, `Free` | zero-length allocations are fine; a freed block may be reused | the runtime allocator (section 3) |
+| leaks | counted at the end of a test build | the allocator counts live blocks (test builds only) |
+
+## 3. Runtime (emitted by the backend)
+
+- `rt_write(ptr, len)`: loops over `write` until everything is written or an error occurs.
+- `rt_stop(msg_ptr, msg_len)`: writes `stopped: `, the message and a newline to standard error, then `exit_group(1)`.
+- **Allocator**: size classes of 16, 32, 64, ... bytes up to 64 KiB, each with a free list; larger blocks go straight to `mmap`. Every block has a 16-byte header
+  holding its class (the IR's `Free` carries no size), so a block is 16-byte aligned. Chunks of 1 MiB are taken from `mmap`. Test builds add a live-block counter
+  reported at exit (`leaked N allocation(s)`, like the interpreter).
+
+## 4. Status
+
+N1 (encoder, ELF writer, runtime): see the card. Everything else is planned.
