@@ -6,6 +6,8 @@
 pub mod ast;
 pub mod ast_print;
 pub mod check;
+pub mod editors;
+pub mod highlight;
 pub mod ir;
 pub mod keyword;
 pub mod lexer;

@@ -1,0 +1,55 @@
+{
+  "name": "pelago",
+  "displayName": "Pelago",
+  "description": "Syntax highlighting and snippets for the Pelago programming language (.pel)",
+  "version": "0.0.1",
+  "publisher": "pelagolang",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Themes"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "pelago",
+        "aliases": [
+          "Pelago",
+          "pelago"
+        ],
+        "extensions": [
+          ".pel"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "pelago",
+        "scopeName": "source.pelago",
+        "path": "./syntaxes/pelago.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "pelago",
+        "path": "./snippets/pelago.json"
+      }
+    ],
+    "themes": [
+      {
+        "label": "Pelago Dark (test)",
+        "uiTheme": "vs-dark",
+        "path": "./themes/pelago-dark.json"
+      },
+      {
+        "label": "Pelago Light (test)",
+        "uiTheme": "vs",
+        "path": "./themes/pelago-light.json"
+      }
+    ]
+  }
+}

@@ -8,7 +8,15 @@ use pelago::token::{Punct, TokenKind};
 fn main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
-        Some("keywords") => print_keywords(),
+        Some("keywords") => match args.next().as_deref() {
+            Some("--json") => println!("{}", pelago::editors::keywords_json()),
+            _ => print_keywords(),
+        },
+        Some("highlight") => {
+            let rest: Vec<String> = args.collect();
+            highlight_command(&rest);
+        }
+        Some("grammar") => print!("{}", pelago::editors::textmate_grammar()),
         Some("tokens") => print_punct(),
         Some("lex-bench") => match args.next() {
             Some(path) => lex_bench(&path),
@@ -106,6 +114,56 @@ fn print_keywords() {
         println!("  {}", words.join(" "));
         println!();
     }
+}
+
+/// `pelago highlight <file> [--ansi | --html | --html-page | --plain] [--theme dark|light]`
+fn highlight_command(args: &[String]) {
+    let mut mode = "ansi";
+    let mut theme = pelago::highlight::Theme::Dark;
+    let mut path: Option<&str> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--ansi" => mode = "ansi",
+            "--html" => mode = "html",
+            "--html-page" => mode = "html-page",
+            "--plain" => mode = "plain",
+            "--theme" => {
+                i += 1;
+                theme = match args.get(i).map(|s| s.as_str()) {
+                    Some("light") => pelago::highlight::Theme::Light,
+                    Some("dark") => pelago::highlight::Theme::Dark,
+                    _ => {
+                        eprintln!("usage: pelago highlight <file> [--ansi | --html | --html-page | --plain] [--theme dark|light]");
+                        std::process::exit(2);
+                    }
+                };
+            }
+            other if other.starts_with("--") => {
+                eprintln!("unknown option `{other}`");
+                std::process::exit(2);
+            }
+            other => path = Some(other),
+        }
+        i += 1;
+    }
+    let Some(path) = path else {
+        eprintln!("usage: pelago highlight <file> [--ansi | --html | --html-page | --plain] [--theme dark|light]");
+        std::process::exit(2);
+    };
+    let src = read_source(path);
+    let pieces = pelago::highlight::classify(&src);
+    // NO_COLOR asks for no escape codes.
+    if mode == "ansi" && std::env::var_os("NO_COLOR").is_some() {
+        mode = "plain";
+    }
+    let text = match mode {
+        "html" => pelago::highlight::render_html(&src, &pieces, false),
+        "html-page" => pelago::highlight::render_html(&src, &pieces, true),
+        "plain" => pelago::highlight::render_plain(&src, &pieces),
+        _ => pelago::highlight::render_ansi(&src, &pieces, theme),
+    };
+    print!("{text}");
 }
 
 fn print_punct() {
