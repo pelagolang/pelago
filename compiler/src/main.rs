@@ -179,7 +179,11 @@ fn ir_or_run(path: &str, run: bool, flags: &[&str]) {
         let module = program.module(d.module);
         let index = LineIndex::new(&module.src);
         let (line, col) = index.line_col(&module.src, d.span.start);
-        eprintln!("{}:{line}:{col}: note: {}", module.path, d.message);
+        let kind = if d.warning { "note" } else { "error" };
+        eprintln!("{}:{line}:{col}: {kind}: {}", module.path, d.message);
+        if !d.warning {
+            failed = true;
+        }
     }
     for e in pelago::ir::verify_module(&lowered.module) {
         eprintln!("ir error: {e}");

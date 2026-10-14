@@ -165,6 +165,9 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 - **IR19** `become f(...)` on the function itself with plain number parameters is a jump to the top (no stack growth); any other `become` is a
   call followed by `return`.
 - **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa` and `async` (see the plans in `docs/plans/`).
+- **IR25** `meta expr` runs in the IR interpreter during lowering (`lower/meta.rs`, `run_capture` in the interpreter): the jobs the expression
+  needs are lowered first (others wait), the entry function writes its result to a block the interpreter provides, the value is read back
+  by type into a tree of constants and emitted as code at the use site. The step limit is a parameter of the run.
 - **IR24** `soa<T>` (`lower/soa.rs`): one list header (24 bytes) per field of the struct `T`, one after the other, all the same length. The
   element is never stored whole. `points[i].x` is the address `x_data + i * size` (bounds checked against the length); `points.x` is the
   column header itself, read as a `[float]`; a whole element (`const p = points[i]`) is gathered into a temporary; `points[i] = v` drops the old

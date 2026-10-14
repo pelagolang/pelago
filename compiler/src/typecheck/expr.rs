@@ -389,7 +389,12 @@ impl<'p> Checker<'p> {
                 }
                 self.tt.void
             }
-            ExprKind::Meta(inner) => self.check_expr(inner, exp),
+            ExprKind::Meta(inner) => {
+                self.meta_depth += 1;
+                let t = self.check_expr(inner, exp);
+                self.meta_depth -= 1;
+                t
+            }
             ExprKind::Labeled { label, body } => self.labeled(label, body, exp),
             ExprKind::Error => self.tt.unknown,
         }
@@ -433,7 +438,16 @@ impl<'p> Checker<'p> {
                 self.local_tys.get(&def).copied().unwrap_or(self.tt.unknown)
             }
             DefKind::Const | DefKind::Var => match self.nodes.get(&def) {
-                Some(Node::Global { .. }) => self.global_ty(def),
+                Some(Node::Global { .. }) => {
+                    if self.meta_depth > 0 && d.kind == DefKind::Var {
+                        let name = d.name.clone();
+                        self.err(
+                            span,
+                            format!("`{name}` is a `var`; compile-time code cannot read it"),
+                        );
+                    }
+                    self.global_ty(def)
+                }
                 _ => self.local_tys.get(&def).copied().unwrap_or(self.tt.unknown),
             },
             DefKind::Fn => match self.fn_value(def, span) {

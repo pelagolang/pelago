@@ -704,7 +704,7 @@ fn program_generic() {
 #[test]
 fn example_programs_run() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/programs");
-    for name in ["shapes", "words", "stack", "tree"] {
+    for name in ["shapes", "words", "stack", "tree", "tables"] {
         let mut program = Program::with_core();
         program
             .add_package_from_path(&dir.join(format!("{name}.pel")))
@@ -1004,5 +1004,89 @@ fn soa_prints_as_a_list_of_structs_and_has_blocked_form() {
     assert_eq!(
         output_of(src),
         "10 81 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]\n[point { x: 1, y: 2 }]\n"
+    );
+}
+
+// ---- A-05 stage M3: `meta expr` and `meta fn` -------------------------------------------------------
+
+fn lowered_diags(src: &str) -> Vec<(String, bool)> {
+    let mut program = Program::with_core();
+    program.add_package("app", &[("main", src)]);
+    let res = resolve(&program);
+    let typed = check(&program, &res);
+    assert!(typed.diagnostics.is_empty(), "{:?}", typed.diagnostics);
+    let l = lower(&program, &res, &typed);
+    l.diagnostics
+        .iter()
+        .map(|d| (d.message.clone(), d.warning))
+        .collect()
+}
+
+#[test]
+fn meta_values_are_baked_in() {
+    let src = r#"meta fn build_table() -> [int; 8] {
+    var t = [0; 8]
+    for i in 0..8 { t[i] = i * i }
+    t
+}
+meta fn greeting(name: string) -> string = "hello, #name"
+meta fn squares() -> [int] {
+    var xs: [int] = []
+    for i in 0..5 { xs.push!(i * 2) }
+    xs
+}
+struct pair { a: int, b: string }
+meta fn make_pair() -> pair = pair { a: 7, b: "seven" }
+const table = meta build_table()
+fn main() {
+    print(table[3], table)
+    print(meta greeting("pelago"))
+    print(meta squares())
+    const p = meta make_pair()
+    print(p.a, p.b)
+    const o: int? = meta 5
+    print(o)
+}
+"#;
+    assert_eq!(
+        output_of(src),
+        "9 [0, 1, 4, 9, 16, 25, 36, 49]\nhello, pelago\n[0, 2, 4, 6, 8]\n7 seven\nsome(5)\n"
+    );
+}
+
+#[test]
+fn meta_runs_that_cannot_finish_are_errors() {
+    let d = lowered_diags("meta fn spin() -> int { var i = 0\n while true { i += 1 }\n i }\n@meta_limit(500)\nconst c = meta spin()\nfn main() { print(c) }\n");
+    assert!(
+        d.iter().any(|(m, w)| !w && m.contains("ran too long")),
+        "{d:?}"
+    );
+    let d = lowered_diags("meta fn fail() -> int { meta_error(\"nope\") }\nfn main() { const c = meta fail()\n print(c) }\n");
+    assert!(d.iter().any(|(m, w)| !w && m.contains("nope")), "{d:?}");
+    let d = lowered_diags(
+        "meta fn f() -> int = a + 1\nconst a: int = meta f()\nfn main() { print(a) }\n",
+    );
+    assert!(
+        d.iter().any(|(m, w)| !w && m.contains("needs itself")),
+        "{d:?}"
+    );
+}
+
+#[test]
+fn meta_values_that_hold_closures_are_errors() {
+    let d = lowered_diags("meta fn mk() -> box<fn(int) -> int> { box((x: int) ~> x + 1) }\nfn main() { const f = meta mk()\n print(f.get()(1)) }\n");
+    assert!(
+        d.iter()
+            .any(|(m, w)| !w && m.contains("cannot be computed at compile time")),
+        "{d:?}"
+    );
+}
+
+#[test]
+fn meta_note_is_a_compile_time_message() {
+    let d = lowered_diags("meta fn f() -> int { meta_note(\"building\")\n 4 }\nfn main() { const c = meta f()\n print(c) }\n");
+    assert!(
+        d.iter().any(|(m, w)| *w && m.contains("meta: building")),
+        "{d:?}"
     );
 }

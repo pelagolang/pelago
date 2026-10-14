@@ -308,6 +308,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Unsafe(b) => self.block(b, None, want),
             ExprKind::If(i) => self.if_expr(e, i, false, None, want),
             ExprKind::MetaIf(i) => self.meta_if(i, None, want),
+            ExprKind::Meta(inner) => self.meta_expr(e, inner, None),
             ExprKind::Unless(i) => self.if_expr(e, i, true, None, want),
             ExprKind::Ternary { cond, then, else_ } => {
                 self.ternary(e, cond, then, else_, None, want)
@@ -337,6 +338,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Block(b) | ExprKind::Unsafe(b) => self.block(b, Some(dst), t),
             ExprKind::If(i) => self.if_expr(e, i, false, Some(dst), t),
             ExprKind::MetaIf(i) => self.meta_if(i, Some(dst), t),
+            ExprKind::Meta(inner) => self.meta_expr(e, inner, Some(dst)),
             ExprKind::Unless(i) => self.if_expr(e, i, true, Some(dst), t),
             ExprKind::Ternary { cond, then, else_ } => {
                 self.ternary(e, cond, then, else_, Some(dst), t)

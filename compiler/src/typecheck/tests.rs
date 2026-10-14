@@ -1349,3 +1349,33 @@ fn soa_types_are_checked() {
     let e = run("struct p { x: int }\nfn t(x: soa<p>) { const y = x.nope }").errors();
     assert!(e.iter().any(|m| m.contains("no field")), "{e:?}");
 }
+
+// ---- meta fn rules --------------------------------------------------------------------------------------
+
+#[test]
+fn meta_code_has_rules() {
+    clean("meta fn f() -> int = 4\nconst c = meta f()\nfn t() -> int = meta f() + 1");
+    let e = run("meta fn f() -> int = 4\nfn t() -> int = f()").errors();
+    assert!(
+        e.iter()
+            .any(|m| m.contains("can only be called inside `meta`")),
+        "{e:?}"
+    );
+    let e = run("meta fn f() -> int { print(1)\n 4 }").errors();
+    assert!(
+        e.iter()
+            .any(|m| m.contains("not available at compile time")),
+        "{e:?}"
+    );
+    let e = run("ext fn puts(s: ptr) -> int\nmeta fn f() -> int { puts(rt_null())\n 4 }").errors();
+    assert!(
+        e.iter().any(|m| m.contains("defined outside the language")),
+        "{e:?}"
+    );
+    let e = run("var counter = 0\nmeta fn f() -> int = counter").errors();
+    assert!(
+        e.iter()
+            .any(|m| m.contains("compile-time code cannot read it")),
+        "{e:?}"
+    );
+}

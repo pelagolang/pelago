@@ -82,6 +82,7 @@ struct Machine<'m> {
     heap: BTreeMap<usize, (usize, bool)>,
     out: Vec<u8>,
     steps: u64,
+    max_steps: u64,
     depth: u32,
 }
 
@@ -102,13 +103,50 @@ pub fn run(m: &Module, name: &str, args: &[Val]) -> Result<Val, String> {
 }
 
 pub fn run_full(m: &Module, name: &str, args: &[Val]) -> Outcome {
+    run_inner(m, name, args, DEFAULT_STEPS, None).0
+}
+
+/// A run that also keeps what is left in memory, for compile-time code (`meta`).
+pub struct Capture {
+    pub outcome: Outcome,
+    /// All of memory when the run ended.
+    pub image: Vec<u8>,
+    /// Where the result block was (when one was asked for).
+    pub ret_addr: usize,
+}
+
+/// Runs `name` with a step budget. With `ret_size`, a block of that many bytes is allocated first
+/// and its address is the only argument (the function writes its result there, as functions
+/// returning memory values do); the block does not count as a leak.
+pub fn run_capture(m: &Module, name: &str, ret_size: Option<usize>, max_steps: u64) -> Capture {
+    let (outcome, image, ret_addr) = run_inner(m, name, &[], max_steps, ret_size);
+    Capture {
+        outcome,
+        image,
+        ret_addr,
+    }
+}
+
+const DEFAULT_STEPS: u64 = 200_000_000;
+
+fn run_inner(
+    m: &Module,
+    name: &str,
+    args: &[Val],
+    max_steps: u64,
+    ret_size: Option<usize>,
+) -> (Outcome, Vec<u8>, usize) {
     let Some(i) = m.funcs.iter().position(|f| f.name == name) else {
-        return Outcome {
-            result: Err(format!("no function `{name}`")),
-            output: String::new(),
-            leaked: 0,
-            steps: 0,
-        };
+        return (
+            Outcome {
+                result: Err(format!("no function `{name}`")),
+                output: String::new(),
+                leaked: 0,
+                steps: 0,
+            },
+            Vec::new(),
+            0,
+        );
     };
     let mut mem = vec![0u8; 16];
     let mut data_at = Vec::new();
@@ -135,30 +173,48 @@ pub fn run_full(m: &Module, name: &str, args: &[Val]) -> Outcome {
         heap: BTreeMap::new(),
         out: Vec::new(),
         steps: 0,
+        max_steps,
         depth: 0,
     };
+    let mut call_args: Vec<Val> = args.to_vec();
+    let mut ret_addr = 0;
+    if let Some(n) = ret_size {
+        ret_addr = mc.alloc(n.max(1));
+        call_args = vec![Val::Ptr(ret_addr)];
+    }
     let result = std::thread::scope(|s| {
         std::thread::Builder::new()
             .stack_size(HOST_STACK)
-            .spawn_scoped(s, || mc.call(i, args))
+            .spawn_scoped(s, || mc.call(i, &call_args))
             .map(|h| {
                 h.join()
                     .unwrap_or_else(|_| Err("the interpreter crashed".to_string()))
             })
             .unwrap_or_else(|_| Err("cannot start the interpreter thread".to_string()))
     });
+    if ret_size.is_some() {
+        if let Some(b) = mc.heap.get_mut(&ret_addr) {
+            b.1 = false;
+        }
+    }
     let leaked = mc
         .heap
         .values()
         .filter(|(_, live)| *live)
         .map(|(s, _)| *s)
         .sum();
-    Outcome {
+    let outcome = Outcome {
         result,
         output: String::from_utf8_lossy(&mc.out).into_owned(),
         leaked,
         steps: mc.steps,
-    }
+    };
+    let image = if ret_size.is_some() {
+        std::mem::take(&mut mc.mem)
+    } else {
+        Vec::new()
+    };
+    (outcome, image, ret_addr)
 }
 
 impl Machine<'_> {
@@ -180,7 +236,7 @@ impl Machine<'_> {
             let b = &f.blocks[block];
             for &id in &b.insts {
                 self.steps += 1;
-                if self.steps > 200_000_000 {
+                if self.steps > self.max_steps {
                     return Err("the step limit was reached".to_string());
                 }
                 let inst = &f.insts[id];

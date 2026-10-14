@@ -692,6 +692,7 @@ impl<'p> Checker<'p> {
         let d = self.def(def);
         match d.kind {
             DefKind::Fn => {
+                self.check_meta_call(e, def);
                 let Some(sig) = self.fn_sig(def) else {
                     for a in args {
                         self.check_expr(&a.value, Exp::Any);
@@ -741,6 +742,39 @@ impl<'p> Checker<'p> {
                 }
                 self.tt.unknown
             }
+        }
+    }
+
+    /// `meta fn` only inside `meta`; and inside `meta`: no output, no outside functions.
+    fn check_meta_call(&mut self, e: &'p Expr, def: DefId) {
+        let name = self.def(def).name.clone();
+        if self.meta_fns.contains(&def) && self.meta_depth == 0 {
+            self.err(
+                e.span,
+                format!("`{name}` is a `meta fn`; it can only be called inside `meta`"),
+            );
+        }
+        if self.meta_depth == 0 {
+            return;
+        }
+        let core = self.is_core_def(def);
+        if core && name == "print" {
+            self.err(
+                e.span,
+                "`print` is not available at compile time; use `meta_note(\"...\")`",
+            );
+        }
+        let outside = matches!(
+            self.nodes.get(&def),
+            Some(Node::Fn { f, .. }) if matches!(f.body, FnBody::None)
+        );
+        if outside && !core {
+            self.err(
+                e.span,
+                format!(
+                    "`{name}` is defined outside the language, so it cannot run at compile time"
+                ),
+            );
         }
     }
 

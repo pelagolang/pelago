@@ -355,6 +355,10 @@ pub(crate) struct Checker<'p> {
     top_stmts: Vec<(ModuleId, usize, &'p [Stmt])>,
     /// The `meta N: int` parameters.
     meta_params: std::collections::HashSet<DefId>,
+    /// The `meta fn` functions.
+    meta_fns: std::collections::HashSet<DefId>,
+    /// How many `meta` expressions or `meta fn` bodies enclose the code being checked.
+    meta_depth: u32,
     /// The interfaces each generic parameter must provide, as written.
     param_bounds: HashMap<DefId, Vec<&'p Type>>,
     /// `@derive(...)` names of types.
@@ -418,6 +422,8 @@ impl<'p> Checker<'p> {
             tests: Vec::new(),
             top_stmts: Vec::new(),
             meta_params: std::collections::HashSet::new(),
+            meta_fns: std::collections::HashSet::new(),
+            meta_depth: 0,
             param_bounds: HashMap::new(),
             derives: HashMap::new(),
             pending_bounds: Vec::new(),
@@ -832,6 +838,9 @@ impl<'p> Checker<'p> {
         match &item.kind {
             ItemKind::Fn(f) => {
                 self.register_generics(file, &f.generics, &f.where_);
+                if let (Some(d), true) = (def, item.mods.is_meta) {
+                    self.meta_fns.insert(d);
+                }
                 if let Some(d) = def {
                     self.nodes.insert(
                         d,
@@ -1638,6 +1647,8 @@ impl<'p> Checker<'p> {
         }
         let Some(sig) = self.fn_sig(def) else { return };
         let self_ty = self.owner_self_ty(owner);
+        let saved_meta = self.meta_depth;
+        self.meta_depth = u32::from(self.meta_fns.contains(&def));
         let st = self.begin_unit(file, scope, self_ty);
         // `init` and `deinit` have an implicit `self`.
         if f.kind != FnKind::Fn {
@@ -1695,7 +1706,10 @@ impl<'p> Checker<'p> {
                 span = e.span;
                 self.check_expr(e, exp)
             }
-            FnBody::None => return,
+            FnBody::None => {
+                self.meta_depth = saved_meta;
+                return;
+            }
         };
         if let Exp::Is(t) = exp {
             self.coerce_at(found, t, span, "this function's value");
@@ -1705,6 +1719,7 @@ impl<'p> Checker<'p> {
                 self.coerce_at(found, sig.ret, span, "this function's value");
             }
         }
+        self.meta_depth = saved_meta;
         self.fn_ctx.pop();
         self.end_unit(st);
     }

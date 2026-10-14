@@ -1813,6 +1813,14 @@ impl<T> box<T> {
     }
 }
 
+// ---- Compile-time code -------------------------------------------------------------------------
+
+/// Compile-time code says something: it is shown as a note while compiling.
+pub fn meta_note(message: string) { print("meta: #message") }
+
+/// Compile-time code stops the compilation with this message.
+pub fn meta_error(message: string) -> never { panic(message) }
+
 // ---- soa: struct-of-arrays ---------------------------------------------------------------------
 
 pub ext fn rt_soa_len<T>(h: ptr) -> int
