@@ -54,6 +54,16 @@ impl<'p> Checker<'p> {
     }
 
     pub(crate) fn lookup_method(&mut self, recv: Ty, name: &str, span: Span) -> Option<Method> {
+        if let Some(m) = self.find_own_method(recv, name, span) {
+            return Some(m);
+        }
+        // Promised and default methods of the interfaces the type provides.
+        let r = self.tt.shallow(recv);
+        self.iface_method(r, name)
+    }
+
+    /// A method the type itself has: in its declaration, its `obj` bases or an `impl` block.
+    pub(crate) fn find_own_method(&mut self, recv: Ty, name: &str, span: Span) -> Option<Method> {
         self.settle_literal(recv);
         let r = self.tt.shallow(recv);
         if let TyKind::Adt(def, args) = self.kind_of(r) {
@@ -123,7 +133,7 @@ impl<'p> Checker<'p> {
     }
 
     /// Every field of a struct or obj, bases first, with its type for these type arguments.
-    fn collect_fields(&mut self, def: DefId, args: &[Ty]) -> Vec<(DefId, Ty)> {
+    pub(crate) fn collect_fields(&mut self, def: DefId, args: &[Ty]) -> Vec<(DefId, Ty)> {
         let map = self.adt_map(def, args);
         let mut out = Vec::new();
         for b in self.bases_of(def) {

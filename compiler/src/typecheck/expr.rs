@@ -25,7 +25,7 @@ impl<'p> Checker<'p> {
             (TyKind::Never, _) => true,
             (_, TyKind::Option(inner)) => self.try_coerce(f, inner),
             (TyKind::String, TyKind::Str) => true,
-            (_, TyKind::Any(_)) => true,
+            (_, TyKind::Any(i)) => self.provides(f, i),
             (TyKind::Adt(d1, a1), TyKind::Adt(d2, a2)) => self.is_subtype(d1, &a1, d2, &a2),
             _ => false,
         }
@@ -73,6 +73,10 @@ impl<'p> Checker<'p> {
     fn mismatch_hint(&self, found: Ty, expected: Ty) -> String {
         let f = self.tt.kind_of(found);
         let e = self.tt.kind_of(expected);
+        if let TyKind::Any(i) = e {
+            let (fname, iname) = (self.show(found), self.def(*i).name.clone());
+            return format!("; `{fname}` does not provide `{iname}`");
+        }
         let numeric = |k: &TyKind| matches!(k, TyKind::Int(_) | TyKind::Float(_));
         if numeric(f) && numeric(e) {
             return "; convert with `to`".to_string();
@@ -260,7 +264,19 @@ impl<'p> Checker<'p> {
             ExprKind::Call { callee, args, mark } => self.call_expr(e, callee, args, *mark, exp),
             ExprKind::TypeApply { base, args } => self.type_apply(e, base, args),
             ExprKind::Unary { op, operand } => self.unary(e, *op, operand, exp),
-            ExprKind::Copy(inner) => self.check_expr(inner, exp),
+            ExprKind::Copy(inner) => {
+                let t = self.check_expr(inner, exp);
+                if let Some(i) = self.core_iface("clone") {
+                    if !self.provides(t, i) {
+                        let s = self.show(t);
+                        self.err(
+                            e.span,
+                            format!("`copy` needs a type that can be copied, but `{s}` cannot; an `obj` must provide `clone` (`impl clone for ...`)"),
+                        );
+                    }
+                }
+                t
+            }
             ExprKind::Binary { op, lhs, rhs } => self.binary(e, *op, lhs, rhs, exp),
             ExprKind::In { lhs, rhs } => self.in_expr(lhs, rhs),
             ExprKind::Assign { op, lhs, rhs } => self.assign(e, *op, lhs, rhs),
@@ -444,7 +460,9 @@ impl<'p> Checker<'p> {
     }
 
     pub(crate) fn fresh_map(&mut self, generics: &[DefId], span: Span) -> HashMap<DefId, Ty> {
-        generics.iter().map(|g| (*g, self.var(span))).collect()
+        let tys: Vec<Ty> = generics.iter().map(|_| self.var(span)).collect();
+        self.queue_bounds(generics, &tys, span);
+        generics.iter().copied().zip(tys).collect()
     }
 
     /// An enum case used as a value: a constant for `empty`, a function for `circle(r)`.
@@ -893,6 +911,19 @@ impl<'p> Checker<'p> {
                     TyKind::Var(_) => self.is_numeric(t),
                     _ => false,
                 };
+                if matches!(k, TyKind::Adt(..) | TyKind::Param(_) | TyKind::Any(_)) {
+                    return match self.lookup_method(t, "neg", e.span) {
+                        Some(m) => self.tt.subst(m.sig.ret, &m.map),
+                        None => {
+                            let s = self.show(t);
+                            self.err(
+                                e.span,
+                                format!("cannot negate `{s}`: it does not provide `neg`; write `impl neg for {s}`"),
+                            );
+                            self.tt.unknown
+                        }
+                    };
+                }
                 if !ok {
                     let s = self.show(t);
                     self.err(e.span, format!("cannot negate `{s}`"));
@@ -980,6 +1011,12 @@ impl<'p> Checker<'p> {
     fn arith(&mut self, e: &'p Expr, op: Punct, lhs: &'p Expr, rhs: &'p Expr, exp: Exp) -> Ty {
         let operand = self.operand_exp(exp);
         let lt = self.check_expr(lhs, operand);
+        if matches!(
+            self.kind_of(lt),
+            TyKind::Adt(..) | TyKind::Param(_) | TyKind::Any(_)
+        ) {
+            return self.user_binary(e, op, lt, rhs);
+        }
         // Text: `+` joins.
         if op == Punct::Plus && matches!(self.kind_of(lt), TyKind::String | TyKind::Str) {
             let rt = self.check_expr(rhs, Exp::Is(self.tt.str_));
@@ -1052,6 +1089,40 @@ impl<'p> Checker<'p> {
         }
         let ordering = !matches!(op, Punct::EqEq | Punct::NotEq);
         let k = self.kind_of(lt);
+        let against_none = matches!(rhs.kind, ExprKind::None) || matches!(lhs.kind, ExprKind::None);
+        if !against_none
+            && matches!(
+                k,
+                TyKind::Adt(..)
+                    | TyKind::Param(_)
+                    | TyKind::Any(_)
+                    | TyKind::List(_)
+                    | TyKind::Array(..)
+                    | TyKind::Tuple(_)
+                    | TyKind::Option(_)
+                    | TyKind::Result(..)
+                    | TyKind::Map(..)
+                    | TyKind::Set(_)
+                    | TyKind::Box(_)
+            )
+        {
+            let need = if ordering { "order" } else { "eq" };
+            if let Some(i) = self.core_iface(need) {
+                if !self.provides(lt, i) {
+                    let s = self.show(lt);
+                    let hint = self.provide_hint(lt, i);
+                    let what = if ordering { "ordered" } else { "compared" };
+                    self.err(
+                        e.span,
+                        format!(
+                            "`{s}` cannot be {what} with `{}`: it does not provide `{need}`{hint}",
+                            op.as_str()
+                        ),
+                    );
+                    return self.tt.bool_;
+                }
+            }
+        }
         if matches!(k, TyKind::Fn(..)) {
             self.err(e.span, "functions cannot be compared");
         } else if ordering
@@ -1182,7 +1253,12 @@ impl<'p> Checker<'p> {
                     Punct::MinusPercentEq => Punct::MinusPercent,
                     _ => Punct::StarPercent,
                 };
-                if base == Punct::Plus && matches!(self.kind_of(lt), TyKind::String) {
+                if matches!(
+                    self.kind_of(lt),
+                    TyKind::Adt(..) | TyKind::Param(_) | TyKind::Any(_)
+                ) {
+                    self.user_binary(e, base, lt, rhs);
+                } else if base == Punct::Plus && matches!(self.kind_of(lt), TyKind::String) {
                     self.check_coerce(rhs, self.tt.str_);
                 } else if matches!(base, Punct::Shl | Punct::Shr) {
                     let rt = self.check_expr(rhs, Exp::Any);

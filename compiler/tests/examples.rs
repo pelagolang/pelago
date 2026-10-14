@@ -100,7 +100,7 @@ fn programs_check_cleanly() {
         let mut program = langc::package::Program::with_core();
         program.add_package("app", &[(name.as_str(), src.as_str())]);
         let resolved = langc::resolve::resolve(&program);
-        let typed = langc::typeck::check(&program, &resolved);
+        let typed = langc::typecheck::check(&program, &resolved);
         let messages: Vec<String> = typed
             .diagnostics
             .iter()

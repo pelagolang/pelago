@@ -18,13 +18,14 @@
 
 mod call;
 mod expr;
+mod iface;
 mod pat;
 mod stmt;
 #[cfg(test)]
 mod tests;
 
 use crate::ast::*;
-use crate::package::{Diagnostic, ModuleId, Program};
+use crate::package::{Diagnostic, ModuleId, PackageId, Program};
 use crate::resolve::{Def, DefId, DefKind, Resolved};
 use crate::span::Span;
 use crate::types::*;
@@ -55,6 +56,7 @@ pub fn check(program: &Program, resolved: &Resolved) -> Typed {
     let mut c = Checker::new(program, resolved);
     c.index_all();
     c.prepare_impls();
+    c.check_impls();
     c.check_all();
     c.finish()
 }
@@ -120,6 +122,8 @@ pub(crate) struct ImplInfo<'p> {
     /// The type the methods are for.
     self_ty: Ty,
     methods: HashMap<String, DefId>,
+    /// The interface of `impl iface for type`.
+    iface: Option<DefId>,
 }
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -246,6 +250,13 @@ pub(crate) struct Checker<'p> {
     /// Top-level statements and constants of modules, checked as one pseudo-function each.
     tests: Vec<(ModuleId, usize, &'p Block)>,
     top_stmts: Vec<(ModuleId, usize, &'p [Stmt])>,
+    /// The interfaces each generic parameter must provide, as written.
+    param_bounds: HashMap<DefId, Vec<&'p Type>>,
+    /// `@derive(...)` names of types.
+    derives: HashMap<DefId, Vec<String>>,
+    /// Bounds to check once the types are known.
+    pending_bounds: Vec<iface::PendingBound>,
+    core_ifaces: HashMap<String, DefId>,
 }
 
 fn int_text(text: &str) -> Option<u128> {
@@ -292,10 +303,15 @@ impl<'p> Checker<'p> {
             var_floor: 0,
             tests: Vec::new(),
             top_stmts: Vec::new(),
+            param_bounds: HashMap::new(),
+            derives: HashMap::new(),
+            pending_bounds: Vec::new(),
+            core_ifaces: HashMap::new(),
         }
     }
 
     fn finish(mut self) -> Typed {
+        self.flush_bounds();
         let mut tys = HashMap::new();
         let entries = std::mem::take(&mut self.expr_tys);
         for (f, s, e, t) in entries {
@@ -463,6 +479,7 @@ impl<'p> Checker<'p> {
         let def = self.res.item_defs.get(&(file, item.span.start)).copied();
         match &item.kind {
             ItemKind::Fn(f) => {
+                self.register_generics(file, &f.generics, &f.where_);
                 if let Some(d) = def {
                     self.nodes.insert(
                         d,
@@ -476,7 +493,9 @@ impl<'p> Checker<'p> {
                 }
             }
             ItemKind::Struct(d) | ItemKind::Obj(d) | ItemKind::Interface(d) => {
+                self.register_generics(file, &d.generics, &d.where_);
                 let Some(def) = def else { return };
+                self.register_derives(file, def, &item.attrs);
                 self.nodes.insert(
                     def,
                     Node::Adt {
@@ -490,7 +509,9 @@ impl<'p> Checker<'p> {
                 }
             }
             ItemKind::Enum(e) => {
+                self.register_generics(file, &e.generics, &e.where_);
                 let Some(def) = def else { return };
+                self.register_derives(file, def, &item.attrs);
                 self.nodes.insert(
                     def,
                     Node::Adt {
@@ -526,7 +547,9 @@ impl<'p> Checker<'p> {
                     generics: Vec::new(),
                     self_ty: self.tt.unknown,
                     methods: HashMap::new(),
+                    iface: None,
                 });
+                self.register_generics(file, &im.generics, &im.where_);
                 for m in &im.members {
                     if let Member::Item(i) = m {
                         self.index_member_item(file, scope, Owner::Impl(idx), i);
@@ -584,6 +607,7 @@ impl<'p> Checker<'p> {
     fn index_member_item(&mut self, file: ModuleId, scope: usize, owner: Owner, i: &'p Item) {
         match &i.kind {
             ItemKind::Fn(f) => {
+                self.register_generics(file, &f.generics, &f.where_);
                 if let Some(&d) = self.res.item_defs.get(&(file, i.span.start)) {
                     self.nodes.insert(
                         d,
@@ -645,6 +669,19 @@ impl<'p> Checker<'p> {
             // The type the methods are for: the type after `for`, or the single type.
             let target = decl.for_type.as_ref().unwrap_or(&decl.target);
             let self_ty = self.with_ctx(file, scope, None, |c| c.lower_type(target));
+            let iface = decl
+                .for_type
+                .as_ref()
+                .and_then(|_| self.iface_of_type(file, &decl.target));
+            if decl.for_type.is_some() && iface.is_none() {
+                let saved = self.file;
+                self.file = file;
+                if !matches!(decl.target.kind, TypeKind::Error) {
+                    self.err(decl.target.span, "this is not an interface");
+                }
+                self.file = saved;
+            }
+            self.impls[i].iface = iface;
             self.impls[i].generics = generics;
             self.impls[i].self_ty = self_ty;
             if let Some(h) = self.head_of(self_ty) {
@@ -692,6 +729,10 @@ impl<'p> Checker<'p> {
     fn owner_self_ty(&mut self, owner: Owner) -> Option<Ty> {
         match owner {
             Owner::None => None,
+            // Inside an interface, `Self` is a stand-in named by the interface itself.
+            Owner::Adt(d) if self.def(d).kind == DefKind::Interface => {
+                Some(self.tt.mk(TyKind::Param(d)))
+            }
             Owner::Adt(d) => Some(self.own_adt_ty(d)),
             Owner::Impl(i) => Some(self.impls[i].self_ty),
         }
@@ -817,7 +858,13 @@ impl<'p> Checker<'p> {
         };
         let self_ty = self.own_adt_ty(def);
         self.with_ctx(file, scope, Some(self_ty), |c| {
-            bases.iter().map(|b| c.lower_type(b)).collect()
+            let mut out = Vec::new();
+            for b in bases {
+                if c.iface_of_type(file, b).is_none() {
+                    out.push(c.lower_type(b));
+                }
+            }
+            out
         })
     }
 
@@ -943,6 +990,8 @@ impl<'p> Checker<'p> {
                     );
                     return self.tt.unknown;
                 }
+                let gens = self.adt_generics(def);
+                self.queue_bounds(&gens, &lowered, t.span);
                 self.tt.mk(TyKind::Adt(def, lowered))
             }
             DefKind::Interface => {
@@ -1125,6 +1174,7 @@ impl<'p> Checker<'p> {
         for (_, span) in self.tt.unsolved(self.var_floor) {
             self.err(span, "cannot work out the type here; add a type annotation");
         }
+        self.flush_bounds();
         let lits = std::mem::take(&mut self.lits);
         for l in lits {
             if let Some(k) = self.tt.int_kind(l.ty) {

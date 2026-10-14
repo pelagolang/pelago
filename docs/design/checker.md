@@ -11,7 +11,7 @@ cargo run -- check <file or directory>     # parse + resolve names; later: + typ
 | Stage | What it adds | State |
 |---|---|---|
 | 1. Names | modules, imports, scopes: what every name refers to | **done** (`compiler/src/resolve/`, `package.rs`) |
-| 2. Types | a type for every expression, local inference, method lookup, operators | **done** (`compiler/src/types.rs`, `typeck/`) |
+| 2. Types | a type for every expression, local inference, method lookup, operators | **done** (`compiler/src/types.rs`, `typecheck/`) |
 | 3. Generics and interfaces | bounds, `impl` lookup, `any`, the orphan rule | after 2 |
 | 4. Patterns | typing of patterns, exhaustiveness of `switch`, list-pattern lengths | after 2 |
 | 5. Value semantics | `let` / `inout` / `sink` exclusivity, moves, `copy`, second-class references, `const` depth, `become` | after 3 and 4 |

@@ -4,7 +4,49 @@
 /// the checker needs.
 
 /// Anything that can be printed and put into a `#( )` string.
-pub interface show {}
+pub interface show {
+    fn show(self) -> string
+}
+
+/// Equality with `==`. Plain `struct` and `enum` types have it already; an `obj` must say so.
+pub interface eq {
+    fn eq(self, other: Self) -> bool
+}
+
+/// Ordering with `<`, `>`, `<=`, `>=`: a negative, zero or positive number.
+pub interface order : eq {
+    fn cmp(self, other: Self) -> int
+}
+
+/// Use as a key of a `map` or a member of a `set` (together with `eq`).
+pub interface hash : eq {
+    fn hash(self) -> int
+}
+
+/// Types that `copy` can duplicate. Plain data has it already; an `obj` must write `clone`.
+pub interface clone {
+    fn clone(self) -> Self
+}
+
+/// One interface per operator: `impl add for vec2 { fn add(self, other: vec2) -> vec2 ... }`.
+pub interface add {
+    fn add(self, other: Self) -> Self
+}
+pub interface sub {
+    fn sub(self, other: Self) -> Self
+}
+pub interface mul {
+    fn mul(self, other: Self) -> Self
+}
+pub interface div {
+    fn div(self, other: Self) -> Self
+}
+pub interface rem {
+    fn rem(self, other: Self) -> Self
+}
+pub interface neg {
+    fn neg(self) -> Self
+}
 
 /// A failed text-to-number conversion.
 pub struct parse_error {
@@ -17,23 +59,29 @@ pub ext fn panic(message: string) -> never
 pub ext fn todo() -> never
 pub ext fn unreachable() -> never
 
+impl<T: eq> list<T> {
+    ext fn contains(self, item: T) -> bool
+}
+
+impl<T: order> list<T> {
+    ext fn sort(inout self)
+    ext fn sorted(self) -> list<T>
+}
+
 impl<T> list<T> {
     ext fn len(self) -> int
     ext fn is_empty(self) -> bool
     ext fn get(self, index: int) -> T?
     ext fn first(self) -> T?
     ext fn last(self) -> T?
-    ext fn contains(self, item: T) -> bool
     ext fn push(inout self, sink item: T)
     ext fn pop(inout self) -> T?
     ext fn insert(inout self, index: int, sink item: T)
     ext fn remove(inout self, index: int) -> T
     ext fn clear(inout self)
     ext fn reverse(inout self)
-    ext fn sort(inout self)
     ext fn swap(inout self, a: int, b: int)
     ext fn extend(inout self, other: list<T>)
-    ext fn sorted(self) -> list<T>
     ext fn reversed(self) -> list<T>
     ext fn iter(self) -> iter<T>
     ext fn map<U>(self, f: fn(T) -> U) -> iter<U>

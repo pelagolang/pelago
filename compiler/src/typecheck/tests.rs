@@ -856,3 +856,209 @@ fn the_tour_checks_without_panicking() {
     let typed = check(&program, &res);
     assert!(!typed.tys.is_empty());
 }
+
+// ---- Stage 3: interfaces ----------------------------------------------------------------------
+
+#[test]
+fn bounds_are_checked_at_calls() {
+    let defs = "interface shape { fn area(self) -> float }\nstruct sq { s: float }\nimpl shape for sq { fn area(self) -> float = self.s * self.s }\nstruct blob { n: int }\nfn total<T: shape>(x: T) -> float = x.area()\n";
+    clean(&format!("{defs}fn t() {{ total(sq {{ s: 2.0 }}) }}"));
+    flagged(
+        &format!("{defs}fn t() {{ total(blob {{ n: 1 }}) }}"),
+        "`blob` does not provide `shape`, which the type parameter `T` needs; write `impl shape for blob`",
+    );
+    flagged(
+        "fn big<T: order>(a: T, b: T) -> bool = a > b\nobj thing { n: int }\nfn t(a: thing, b: thing) { big(a, b) }",
+        "does not provide `order`",
+    );
+    clean("fn big<T: order>(a: T, b: T) -> bool = a > b\nfn t() { big(1, 2) }");
+    clean("fn big<T: order>(a: T, b: T) -> bool = a > b\nfn t() { big(\"a\", \"b\") }");
+    clean("fn big<T>(a: T) -> T where T: show = a\nfn t() { big(1) }");
+    flagged(
+        "fn big<T: eq>(a: T) -> T = a\nfn t() { big(print) }",
+        "does not provide `eq`",
+    );
+}
+
+#[test]
+fn bounds_on_type_arguments() {
+    let defs = "struct bag<T: hash> { items: [T] }\n";
+    clean(&format!("{defs}fn t(b: bag<int>) {{ }}"));
+    flagged(
+        &format!("{defs}struct k {{ n: int }}\nfn t(b: bag<k>) {{ }}"),
+        "does not provide `hash`",
+    );
+    clean(&format!(
+        "{defs}struct k {{ n: int }}\n@derive(hash)\nstruct j {{ n: int }}\nfn t(b: bag<j>) {{ }}"
+    ));
+}
+
+#[test]
+fn methods_through_bounds_and_defaults() {
+    clean("interface named { fn name(self) -> string\n fn shout(self) -> string = self.name() + \"!\" }\nstruct d { n: string }\nimpl named for d { fn name(self) -> string = self.n }\nfn t(x: d) -> string = x.shout()");
+    clean("interface named { fn name(self) -> string }\nfn t<T: named>(x: T) -> string = x.name()");
+    flagged(
+        "interface named { fn name(self) -> string }\nfn t<T>(x: T) -> string = x.name()",
+        "has no method `name`",
+    );
+    clean("interface named { fn name(self) -> string }\nfn t(x: any named) -> string = x.name()");
+    clean("interface named { fn name(self) -> string }\ninterface titled : named { fn title(self) -> string }\nfn t<T: titled>(x: T) -> string = x.name()");
+}
+
+#[test]
+fn impls_must_be_complete_and_match() {
+    flagged(
+        "interface g { fn greet(self) -> string }\nstruct b { n: int }\nimpl g for b { }",
+        "`b` does not implement `greet`, which `g` promises",
+    );
+    flagged(
+        "interface g { fn greet(self) -> string }\nstruct b { n: int }\nimpl g for b { fn greet(self) -> int = 1 }",
+        "`greet` of `b` does not match `g`",
+    );
+    flagged(
+        "interface g { fn greet(self, loud: bool) -> string }\nstruct b { n: int }\nimpl g for b { fn greet(self) -> string = \"\" }",
+        "does not match `g`",
+    );
+    flagged(
+        "interface g { fn greet(self) -> string }\nstruct b : g { n: int }",
+        "does not implement `greet`",
+    );
+    clean("interface g { fn greet(self) -> string }\nstruct b : g { n: int\n fn greet(self) -> string = \"x\" }");
+    clean(
+        "interface g { fn greet(self) -> string = \"hi\" }\nstruct b { n: int }\nimpl g for b { }",
+    );
+    flagged(
+        "interface a { fn x(self) -> int }\ninterface b : a { fn y(self) -> int }\nstruct s { n: int }\nimpl b for s { fn y(self) -> int = 1 }",
+        "`b` builds on `a`, so `s` must provide `a` too",
+    );
+    flagged(
+        "struct s { n: int }\nstruct u { n: int }\nimpl s for u { }",
+        "this is not an interface",
+    );
+}
+
+#[test]
+fn operators_on_user_types() {
+    let vec2 = "struct vec2 { x: float, y: float }\n";
+    flagged(
+        &format!("{vec2}fn t(a: vec2, b: vec2) {{ a + b }}"),
+        "`+` does not work on `vec2`: it does not provide `add`; write `impl add for vec2`",
+    );
+    let add = "impl add for vec2 { fn add(self, other: vec2) -> vec2 = vec2 { x: self.x + other.x, y: self.y + other.y } }\n";
+    clean(&format!(
+        "{vec2}{add}fn t(a: vec2, b: vec2) -> vec2 = a + b"
+    ));
+    clean(&format!(
+        "{vec2}{add}fn t(a: vec2, b: vec2) {{ var c = a\n c += b }}"
+    ));
+    flagged(
+        &format!("{vec2}{add}fn t(a: vec2) {{ a - a }}"),
+        "does not provide `sub`",
+    );
+    flagged(
+        &format!("{vec2}{add}fn t(a: vec2) {{ -a }}"),
+        "cannot negate `vec2`",
+    );
+    flagged(&format!("{vec2}{add}fn t(a: vec2) {{ a + 1 }}"), "expected");
+    clean("fn sum<T: add>(a: T, b: T) -> T = a + b\nfn t() { sum(1, 2) }");
+    flagged(
+        "fn sum<T>(a: T, b: T) -> T = a + b",
+        "does not provide `add`",
+    );
+}
+
+#[test]
+fn equality_and_order_need_interfaces() {
+    clean("struct p { x: int }\nfn t(a: p, b: p) -> bool = a == b");
+    flagged(
+        "struct p { x: int }\nfn t(a: p, b: p) -> bool = a < b",
+        "does not provide `order`",
+    );
+    clean("@derive(order)\nstruct p { x: int }\nfn t(a: p, b: p) -> bool = a < b");
+    flagged(
+        "obj o { x: int }\nfn t(a: o, b: o) -> bool = a == b",
+        "does not provide `eq`",
+    );
+    clean("obj o { x: int }\nimpl eq for o { fn eq(self, other: o) -> bool = self.x == other.x }\nfn t(a: o, b: o) -> bool = a == b");
+    clean("obj o { x: int }\nfn t(a: o?) -> bool = a == none");
+    flagged(
+        "fn t<T>(a: T, b: T) -> bool = a == b",
+        "does not provide `eq`",
+    );
+    clean("fn t<T: eq>(a: T, b: T) -> bool = a == b");
+    clean("fn t(a: [int], b: [int]) -> bool = a == b");
+    flagged(
+        "obj o { x: int }\nfn t(a: [o], b: [o]) -> bool = a == b",
+        "does not provide `eq`",
+    );
+    flagged(
+        "struct p { x: int, o: opaque }\nobj opaque { }\nfn t(a: p, b: p) -> bool = a == b",
+        "does not provide `eq`",
+    );
+}
+
+#[test]
+fn any_needs_the_interface() {
+    let defs = "interface shape { fn area(self) -> float }\nstruct sq { s: float }\nimpl shape for sq { fn area(self) -> float = 1.0 }\nstruct blob { n: int }\n";
+    clean(&format!(
+        "{defs}fn t(x: any shape) {{ }}\nfn u() {{ t(sq {{ s: 1.0 }}) }}"
+    ));
+    flagged(
+        &format!("{defs}fn t(x: any shape) {{ }}\nfn u() {{ t(blob {{ n: 1 }}) }}"),
+        "`blob` does not provide `shape`",
+    );
+    flagged(
+        "struct blob { n: int }\nfn u() { print(blob { n: 1 }) }",
+        "does not provide `show`",
+    );
+    clean("@derive(show)\nstruct blob { n: int }\nfn u() { print(blob { n: 1 }) }");
+}
+
+#[test]
+fn the_orphan_rule() {
+    // In another package, neither the interface nor the type belongs to us.
+    let mut program = Program::with_core();
+    program.add_package("app", &[("main", "fn t() { }\nimpl show for int { fn show(self) -> string = \"\" }\nimpl<T> list<T> { fn second(self) -> T? = self.get(1) }")]);
+    let res = resolve(&program);
+    let typed = check(&program, &res);
+    let msgs: Vec<String> = typed
+        .diagnostics
+        .iter()
+        .map(|d| d.message.clone())
+        .collect();
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("neither `show` nor `int` is defined in this package")),
+        "{msgs:?}"
+    );
+    assert!(
+        msgs.iter()
+            .any(|m| m.contains("cannot add methods to `[T]` here")),
+        "{msgs:?}"
+    );
+    // Our own type is fine.
+    clean("struct mine { n: int }\nimpl show for mine { fn show(self) -> string = \"m\" }\nimpl<T> list<T> { }".replace("impl<T> list<T> { }", "").as_str());
+}
+
+#[test]
+fn library_methods_carry_bounds() {
+    clean("fn t(xs: [int]) { xs.contains(2)\n xs.sorted() }");
+    flagged(
+        "obj o { x: int }\nfn t(xs: [o], y: o) { xs.contains(y) }",
+        "does not provide `eq`",
+    );
+    flagged(
+        "obj o { x: int }\nfn t(xs: [o]) { xs.sorted() }",
+        "does not provide `order`",
+    );
+}
+
+#[test]
+fn copy_needs_a_copyable_type() {
+    clean("fn t(xs: [int]) { const b = copy xs }");
+    flagged(
+        "obj o { x: int }\nfn t(a: o) { const b = copy a }",
+        "cannot",
+    );
+    clean("obj o { x: int }\nimpl clone for o { fn clone(self) -> o = o { x: self.x } }\nfn t(a: o) { const b = copy a }");
+}

@@ -104,7 +104,7 @@ fn check_path(path: &str) {
         std::process::exit(2);
     }
     let resolved = langc::resolve::resolve(&program);
-    let typed = langc::typeck::check(&program, &resolved);
+    let typed = langc::typecheck::check(&program, &resolved);
     let mut diags = typed.diagnostics.clone();
     diags.sort_by_key(|d| (d.module, d.span.start));
     diags.dedup();

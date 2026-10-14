@@ -13,6 +13,6 @@ pub mod parser;
 pub mod resolve;
 pub mod span;
 pub mod token;
-pub mod typeck;
+pub mod typecheck;
 pub mod types;
 pub mod visit;
