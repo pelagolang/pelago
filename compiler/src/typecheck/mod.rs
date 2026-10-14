@@ -792,8 +792,10 @@ impl<'p> Checker<'p> {
     fn index_meta_expr(&mut self, file: ModuleId, scope: usize, e: &'p Expr) {
         match &e.kind {
             ExprKind::MetaIf(i) => {
-                self.index_stmts(file, scope, &i.then.stmts, false);
-                if let Some(el) = &i.else_ {
+                let src = &self.program.module(file).src;
+                if crate::meta::chooses_then(i, src, &self.program.target) {
+                    self.index_stmts(file, scope, &i.then.stmts, false);
+                } else if let Some(el) = &i.else_ {
                     self.index_meta_expr(file, scope, el);
                 }
             }

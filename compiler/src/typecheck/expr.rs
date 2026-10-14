@@ -314,7 +314,17 @@ impl<'p> Checker<'p> {
             ExprKind::Closure(c) => self.closure(e, c, exp),
             ExprKind::If(i) => self.if_expr(i, exp, false),
             ExprKind::Unless(i) => self.if_expr(i, exp, true),
-            ExprKind::MetaIf(i) => self.if_expr(i, exp, false),
+            ExprKind::MetaIf(i) => {
+                let src = &self.program.module(self.file).src;
+                if crate::meta::chooses_then(i, src, &self.program.target) {
+                    self.check_block(&i.then, exp)
+                } else {
+                    match &i.else_ {
+                        Some(el) => self.check_expr(el, exp),
+                        None => self.tt.void,
+                    }
+                }
+            }
             ExprKind::Switch(s) => self.switch_expr(e, s, exp),
             ExprKind::Select(arms) => self.select_expr(arms, exp),
             ExprKind::Scope { name, body } => {

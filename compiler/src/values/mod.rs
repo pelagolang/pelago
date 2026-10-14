@@ -1032,7 +1032,15 @@ impl<'a> Walker<'a> {
                 }
                 self.state.dead = true;
             }
-            ExprKind::Meta(_) | ExprKind::MetaIf(_) => {}
+            ExprKind::Meta(_) => {}
+            ExprKind::MetaIf(i) => {
+                let src = &self.program.module(self.file).src;
+                if crate::meta::chooses_then(i, src, &self.program.target) {
+                    self.block(&i.then, ctx);
+                } else if let Some(el) = &i.else_ {
+                    self.expr(el, ctx);
+                }
+            }
             _ => {
                 let mut v = Generic { w: self };
                 visit::walk_expr(&mut v, e);

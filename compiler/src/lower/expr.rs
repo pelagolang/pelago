@@ -287,6 +287,19 @@ impl<'a> Lowerer<'a> {
 
     // ---- Scalar expressions that can also be reached through `into` ----------------------------------------
 
+    /// `meta if`: only the branch the target selects is lowered.
+    fn meta_if(&mut self, i: &'a IfExpr, dst: Option<Value>, want: Ty) -> Res {
+        let src = &self.program.module(self.f.file).src;
+        if crate::meta::chooses_then(i, src, &self.program.target) {
+            return self.block(&i.then, dst, want);
+        }
+        match (&i.else_, dst) {
+            (Some(el), Some(d)) => self.into(el, d, want),
+            (Some(el), None) => self.expr(el),
+            (None, _) => Res::Unit,
+        }
+    }
+
     /// Evaluates an expression of a scalar or zero-sized type that is not a place.
     pub(crate) fn value_expr(&mut self, e: &'a Expr, dst: Option<Value>, want: Ty) -> Res {
         let _ = (dst, want);
@@ -294,6 +307,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Block(b) => self.block(b, None, want),
             ExprKind::Unsafe(b) => self.block(b, None, want),
             ExprKind::If(i) => self.if_expr(e, i, false, None, want),
+            ExprKind::MetaIf(i) => self.meta_if(i, None, want),
             ExprKind::Unless(i) => self.if_expr(e, i, true, None, want),
             ExprKind::Ternary { cond, then, else_ } => {
                 self.ternary(e, cond, then, else_, None, want)
@@ -322,6 +336,7 @@ impl<'a> Lowerer<'a> {
         match &e.kind {
             ExprKind::Block(b) | ExprKind::Unsafe(b) => self.block(b, Some(dst), t),
             ExprKind::If(i) => self.if_expr(e, i, false, Some(dst), t),
+            ExprKind::MetaIf(i) => self.meta_if(i, Some(dst), t),
             ExprKind::Unless(i) => self.if_expr(e, i, true, Some(dst), t),
             ExprKind::Ternary { cond, then, else_ } => {
                 self.ternary(e, cond, then, else_, Some(dst), t)

@@ -1025,7 +1025,32 @@ impl<'p> Resolver<'p> {
                 self.pop_frame();
                 None
             }
-            ExprKind::If(i) | ExprKind::MetaIf(i) => {
+            ExprKind::MetaIf(i) => {
+                let src = &self.program.module(self.cur_file).src;
+                let then = match crate::meta::eval_cond(&i.cond, src, &self.program.target) {
+                    Ok(b) => b,
+                    Err((span, msg)) => {
+                        self.error(span, msg);
+                        true
+                    }
+                };
+                // At module level the chosen branch holds declarations that are already defined.
+                let top = self.frames.is_empty();
+                if then {
+                    if top {
+                        self.resolve_stmts_toplevel(&i.then.stmts);
+                    } else {
+                        self.resolve_block(&i.then);
+                    }
+                } else if let Some(el) = &i.else_ {
+                    match (&el.kind, top) {
+                        (ExprKind::Block(b), true) => self.resolve_stmts_toplevel(&b.stmts),
+                        _ => self.resolve_expr(el),
+                    }
+                }
+                None
+            }
+            ExprKind::If(i) => {
                 let bound = self.resolve_cond(&i.cond);
                 self.with_bindings(bound, |r| r.resolve_block(&i.then));
                 if let Some(el) = &i.else_ {

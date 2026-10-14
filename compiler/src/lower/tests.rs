@@ -922,3 +922,23 @@ fn temporaries_die_in_reverse_order_at_the_end_of_the_statement() {
     let src = "obj noisy { id: int\n deinit { print(\"drop #(self.id)\") } }\nfn mk(i: int) -> noisy { noisy { id: i } }\nfn pair(a: noisy, b: noisy) -> int { a.id + b.id }\nfn main() { print(pair(mk(1), mk(2)))\n print(\"next\") }\n";
     assert_eq!(output_of(src), "3\ndrop 2\ndrop 1\nnext\n");
 }
+
+// ---- A-05 stage M1: `meta if` ---------------------------------------------------------------------
+
+#[test]
+fn meta_if_lowers_only_the_chosen_branch() {
+    let src = "meta if target.os == linux {\n fn platform() -> string = \"linux\"\n} else {\n fn platform() -> string = \"other\"\n}\nfn main() { print(platform())\n const n = meta if target.pointer_bits == 64 { 8 } else { missing_name }\n print(n) }\n";
+    let mut program = Program::with_core();
+    program.target = crate::meta::Target {
+        os: "linux".into(),
+        pointer_bits: 64,
+        ..crate::meta::Target::host()
+    };
+    program.add_package("app", &[("main", src)]);
+    let res = resolve(&program);
+    let typed = check(&program, &res);
+    assert!(typed.diagnostics.is_empty(), "{:?}", typed.diagnostics);
+    let l = lower(&program, &res, &typed);
+    let o = run_full(&l.module, "main", &[]);
+    assert_eq!(o.output, "linux\n8\n");
+}

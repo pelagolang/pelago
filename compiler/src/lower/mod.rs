@@ -255,8 +255,24 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 }
-                StmtKind::Expr(_) => {}
+                StmtKind::Expr(e) => self.index_meta_expr(file, e),
             }
+        }
+    }
+
+    /// Declarations inside a module-level `meta if`: only the branch the target selects.
+    fn index_meta_expr(&mut self, file: ModuleId, e: &'a Expr) {
+        match &e.kind {
+            ExprKind::MetaIf(i) => {
+                let src = &self.program.module(file).src;
+                if crate::meta::chooses_then(i, src, &self.program.target) {
+                    self.index_stmts(file, &i.then.stmts);
+                } else if let Some(el) = &i.else_ {
+                    self.index_meta_expr(file, el);
+                }
+            }
+            ExprKind::Block(b) => self.index_stmts(file, &b.stmts),
+            _ => {}
         }
     }
 
