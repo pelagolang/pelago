@@ -1396,8 +1396,30 @@ impl<T, E> result<T, E> {
 }
 
 impl<T> range<T> {
-    ext fn iter(self) -> iter<T>
-    ext fn contains(self, item: T) -> bool
+    fn contains(self, item: T) -> bool {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        const cmp = rt_cmp_fn<T>()
+        const probe = rt_addr_of(item)
+        if rt_call_int2(cmp, probe, h) < 0 { return false }
+        const c = rt_call_int2(cmp, probe, rt_offset(h, size))
+        if rt_load_bool(rt_offset(h, size * 2)) { c <= 0 } else { c < 0 }
+    }
+}
+
+impl range<int> {
+    fn iter(self) -> iter<int> {
+        const h = rt_addr_of(self)
+        var out: list<int> = []
+        var i = rt_load_int(h)
+        var end = rt_load_int(rt_offset(h, 8))
+        if rt_load_bool(rt_offset(h, 16)) { end += 1 }
+        while i < end {
+            out.push!(i)
+            i += 1
+        }
+        rt_cast<list<int>, iter<int>>(sink out)
+    }
 }
 
 impl int {

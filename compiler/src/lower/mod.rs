@@ -15,6 +15,7 @@
 
 mod agg;
 mod any;
+mod builder;
 mod call;
 mod closure;
 mod coll;
@@ -44,6 +45,7 @@ use crate::types::{FloatKind, Ty, TyKind, TypeTable};
 use std::collections::HashMap;
 use std::rc::Rc;
 
+pub(crate) use expr::LoopBody;
 pub(crate) use func::*;
 pub(crate) use ty::*;
 

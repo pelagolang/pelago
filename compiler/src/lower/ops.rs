@@ -292,4 +292,34 @@ impl<'a> Lowerer<'a> {
             }
         }
     }
+
+    // ---- Ranges as values --------------------------------------------------------------------------------
+
+    /// `lo..hi` and `lo..=hi` kept in a value: the two ends and whether the end counts.
+    pub(crate) fn range_value(&mut self, e: &'a Expr, dst: Value, t: Ty) -> Res {
+        let ExprKind::Range {
+            start: Some(lo),
+            end: Some(hi),
+            inclusive,
+            ..
+        } = &e.kind
+        else {
+            return self.unsupported(e.span, "a range with an open end kept as a value");
+        };
+        let fs = self.struct_fields(t);
+        if fs.len() != 3 {
+            return self.unsupported(e.span, "a range of this type");
+        }
+        let p0 = self.at(dst, fs[0].off);
+        if let Res::Never = self.into(lo, p0, fs[0].ty) {
+            return Res::Never;
+        }
+        let p1 = self.at(dst, fs[1].off);
+        if let Res::Never = self.into(hi, p1, fs[1].ty) {
+            return Res::Never;
+        }
+        let flag = self.konst(IrTy::Bool, Const::Bool(*inclusive), e.span);
+        self.store_at(dst, fs[2].off, flag);
+        Res::Unit
+    }
 }

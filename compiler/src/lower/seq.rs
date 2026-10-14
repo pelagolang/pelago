@@ -697,7 +697,7 @@ impl<'a> Lowerer<'a> {
         label: Option<String>,
         pats: &'a [Pattern],
         iter: &'a Expr,
-        body: &'a Block,
+        body: &mut LoopBody<'a, '_>,
         keys_only: bool,
     ) -> Res {
         let Some(it) = self.ty_of(iter) else {
@@ -818,7 +818,7 @@ impl<'a> Lowerer<'a> {
             scope_depth: depth,
         });
         let void = self.types.void;
-        let r = self.block(body, None, void);
+        let r = self.run_body(body, void);
         if !matches!(r, Res::Never) {
             self.jump(step, vec![]);
         }

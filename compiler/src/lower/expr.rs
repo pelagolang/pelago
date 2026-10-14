@@ -12,6 +12,12 @@
 use super::*;
 use crate::typecheck::literal_value;
 
+/// What a `for` runs on each turn.
+pub(crate) enum LoopBody<'a, 'b> {
+    Block(&'a Block),
+    Code(&'b mut dyn FnMut(&mut Lowerer<'a>) -> Res),
+}
+
 impl<'a> Lowerer<'a> {
     // ---- Small helpers --------------------------------------------------------------------------------
 
@@ -1481,6 +1487,23 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Runs the body of a loop: a block, or code made by the caller (a builder's clauses).
+    pub(crate) fn run_body(&mut self, body: &mut LoopBody<'a, '_>, want: Ty) -> Res {
+        match body {
+            LoopBody::Block(b) => self.block(b, None, want),
+            LoopBody::Code(f) => {
+                self.push_scope();
+                let r = f(self);
+                if matches!(r, Res::Never) {
+                    self.f.scopes.pop();
+                } else {
+                    self.pop_scope();
+                }
+                r
+            }
+        }
+    }
+
     fn for_loop(&mut self, e: &'a Expr, f: &'a ForExpr) -> Res {
         let label = self.f.pending_label.take();
         let (pats, iter, keys_only): (&'a [Pattern], &'a Expr, bool) = match &f.head {
@@ -1494,13 +1517,23 @@ impl<'a> Lowerer<'a> {
             start: Some(start),
             end: Some(end),
             inclusive,
-            step: None,
+            step,
         } = &iter.kind
         {
-            return self.for_range(label, pats, start, end, *inclusive, &f.body, iter.span);
+            let step = step.as_deref();
+            return self.for_range(
+                label,
+                pats,
+                start,
+                end,
+                *inclusive,
+                step,
+                &mut LoopBody::Block(&f.body),
+                iter.span,
+            );
         }
         let _ = e;
-        self.for_each(label, pats, iter, &f.body, keys_only)
+        self.for_each(label, pats, iter, &mut LoopBody::Block(&f.body), keys_only)
     }
 
     /// `for (init; cond; step) { body }`.
@@ -1565,14 +1598,15 @@ impl<'a> Lowerer<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn for_range(
+    pub(crate) fn for_range(
         &mut self,
         label: Option<String>,
         pats: &'a [Pattern],
         start: &'a Expr,
         end: &'a Expr,
         inclusive: bool,
-        body: &'a Block,
+        step_e: Option<&'a Expr>,
+        body: &mut LoopBody<'a, '_>,
         span: Span,
     ) -> Res {
         let [pat] = pats else {
@@ -1598,6 +1632,13 @@ impl<'a> Lowerer<'a> {
         let Some(b) = self.scalar(end) else {
             return Res::Never;
         };
+        let step_v = match step_e {
+            Some(s) => match self.scalar(s) {
+                Some(v) => Some(v),
+                None => return Res::Never,
+            },
+            None => None,
+        };
         let head = self.new_block(&[ty]);
         let body_b = self.new_block(&[]);
         let step = self.new_block(&[]);
@@ -1611,7 +1652,29 @@ impl<'a> Lowerer<'a> {
             (true, true) => CmpOp::Le,
             (true, false) => CmpOp::ULe,
         };
-        if let Some(c) = self.emit(Op::Cmp(cmp, i, b), Some(IrTy::Bool), span) {
+        let up = self.emit(Op::Cmp(cmp, i, b), Some(IrTy::Bool), span);
+        let cond = match (step_v, up) {
+            (Some(sv), Some(up)) if signed || ty.is_float() => {
+                // A step below zero walks down: the loop runs while the value is above the end.
+                let zero = if ty.is_float() {
+                    self.konst(ty, Const::Float(0.0), span)
+                } else {
+                    self.konst(ty, Const::Int(0), span)
+                };
+                let pos = self.emit(Op::Cmp(CmpOp::Gt, sv, zero), Some(IrTy::Bool), span);
+                let down_op = if inclusive { CmpOp::Ge } else { CmpOp::Gt };
+                let down = self.emit(Op::Cmp(down_op, i, b), Some(IrTy::Bool), span);
+                match (pos, down) {
+                    (Some(pos), Some(down)) => match self.select(pos, up, down, IrTy::Bool, span) {
+                        Res::Val(v) => Some(v),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            _ => up,
+        };
+        if let Some(c) = cond {
             self.branch(c, body_b, exit);
         }
         if let Some(d) = var {
@@ -1628,13 +1691,15 @@ impl<'a> Lowerer<'a> {
         });
         self.start(body_b);
         let void = self.types.void;
-        let r = self.block(body, None, void);
+        let r = self.run_body(body, void);
         if !matches!(r, Res::Never) {
             self.jump(step, vec![]);
         }
         self.f.loops.pop();
         self.start(step);
-        let next = if inclusive {
+        let next = if let Some(sv) = step_v {
+            self.emit(Op::Bin(BinOp::Add, i, sv), Some(ty), span)
+        } else if inclusive {
             // After the last value, stop without adding (the add could overflow).
             let at_end = self.emit(Op::Cmp(CmpOp::Eq, i, b), Some(IrTy::Bool), span);
             let more = self.new_block(&[]);
