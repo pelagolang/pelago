@@ -65,6 +65,16 @@ pub fn parse_source(src: &str) -> (ParseOutput, Vec<LexError>) {
     (parse(src, &lexed.tokens), lexed.errors)
 }
 
+/// Lexes, parses and runs the syntax checks of [`crate::check`]. This is what a compile uses.
+/// Errors from all stages are sorted by position.
+pub fn parse_and_check(src: &str) -> (ParseOutput, Vec<LexError>) {
+    let (mut out, lex) = parse_source(src);
+    let checked = crate::check::check_file(&out.file, src);
+    out.errors.extend(checked);
+    out.errors.sort_by_key(|e| e.span.start);
+    (out, lex)
+}
+
 /// Lexes and parses `text`, which sits at byte offset `offset` inside the real source `src`
 /// (used for `#(...)` in strings). Spans in the result point into `src`.
 fn parse_fragment(src: &str, offset: u32, text: &str) -> (crate::ast::Expr, Vec<ParseError>) {
@@ -122,6 +132,8 @@ pub(crate) struct Parser<'a> {
     /// For each opening bracket, whether an `of` keyword sits directly inside it.
     has_of: Vec<bool>,
     pos: usize,
+    /// The current token, kept in step with `pos` and `gt` by [`Parser::refresh`].
+    cur: Token,
     /// How many leading `>` characters of the current token were already used to close generics.
     gt: u8,
     prev_end: u32,
@@ -132,6 +144,10 @@ pub(crate) struct Parser<'a> {
     /// `name ~>` is not a closure (the source of a builder clause).
     no_arrow: bool,
     frames: Vec<Frame>,
+    /// Doc comment tokens, in source order.
+    docs: Vec<Token>,
+    /// Names of the labeled loops around the current position.
+    labels: Vec<crate::ast::Ident>,
     depth: u32,
     errors: Vec<ParseError>,
 }
@@ -139,8 +155,15 @@ pub(crate) struct Parser<'a> {
 impl<'a> Parser<'a> {
     fn new(src: &'a str, tokens: &[Token]) -> Parser<'a> {
         let mut toks: Vec<Token> = Vec::with_capacity(tokens.len());
+        let mut docs: Vec<Token> = Vec::new();
         for t in tokens {
             if t.kind.is_trivia() {
+                if matches!(
+                    t.kind,
+                    TokenKind::DocLineComment | TokenKind::DocBlockComment
+                ) {
+                    docs.push(*t);
+                }
                 continue;
             }
             if t.kind == TokenKind::Newline
@@ -161,12 +184,15 @@ impl<'a> Parser<'a> {
             close_of,
             has_of,
             pos: 0,
+            cur: Token::new(TokenKind::Eof, Span::new(0, 0)),
             gt: 0,
             prev_end: 0,
             nl_ignore: 0,
             no_struct: false,
             no_arrow: false,
             frames: Vec::new(),
+            docs,
+            labels: Vec::new(),
             depth: 0,
             errors: Vec::new(),
         };
@@ -181,21 +207,28 @@ impl<'a> Parser<'a> {
     }
 
     /// The current token. After a split `>>` this is the rest of it.
+    #[inline]
     fn tok(&self) -> Token {
+        self.cur
+    }
+
+    /// Recomputes [`Parser::cur`] after `pos` or `gt` changed.
+    fn refresh(&mut self) {
         let t = self.toks[self.pos];
-        if self.gt == 0 {
-            return t;
-        }
-        let rest = &t.text(self.src)[self.gt as usize..];
-        let p = match rest {
-            ">" => Punct::Gt,
-            ">=" => Punct::GtEq,
-            _ => Punct::Eq,
+        self.cur = if self.gt == 0 {
+            t
+        } else {
+            let rest = &t.text(self.src)[self.gt as usize..];
+            let p = match rest {
+                ">" => Punct::Gt,
+                ">=" => Punct::GtEq,
+                _ => Punct::Eq,
+            };
+            Token::new(
+                TokenKind::Punct(p),
+                Span::new(t.span.start + u32::from(self.gt), t.span.end),
+            )
         };
-        Token::new(
-            TokenKind::Punct(p),
-            Span::new(t.span.start + u32::from(self.gt), t.span.end),
-        )
     }
 
     fn kind(&self) -> TokenKind {
@@ -231,6 +264,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
             }
         }
+        self.refresh();
     }
 
     fn bump(&mut self) -> Token {
@@ -274,6 +308,7 @@ impl<'a> Parser<'a> {
             TokenKind::Punct(Punct::Shr | Punct::GtEq | Punct::ShrEq) => {
                 self.gt += 1;
                 self.prev_end = t.span.start + 1;
+                self.refresh();
                 true
             }
             _ => false,
@@ -310,6 +345,7 @@ impl<'a> Parser<'a> {
         while self.toks[self.pos].kind == TokenKind::Newline {
             self.pos += 1;
         }
+        self.refresh();
     }
 
     fn snapshot(&self) -> Snapshot {
@@ -334,12 +370,52 @@ impl<'a> Parser<'a> {
         self.no_arrow = s.no_arrow;
         self.frames.truncate(s.frames);
         self.errors.truncate(s.errors);
+        self.refresh();
     }
 
     /// Index of the closing bracket for the opening bracket at the current token, if any.
     fn closing_index(&self) -> Option<usize> {
         let c = *self.close_of.get(self.pos)?;
         (c != u32::MAX).then_some(c as usize)
+    }
+
+    /// The doc comments sitting right before the current token (and after the previous real
+    /// token, on lines of their own).
+    fn docs_here(&self) -> Vec<Span> {
+        if self.docs.is_empty() {
+            return Vec::new();
+        }
+        let here = self.toks[self.pos].span.start;
+        let mut prev_end = 0u32;
+        let mut has_prev = false;
+        let mut j = self.pos;
+        while j > 0 {
+            j -= 1;
+            if self.toks[j].kind != TokenKind::Newline {
+                prev_end = self.toks[j].span.end;
+                has_prev = true;
+                break;
+            }
+        }
+        let lo = self.docs.partition_point(|d| d.span.start < prev_end);
+        let mut out: Vec<Span> = Vec::new();
+        for d in &self.docs[lo..] {
+            if d.span.end > here {
+                break;
+            }
+            // A doc comment on the same line as the previous token is not for this item.
+            if out.is_empty()
+                && has_prev
+                && !self
+                    .src
+                    .get(prev_end as usize..d.span.start as usize)
+                    .is_some_and(|gap| gap.contains('\n'))
+            {
+                continue;
+            }
+            out.push(d.span);
+        }
+        out
     }
 
     // ---- Errors --------------------------------------------------------------

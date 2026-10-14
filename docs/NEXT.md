@@ -9,8 +9,9 @@
 
 ## Next, in order
 
-1. **The parser** is written (`docs/design/parser.md`, `compiler/src/parser/`). Open: the choices P1 to P10 in that page,
-   doc comments kept in the tree for the formatter, and an arena for speed.
+1. **The parser** and the syntax checks are written and decided (`docs/design/parser.md`). Left there: ordinary comments kept for
+   the formatter, and an index-based arena for tree nodes (when the type checker's needs are known).
+   **Next design pass: the import form** (our own shape; `use` stays as an alias).
 2. **Collections** (including builders) and **list patterns** are decided (`collections.md`, `list-patterns.md`). Revisit `sink` list patterns once the checker exists.
 3. **Errors** are decided (`docs/design/errors.md`). **Concurrency** is decided (`docs/design/concurrency.md`, CC1 to CC9).
 4. **Name resolution and the type checker** are next: modules and scopes first, then types, then the value-semantics checker.
@@ -19,4 +20,4 @@
 
 - The final **name** (see `NAMES.md`, round 6). `langc` stays as the crate name until then.
 - Whether to ship a **single tool** named after the language, with the compiler inside it.
-- Quick confirms at the end of `docs/design/switch.md` (N1 to N3).
+- The **import form** (P2 in `docs/design/parser.md`).

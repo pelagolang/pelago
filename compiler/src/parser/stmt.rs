@@ -153,6 +153,7 @@ impl Parser<'_> {
                     span,
                 }
             }
+            TokenKind::Ident if self.at_label() => self.parse_labeled(),
             TokenKind::Ident => {
                 // `class Foo { ... }` and friends from other languages.
                 if let Some(hint) = foreign_keyword_hint(self.text(t)) {
@@ -177,6 +178,46 @@ impl Parser<'_> {
                 self.parse_expr_stmt()
             }
             _ => self.parse_expr_stmt(),
+        }
+    }
+
+    /// `name: for ...`, `name: while ...`, `name: loop ...`, `name: do ...`, `name: { ... }`
+    fn at_label(&self) -> bool {
+        self.peek_raw().kind == TokenKind::Punct(Punct::Colon)
+            && matches!(
+                self.peek_sig(2).kind,
+                TokenKind::Keyword(Keyword::For | Keyword::While | Keyword::Loop | Keyword::Do)
+                    | TokenKind::Punct(Punct::LBrace)
+            )
+    }
+
+    fn parse_labeled(&mut self) -> Stmt {
+        let label = self.ident("a label");
+        self.bump(); // `:`
+        self.skip_newlines();
+        if self
+            .labels
+            .iter()
+            .any(|l| l.text(self.src) == label.text(self.src))
+        {
+            self.error(
+                label.span,
+                "this label is already used by an enclosing loop",
+            );
+        }
+        self.labels.push(label);
+        let body = self.parse_expr();
+        self.labels.pop();
+        let span = label.span.to(body.span);
+        Stmt {
+            kind: StmtKind::Expr(Expr {
+                kind: ExprKind::Labeled {
+                    label,
+                    body: Box::new(body),
+                },
+                span,
+            }),
+            span,
         }
     }
 

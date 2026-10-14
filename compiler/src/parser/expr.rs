@@ -818,7 +818,7 @@ impl Parser<'_> {
         let open = self.tok();
         // `(a, b) ~> body`
         if let Some(c) = self.closing_index() {
-            if self.toks[c + 1].kind == TokenKind::Punct(Punct::TildeArrow) && !self.no_arrow {
+            if self.tilde_arrow_follows(c) && !self.no_arrow {
                 return self.parse_closure_from_params();
             }
         }
@@ -914,6 +914,56 @@ impl Parser<'_> {
         }
     }
 
+    /// Is the token after the `)` at index `close` a `~>`, or `-> Type ~>`?
+    fn tilde_arrow_follows(&self, close: usize) -> bool {
+        match self.toks.get(close + 1) {
+            Some(t) if t.kind == TokenKind::Punct(Punct::TildeArrow) => true,
+            Some(t) if t.kind == TokenKind::Punct(Punct::Arrow) => self.type_then_tilde(close + 2),
+            _ => false,
+        }
+    }
+
+    /// Scans a return type (no braces, no line breaks) looking for the `~>` after it.
+    fn type_then_tilde(&self, mut i: usize) -> bool {
+        let mut steps = 0;
+        let mut angle = 0u32;
+        while let Some(t) = self.toks.get(i) {
+            match t.kind {
+                TokenKind::Punct(Punct::TildeArrow) => return true,
+                TokenKind::Punct(Punct::Lt) => angle += 1,
+                TokenKind::Punct(Punct::Gt) => angle = angle.saturating_sub(1),
+                TokenKind::Punct(Punct::Shr) => angle = angle.saturating_sub(2),
+                TokenKind::Punct(Punct::Comma) if angle > 0 => {}
+                TokenKind::Punct(Punct::LParen | Punct::LBracket) => {
+                    let c = self.close_of.get(i).copied().unwrap_or(u32::MAX);
+                    if c == u32::MAX {
+                        return false;
+                    }
+                    i = c as usize + 1;
+                    continue;
+                }
+                TokenKind::Newline
+                | TokenKind::Eof
+                | TokenKind::Punct(
+                    Punct::LBrace
+                    | Punct::RBrace
+                    | Punct::RParen
+                    | Punct::RBracket
+                    | Punct::Comma
+                    | Punct::Semi
+                    | Punct::Eq,
+                ) => return false,
+                _ => {}
+            }
+            i += 1;
+            steps += 1;
+            if steps > 256 {
+                return false;
+            }
+        }
+        false
+    }
+
     /// Is the `]` at token index `close` followed by closure parameters and `~>`?
     fn capture_list_follows(&self, close: usize) -> bool {
         let after = self.toks.get(close + 1).copied();
@@ -926,11 +976,7 @@ impl Parser<'_> {
                 .is_some_and(|t| t.kind == TokenKind::Punct(Punct::TildeArrow)),
             TokenKind::Punct(Punct::LParen) => {
                 let c = self.close_of.get(close + 1).copied().unwrap_or(u32::MAX);
-                c != u32::MAX
-                    && self
-                        .toks
-                        .get(c as usize + 1)
-                        .is_some_and(|t| t.kind == TokenKind::Punct(Punct::TildeArrow))
+                c != u32::MAX && self.tilde_arrow_follows(c as usize)
             }
             _ => false,
         }
@@ -986,11 +1032,19 @@ impl Parser<'_> {
                 params.push(ClosureParam { pattern, ty: None });
             }
         }
+        let ret = if self.at(Punct::Arrow) {
+            self.bump();
+            Some(self.parse_type())
+        } else {
+            None
+        };
         self.expect(Punct::TildeArrow);
         self.skip_newlines();
         let saved = self.no_arrow;
         self.no_arrow = false;
+        let saved_labels = std::mem::take(&mut self.labels);
         let mut body = self.parse_expr();
+        self.labels = saved_labels;
         self.no_arrow = saved;
         // `n ~> n++`: the increment belongs to the body.
         if self.at(Punct::PlusPlus) || self.at(Punct::MinusMinus) {
@@ -1014,6 +1068,7 @@ impl Parser<'_> {
             kind: ExprKind::Closure(Box::new(Closure {
                 captures,
                 params,
+                ret,
                 body,
             })),
             span,
@@ -1088,6 +1143,12 @@ impl Parser<'_> {
         loop {
             let before = self.pos;
             if self.at_kw(Keyword::If) {
+                if clauses.is_empty() {
+                    self.error(
+                        self.tok().span,
+                        "a builder starts with `x of xs`; `if` filters what comes before it",
+                    );
+                }
                 self.bump();
                 clauses.push(Clause::If(self.parse_expr()));
             } else {
@@ -1152,6 +1213,27 @@ impl Parser<'_> {
                 )
                 | TokenKind::Keyword(Keyword::Case | Keyword::Else)
         ) && !self.at_default_arm()
+    }
+
+    fn parse_optional_value(&mut self) -> Option<Box<Expr>> {
+        if self.at_value_start() {
+            Some(Box::new(self.parse_expr()))
+        } else {
+            None
+        }
+    }
+
+    /// After `break` / `continue`: a name that matches an enclosing loop label is that label.
+    /// (To break with a value that has the same name, wrap it in parentheses.)
+    fn take_label(&mut self) -> Option<Ident> {
+        if self.kind() != TokenKind::Ident {
+            return None;
+        }
+        let name = self.text(self.tok());
+        if self.labels.iter().any(|l| l.text(self.src) == name) {
+            return Some(self.ident("a label"));
+        }
+        None
     }
 
     fn parse_keyword_expr(&mut self, k: Keyword) -> Expr {
@@ -1221,26 +1303,36 @@ impl Parser<'_> {
                     },
                 }
             }
-            Keyword::Return | Keyword::Break | Keyword::Yield => {
+            Keyword::Break => {
                 self.bump();
-                let value = if self.at_value_start() {
-                    Some(Box::new(self.parse_expr()))
-                } else {
-                    None
-                };
+                let label = self.take_label();
+                let value = self.parse_optional_value();
+                let mut span = label.map_or(t.span, |l| t.span.to(l.span));
+                if let Some(v) = &value {
+                    span = span.to(v.span);
+                }
+                Expr {
+                    kind: ExprKind::Break { label, value },
+                    span,
+                }
+            }
+            Keyword::Return | Keyword::Yield => {
+                self.bump();
+                let value = self.parse_optional_value();
                 let span = value.as_ref().map_or(t.span, |v| t.span.to(v.span));
-                let kind = match k {
-                    Keyword::Return => ExprKind::Return(value),
-                    Keyword::Break => ExprKind::Break(value),
-                    _ => ExprKind::Yield(value),
+                let kind = if k == Keyword::Return {
+                    ExprKind::Return(value)
+                } else {
+                    ExprKind::Yield(value)
                 };
                 Expr { kind, span }
             }
             Keyword::Continue => {
                 self.bump();
+                let label = self.take_label();
                 Expr {
-                    kind: ExprKind::Continue,
-                    span: t.span,
+                    span: label.map_or(t.span, |l| t.span.to(l.span)),
+                    kind: ExprKind::Continue { label },
                 }
             }
             Keyword::Become => {

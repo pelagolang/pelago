@@ -120,6 +120,7 @@ impl Parser<'_> {
     /// Attributes and modifiers, then the declaration itself.
     pub(super) fn parse_item(&mut self) -> Item {
         let start = self.tok().span;
+        let docs = self.docs_here();
         let mut attrs = Vec::new();
         while self.at(Punct::At) {
             attrs.push(self.parse_attr());
@@ -129,6 +130,7 @@ impl Parser<'_> {
         let kind = self.parse_item_kind();
         let end = self.prev_end.max(start.end);
         Item {
+            docs,
             attrs,
             mods,
             kind,
@@ -286,6 +288,7 @@ impl Parser<'_> {
             None
         };
         let where_ = self.parse_where();
+        let saved_labels = std::mem::take(&mut self.labels);
         let body = if self.at(Punct::LBrace) {
             FnBody::Block(self.parse_block())
         } else if self.at(Punct::Eq) {
@@ -295,6 +298,7 @@ impl Parser<'_> {
         } else {
             FnBody::None
         };
+        self.labels = saved_labels;
         FnDecl {
             kind,
             name,
@@ -390,12 +394,16 @@ impl Parser<'_> {
             }
             let before = self.pos;
             self.parse_member(&mut members, variants.as_deref_mut());
-            let ended = matches!(
-                self.kind(),
-                TokenKind::Newline
-                    | TokenKind::Eof
-                    | TokenKind::Punct(Punct::Comma | Punct::Semi | Punct::RBrace)
-            );
+            // A member that ends with a block may be followed by the next one on the same line.
+            let after_block = self.prev_end > 0
+                && self.src.as_bytes().get(self.prev_end as usize - 1) == Some(&b'}');
+            let ended = after_block
+                || matches!(
+                    self.kind(),
+                    TokenKind::Newline
+                        | TokenKind::Eof
+                        | TokenKind::Punct(Punct::Comma | Punct::Semi | Punct::RBrace)
+                );
             if !ended {
                 self.error_expected("the end of the member");
                 self.sync_stmt();
@@ -411,6 +419,7 @@ impl Parser<'_> {
 
     fn parse_member(&mut self, members: &mut Vec<Member>, variants: Option<&mut Vec<Variant>>) {
         let start = self.tok().span;
+        let docs = self.docs_here();
         // Attributes and modifiers belong to either a field or a method.
         let mut attrs = Vec::new();
         while self.at(Punct::At) {
@@ -440,6 +449,7 @@ impl Parser<'_> {
             let kind = self.parse_item_kind();
             let end = self.prev_end.max(start.end);
             members.push(Member::Item(Item {
+                docs,
                 attrs,
                 mods,
                 kind,
@@ -452,7 +462,7 @@ impl Parser<'_> {
             return;
         }
         if let Some(variants) = variants {
-            variants.push(self.parse_variant());
+            variants.push(self.parse_variant(docs));
             return;
         }
         let name = self.ident("a field name");
@@ -466,6 +476,7 @@ impl Parser<'_> {
         };
         let end = self.prev_end.max(start.end);
         members.push(Member::Field(FieldDecl {
+            docs,
             attrs,
             vis: mods.vis,
             name,
@@ -475,7 +486,7 @@ impl Parser<'_> {
         }));
     }
 
-    fn parse_variant(&mut self) -> Variant {
+    fn parse_variant(&mut self, docs: Vec<Span>) -> Variant {
         let name = self.ident("a case name");
         let mut fields = Vec::new();
         if self.at(Punct::LParen) {
@@ -510,6 +521,7 @@ impl Parser<'_> {
             None
         };
         Variant {
+            docs,
             span: name
                 .span
                 .to(Span::new(name.span.start, self.prev_end.max(name.span.end))),

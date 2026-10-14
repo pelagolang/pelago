@@ -769,7 +769,7 @@ fn random_token_soup_never_panics_or_hangs() {
             src.push_str(SOUP[rng.below(SOUP.len())]);
             src.push(' ');
         }
-        let (out, _) = parse_source(&src);
+        let (out, _) = parse_and_check(&src);
         // Printing must work on whatever tree came out.
         let _ = print_file(&out.file, &src);
     }
@@ -800,7 +800,7 @@ fn damaged_real_files_never_panic_or_hang() {
             }
         }
         let src: String = c.into_iter().collect();
-        let (out, _) = parse_source(&src);
+        let (out, _) = parse_and_check(&src);
         let _ = print_file(&out.file, &src);
     }
 }
@@ -815,9 +815,317 @@ fn truncated_real_files_never_panic_or_hang() {
     let mut cut = 0;
     while cut < tour.len() {
         if tour.is_char_boundary(cut) {
-            let (out, _) = parse_source(&tour[..cut]);
+            let (out, _) = parse_and_check(&tour[..cut]);
             let _ = print_file(&out.file, &tour[..cut]);
         }
         cut += 7;
     }
+}
+
+// ---- Labels, closure return types, doc comments -----------------------------------
+
+#[test]
+fn labels() {
+    assert_eq!(
+        one("outer: for x of xs { break outer }"),
+        "(label outer (for-of (x) xs (block (tail (break outer)))))"
+    );
+    assert_eq!(
+        one("a: loop { continue a }"),
+        "(label a (loop (block (tail (continue a)))))"
+    );
+    assert_eq!(
+        one("s: loop { break s 5 }"),
+        "(label s (loop (block (tail (break s 5)))))"
+    );
+    // A name that is not a label is a value.
+    assert_eq!(one("loop { break x }"), "(loop (block (tail (break x))))");
+    // Parentheses force the value reading.
+    assert_eq!(
+        one("x: loop { break (x) }"),
+        "(label x (loop (block (tail (break (paren x))))))"
+    );
+    assert_eq!(
+        one("b: { break b 1 }"),
+        "(label b (block (tail (break b 1))))"
+    );
+    // Labels do not reach into functions or closures.
+    let (out, _) = parse_source("a: loop { f(~> break a) }");
+    assert!(out.errors.is_empty());
+    assert!(!checked("a: loop { f(~> break a) }").is_empty());
+}
+
+#[test]
+fn a_label_cannot_be_reused_in_its_own_loop() {
+    assert!(errors("a: loop { a: loop { } }")
+        .iter()
+        .any(|m| m.contains("already used")));
+}
+
+#[test]
+fn closures_can_name_their_return_type() {
+    assert_eq!(
+        one("(a: int) -> int ~> a + 1"),
+        "(~> ((: a int)) -> int (+ a 1))"
+    );
+    assert_eq!(
+        one("[inout n] (a, b) -> [int] ~> { n += 1; [a, b] }"),
+        "(~> (capture (inout n)) (a b) -> (list int) (block (+= n 1) (tail (list a b))))"
+    );
+    assert_eq!(
+        one("(a) -> map<string, int> ~> m"),
+        "(~> (a) -> (map string int) m)"
+    );
+    // Not a closure: no `~>` follows.
+    assert!(!errors("(a, b) -> c").is_empty());
+}
+
+fn doc_of(src: &str) -> Vec<String> {
+    let (out, _) = parse_source(src);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    out.file
+        .stmts
+        .iter()
+        .filter_map(|s| match &s.kind {
+            StmtKind::Item(i) => Some(doc_text(src, &i.docs)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn doc_comments_attach_to_the_next_declaration() {
+    assert_eq!(doc_of("/// one\n/// two\nfn f() {}"), vec!["one\ntwo"]);
+    assert_eq!(doc_of("/// a\n\nfn f() {}\nfn g() {}"), vec!["a", ""]);
+    assert_eq!(
+        doc_of("///* big\n   text *///\nfn f() {}"),
+        vec!["big\ntext"]
+    );
+    assert_eq!(doc_of("/// for g\n@inline fn g() {}"), vec!["for g"]);
+    assert_eq!(doc_of("/// for g\npub fn g() {}"), vec!["for g"]);
+}
+
+#[test]
+fn a_doc_comment_after_code_on_the_same_line_is_not_for_the_next_item() {
+    assert_eq!(doc_of("const a = 1 /// note\nfn f() {}"), vec![""]);
+    assert_eq!(doc_of("fn f() {} /// trailing\nfn g() {}"), vec!["", ""]);
+}
+
+#[test]
+fn doc_comments_attach_to_fields_variants_and_methods() {
+    let src = "struct s {\n  /// the x\n  x: int\n  /// a method\n  fn m(self) {}\n}\nenum e {\n  /// first\n  a\n  b\n}";
+    let (out, _) = parse_source(src);
+    assert!(out.errors.is_empty(), "{:?}", out.errors);
+    let StmtKind::Item(s) = &out.file.stmts[0].kind else {
+        panic!()
+    };
+    let ItemKind::Struct(d) = &s.kind else {
+        panic!()
+    };
+    let Member::Field(f) = &d.members[0] else {
+        panic!()
+    };
+    assert_eq!(doc_text(src, &f.docs), "the x");
+    let Member::Item(m) = &d.members[1] else {
+        panic!()
+    };
+    assert_eq!(doc_text(src, &m.docs), "a method");
+    let StmtKind::Item(e) = &out.file.stmts[1].kind else {
+        panic!()
+    };
+    let ItemKind::Enum(d) = &e.kind else { panic!() };
+    assert_eq!(doc_text(src, &d.variants[0].docs), "first");
+    assert!(d.variants[1].docs.is_empty());
+}
+
+#[test]
+fn struct_pattern_rest_comes_last() {
+    assert!(errors("switch v { case point { .., x }: 0 }")
+        .iter()
+        .any(|m| m.contains("last")));
+}
+
+#[test]
+fn builders_start_with_a_source() {
+    assert!(!errors("[if x ~> x]").is_empty());
+}
+
+// ---- Syntax checks (check.rs) --------------------------------------------------------
+
+fn checked(src: &str) -> Vec<String> {
+    let (out, _) = parse_and_check(src);
+    out.errors.into_iter().map(|e| e.message).collect()
+}
+
+fn assert_clean(src: &str) {
+    let e = checked(src);
+    assert!(e.is_empty(), "unexpected errors in {src:?}: {e:?}");
+}
+
+fn assert_flagged(src: &str, needle: &str) {
+    let e = checked(src);
+    assert!(
+        e.iter().any(|m| m.contains(needle)),
+        "expected {needle:?} for {src:?}, got {e:?}"
+    );
+}
+
+#[test]
+fn break_and_continue_need_a_loop() {
+    assert_flagged("break", "inside a loop");
+    assert_flagged("continue", "inside a loop");
+    assert_flagged("if a { break }", "inside a loop");
+    assert_flagged("loop { f(~> break) }", "inside a loop");
+    assert_flagged("fn f() { break }", "inside a loop");
+    assert_clean("loop { break }");
+    assert_clean("while a { if b { continue } }");
+    assert_clean("for x of xs { switch x { case 1: break default: continue } }");
+    assert_clean("a: { break a }");
+}
+
+#[test]
+fn become_takes_a_call() {
+    assert_clean("fn f(n: int) -> int = become f(n)");
+    assert_flagged("fn f(n: int) -> int = become n", "function call");
+    assert_flagged("fn f(n: int) -> int = become (f(n))", "function call");
+}
+
+#[test]
+fn assignment_targets() {
+    assert_clean("x = 1");
+    assert_clean("a.b = 1");
+    assert_clean("xs[0] += 1");
+    assert_clean("t.0 = 1");
+    assert_clean("_ = f()");
+    assert_clean("(x) = 1");
+    assert_clean("i++");
+    assert_flagged("1 = 2", "cannot be assigned");
+    assert_flagged("f() = 2", "cannot be assigned");
+    assert_flagged("a?.b = 2", "cannot be assigned");
+    assert_flagged("_ += 2", "cannot be assigned");
+    assert_flagged("f()++", "`++`");
+}
+
+#[test]
+fn self_and_special_functions() {
+    assert_clean("struct s { fn m(self) {} fn n(inout self, x: int) {} fn assoc(x: int) {} }");
+    assert_clean("enum e { a\n fn m(self) {} }");
+    assert_clean("impl show for s { fn show(self) -> string = \"\" }");
+    assert_clean("interface i { fn m(self) -> int }");
+    assert_flagged("fn f(self) {}", "first parameter of a method");
+    assert_flagged(
+        "struct s { fn m(x: int, self) {} }",
+        "first parameter of a method",
+    );
+    assert_flagged("fn f() { fn g(self) {} }", "first parameter of a method");
+    assert_flagged("struct s { init(self) {} }", "no `self`");
+    assert_clean("struct s { init(x: int) {} deinit {} }");
+    assert_flagged("deinit {}", "belongs inside");
+    assert_flagged("struct s { deinit(x: int) {} }", "cannot fail");
+    assert_flagged("struct s { deinit() -> int {} }", "cannot fail");
+    assert_flagged("interface i { deinit {} }", "belongs inside");
+}
+
+#[test]
+fn parameters() {
+    assert_clean("fn f(a: int, ...rest: int) {}");
+    assert_flagged("fn f(...a: int, b: int) {}", "come last");
+    assert_flagged("fn f(...a: int, ...b: int) {}", "come last");
+    assert_flagged("fn f(a) {}", "needs a type");
+    assert_flagged("fn f(a: int, a: int) {}", "appears twice");
+    assert_clean("fn f(a: int = 1, b: string = \"x\") {}");
+}
+
+#[test]
+fn function_bodies() {
+    assert_flagged("fn f()", "needs a body");
+    assert_clean("interface i { fn m(self)\n fn n(self) = 1 }");
+    assert_clean("abstract obj a { abstract fn m(self) }");
+    assert_clean("ext fn puts(s: ptr) -> int");
+    assert_flagged("ext fn puts(s: ptr) {}", "has no body");
+    assert_flagged("struct s { fn m(self) }", "needs a body");
+    assert_flagged("impl i for s { fn m(self) }", "needs a body");
+}
+
+#[test]
+fn declarations_need_a_value_and_no_modes() {
+    assert_clean("const x = 1");
+    assert_clean("const (a, b) = pair");
+    assert_clean("ext const limit: int");
+    assert_flagged("var x: int", "given a value");
+    assert_flagged("ext const limit: int = 3", "no value");
+    assert_flagged("const inout x = 1", "access modes");
+    assert_flagged("const (a, sink b) = p", "access modes");
+    assert_flagged("const 1 = x", "can fail");
+    assert_flagged("const none = x", "can fail");
+    assert_flagged("const (0, y) = p", "can fail");
+    assert_flagged("const (a, a) = p", "bound twice");
+}
+
+#[test]
+fn modifiers_fit_the_declaration() {
+    assert_clean("open obj a { open fn m(self) {} }");
+    assert_clean("obj b : a { override fn m(self) {} final fn n(self) {} }");
+    assert_clean("linear struct t { x: int }");
+    assert_clean("static var counter = 0");
+    assert_flagged("open struct s {}", "`open` applies to");
+    assert_flagged(
+        "struct s { override fn m(self) {} }",
+        "`override` applies to",
+    );
+    assert_flagged("linear fn f() {}", "`linear` applies to");
+    assert_flagged("pub impl show for s {}", "do not apply");
+    assert_flagged(
+        "obj o { abstract fn m(self) }\nstruct s { abstract fn m(self) }",
+        "`abstract` applies to",
+    );
+}
+
+#[test]
+fn interfaces_and_impls_have_no_fields() {
+    assert_flagged("interface i { x: int }", "cannot have fields");
+    assert_flagged("impl i for s { x: int }", "cannot have fields");
+}
+
+#[test]
+fn pattern_bindings() {
+    assert_flagged("switch v { case (a, a): 0 }", "bound twice");
+    assert_flagged("for a, a of xs {}", "bound twice");
+    assert_flagged("f((a, a) ~> 1)", "bound twice");
+    assert_flagged("x is (a, a)", "bound twice");
+    assert_clean("switch v { case (a, _): 0 case (_, _): 1 }");
+}
+
+#[test]
+fn alternatives_bind_the_same_names() {
+    assert_clean("switch s { case .circle(r), .square(r): r }");
+    assert_clean("switch s { case 1, 2, 3: 0 }");
+    assert_flagged("switch s { case .circle(r), .square(w): r }", "same names");
+    assert_flagged("switch s { case .circle(r), .empty: r }", "same names");
+    assert_flagged(
+        "switch s { case .circle(inout r), .square(r): r }",
+        "same names",
+    );
+}
+
+#[test]
+fn switch_defaults() {
+    assert_clean("switch x { case 1: 0 default: 1 }");
+    assert_flagged("switch x { default: 0 default: 1 }", "only one `default`");
+    assert_flagged("switch x { default: 0 case 1: 1 }", "must be the last");
+    assert_flagged("select { default { } default { } }", "only one `default`");
+}
+
+#[test]
+fn map_builders_give_pairs() {
+    assert_clean("map { x of xs ~> x : 1 }");
+    assert_flagged("map { x of xs ~> x }", "key : value");
+    assert_flagged("map { x of xs }", "key : value");
+}
+
+#[test]
+fn repeated_names() {
+    assert_flagged("point { x: 1, x: 2 }", "given twice");
+    assert_flagged("f(a: 1, a: 2)", "given twice");
+    assert_clean("f(a: 1, b: 2)");
 }

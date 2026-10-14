@@ -1,4 +1,4 @@
-# Parser (draft 1)
+# Parser (draft 2)
 
 The stage 0 parser is in `compiler/src/parser/` and the tree in `compiler/src/ast.rs`. It parses every
 construct decided in the other design docs, and everything in `examples/tour.lang`. This page lists
@@ -64,40 +64,108 @@ A newline ends a statement, except:
 A block's last expression, when not followed by `;`, is its value. Arms of a `switch` end at the next
 `case` / `default` / `}`, so `switch x { case 1: "a" case 2: "b" }` works on one line.
 
-## Choices to confirm (P1 to P10)
+## Decisions from draft 1
 
-**P1. Statements at the top level of a file.** `tour.lang` has them, so the file node holds statements and
-items alike. A later pass would reject executable statements outside `fn`s in a real module. Fine?
+- **P1** A file may contain statements at the top level, as well as declarations.
+- **P2** `use` stays as another spelling of `import`. The import form itself is to be redesigned in its own
+  pass (our own shape); until then the parser accepts `import std.io` and `import a, b from std.io`.
+- **P3** Struct literals are not allowed in conditions; wrap them in parentheses.
+- **P4** Bitwise operators bind tighter than comparison (Rust and Go, not C).
+- **P5** `to` binds between `+` and the comparisons: `a + b to float` is `(a + b) to float`.
+- **P6** Ranges bind tighter than comparison and looser than `to` and `+`; `step` follows a range.
+- **P7** `loop` is an expression: `break value` leaves it with a value (`const r = loop { break 5 }`).
+- **P8** Loop labels exist (below).
+- **P9** Closures may name their return type (below).
+- **P10** `T??` is not written; use `(T?)?`.
 
-**P2. Import forms.** `import std.io`, `import a, b from std.io`, and `use` as another spelling. There is no
-`as` rename yet. Keep, or add `import std.io as fmt`?
+## Loop labels
 
-**P3. No struct literals in conditions.** `if p == point { x: 1 } { }` is ambiguous, so a literal there needs
-parentheses (as in Rust). Same for `while`, `unless`, `guard`, `for` and `switch` heads. Fine?
+```
+outer: for i of 0..10 {
+    inner: for j of 0..10 {
+        if i * j > 20 { break outer }        // leaves both loops
+        if j > i { continue outer }          // next i
+    }
+}
 
-**P4. Bitwise operators bind tighter than comparison** (Rust and Go, not C), so `a & b == c` is `(a & b) == c`.
-Keep?
+search: loop { break search 5 }              // leave with a value
+found: { if ok { break found 1 }  2 }        // a labeled block can be left early too
+```
 
-**P5. `to` binds between `+` and the comparisons**: `a + b to float` is `(a + b) to float`, and
-`x to float < 3.0` is `(x to float) < 3.0`. Keep?
+- A label is `name:` in front of a `for`, `while`, `loop`, `do` or a block, at the start of a statement.
+- `break name`, `break name value` and `continue name` use it. A plain `break` still leaves the innermost loop.
+- A name after `break` is read as a label when an enclosing loop carries that label; otherwise it is a value. To break
+  with a value that happens to share a label's name, write it in parentheses: `break (outer)`.
+- Labels do not reach into closures or functions. The same label cannot be nested inside itself.
+- Not allowed: labels in the middle of an expression (`const r = a: loop { }`), since `a:` already means a map key,
+  a named argument and a field there.
 
-**P6. Ranges bind tighter than comparison and looser than `to`/`+`**, so `x in 0..n + 1` and
-`0..10 step 2` read naturally. Keep?
+## Closure return types
 
-**P7. `break` and `yield` may carry a value** (`const r = loop { break 5 }`). Is `loop` meant to be an
-expression with a value?
+```
+const twice = (x: int) -> int ~> x * 2
+const bump = [inout n] (a: int, b: int) -> int ~> { n += 1; a + b }
+```
 
-**P8. Loop labels** (`outer: for ...`, `break outer`) are not parsed. Do you want them? A syntax would be needed.
+Why now: closures that return `result` or `option` often need the type spelled out because inference has nothing
+to go on (`~> ok(1)` could be `int ! e` for any `e`), and a block body with several `return`s has the same problem.
+The `-> Type` goes after the parameter list, as in a function. It needs the parenthesised parameter form; a lone
+`x ~> ...` has no room for it, so use `(x) -> T ~> ...`.
 
-**P9. Closure return types** (`(a: int) -> int ~> a + 1`) are not parsed; a closure body is one expression or a
-block. Fine for now?
+## Doc comments
 
-**P10. `T??`** cannot be written because `??` is one token; write `(T?)?`. Fine, since a nested option is rare?
+`///` lines and `///* ... *///` blocks that sit right before a declaration are kept in the tree (`docs` on items,
+fields and enum cases) and `doc_text` turns them into plain text. A doc comment on the same line as code before it
+belongs to nothing. Comments elsewhere are still dropped; the formatter will keep ordinary comments later.
+
+## Syntax checks (`check.rs`)
+
+The parser accepts a little more than the language allows. `parse_and_check` (used by `langc parse`) also runs
+these rules, built on the tree walker in `visit.rs`:
+
+| Area | Rule |
+|---|---|
+| Jumps | `break` and `continue` only inside a loop (a closure starts afresh); `become` only with a call |
+| Assignment | the target is a name, field, index or tuple position (`_ = f()` is allowed); `++` / `--` only on those |
+| Methods | `self` only as the first parameter of a method; `init` and `deinit` only inside a type; `init` has no `self`; `deinit` takes nothing and returns nothing |
+| Parameters | each has a type; no repeated names; a variadic one comes last and alone |
+| Bodies | a function has a body, except in interfaces, `abstract` methods and `ext` functions, which have none |
+| Declarations | `const` / `var` get a value (not `ext`, which gets none), carry no `inout` / `sink` / `let`, and use patterns that cannot fail by shape |
+| Modifiers | `open` / `abstract` / `final` on `obj` and its methods, `override` on methods of an `obj`, `linear` on types, `static` / `ext` on functions and variables, `pub` / `priv` not on `impl` or `test` |
+| Types | `interface` and `impl` hold functions only |
+| Patterns | a name is bound once per pattern, and the alternatives of one `case` bind the same names in the same modes |
+| `switch` / `select` | at most one `default`, and it comes last |
+| Builders | a map builder gives `key : value`; a builder starts with `x of xs` |
+| Names | no field repeated in a struct literal, no argument name repeated in a call |
+
+Rules that need types (are alternatives of the same type, does `guard ... else` leave, is `inout` allowed here)
+belong to the type checker.
+
+## Speed
+
+Measured on 10 MB made from repeated copies of `tour.lang` (release build, best of 10, this container):
+
+| Stage | Time | Speed |
+|---|---|---|
+| lex | about 105 ms | about 90 MB/s |
+| parse | about 200 ms | about 50 MB/s |
+| syntax checks | about 70 to 90 ms | about 120 MB/s |
+| free the tree | about 100 ms | |
+
+That is roughly 1.5 million lines per second for lexing, parsing and checking together. What was tried:
+
+- Caching the current token in the parser: parse went from about 220 to about 200 ms.
+- A bump allocator that never frees (as an experiment): about 20% faster on a single cold run, but memory grows
+  without limit across runs and the gain is mostly page faults, so it is not worth the hack.
+- Names are already "interned" in the cheapest way: an `Ident` is a span of the source, with no allocation. A real
+  symbol table belongs to name resolution, where every use of a name must be compared.
+
+What would help most is an index-based arena for tree nodes (one `Vec` per node kind, 4-byte ids instead of boxes).
+It touches every consumer of the tree, so it waits until the type checker's needs are known. At the numbers above
+the parser is not the bottleneck for the compile-speed target; the type checker and the backend will be.
 
 ## Not done yet
 
-- Doc comments are skipped, not attached to declarations. The formatter will need them kept.
-- The checker rules for things the parser accepts: `++` only as a statement, `inout` / `sink` only where
-  modes are allowed, one `...` per list pattern (already reported), and so on.
-- Speed: a first measurement of lexing plus parsing is about 25 MB/s on a repeated copy of `tour.lang`
-  (the lexer alone is about 75 MB/s on the same text). Expect a good gain from an arena and interned names.
+- Ordinary (non-doc) comments are skipped; the formatter needs them kept.
+- The import form (P2).
+- Rules that need types, listed above.

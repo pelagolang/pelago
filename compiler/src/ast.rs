@@ -338,6 +338,8 @@ pub struct ClosureParam {
 pub struct Closure {
     pub captures: Vec<Capture>,
     pub params: Vec<ClosureParam>,
+    /// `(a: int) -> int ~> a + 1`
+    pub ret: Option<Type>,
     pub body: Expr,
 }
 
@@ -534,8 +536,20 @@ pub enum ExprKind {
         else_: Block,
     },
     Return(Option<Box<Expr>>),
-    Break(Option<Box<Expr>>),
-    Continue,
+    /// `break`, `break value`, `break outer`, `break outer value`.
+    Break {
+        label: Option<Ident>,
+        value: Option<Box<Expr>>,
+    },
+    /// `continue` or `continue outer`.
+    Continue {
+        label: Option<Ident>,
+    },
+    /// `outer: for x of xs { ... }`: a loop or block that `break` and `continue` can name.
+    Labeled {
+        label: Ident,
+        body: Box<Expr>,
+    },
     Become(Box<Expr>),
     Defer(Box<Expr>),
     Yield(Option<Box<Expr>>),
@@ -588,6 +602,8 @@ pub struct Decl {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Item {
+    /// The `///` and `///* ... *///` comments right before the declaration.
+    pub docs: Vec<Span>,
     pub attrs: Vec<Attr>,
     pub mods: Modifiers,
     pub kind: ItemKind,
@@ -694,6 +710,7 @@ pub struct FnDecl {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FieldDecl {
+    pub docs: Vec<Span>,
     pub attrs: Vec<Attr>,
     pub vis: Vis,
     pub name: Ident,
@@ -722,6 +739,7 @@ pub struct TypeDecl {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Variant {
+    pub docs: Vec<Span>,
     pub name: Ident,
     pub fields: Vec<VariantField>,
     pub discriminant: Option<Expr>,
@@ -754,4 +772,30 @@ pub struct ImplDecl {
     pub for_type: Option<Type>,
     pub where_: Vec<WherePred>,
     pub members: Vec<Member>,
+}
+
+/// The text of doc comments, with the `///` markers (or `///*` and `*///`) and one leading space
+/// removed from each line, joined by newlines.
+pub fn doc_text(src: &str, docs: &[Span]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for span in docs {
+        let raw = src
+            .get(span.start as usize..span.end as usize)
+            .unwrap_or("");
+        if let Some(body) = raw.strip_prefix("///*") {
+            let body = body.strip_suffix("*///").unwrap_or(body);
+            for line in body.trim().lines() {
+                lines.push(line.trim().to_string());
+            }
+        } else {
+            let body = raw.strip_prefix("///").unwrap_or(raw);
+            lines.push(
+                body.strip_prefix(' ')
+                    .unwrap_or(body)
+                    .trim_end()
+                    .to_string(),
+            );
+        }
+    }
+    lines.join("\n")
 }

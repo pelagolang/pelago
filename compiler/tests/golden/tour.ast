@@ -1,5 +1,8 @@
 (file
-  (mod tour)
+  (mod
+    (doc
+      "A tour of the syntax decided so far. Not a program anyone can run yet:\nit exists so the lexer (and later the parser) has something real to read.\nDocumentation can also\nspan many lines.")
+    tour)
   (import std)
   (const name (str "Dennis"))
   (var score (: int) 10)
@@ -17,7 +20,13 @@
     (str "Score: " (# score) ", next: " (# (+ score 1)) ", name: " (# name) ", hash: \\#"))
   (const whole 7)
   (const decimal (to whole float))
-  (fn add ((a : int) (b : int)) -> int (block (tail (+ a b))))
+  (fn
+    (doc "Adds two numbers.\n\nThe last expression is the result.")
+    add
+    ((a : int) (b : int))
+    ->
+    int
+    (block (tail (+ a b))))
   (fn double ((x : int)) -> int = (* x 2))
   (fn
     greet
@@ -98,7 +107,12 @@
   (var p (new point (: x 3.0) (: y 4.0)))
   (call! (. p shift) 1.0 1.0)
   (const n (call!! (. c close)))
-  (enum shape (case circle (radius: float)) (case rect (w: float) (h: float)) (case empty))
+  (enum
+    (doc "A shape with a size.")
+    shape
+    (case circle (doc "A round one.") (radius: float))
+    (case rect (w: float) (h: float))
+    (case empty))
   (interface shape_like (fn area (self) -> float))
   (struct circle (: shape_like) (field radius : float))
   (impl shape_like for rect)
@@ -355,4 +369,23 @@
     day
     (case (1) (block (tail (str "a"))))
     (case (2) (block (tail (str "b"))))
-    (case default (block (tail (str "c"))))))
+    (case default (block (tail (str "c")))))
+  (label
+    outer
+    (for-of
+      (i)
+      (.. 0 10)
+      (block
+        (tail
+          (label
+            inner
+            (for-of
+              (j)
+              (.. 0 10)
+              (block
+                (if (> (* i j) 20) (block (tail (break outer))))
+                (if (> j i) (block (tail (continue outer))))
+                (tail (if (== j 3) (block (tail (break inner))))))))))))
+  (label search (loop (block (tail (break search 5)))))
+  (const twice (~> ((: x int)) -> int (* x 2)))
+  (const bump (~> (capture (inout n)) ((: a int) (: b int)) -> int (block (+= n 1) (tail (+ a b))))))

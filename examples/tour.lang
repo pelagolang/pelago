@@ -27,6 +27,9 @@ const whole = 7
 const decimal = whole to float
 
 // ---- Functions --------------------------------------------------------------
+/// Adds two numbers.
+///
+/// The last expression is the result.
 fn add(a: int, b: int) -> int {
     a + b
 }
@@ -121,7 +124,9 @@ var p = point { x: 3.0, y: 4.0 }
 p.shift!(1.0, 1.0)
 const n = c.close!!()
 
+/// A shape with a size.
 enum shape {
+    /// A round one.
     circle(radius: float)
     rect(w: float, h: float)
     empty
@@ -382,3 +387,22 @@ switch shape {
 }
 
 switch day { case 1: "a" case 2: "b" default: "c" }
+
+// ---- Labels and closure return types ------------------------------------------------
+outer: for i of 0..10 {
+    inner: for j of 0..10 {
+        if i * j > 20 { break outer }
+        if j > i { continue outer }
+        if j == 3 { break inner }
+    }
+}
+
+search: loop {
+    break search 5
+}
+
+const twice = (x: int) -> int ~> x * 2
+const bump = [inout n] (a: int, b: int) -> int ~> {
+    n += 1
+    a + b
+}

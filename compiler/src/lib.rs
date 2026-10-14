@@ -5,8 +5,10 @@
 
 pub mod ast;
 pub mod ast_print;
+pub mod check;
 pub mod keyword;
 pub mod lexer;
 pub mod parser;
 pub mod span;
 pub mod token;
+pub mod visit;

@@ -100,7 +100,7 @@ fn read_source(path: &str) -> String {
 
 fn parse_file(path: &str) {
     let src = read_source(path);
-    let (out, lex_errors) = langc::parser::parse_source(&src);
+    let (out, lex_errors) = langc::parser::parse_and_check(&src);
     println!("{}", langc::ast_print::print_file(&out.file, &src));
     let index = LineIndex::new(&src);
     for error in &lex_errors {
@@ -116,25 +116,45 @@ fn parse_file(path: &str) {
     }
 }
 
-/// Times lexing plus parsing, so compile speed is measured from the first compiler.
+/// Times lexing, parsing, checking and freeing the tree separately, so compile speed is measured
+/// from the first compiler.
 fn parse_bench(path: &str) {
+    use std::time::{Duration, Instant};
     let src = read_source(path);
     let runs = 10;
-    let mut best = std::time::Duration::MAX;
+    let (mut lex, mut parse, mut check, mut free) =
+        (Duration::MAX, Duration::MAX, Duration::MAX, Duration::MAX);
     let mut tokens = 0;
     for _ in 0..runs {
-        let start = std::time::Instant::now();
+        let t0 = Instant::now();
         let lexed = tokenize(&src);
+        let t1 = Instant::now();
         let out = langc::parser::parse(&src, &lexed.tokens);
-        best = best.min(start.elapsed());
+        let t2 = Instant::now();
+        let errors = langc::check::check_file(&out.file, &src);
+        let t3 = Instant::now();
+        std::hint::black_box(&errors);
+        drop(out);
+        let t4 = Instant::now();
+        lex = lex.min(t1 - t0);
+        parse = parse.min(t2 - t1);
+        check = check.min(t3 - t2);
+        free = free.min(t4 - t3);
         tokens = lexed.tokens.len();
-        std::hint::black_box(&out);
     }
     let mb = src.len() as f64 / 1e6;
+    let ms = |d: Duration| d.as_secs_f64() * 1e3;
+    let rate = |d: Duration| mb / d.as_secs_f64();
+    println!("{mb:.1} MB, {tokens} tokens, best of {runs}:");
+    println!("  lex    {:7.1} ms  {:5.0} MB/s", ms(lex), rate(lex));
+    println!("  parse  {:7.1} ms  {:5.0} MB/s", ms(parse), rate(parse));
+    println!("  check  {:7.1} ms  {:5.0} MB/s", ms(check), rate(check));
+    println!("  free   {:7.1} ms", ms(free));
+    let all = lex + parse + check;
     println!(
-        "{mb:.1} MB, {tokens} tokens, best of {runs}: {:.1} ms ({:.0} MB/s)",
-        best.as_secs_f64() * 1e3,
-        mb / best.as_secs_f64()
+        "  total  {:7.1} ms  {:5.0} MB/s (without freeing)",
+        ms(all),
+        rate(all)
     );
 }
 

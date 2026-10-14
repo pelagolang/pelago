@@ -437,6 +437,10 @@ impl Printer<'_> {
                         })
                         .collect(),
                 ));
+                if let Some(r) = &c.ret {
+                    v.push(atom("->"));
+                    v.push(self.ty(r));
+                }
                 v.push(self.expr(&c.body));
                 list("~>", v)
             }
@@ -523,9 +527,28 @@ impl Printer<'_> {
                 list("guard", vec![self.expr(cond), self.block(else_)])
             }
             ExprKind::Return(v) => self.opt_list("return", v),
-            ExprKind::Break(v) => self.opt_list("break", v),
+            ExprKind::Break { label, value } => {
+                let mut v = Vec::new();
+                if let Some(l) = label {
+                    v.push(self.id(l));
+                }
+                if let Some(e) = value {
+                    v.push(self.expr(e));
+                }
+                if v.is_empty() {
+                    atom("break")
+                } else {
+                    list("break", v)
+                }
+            }
+            ExprKind::Labeled { label, body } => {
+                list("label", vec![self.id(label), self.expr(body)])
+            }
             ExprKind::Yield(v) => self.opt_list("yield", v),
-            ExprKind::Continue => atom("continue"),
+            ExprKind::Continue { label } => match label {
+                Some(l) => list("continue", vec![self.id(l)]),
+                None => atom("continue"),
+            },
             ExprKind::Become(c) => list("become", vec![self.expr(c)]),
             ExprKind::Defer(c) => list("defer", vec![self.expr(c)]),
             ExprKind::Meta(c) => list("meta", vec![self.expr(c)]),
@@ -755,6 +778,7 @@ impl Printer<'_> {
         match m {
             Member::Field(f) => {
                 let mut v = Vec::new();
+                v.extend(self.docs(&f.docs));
                 for a in &f.attrs {
                     v.push(self.attr(a));
                 }
@@ -776,6 +800,16 @@ impl Printer<'_> {
         }
     }
 
+    fn docs(&self, docs: &[crate::span::Span]) -> Option<Sexp> {
+        if docs.is_empty() {
+            return None;
+        }
+        Some(list(
+            "doc",
+            vec![atom(format!("{:?}", doc_text(self.src, docs)))],
+        ))
+    }
+
     fn attr(&self, a: &Attr) -> Sexp {
         let mut v = vec![self.id(&a.name)];
         v.extend(self.exprs(&a.args));
@@ -795,7 +829,8 @@ impl Printer<'_> {
     }
 
     pub fn item(&self, i: &Item) -> Sexp {
-        let mut pre: Vec<Sexp> = i.attrs.iter().map(|a| self.attr(a)).collect();
+        let mut pre: Vec<Sexp> = self.docs(&i.docs).into_iter().collect();
+        pre.extend(i.attrs.iter().map(|a| self.attr(a)));
         pre.extend(self.mods(&i.mods));
         let body = match &i.kind {
             ItemKind::Mod { path, body } => {
@@ -835,6 +870,7 @@ impl Printer<'_> {
                 v.extend(self.where_clause(&e.where_));
                 for c in &e.variants {
                     let mut cv = vec![self.id(&c.name)];
+                    cv.extend(self.docs(&c.docs));
                     for f in &c.fields {
                         match &f.label {
                             Some(l) => cv.push(list(

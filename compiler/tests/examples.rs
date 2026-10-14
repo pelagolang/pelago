@@ -48,7 +48,7 @@ fn tour_uses_the_interesting_tokens() {
 #[test]
 fn examples_parse_without_errors() {
     for (path, src) in examples() {
-        let (out, lex_errors) = langc::parser::parse_source(&src);
+        let (out, lex_errors) = langc::parser::parse_and_check(&src);
         assert!(lex_errors.is_empty(), "{path}: {lex_errors:?}");
         assert!(out.errors.is_empty(), "{path}: {:?}", out.errors);
     }

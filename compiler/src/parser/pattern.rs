@@ -329,6 +329,12 @@ impl Parser<'_> {
         let mut has_rest = false;
         while !self.at(Punct::RBrace) && !self.at_eof() {
             let before = self.pos;
+            if has_rest {
+                self.error(
+                    self.tok().span,
+                    "`..` must be the last thing in a struct pattern",
+                );
+            }
             if self.at(Punct::DotDot) {
                 self.bump();
                 has_rest = true;
