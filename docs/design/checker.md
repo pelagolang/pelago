@@ -1,4 +1,4 @@
-# The checker: names, types and value semantics (draft 3)
+# The checker: names, types and value semantics (draft 4)
 
 How the front end after the parser is built, in stages that each end with something testable.
 
@@ -12,9 +12,9 @@ cargo run -- check <file or directory>     # parse + resolve names; later: + typ
 |---|---|---|
 | 1. Names | modules, imports, scopes: what every name refers to | **done** (`compiler/src/resolve/`, `package.rs`) |
 | 2. Types | a type for every expression, local inference, method lookup, operators | **done** (`compiler/src/types.rs`, `typecheck/`) |
-| 3. Generics and interfaces | bounds, `impl` lookup, `any`, the orphan rule | after 2 |
-| 4. Patterns | typing of patterns, exhaustiveness of `switch`, list-pattern lengths | after 2 |
-| 5. Value semantics | `let` / `inout` / `sink` exclusivity, moves, `copy`, second-class references, `const` depth, `become` | after 3 and 4 |
+| 3. Generics and interfaces | bounds, `impl` lookup, `any`, operators, the orphan rule | **done** (`typecheck/iface.rs`) |
+| 4. Patterns | exhaustiveness of `switch`, irrefutable patterns, list-pattern lengths | **done** (`typecheck/exhaust.rs`) |
+| 5. Value semantics | `inout` exclusivity, moves, `copy`, `const` depth, closure captures | **done** (`values/`); `become` and linear types still open |
 | 6. Errors and entry points | `?` and `converts`, `main` forms, overflow operators, `defer` | with 5 |
 
 Each stage reports its own errors and leaves a table for the next. The end product is a typed form of the program
@@ -64,17 +64,14 @@ What it does:
   when the method takes `inout self`, `!!` when it takes `sink self`.
 - **Patterns:** bindings get types; enum cases (`.circle`, `type.case`, `ok`, `err`, `some`), tuples, lists with `...`, ranges,
   struct patterns (a left-out field needs `..`), `x is dog`.
-- **Generics:** type parameters on functions, structs and enums, with inference at calls and `f<int>(...)`. Bounds are not checked yet.
+- **Generics:** type parameters on functions, structs and enums, with inference at calls and `f<int>(...)`. Bounds are checked in stage 3.
 - **The library** is written in the language: `compiler/core/core.lang` is the package `core`, loaded by `Program::with_core()`. Its
   `pub` names are in scope everywhere. Functions that the backend provides are `ext fn` without a body, for example
   `impl<T> list<T> { ext fn push(inout self, sink item: T) }`.
 - **`Unknown`** is a quiet type for things not modelled yet (the `scope` handle, `chan`, ...). It unifies with everything so one gap
   does not flood the output.
 
-Not yet (later stages): interface bounds and `impl` completeness, operators for user types, `==` requirements, exhaustiveness of
-`switch`, and everything about `inout` exclusivity, moves and `const` depth.
-
-### Choices made while building it (TC9 to TC13)
+### Decisions TC9 to TC13 (confirmed by the owner)
 
 - **TC9. `sink` at a call site.** A variable passed to a `sink` parameter is written `sink x` (it moves). A temporary needs no mark
   (`xs.push!(2)`). `inout x` must be a variable, never a temporary.
@@ -86,6 +83,73 @@ Not yet (later stages): interface bounds and `impl` completeness, operators for 
 - **TC12. Methods on number literals.** `1.max(2)` and `xs.first()?.abs()` settle the literal to `int` (or `float`) at the call.
 - **TC13. Rules for text.** `"literal"` is a `string`; it converts to a `str` view where one is wanted; `+` joins text; text cannot be
   indexed by position, only sliced by range.
+
+## Stage 3: interfaces (done)
+
+Where it lives: `typecheck/iface.rs`. The library interfaces are in `core.lang`: `show`, `eq`, `order : eq`, `hash : eq`, `clone`,
+and one per operator (`add`, `sub`, `mul`, `div`, `rem`, `neg`).
+
+- **What a type provides.** An interface is provided when the type lists it after `:`, has an `impl iface for type`, or has
+  `@derive(iface)`; or it is a built-in type the library gives it to (`int` has `eq order hash show clone add ...`, a list has
+  `eq order hash show clone` when its elements do); or it is a plain `struct` / `enum` whose fields provide `eq` or `clone` (T5: those
+  two are automatic; `order`, `hash`, `show` are opt-in; an `obj` must write all of them). A type parameter provides its bounds, and an
+  `any iface` provides what `iface` builds on. An `impl` of `order` does not by itself give `eq`; the type must provide it too.
+- **Bounds** (`<T: order + hash>`, `where T: eq`) are queued when a generic is instantiated (a call, a struct literal, a written type
+  `bag<k>`) and checked at the end of the function, when the types are known: "`k` does not provide `hash`, which the type parameter `T`
+  needs; write `@derive(hash)` on `k` or `impl hash for k`". Library methods carry bounds: `contains` needs `eq`, `sort` needs `order`.
+- **Methods through interfaces.** Inside `<T: shape>`, `x.area()` finds the promised method; default methods (an interface `fn` with a
+  body) are found on every type that provides the interface; `any shape` calls work the same way. Inside an interface, `Self` stands for
+  the type that provides it.
+- **`impl` checks.** Every promised method must exist with the same parameters, modes and result (`Self` replaced by the type); the
+  interfaces an interface builds on must be provided too; the thing after `impl ... for` must be an interface. Types that list interfaces
+  after `:` get the same check.
+- **Operators on your own types.** `a + b` looks up `add` on the type and uses its signature (the right side can be another type);
+  `-a` uses `neg`; `a += b` is `a = a + b`. `==` needs `eq` and `<` needs `order` on `struct`, `enum`, `obj`, type parameters and
+  containers of them; comparing with `none` needs nothing. `copy x` needs `clone`.
+- **`any` coercion.** A value goes into `any iface` only if its type provides `iface` (`print(x)` needs `show`).
+- **Orphan rule (IM-orphan, now enforced).** An `impl` is allowed when its interface or its type was defined in the same package. Only
+  the `core` package may add methods to built-in types.
+
+## Stage 4: exhaustiveness (done)
+
+Where it lives: `typecheck/exhaust.rs`. Patterns are put into a small normal form and checked with the classic matrix method: take the first
+column, try each constructor of its type (an enum case, `some` / `none`, `ok` / `err`, `true` / `false`, the one constructor of a tuple or
+struct, each list length up to one past the longest pattern), keep the rows that can match, recurse.
+
+- A `switch` must cover every value or have a `default` (or a catch-all name). The error names a value that is missed:
+  "this `switch` does not handle `.rect(_, _)`".
+- An arm with a guard may fail, so it does not count. Alternatives (`case a, b`) count separately.
+- Numbers, text and characters can only be covered by a name or `_`; ranges and `is dog` tests are never complete on their own.
+- Patterns that must always match (`const (a, b) = pair`, `var .circle(r) = s`, `for (k, v) of m`, `[a, b] = xs`) get the same check:
+  "this pattern does not always match (it misses `[]`); use `switch`, `if ... is` or `guard`".
+- Rows that cannot be reached are not reported yet.
+
+## Stage 5: value semantics (done, v1)
+
+Where it lives: `values/` (its own pass after the types, reading `Typed`). It follows `docs/design/types.md` section 2 and `memory.md`.
+
+- **VS1. Permission to change.** A place may be assigned to, passed as `inout`, or used as the receiver of `c.bump!()` only when its root
+  variable allows it: a `var`, an `inout` or `sink` parameter, `inout self`, `init` parameters, `inout x` in a pattern. A `const`, a
+  read-only parameter (the default), a method's plain `self` and a name bound by a pattern are fixed all the way down (`const` depth).
+- **VS2. Moves.** A value that owns something (see `Typed::is_owning`: `string`, lists, maps, sets, `box`, an `obj`, a struct or enum with
+  such a field) moves when it is assigned, put into a literal or an enum case, passed to a `sink` parameter, returned, or captured with
+  `sink`. Afterwards the variable cannot be used until it is assigned again: "`a` was moved on line 3 and cannot be used again; write
+  `copy a` there to keep it". Plain values (numbers, `bool`, plain structs) copy. A type parameter counts as plain for now, because
+  generic code cannot say yet whether `T` copies (this tightens when `linear` and copy bounds arrive, M4).
+- **VS3. Taking a part needs `copy`.** `return self.name` or `const n = p.name` for an owning field is an error; write `copy self.name`.
+  Taking a read-only or `inout` parameter whole is the same error (`fn f(s: string) -> string = s` needs `copy s` or `sink s`). This is
+  T1 applied strictly. `init` parameters are owned, so `self.name = name` is fine.
+- **VS4. Branches and loops.** After an `if` or `switch` a variable is moved when any side moved it. A loop body is walked twice, so moving
+  a variable declared outside the loop shows up as a use after a move. Code after `return`, `break`, `continue` and calls that never
+  return is not checked.
+- **VS5. Exclusive access.** In one call, a place that is changed or given away (`inout x`, `sink x`, `c.bump!()`, `c.close!!()`) may not
+  overlap another place passed to the same call (`both(inout xs, xs)`, `xs.extend!(xs)`, `swap(inout a[0], inout a[1])`). Different fields
+  do not overlap; any two indexes of one list do. Temporaries (`xs.push!(xs.len())`) are evaluated first and do not count; plain values
+  that are copied do not count. Use `xs.swap!(0, 1)` for two elements of one list.
+- **VS6. Closures.** A closure changes an outer variable only if it captures it with `inout` (`[inout total] x ~> total += x`); `sink`
+  moves it in at the closure.
+- **Not done yet:** `become` rules, second-class reference escape (returning or storing a `str` view of a parameter), `defer` ordering, a
+  report for unreachable `switch` arms, `linear` types, and the value rules for `spawn` captures.
 
 ## Decisions from draft 1 (TC1 to TC8)
 

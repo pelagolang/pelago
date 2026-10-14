@@ -14,7 +14,7 @@
    **Imports and modules** are decided (`docs/design/modules.md`) and implemented.
 2. **Collections** (including builders) and **list patterns** are decided (`collections.md`, `list-patterns.md`). Revisit `sink` list patterns once the checker exists.
 3. **Errors** are decided (`docs/design/errors.md`). **Concurrency** is decided (`docs/design/concurrency.md`, CC1 to CC9).
-4. **Name resolution is done** (`docs/design/checker.md`, stage 1). **Stage 2, types, is done** (`langc check`). **Next: stage 3, generics and interfaces** (bounds, `impl` lookup for operators and `==`, `any`, the orphan rule), then stage 4 (exhaustiveness).
+4. **Name resolution is done** (`docs/design/checker.md`, stage 1). **Stages 2 to 5 are done** (`langc check`): types, interfaces and bounds, exhaustiveness, value semantics (moves, exclusivity, `const` depth). **Next: stage 6** (`?` and `converts`, `main` forms, overflow operators, `defer`), then lowering to IR. Choices VS1 to VS6 in `checker.md` await the owner's confirmation; VS3 (taking a part of an owning value needs `copy`) is the strictest.
 
 ## Open questions for the owner
 

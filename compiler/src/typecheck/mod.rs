@@ -40,10 +40,34 @@ pub struct Typed {
     pub local_tys: HashMap<DefId, Ty>,
     pub types: TypeTable,
     pub diagnostics: Vec<Diagnostic>,
+    /// The structs, enums and objs that own something (so they move instead of copying).
+    pub owning: std::collections::HashSet<DefId>,
     names: Vec<String>,
 }
 
 impl Typed {
+    /// Does a value of this type own something, so that it moves instead of being copied?
+    /// Type parameters count as plain for now: generic code cannot say yet whether `T` copies.
+    pub fn is_owning(&self, t: Ty) -> bool {
+        let t = self.types.shallow(t);
+        match self.types.kind(t) {
+            TyKind::String
+            | TyKind::List(_)
+            | TyKind::Map(..)
+            | TyKind::Set(_)
+            | TyKind::Box(_)
+            | TyKind::Iter(_)
+            | TyKind::Any(_) => true,
+            TyKind::Array(e, _) | TyKind::Option(e) | TyKind::Range(e) => self.is_owning(*e),
+            TyKind::Tuple(ts) | TyKind::AltTuple(ts, _) => ts.iter().any(|x| self.is_owning(*x)),
+            TyKind::Result(a, b) => self.is_owning(*a) || self.is_owning(*b),
+            TyKind::Adt(d, args) => {
+                self.owning.contains(d) || args.iter().any(|x| self.is_owning(*x))
+            }
+            _ => false,
+        }
+    }
+
     /// A type written the way it is in source.
     pub fn show(&self, t: Ty) -> String {
         self.types.display(t, &|d| {
@@ -330,9 +354,11 @@ impl<'p> Checker<'p> {
             let z = self.tt.zonk(t);
             local_tys.insert(d, z);
         }
+        let owning = self.compute_owning();
         let mut diagnostics = self.res.diagnostics.clone();
         diagnostics.extend(self.diags);
         Typed {
+            owning,
             tys,
             local_tys,
             names: self.res.defs.iter().map(|d| d.name.clone()).collect(),

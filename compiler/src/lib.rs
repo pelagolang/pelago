@@ -15,4 +15,5 @@ pub mod span;
 pub mod token;
 pub mod typecheck;
 pub mod types;
+pub mod values;
 pub mod visit;

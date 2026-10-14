@@ -484,6 +484,64 @@ impl<'p> Checker<'p> {
         None
     }
 
+    /// Which structs, enums and objs own something. An `obj` always does; the others do when a
+    /// field or payload does (found by repeating until nothing changes).
+    pub(crate) fn compute_owning(&mut self) -> std::collections::HashSet<DefId> {
+        let mut adts: Vec<DefId> = self
+            .nodes
+            .iter()
+            .filter_map(|(d, n)| matches!(n, Node::Adt { .. }).then_some(*d))
+            .collect();
+        adts.sort();
+        let mut owning = std::collections::HashSet::new();
+        for d in &adts {
+            if self.def(*d).kind == DefKind::Obj {
+                owning.insert(*d);
+            }
+        }
+        loop {
+            let mut changed = false;
+            for d in &adts {
+                if owning.contains(d) || self.def(*d).kind == DefKind::Interface {
+                    continue;
+                }
+                let own = self.own_adt_ty(*d);
+                let TyKind::Adt(_, args) = self.kind_of(own) else {
+                    continue;
+                };
+                let fields = self.field_types_of(*d, &args);
+                if fields.into_iter().any(|t| self.owns(t, &owning)) {
+                    owning.insert(*d);
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        owning
+    }
+
+    fn owns(&self, t: Ty, owning: &std::collections::HashSet<DefId>) -> bool {
+        let t = self.tt.shallow(t);
+        match self.tt.kind(t) {
+            TyKind::String
+            | TyKind::List(_)
+            | TyKind::Map(..)
+            | TyKind::Set(_)
+            | TyKind::Box(_)
+            | TyKind::Iter(_)
+            | TyKind::Any(_) => true,
+            TyKind::Array(e, _) | TyKind::Option(e) | TyKind::Range(e) => self.owns(*e, owning),
+            TyKind::Tuple(ts) | TyKind::AltTuple(ts, _) => ts.iter().any(|x| self.owns(*x, owning)),
+            TyKind::Result(a, b) => self.owns(*a, owning) || self.owns(*b, owning),
+            TyKind::Adt(d, args) => {
+                owning.contains(d) || args.iter().any(|x| self.owns(*x, owning))
+            }
+            _ => false,
+        }
+    }
+
     // ---- impl checks ------------------------------------------------------------------------------------
 
     /// Completeness of `impl iface for type` and of types that list interfaces, and the orphan rule.

@@ -101,8 +101,9 @@ fn programs_check_cleanly() {
         program.add_package("app", &[(name.as_str(), src.as_str())]);
         let resolved = langc::resolve::resolve(&program);
         let typed = langc::typecheck::check(&program, &resolved);
-        let messages: Vec<String> = typed
-            .diagnostics
+        let mut all = typed.diagnostics.clone();
+        all.extend(langc::values::check(&program, &resolved, &typed));
+        let messages: Vec<String> = all
             .iter()
             .map(|d| format!("{}: {}", name, d.message))
             .collect();

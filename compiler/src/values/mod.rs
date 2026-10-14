@@ -1,0 +1,1111 @@
+//! Stage 5 of the checker: value semantics. What the types cannot say: who may change what, and
+//! when a value is gone.
+//!
+//! The rules (see `docs/design/checker.md`):
+//!
+//! - **Changing needs permission.** A place can be changed (assigned to, passed as `inout`, used
+//!   as the receiver of `c.bump!()`) only when its root variable allows it: a `var`, an `inout` or
+//!   `sink` parameter, `inout self`. A `const`, a read-only parameter and a name bound by a pattern
+//!   are fixed all the way down (`const` depth): `const xs = [1]; xs[0] = 2` is an error.
+//! - **Owning values move.** A value that owns something (`string`, a list, a map, an `obj`, a
+//!   struct holding one) is moved, not copied, when it is assigned, passed to a `sink` parameter or
+//!   an enum case, returned, or put in a literal. The old variable is then unusable until it gets a
+//!   new value. Taking part of a variable (`a.items`) needs `copy`, and so does taking a read-only
+//!   parameter. Plain values (numbers, `bool`, plain structs) copy freely.
+//! - **Exclusive access.** A call may not change a place and also pass an overlapping place to
+//!   another argument: `swap(inout a[0], inout a[1])`, `xs.extend!(xs)`. Temporaries computed by
+//!   other arguments are evaluated first and do not count.
+//! - **Closures** change outer variables only when they capture them with `inout`.
+//!
+//! Moves are tracked through branches and loops: after an `if`, a variable is moved when either
+//! side moved it; a loop body is walked twice so a move in one pass shows up as a use after a move
+//! in the next. Code after `return`, `break` and `continue` is not checked.
+
+use crate::ast::*;
+use crate::package::{Diagnostic, ModuleId, Program};
+use crate::resolve::{DefId, DefKind, Resolved};
+use crate::span::Span;
+use crate::typecheck::Typed;
+use crate::types::TyKind;
+use crate::visit::{self, Visitor};
+use std::collections::{HashMap, HashSet};
+
+#[cfg(test)]
+mod tests;
+
+/// Checks moves, exclusive access and `const` depth in every module.
+pub fn check(program: &Program, res: &Resolved, typed: &Typed) -> Vec<Diagnostic> {
+    let mut diags = Vec::new();
+    for m in &program.modules {
+        let mut w = Walker::new(program, res, typed, m.id);
+        w.top(&m.file.stmts);
+        diags.extend(w.diags);
+    }
+    diags
+}
+
+/// How a name was introduced, which decides what may be done with it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Bind {
+    Var,
+    Const,
+    /// A read-only parameter (the default), or `self` of a method that does not change it.
+    Let,
+    Inout,
+    Sink,
+    /// A parameter of `init`: the new value takes what it is given.
+    Owned,
+    /// A name bound by a pattern: a view into another value.
+    View,
+    /// `inout x` in a pattern.
+    ViewInout,
+}
+
+impl Bind {
+    fn can_change(self) -> bool {
+        matches!(
+            self,
+            Bind::Var | Bind::Inout | Bind::Sink | Bind::Owned | Bind::ViewInout
+        )
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ctx {
+    /// The value is looked at.
+    Read,
+    /// The value flows into an owner: it moves when it owns something.
+    Consume,
+}
+
+#[derive(Clone, Default)]
+struct State {
+    /// Variables that may have been moved, and where.
+    moved: HashMap<DefId, Span>,
+    /// After `return`, `break`, `continue` or a call that never returns.
+    dead: bool,
+}
+
+fn merge(a: State, b: State) -> State {
+    if a.dead {
+        return b;
+    }
+    if b.dead {
+        return a;
+    }
+    let mut out = a;
+    for (d, s) in b.moved {
+        out.moved.entry(d).or_insert(s);
+    }
+    out
+}
+
+struct LoopFrame {
+    label: Option<String>,
+    breaks: Vec<State>,
+    continues: Vec<State>,
+}
+
+struct ClosureFrame {
+    span: Span,
+    caps: Vec<(DefId, Option<Mode>)>,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum Seg {
+    Field(String),
+    Index,
+}
+
+#[derive(Clone, Debug)]
+struct PlaceKey {
+    root: DefId,
+    segs: Vec<Seg>,
+}
+
+fn overlap(a: &PlaceKey, b: &PlaceKey) -> bool {
+    if a.root != b.root {
+        return false;
+    }
+    for (x, y) in a.segs.iter().zip(b.segs.iter()) {
+        if x != y {
+            return false;
+        }
+    }
+    true
+}
+
+struct Access {
+    place: PlaceKey,
+    changes: bool,
+    span: Span,
+}
+
+struct Walker<'a> {
+    program: &'a Program,
+    res: &'a Resolved,
+    typed: &'a Typed,
+    file: ModuleId,
+    diags: Vec<Diagnostic>,
+    seen: HashSet<(u32, &'static str)>,
+    binds: HashMap<DefId, Bind>,
+    state: State,
+    loops: Vec<LoopFrame>,
+    closures: Vec<ClosureFrame>,
+    pending_label: Option<String>,
+}
+
+impl<'a> Walker<'a> {
+    fn new(program: &'a Program, res: &'a Resolved, typed: &'a Typed, file: ModuleId) -> Self {
+        Walker {
+            program,
+            res,
+            typed,
+            file,
+            diags: Vec::new(),
+            seen: HashSet::new(),
+            binds: HashMap::new(),
+            state: State::default(),
+            loops: Vec::new(),
+            closures: Vec::new(),
+            pending_label: None,
+        }
+    }
+
+    // ---- Small helpers --------------------------------------------------------------------------
+
+    fn report(&mut self, span: Span, key: &'static str, message: String) {
+        if self.state.dead || !self.seen.insert((span.start, key)) {
+            return;
+        }
+        self.diags.push(Diagnostic {
+            module: self.file,
+            span,
+            message,
+        });
+    }
+
+    fn src(&self) -> &'a str {
+        &self.program.module(self.file).src
+    }
+
+    fn text(&self, span: Span) -> &'a str {
+        &self.src()[span.start as usize..span.end as usize]
+    }
+
+    fn line_of(&self, span: Span) -> usize {
+        self.src()[..span.start as usize].matches('\n').count() + 1
+    }
+
+    fn def_at_use(&self, start: u32) -> Option<DefId> {
+        self.res.use_at(self.file, start)
+    }
+
+    fn name_of(&self, d: DefId) -> &'a str {
+        &self.res.def(d).name
+    }
+
+    fn ty_owning(&self, e: &Expr) -> bool {
+        self.typed
+            .tys
+            .get(&(self.file, e.span.start, e.span.end))
+            .is_some_and(|t| self.typed.is_owning(*t))
+    }
+
+    fn expr_never(&self, e: &Expr) -> bool {
+        self.typed
+            .tys
+            .get(&(self.file, e.span.start, e.span.end))
+            .is_some_and(|t| matches!(self.typed.types.kind_of(*t), TyKind::Never))
+    }
+
+    fn strip(e: &Expr) -> &Expr {
+        match &e.kind {
+            ExprKind::Paren(i) => Self::strip(i),
+            _ => e,
+        }
+    }
+
+    /// The variable at the root of a chain of fields and indexes, and the path from it.
+    fn place_of(&self, e: &Expr) -> Option<PlaceKey> {
+        match &Self::strip(e).kind {
+            ExprKind::Name(id) => {
+                let d = self.def_at_use(id.span.start)?;
+                self.binds.contains_key(&d).then(|| PlaceKey {
+                    root: d,
+                    segs: Vec::new(),
+                })
+            }
+            ExprKind::SelfValue => {
+                let d = self.def_at_use(Self::strip(e).span.start)?;
+                self.binds.contains_key(&d).then(|| PlaceKey {
+                    root: d,
+                    segs: Vec::new(),
+                })
+            }
+            ExprKind::Field { base, name, .. } => {
+                if self.def_at_use(name.span.start).is_some() {
+                    return None; // a path through a module or a type
+                }
+                let mut p = self.place_of(base)?;
+                p.segs.push(Seg::Field(self.text(name.span).to_string()));
+                Some(p)
+            }
+            ExprKind::TupleIndex { base, index } => {
+                let mut p = self.place_of(base)?;
+                p.segs.push(Seg::Field(self.text(*index).to_string()));
+                Some(p)
+            }
+            ExprKind::Index { base, .. } => {
+                let mut p = self.place_of(base)?;
+                p.segs.push(Seg::Index);
+                Some(p)
+            }
+            _ => None,
+        }
+    }
+
+    // ---- Units -------------------------------------------------------------------------------------------
+
+    fn top(&mut self, stmts: &[Stmt]) {
+        for s in stmts {
+            self.stmt(s);
+        }
+    }
+
+    /// A function body, test or other piece of code that starts fresh.
+    fn unit(&mut self, f: impl FnOnce(&mut Self)) {
+        let saved_state = std::mem::take(&mut self.state);
+        let saved_loops = std::mem::take(&mut self.loops);
+        let saved_closures = std::mem::take(&mut self.closures);
+        f(self);
+        self.state = saved_state;
+        self.loops = saved_loops;
+        self.closures = saved_closures;
+    }
+
+    fn item(&mut self, it: &Item) {
+        match &it.kind {
+            ItemKind::Fn(f) => self.unit(|w| w.fn_decl(f)),
+            ItemKind::Struct(d) | ItemKind::Obj(d) | ItemKind::Interface(d) => {
+                for m in &d.members {
+                    match m {
+                        Member::Field(f) => {
+                            if let Some(v) = &f.default {
+                                self.unit(|w| w.expr(v, Ctx::Consume));
+                            }
+                        }
+                        Member::Item(i) => self.item(i),
+                    }
+                }
+            }
+            ItemKind::Enum(e) => {
+                for i in &e.items {
+                    self.item(i);
+                }
+            }
+            ItemKind::Impl(im) => {
+                for m in &im.members {
+                    if let Member::Item(i) = m {
+                        self.item(i);
+                    }
+                }
+            }
+            ItemKind::Mod {
+                body: Some(body), ..
+            } => self.unit(|w| w.top(body)),
+            ItemKind::Test { body, .. } => self.unit(|w| w.block(body, Ctx::Read)),
+            ItemKind::Decl(d) => self.unit(|w| w.decl(d)),
+            _ => {}
+        }
+    }
+
+    fn fn_decl(&mut self, f: &FnDecl) {
+        let is_init = f.kind != FnKind::Fn;
+        if is_init {
+            if let Some(&d) = self.res.decls.get(&(self.file, f.name.span.start)) {
+                self.binds.insert(d, Bind::Inout);
+            }
+        }
+        for p in &f.params {
+            if let Some(&d) = self.res.decls.get(&(self.file, p.name.span.start)) {
+                let b = match (p.mode, is_init) {
+                    (Some(Mode::Inout), _) => Bind::Inout,
+                    (Some(Mode::Sink), _) => Bind::Sink,
+                    (_, true) => Bind::Owned,
+                    _ => Bind::Let,
+                };
+                self.binds.insert(d, b);
+            }
+            if let Some(v) = &p.default {
+                self.expr(v, Ctx::Consume);
+            }
+        }
+        match &f.body {
+            FnBody::Block(b) => self.block(b, Ctx::Consume),
+            FnBody::Expr(e) => self.expr(e, Ctx::Consume),
+            FnBody::None => {}
+        }
+    }
+
+    // ---- Statements and patterns ------------------------------------------------------------------------
+
+    fn stmt(&mut self, s: &Stmt) {
+        match &s.kind {
+            StmtKind::Decl(d) => self.decl(d),
+            StmtKind::Expr(e) => self.expr(e, Ctx::Read),
+            StmtKind::Item(i) => self.item(i),
+        }
+    }
+
+    fn decl(&mut self, d: &Decl) {
+        if let Some(init) = &d.init {
+            self.expr(init, Ctx::Consume);
+        }
+        let kind = match d.kind {
+            DeclKind::Var => Bind::Var,
+            DeclKind::Const => Bind::Const,
+        };
+        self.bind_pattern(&d.pattern, kind);
+    }
+
+    /// Records how each name of a pattern was introduced. A new binding starts unmoved.
+    fn bind_pattern(&mut self, p: &Pattern, default: Bind) {
+        match &p.kind {
+            PatternKind::Binding { mode, name } => self.bind_name(name, *mode, default),
+            PatternKind::As { name, pattern } => {
+                self.bind_name(name, None, default);
+                self.bind_pattern(pattern, default);
+            }
+            PatternKind::Tuple(ps) => {
+                for s in ps {
+                    self.bind_pattern(s, default);
+                }
+            }
+            PatternKind::List(items) => {
+                for it in items {
+                    match it {
+                        ListPatItem::Pattern(s) => self.bind_pattern(s, default),
+                        ListPatItem::Rest {
+                            mode,
+                            name: Some(n),
+                            ..
+                        } => self.bind_name(n, *mode, default),
+                        ListPatItem::Rest { .. } => {}
+                    }
+                }
+            }
+            PatternKind::Variant { args, .. } => {
+                for a in args.iter().flatten() {
+                    self.bind_pattern(&a.pattern, default);
+                }
+            }
+            PatternKind::Struct { fields, .. } => {
+                for f in fields {
+                    match &f.pattern {
+                        Some(s) => self.bind_pattern(s, default),
+                        None => self.bind_name(&f.name, f.mode, default),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn bind_name(&mut self, name: &Ident, mode: Option<Mode>, default: Bind) {
+        let Some(&d) = self.res.decls.get(&(self.file, name.span.start)) else {
+            return;
+        };
+        let b = match (mode, default) {
+            (Some(Mode::Inout), Bind::View | Bind::ViewInout) => Bind::ViewInout,
+            (Some(Mode::Inout), _) => Bind::ViewInout,
+            _ => default,
+        };
+        self.binds.insert(d, b);
+        self.state.moved.remove(&d);
+    }
+
+    fn block(&mut self, b: &Block, ctx: Ctx) {
+        for s in &b.stmts {
+            self.stmt(s);
+        }
+        if let Some(t) = &b.tail {
+            self.expr(t, ctx);
+        }
+    }
+
+    // ---- Names, moves and permission --------------------------------------------------------------------
+
+    /// A mention of a variable: it must be live, and an owning value flowing into an owner moves.
+    fn touch(&mut self, d: DefId, span: Span, ctx: Ctx, owning: bool) {
+        let Some(&bind) = self.binds.get(&d) else {
+            return;
+        };
+        if let Some(&at) = self.state.moved.get(&d) {
+            let (n, line) = (self.name_of(d), self.line_of(at));
+            self.report(
+                span,
+                "moved",
+                format!("`{n}` was moved on line {line} and cannot be used again; write `copy {n}` there to keep it"),
+            );
+            return;
+        }
+        if ctx == Ctx::Consume && owning {
+            self.take(d, bind, span);
+        }
+    }
+
+    fn declared_outside_closure(&self, d: DefId) -> bool {
+        match self.closures.last() {
+            Some(c) => {
+                let s = self.res.def(d).span;
+                s.start < c.span.start || s.start >= c.span.end
+            }
+            None => false,
+        }
+    }
+
+    fn take(&mut self, d: DefId, bind: Bind, span: Span) {
+        let n = self.name_of(d);
+        match bind {
+            Bind::Let => self.report(
+                span,
+                "take",
+                format!("`{n}` is read-only here, so it cannot be moved out; write `copy {n}`, or take the parameter with `sink`"),
+            ),
+            Bind::Inout => self.report(
+                span,
+                "take",
+                format!("`{n}` is `inout`, so it cannot be moved out; write `copy {n}`"),
+            ),
+            Bind::View | Bind::ViewInout => {}
+            Bind::Var | Bind::Const | Bind::Sink | Bind::Owned => {
+                if !self.declared_outside_closure(d) {
+                    self.state.moved.insert(d, span);
+                }
+            }
+        }
+    }
+
+    /// Checks that the root of a place may be changed.
+    fn may_change(&mut self, d: DefId, span: Span) {
+        let Some(&bind) = self.binds.get(&d) else {
+            return;
+        };
+        let n = self.name_of(d);
+        if !bind.can_change() {
+            let is_self = n == "self";
+            let msg = match bind {
+                Bind::Const => {
+                    format!("`{n}` is a `const`, so it cannot be changed; declare it with `var`")
+                }
+                Bind::Let if is_self => {
+                    "this method takes `self` read-only; write `inout self` to change it"
+                        .to_string()
+                }
+                Bind::Let => {
+                    format!("`{n}` is a read-only parameter; write `inout {n}` to change it")
+                }
+                _ => format!(
+                    "`{n}` only views part of another value; bind it with `inout {n}` to change it"
+                ),
+            };
+            self.report(span, "change", msg);
+            return;
+        }
+        if self.declared_outside_closure(d) {
+            let ok = self.closures.last().is_some_and(|c| {
+                c.caps
+                    .iter()
+                    .any(|(cd, m)| *cd == d && matches!(m, Some(Mode::Inout | Mode::Sink)))
+            });
+            if !ok {
+                self.report(
+                    span,
+                    "capture",
+                    format!("this closure changes `{n}`; capture it with `[inout {n}]`"),
+                );
+            }
+        }
+    }
+
+    /// Reads along a place (checking liveness of the root and walking index expressions), without
+    /// moving anything.
+    fn place_read(&mut self, e: &Expr) {
+        let e = Self::strip(e);
+        match &e.kind {
+            ExprKind::Name(id) => {
+                if let Some(d) = self.def_at_use(id.span.start) {
+                    self.touch(d, e.span, Ctx::Read, false);
+                }
+            }
+            ExprKind::SelfValue => {
+                if let Some(d) = self.def_at_use(e.span.start) {
+                    self.touch(d, e.span, Ctx::Read, false);
+                }
+            }
+            ExprKind::Field { base, name, .. } => {
+                if self.def_at_use(name.span.start).is_none() {
+                    self.place_read(base);
+                }
+            }
+            ExprKind::TupleIndex { base, .. } => self.place_read(base),
+            ExprKind::Index { base, index } => {
+                self.place_read(base);
+                self.expr(index, Ctx::Read);
+            }
+            _ => self.expr(e, Ctx::Read),
+        }
+    }
+
+    fn change_place(&mut self, e: &Expr) {
+        if let Some(p) = self.place_of(e) {
+            self.may_change(p.root, Self::strip(e).span);
+        }
+    }
+
+    // ---- Expressions ---------------------------------------------------------------------------------
+
+    fn expr(&mut self, e: &Expr, ctx: Ctx) {
+        match &e.kind {
+            ExprKind::Name(id) => {
+                if let Some(d) = self.def_at_use(id.span.start) {
+                    let owning = self.ty_owning(e);
+                    self.touch(d, e.span, ctx, owning);
+                }
+            }
+            ExprKind::SelfValue => {
+                if let Some(d) = self.def_at_use(e.span.start) {
+                    let owning = self.ty_owning(e);
+                    self.touch(d, e.span, ctx, owning);
+                }
+            }
+            ExprKind::Paren(i) => self.expr(i, ctx),
+            ExprKind::Copy(i) => self.place_read(i),
+            ExprKind::Try(i) => self.expr(i, ctx),
+            ExprKind::Field { base, name, .. } => {
+                if self.def_at_use(name.span.start).is_some() {
+                    return;
+                }
+                self.chain(e, base, ctx);
+            }
+            ExprKind::TupleIndex { base, .. } => self.chain(e, base, ctx),
+            ExprKind::Index { base, index } => {
+                self.chain(e, base, ctx);
+                self.expr(index, Ctx::Read);
+            }
+            ExprKind::Binary { op, lhs, rhs } => {
+                use crate::token::Punct;
+                match op {
+                    Punct::AndAnd | Punct::OrOr => {
+                        self.expr(lhs, Ctx::Read);
+                        let s0 = self.state.clone();
+                        self.expr(rhs, Ctx::Read);
+                        self.state = merge(s0, std::mem::take(&mut self.state));
+                    }
+                    Punct::QuestionQuestion => {
+                        self.expr(lhs, ctx);
+                        let s0 = self.state.clone();
+                        self.expr(rhs, ctx);
+                        self.state = merge(s0, std::mem::take(&mut self.state));
+                    }
+                    _ => {
+                        self.expr(lhs, Ctx::Read);
+                        self.expr(rhs, Ctx::Read);
+                    }
+                }
+            }
+            ExprKind::IncDec { operand, .. } => {
+                self.place_read(operand);
+                self.change_place(operand);
+            }
+            ExprKind::Assign { op, lhs, rhs } => self.assign(*op, lhs, rhs),
+            ExprKind::Tuple(es) => {
+                for x in es {
+                    self.expr(x, Ctx::Consume);
+                }
+            }
+            ExprKind::List(items) | ExprKind::Set(items) => {
+                for i in items {
+                    self.expr(&i.value, if i.spread { Ctx::Read } else { Ctx::Consume });
+                }
+            }
+            ExprKind::Map(items) => {
+                for i in items {
+                    match i {
+                        MapItem::Pair(k, v) => {
+                            self.expr(k, Ctx::Consume);
+                            self.expr(v, Ctx::Consume);
+                        }
+                        MapItem::Spread(s) => self.expr(s, Ctx::Read),
+                    }
+                }
+            }
+            ExprKind::StructLit { fields, .. } => {
+                for f in fields {
+                    match f {
+                        StructInit::Field(FieldInit { value: Some(v), .. }) => {
+                            self.expr(v, Ctx::Consume)
+                        }
+                        StructInit::Field(FieldInit { name, value: None }) => {
+                            if let Some(d) = self.def_at_use(name.span.start) {
+                                let owning = self
+                                    .typed
+                                    .local_tys
+                                    .get(&d)
+                                    .is_some_and(|t| self.typed.is_owning(*t));
+                                self.touch(d, name.span, Ctx::Consume, owning);
+                            }
+                        }
+                        StructInit::Spread(s) => self.expr(s, Ctx::Read),
+                    }
+                }
+            }
+            ExprKind::Call { callee, args, mark } => self.call(e, callee, args, *mark),
+            ExprKind::Ternary { cond, then, else_ } => {
+                self.expr(cond, Ctx::Read);
+                let s0 = self.state.clone();
+                self.expr(then, ctx);
+                let s1 = std::mem::replace(&mut self.state, s0);
+                self.expr(else_, ctx);
+                self.state = merge(s1, std::mem::take(&mut self.state));
+            }
+            ExprKind::Is { value, pattern } => {
+                self.place_read(value);
+                self.bind_pattern(pattern, Bind::View);
+            }
+            ExprKind::Closure(c) => self.closure(e, c),
+            ExprKind::If(i) | ExprKind::Unless(i) => self.if_expr(i, ctx),
+            ExprKind::Switch(s) => self.switch(s, ctx),
+            ExprKind::Select(arms) => {
+                let s0 = self.state.clone();
+                let mut out: Option<State> = None;
+                for arm in arms {
+                    self.state = s0.clone();
+                    if let Some(op) = &arm.op {
+                        self.expr(op, Ctx::Read);
+                    }
+                    if let Some(b) = &arm.bind {
+                        self.bind_name(b, None, Bind::View);
+                    }
+                    self.block(&arm.body, ctx);
+                    let st = std::mem::take(&mut self.state);
+                    out = Some(match out {
+                        Some(o) => merge(o, st),
+                        None => st,
+                    });
+                }
+                if let Some(o) = out {
+                    self.state = o;
+                }
+            }
+            ExprKind::Block(b) | ExprKind::Unsafe(b) => self.block(b, ctx),
+            ExprKind::Scope { body, .. } => self.block(body, Ctx::Read),
+            ExprKind::Loop(b) => {
+                let label = self.pending_label.take();
+                self.run_loop(true, label, |w| w.block(b, Ctx::Read));
+            }
+            ExprKind::While { cond, body } => {
+                let label = self.pending_label.take();
+                self.run_loop(false, label, |w| {
+                    w.expr(cond, Ctx::Read);
+                    w.block(body, Ctx::Read);
+                });
+            }
+            ExprKind::DoWhile { body, cond } => {
+                let label = self.pending_label.take();
+                self.run_loop(false, label, |w| {
+                    w.block(body, Ctx::Read);
+                    w.expr(cond, Ctx::Read);
+                });
+            }
+            ExprKind::For(f) => self.for_expr(f),
+            ExprKind::Labeled { label, body } => {
+                self.pending_label = Some(self.text(label.span).to_string());
+                self.expr(body, ctx);
+                self.pending_label = None;
+            }
+            ExprKind::Guard { cond, else_ } => {
+                self.expr(cond, Ctx::Read);
+                let after = self.state.clone();
+                self.block(else_, Ctx::Read);
+                self.state = after;
+            }
+            ExprKind::Return(v) | ExprKind::Yield(v) => {
+                if let Some(v) = v {
+                    self.expr(v, Ctx::Consume);
+                }
+                if matches!(e.kind, ExprKind::Return(_)) {
+                    self.state.dead = true;
+                }
+            }
+            ExprKind::Become(v) => {
+                self.expr(v, Ctx::Consume);
+                self.state.dead = true;
+            }
+            ExprKind::Break { label, value } => {
+                if let Some(v) = value {
+                    self.expr(v, Ctx::Consume);
+                }
+                let name = label.as_ref().map(|l| self.text(l.span).to_string());
+                let st = self.state.clone();
+                if let Some(f) = self.find_loop(name.as_deref()) {
+                    f.breaks.push(st);
+                }
+                self.state.dead = true;
+            }
+            ExprKind::Continue { label } => {
+                let name = label.as_ref().map(|l| self.text(l.span).to_string());
+                let st = self.state.clone();
+                if let Some(f) = self.find_loop(name.as_deref()) {
+                    f.continues.push(st);
+                }
+                self.state.dead = true;
+            }
+            ExprKind::Meta(_) | ExprKind::MetaIf(_) => {}
+            _ => {
+                let mut v = Generic { w: self };
+                visit::walk_expr(&mut v, e);
+            }
+        }
+        if !matches!(e.kind, ExprKind::Return(_) | ExprKind::Become(_)) && self.expr_never(e) {
+            self.state.dead = true;
+        }
+    }
+
+    /// `a.b`, `a[i]`: reading part of a variable. Taking an owning part out needs `copy`.
+    fn chain(&mut self, e: &Expr, base: &Expr, ctx: Ctx) {
+        self.place_read(base);
+        if ctx == Ctx::Consume && self.ty_owning(e) {
+            if let Some(p) = self.place_of(e) {
+                if self.binds.contains_key(&p.root) {
+                    let text = self.text(e.span).to_string();
+                    let root = self.name_of(p.root);
+                    self.report(
+                        e.span,
+                        "part",
+                        format!("`{text}` cannot be taken out of `{root}`; write `copy {text}`"),
+                    );
+                }
+            }
+        }
+    }
+
+    fn find_loop(&mut self, label: Option<&str>) -> Option<&mut LoopFrame> {
+        match label {
+            Some(l) => self
+                .loops
+                .iter_mut()
+                .rev()
+                .find(|f| f.label.as_deref() == Some(l)),
+            None => self.loops.last_mut(),
+        }
+    }
+
+    fn assign(&mut self, op: crate::token::Punct, lhs: &Expr, rhs: &Expr) {
+        use crate::token::Punct;
+        if matches!(lhs.kind, ExprKind::Underscore) {
+            self.expr(rhs, Ctx::Consume);
+            return;
+        }
+        if op == Punct::Eq {
+            self.expr(rhs, Ctx::Consume);
+            let whole = self.place_of(lhs).filter(|p| p.segs.is_empty());
+            if let Some(p) = whole {
+                // A new value revives a moved variable.
+                self.may_change(p.root, Self::strip(lhs).span);
+                self.state.moved.remove(&p.root);
+                return;
+            }
+            self.place_read(lhs);
+            self.change_place(lhs);
+        } else {
+            self.expr(rhs, Ctx::Read);
+            self.place_read(lhs);
+            self.change_place(lhs);
+        }
+    }
+
+    fn if_expr(&mut self, i: &IfExpr, ctx: Ctx) {
+        self.expr(&i.cond, Ctx::Read);
+        let s0 = self.state.clone();
+        self.block(&i.then, ctx);
+        let s1 = std::mem::replace(&mut self.state, s0);
+        if let Some(el) = &i.else_ {
+            self.expr(el, ctx);
+        }
+        self.state = merge(s1, std::mem::take(&mut self.state));
+    }
+
+    fn switch(&mut self, s: &Switch, ctx: Ctx) {
+        match s.mode {
+            Some(Mode::Sink) => self.expr(&s.scrutinee, Ctx::Consume),
+            Some(Mode::Inout) => {
+                self.place_read(&s.scrutinee);
+                self.change_place(&s.scrutinee);
+            }
+            _ => self.place_read(&s.scrutinee),
+        }
+        let s0 = self.state.clone();
+        let mut out: Option<State> = None;
+        for arm in &s.arms {
+            self.state = s0.clone();
+            for p in &arm.patterns {
+                let b = if s.mode == Some(Mode::Inout) {
+                    Bind::ViewInout
+                } else {
+                    Bind::View
+                };
+                self.bind_pattern(p, b);
+            }
+            if let Some(g) = &arm.guard {
+                self.expr(g, Ctx::Read);
+            }
+            self.block(&arm.body, ctx);
+            let st = std::mem::take(&mut self.state);
+            out = Some(match out {
+                Some(o) => merge(o, st),
+                None => st,
+            });
+        }
+        if let Some(o) = out {
+            self.state = o;
+        }
+    }
+
+    fn for_expr(&mut self, f: &ForExpr) {
+        let label = self.pending_label.take();
+        match &f.head {
+            ForHead::Of { pats, iter } => {
+                self.place_read(iter);
+                self.run_loop(false, label, |w| {
+                    for p in pats {
+                        w.bind_pattern(p, Bind::View);
+                    }
+                    w.block(&f.body, Ctx::Read);
+                });
+            }
+            ForHead::In { pat, iter } => {
+                self.place_read(iter);
+                self.run_loop(false, label, |w| {
+                    w.bind_pattern(pat, Bind::View);
+                    w.block(&f.body, Ctx::Read);
+                });
+            }
+            ForHead::C { init, cond, step } => {
+                if let Some(s) = init {
+                    self.stmt(s);
+                }
+                self.run_loop(false, label, |w| {
+                    if let Some(c) = cond {
+                        w.expr(c, Ctx::Read);
+                    }
+                    w.block(&f.body, Ctx::Read);
+                    if let Some(st) = step {
+                        w.expr(st, Ctx::Read);
+                    }
+                });
+            }
+        }
+    }
+
+    /// Walks a loop body twice, so a move in one pass is a use after a move in the next.
+    /// `forever` is for `loop`, which only ends with `break`.
+    fn run_loop(&mut self, forever: bool, label: Option<String>, mut one: impl FnMut(&mut Self)) {
+        let s0 = self.state.clone();
+        self.loops.push(LoopFrame {
+            label,
+            breaks: Vec::new(),
+            continues: Vec::new(),
+        });
+        one(self);
+        let mut end = std::mem::take(&mut self.state);
+        if let Some(f) = self.loops.last_mut() {
+            for c in std::mem::take(&mut f.continues) {
+                end = merge(end, c);
+            }
+        }
+        let start2 = merge(s0, end);
+        self.state = start2.clone();
+        one(self);
+        let mut end2 = std::mem::take(&mut self.state);
+        let frame = self.loops.pop();
+        let mut out = if forever {
+            State {
+                dead: true,
+                ..State::default()
+            }
+        } else {
+            merge(start2, std::mem::take(&mut end2))
+        };
+        if let Some(mut f) = frame {
+            for c in f.continues.drain(..) {
+                if !forever {
+                    out = merge(out, c);
+                }
+            }
+            for b in f.breaks.drain(..) {
+                out = merge(out, b);
+            }
+        }
+        self.state = out;
+    }
+
+    fn closure(&mut self, e: &Expr, c: &Closure) {
+        let mut caps = Vec::new();
+        for cap in &c.captures {
+            let Some(d) = self.def_at_use(cap.name.span.start) else {
+                continue;
+            };
+            caps.push((d, cap.mode));
+            match cap.mode {
+                Some(Mode::Sink) => {
+                    let owning = self
+                        .typed
+                        .local_tys
+                        .get(&d)
+                        .is_some_and(|t| self.typed.is_owning(*t));
+                    self.touch(d, cap.name.span, Ctx::Consume, owning);
+                }
+                Some(Mode::Inout) => {
+                    self.touch(d, cap.name.span, Ctx::Read, false);
+                    self.may_change(d, cap.name.span);
+                }
+                _ => self.touch(d, cap.name.span, Ctx::Read, false),
+            }
+        }
+        let saved = self.state.clone();
+        self.closures.push(ClosureFrame { span: e.span, caps });
+        for p in &c.params {
+            self.bind_pattern(&p.pattern, Bind::View);
+        }
+        self.expr(&c.body, Ctx::Consume);
+        self.closures.pop();
+        self.state = saved;
+    }
+
+    // ---- Calls and exclusive access ---------------------------------------------------------------------
+
+    fn is_constructor(&self, callee: &Expr) -> bool {
+        match &Self::strip(callee).kind {
+            ExprKind::DotName(_) => true,
+            ExprKind::Name(id) => self.def_at_use(id.span.start).is_some_and(|d| {
+                let def = self.res.def(d);
+                matches!(def.kind, DefKind::Variant | DefKind::Struct | DefKind::Obj)
+                    || (matches!(def.kind, DefKind::BuiltinFn | DefKind::BuiltinCase)
+                        && matches!(def.name.as_str(), "ok" | "err" | "some" | "box"))
+            }),
+            ExprKind::Field { name, .. } => self
+                .def_at_use(name.span.start)
+                .is_some_and(|d| self.res.def(d).kind == DefKind::Variant),
+            ExprKind::TypeApply { base, .. } => self.is_constructor(base),
+            _ => false,
+        }
+    }
+
+    fn call(&mut self, e: &Expr, callee: &Expr, args: &[Arg], mark: CallMark) {
+        let ctor = self.is_constructor(callee);
+        let mut accesses: Vec<Access> = Vec::new();
+        let receiver = match &Self::strip(callee).kind {
+            ExprKind::Field { base, name, .. } if self.def_at_use(name.span.start).is_none() => {
+                Some(&**base)
+            }
+            _ => None,
+        };
+        match receiver {
+            Some(base) => match mark {
+                CallMark::Changes => {
+                    self.place_read(base);
+                    self.change_place(base);
+                    self.access(base, true, &mut accesses);
+                }
+                CallMark::Consumes => {
+                    self.expr(base, Ctx::Consume);
+                    self.access(base, true, &mut accesses);
+                }
+                CallMark::None => {
+                    self.expr(base, Ctx::Read);
+                    self.access(base, false, &mut accesses);
+                }
+            },
+            None => self.expr(callee, Ctx::Read),
+        }
+        for a in args {
+            match a.mode {
+                Some(Mode::Inout) => {
+                    self.place_read(&a.value);
+                    self.change_place(&a.value);
+                    self.access(&a.value, true, &mut accesses);
+                }
+                Some(Mode::Sink) => {
+                    self.expr(&a.value, Ctx::Consume);
+                    self.access(&a.value, true, &mut accesses);
+                }
+                _ if ctor && !a.spread => self.expr(&a.value, Ctx::Consume),
+                _ => {
+                    self.expr(&a.value, Ctx::Read);
+                    self.access(&a.value, false, &mut accesses);
+                }
+            }
+        }
+        self.exclusive(&accesses);
+        let _ = e;
+    }
+
+    /// Records the place an argument names. Reads of plain values are copies and do not count.
+    fn access(&self, e: &Expr, changes: bool, out: &mut Vec<Access>) {
+        let Some(place) = self.place_of(e) else {
+            return;
+        };
+        if !changes && !self.ty_owning(e) {
+            return;
+        }
+        out.push(Access {
+            place,
+            changes,
+            span: Self::strip(e).span,
+        });
+    }
+
+    fn exclusive(&mut self, accesses: &[Access]) {
+        for (j, b) in accesses.iter().enumerate() {
+            for a in &accesses[..j] {
+                if (a.changes || b.changes) && overlap(&a.place, &b.place) {
+                    let n = self.name_of(b.place.root);
+                    self.report(
+                        b.span,
+                        "exclusive",
+                        format!("`{n}` is changed or given away by this call and also used by another argument of it; copy one of them first"),
+                    );
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Falls back to the generic tree walk for expressions without special rules.
+struct Generic<'w, 'a> {
+    w: &'w mut Walker<'a>,
+}
+
+impl<'w, 'a> Visitor for Generic<'w, 'a> {
+    fn visit_expr(&mut self, e: &Expr) {
+        // The tree outlives the walk; the visitor trait just cannot say so.
+        let e: &Expr = unsafe { &*(e as *const Expr) };
+        self.w.expr(e, Ctx::Read);
+    }
+    fn visit_pattern(&mut self, p: &Pattern) {
+        let p: &Pattern = unsafe { &*(p as *const Pattern) };
+        self.w.bind_pattern(p, Bind::View);
+    }
+    fn visit_stmt(&mut self, s: &Stmt) {
+        let s: &Stmt = unsafe { &*(s as *const Stmt) };
+        self.w.stmt(s);
+    }
+    fn visit_block(&mut self, b: &Block) {
+        let b: &Block = unsafe { &*(b as *const Block) };
+        self.w.block(b, Ctx::Read);
+    }
+    fn visit_type(&mut self, _t: &Type) {}
+}

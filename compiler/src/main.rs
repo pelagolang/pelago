@@ -106,6 +106,7 @@ fn check_path(path: &str) {
     let resolved = langc::resolve::resolve(&program);
     let typed = langc::typecheck::check(&program, &resolved);
     let mut diags = typed.diagnostics.clone();
+    diags.extend(langc::values::check(&program, &resolved, &typed));
     diags.sort_by_key(|d| (d.module, d.span.start));
     diags.dedup();
     for d in &diags {
