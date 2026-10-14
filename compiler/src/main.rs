@@ -18,7 +18,14 @@ fn main() {
             }
         },
         Some("parse") => match args.next() {
-            Some(path) => parse_file(&path),
+            Some(flag) if flag == "--no-docs" => match args.next() {
+                Some(path) => parse_file(&path, false),
+                None => {
+                    eprintln!("usage: langc parse [--no-docs] <file>");
+                    std::process::exit(2);
+                }
+            },
+            Some(path) => parse_file(&path, true),
             None => {
                 eprintln!("usage: langc parse <file>");
                 std::process::exit(2);
@@ -54,7 +61,7 @@ fn usage() {
     eprintln!("  keywords   list every keyword, hard ones first");
     eprintln!("  tokens     list operators and punctuation");
     eprintln!("  lex-bench <file>  time the lexer alone on a file");
-    eprintln!("  parse <file>  print the syntax tree and any errors (`-` reads standard input)");
+    eprintln!("  parse [--no-docs] <file>  print the syntax tree and any errors (`-` reads standard input)");
     eprintln!("  parse-bench <file>  time lexing plus parsing on a file");
     eprintln!("  lex <file> print the tokens of a source file (`-` reads standard input)");
 }
@@ -98,9 +105,10 @@ fn read_source(path: &str) -> String {
     }
 }
 
-fn parse_file(path: &str) {
+fn parse_file(path: &str, keep_docs: bool) {
     let src = read_source(path);
-    let (out, lex_errors) = langc::parser::parse_and_check(&src);
+    let (out, lex_errors) =
+        langc::parser::parse_and_check_with(&src, langc::parser::ParseOptions { keep_docs });
     println!("{}", langc::ast_print::print_file(&out.file, &src));
     let index = LineIndex::new(&src);
     for error in &lex_errors {

@@ -67,8 +67,8 @@ A block's last expression, when not followed by `;`, is its value. Arms of a `sw
 ## Decisions from draft 1
 
 - **P1** A file may contain statements at the top level, as well as declarations.
-- **P2** `use` stays as another spelling of `import`. The import form itself is to be redesigned in its own
-  pass (our own shape); until then the parser accepts `import std.io` and `import a, b from std.io`.
+- **P2** `use` stays as another spelling of `import`. The import form is `import std.io`, `import fmt = std.io`
+  and `import { a, b: c, ... } = std.io` (see `modules.md`); relative paths start with dots.
 - **P3** Struct literals are not allowed in conditions; wrap them in parentheses.
 - **P4** Bitwise operators bind tighter than comparison (Rust and Go, not C).
 - **P5** `to` binds between `+` and the comparisons: `a + b to float` is `(a + b) to float`.
@@ -116,7 +116,8 @@ The `-> Type` goes after the parameter list, as in a function. It needs the pare
 
 `///` lines and `///* ... *///` blocks that sit right before a declaration are kept in the tree (`docs` on items,
 fields and enum cases) and `doc_text` turns them into plain text. A doc comment on the same line as code before it
-belongs to nothing. Comments elsewhere are still dropped; the formatter will keep ordinary comments later.
+belongs to nothing. Doc comments never reach the compiled program; they exist only for tools. A plain compile
+skips them: `ParseOptions::compile()` (or `langc parse --no-docs`) does not even collect them. Comments elsewhere are still dropped; the formatter will keep ordinary comments later.
 
 ## Syntax checks (`check.rs`)
 
@@ -167,5 +168,4 @@ the parser is not the bottleneck for the compile-speed target; the type checker 
 ## Not done yet
 
 - Ordinary (non-doc) comments are skipped; the formatter needs them kept.
-- The import form (P2).
 - Rules that need types, listed above.

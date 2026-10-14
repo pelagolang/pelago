@@ -842,11 +842,29 @@ impl Printer<'_> {
             }
             ItemKind::Import(imp) => {
                 let mut v = Vec::new();
-                v.extend(imp.names.iter().map(|n| self.id(n)));
-                if !imp.names.is_empty() {
-                    v.push(atom("from"));
+                match &imp.kind {
+                    ImportKind::Module => {}
+                    ImportKind::Alias(a) => {
+                        v.push(self.id(a));
+                        v.push(atom("="));
+                    }
+                    ImportKind::Names { names, glob } => {
+                        let mut items: Vec<Sexp> = names
+                            .iter()
+                            .map(|n| match &n.alias {
+                                Some(a) => list(":", vec![self.id(&n.name), self.id(a)]),
+                                None => self.id(&n.name),
+                            })
+                            .collect();
+                        if *glob {
+                            items.push(atom("..."));
+                        }
+                        v.push(Sexp::List(items));
+                        v.push(atom("="));
+                    }
                 }
-                v.push(atom(self.path_text(&imp.path)));
+                let dots = ".".repeat(usize::from(imp.levels));
+                v.push(atom(format!("{dots}{}", self.path_text(&imp.path))));
                 list(if imp.is_use { "use" } else { "import" }, v)
             }
             ItemKind::Decl(d) => self.decl(d),

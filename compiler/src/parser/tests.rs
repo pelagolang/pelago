@@ -551,7 +551,25 @@ fn items() {
     );
     assert_eq!(one("mod tour"), "(mod tour)");
     assert_eq!(one("import std.io"), "(import std.io)");
-    assert_eq!(one("import a, b from std.x"), "(import a b from std.x)");
+    assert_eq!(one("import fmt = std.io"), "(import fmt = std.io)");
+    assert_eq!(
+        one("import { read, write: put } = std.io"),
+        "(import ((: write put)) = std.io)".replace("((: write put))", "(read (: write put))")
+    );
+    assert_eq!(
+        one("import { ... } = std.math"),
+        "(import (...) = std.math)"
+    );
+    assert_eq!(
+        one("import { a, ... } = .sibling"),
+        "(import (a ...) = .sibling)"
+    );
+    assert_eq!(one("import ..util.strings"), "(import ..util.strings)");
+    assert_eq!(one("import cs = ...up.x"), "(import cs = ...up.x)");
+    assert_eq!(
+        one("pub import { read } = std.io"),
+        "(import pub (read) = std.io)"
+    );
     assert_eq!(one("use std"), "(use std)");
     assert_eq!(one("type id = int64"), "(type id int64)");
     assert_eq!(
@@ -1128,4 +1146,28 @@ fn repeated_names() {
     assert_flagged("point { x: 1, x: 2 }", "given twice");
     assert_flagged("f(a: 1, a: 2)", "given twice");
     assert_clean("f(a: 1, b: 2)");
+}
+
+#[test]
+fn doc_comments_can_be_skipped() {
+    let src = "/// doc\nfn f() {}";
+    let (kept, _) = parse_and_check_with(src, ParseOptions::default());
+    let (skipped, _) = parse_and_check_with(src, ParseOptions::compile());
+    let docs = |o: &ParseOutput| match &o.file.stmts[0].kind {
+        StmtKind::Item(i) => i.docs.len(),
+        _ => usize::MAX,
+    };
+    assert_eq!(docs(&kept), 1);
+    assert_eq!(docs(&skipped), 0);
+    assert!(skipped.errors.is_empty());
+}
+
+#[test]
+fn import_checks() {
+    assert_clean("import { a, b: c } = std.x");
+    assert_clean("import { ... } = std.x");
+    assert_flagged("import { } = std.x", "no names");
+    assert_flagged("import { a, a } = std.x", "imported twice");
+    assert_flagged("import { a, b: a } = std.x", "imported twice");
+    assert_clean("import { a: x, b: y } = std.x");
 }

@@ -270,7 +270,12 @@ fn pipeline() {
 }
 
 // ---- More syntax -----------------------------------------------------------------------
-import list, map from std.collections
+import { list, map: dict } = std.collections
+import fmt = std.io
+import { ... } = std.math
+import { helper } = .util
+import ..shared.strings
+pub import { read } = std.io
 use std.io
 
 type id = int64

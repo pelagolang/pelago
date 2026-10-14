@@ -424,6 +424,28 @@ impl<'a> Checker<'a> {
         }
     }
 
+    fn check_import(&mut self, imp: &Import) {
+        if let ImportKind::Names { names, glob } = &imp.kind {
+            if names.is_empty() && !*glob {
+                self.error(
+                    imp.path.span,
+                    "this import brings in no names; write `...` for everything",
+                );
+            }
+            // Each name is brought in once, under its final name.
+            let mut seen: Vec<&str> = Vec::new();
+            for n in names {
+                let local = self.name(n.alias.as_ref().unwrap_or(&n.name));
+                if seen.contains(&local) {
+                    let msg = format!("`{local}` is imported twice");
+                    self.error(n.name.span, msg);
+                } else {
+                    seen.push(local);
+                }
+            }
+        }
+    }
+
     fn check_members(&mut self, members: &[Member], what: &str) {
         for m in members {
             if let Member::Field(f) = m {
@@ -446,6 +468,7 @@ impl Visitor for Checker<'_> {
             _ => None,
         };
         match &i.kind {
+            ItemKind::Import(imp) => self.check_import(imp),
             ItemKind::Fn(f) => {
                 self.check_fn(i, f, outer);
             }

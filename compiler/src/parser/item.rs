@@ -601,30 +601,58 @@ impl Parser<'_> {
         ItemKind::Mod { path, body }
     }
 
+    /// `import path`, `import name = path`, `import { a, b: c, ... } = path`.
     fn parse_import(&mut self) -> ItemKind {
         let is_use = self.bump().kind == TokenKind::Keyword(Keyword::Use);
-        let first = self.path("a module name");
-        if self.at(Punct::Comma) || self.at_word("from") {
-            let mut names = vec![first.segments[0]];
-            while self.eat(Punct::Comma) {
-                names.push(self.ident("a name"));
+        let kind = if self.at(Punct::LBrace) {
+            self.bump();
+            self.enter_brackets();
+            let mut names = Vec::new();
+            let mut glob = false;
+            while !self.at(Punct::RBrace) && !self.at_eof() {
+                let before = self.pos;
+                if self.eat(Punct::DotDotDot) {
+                    glob = true;
+                } else {
+                    let name = self.ident("a name to import");
+                    let alias = self.eat(Punct::Colon).then(|| self.ident("a new name"));
+                    names.push(ImportName { name, alias });
+                }
+                if !self.eat(Punct::Comma) {
+                    break;
+                }
+                if self.pos == before {
+                    self.bump();
+                }
             }
-            if self.at_word("from") {
-                self.bump();
-            } else {
-                self.error_expected("`from`");
-            }
-            let path = self.path("a module name");
-            return ItemKind::Import(Import {
-                is_use,
-                names,
-                path,
-            });
+            self.leave_brackets();
+            self.expect(Punct::RBrace);
+            self.expect(Punct::Eq);
+            ImportKind::Names { names, glob }
+        } else if self.kind() == TokenKind::Ident
+            && self.peek_raw().kind == TokenKind::Punct(Punct::Eq)
+        {
+            let alias = self.ident("a name");
+            self.bump(); // `=`
+            ImportKind::Alias(alias)
+        } else {
+            ImportKind::Module
+        };
+        let levels = match self.kind() {
+            TokenKind::Punct(Punct::Dot) => 1,
+            TokenKind::Punct(Punct::DotDot) => 2,
+            TokenKind::Punct(Punct::DotDotDot) => 3,
+            _ => 0,
+        };
+        if levels > 0 {
+            self.bump();
         }
+        let path = self.path("a module name");
         ItemKind::Import(Import {
             is_use,
-            names: Vec::new(),
-            path: first,
+            kind,
+            levels,
+            path,
         })
     }
 

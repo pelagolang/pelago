@@ -1,4 +1,4 @@
-# Modules and imports (draft 1)
+# Modules and imports (draft 2)
 
 What a file is, how names cross files, and what `import` looks like. This is the last syntax piece the type
 checker needs before name resolution can be written.
@@ -99,13 +99,53 @@ starts with the package name, so moving a file does not break the imports of oth
 `ext` declarations (`ext fn puts(s: ptr) -> int`) are not imports. They are listed where the library is linked
 (`ext "C" ...`), and the build tool links the library. Header parsing is out of scope.
 
-## Questions
+## Decisions from draft 1
 
-**IM1.** Take Option B (imports as bindings: `import { a, b: c } = path`, `import name = path`, `import path`)?
-**IM2.** `{ ... } = std.math` for "everything", or leave glob imports out entirely (always name what you use)?
-**IM3.** File name is the module name, and a `mod` line, if written, must match?
-**IM4.** Relative paths with leading dots (`.sibling`, `..parent.x`)?
-**IM5.** Cycles between modules of one package allowed (section 5)?
-**IM6.** Imports only at module top level?
-**IM7.** A middle visibility level (PV1), spelled `pub pkg`? Or only `pub` and `priv` for now?
-**IM8.** The orphan rule for `impl` (section 6)?
+- **IM1** Imports are bindings (Option B): `import std.io`, `import fmt = std.io`, `import { a, b: c } = path`.
+  The parser, printer and checks implement it; `use` is a synonym, and `pub import {...}` re-exports.
+- **IM2** `import { ... } = std.math` brings in everything the module makes public. `...` can sit next to renames
+  (`{ read: get, ... }`).
+- **IM5** Modules of one package may import each other.
+- **IM6** Imports only at the top level of a module (or a `mod` block).
+- **IM7 / PV1** A middle visibility level, spelled `pub pkg`: visible inside the package, not outside. (Checked
+  once name resolution exists; the parser does not know `pub pkg` yet.)
+- **IM8** The orphan rule for `impl`.
+
+## Still open (waiting on the answer about how a file becomes a module)
+
+- **IM3** What decides a module's name: the file name, a declared name, or the directory.
+- **IM4** Relative paths with leading dots (`.sibling`, `..parent.x`). The parser accepts them already; whether
+  they stay depends on IM3.
+
+### Why "file name = module name", and the alternatives
+
+It is not a Java idea (Java is one *class* per file). Whole-file namespaces named after the file are how JavaScript,
+Python, Rust, Zig and Swift work. The reasons to like it here:
+
+- **Finding a module needs no scan.** `import geometry.shapes` can be turned into a path and opened directly. If names
+  were only declared inside files, the compiler would have to read every file first to learn what exists.
+- **Parallel by default.** One file, one module, one unit to parse and collect names for.
+- **Nothing to keep in step.** The name cannot disagree with the file (hence the rule that a `mod tour` line must match).
+
+The real costs: renaming a file renames the module (a refactor for everyone importing it), a big module has to be one
+big file or a folder of submodules re-exported by a front file (`pub import { ... } = .list`), and file names must be
+valid names on every operating system (case-insensitive disks, no dashes).
+
+The serious alternative is **Go-style: a directory is a module and all its files share one namespace**.
+
+| | File = module | Directory = module (Go) |
+|---|---|---|
+| Splitting a big module across files | needs submodules and re-exports | free: just add a file |
+| Private names across files of one module | not visible | visible |
+| Finding a module | open one file | read the directory's file list |
+| Parallel unit | file | file (parse), directory (collect names) |
+| Renaming a file | breaks importers | harmless |
+
+I suggest keeping **file = module**, with directories as parent modules whose front file (`shapes.lang` next to
+`shapes/`) can re-export its children: it matches what you already know from TypeScript and Rust, and `pub import`
+makes the facade cheap. The Go style is the better answer if you expect very large modules and want to split them
+without ceremony. A third option, **a declared name that is free of the file name** (`mod geometry` inside any file),
+is the most flexible and costs the directory scan above.
+
+**IM3 (again).** Which one: file = module (suggested), directory = module, or declared name?
+**IM4 (again).** After IM3, keep leading-dot relative paths?

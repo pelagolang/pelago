@@ -49,9 +49,35 @@ pub struct ParseOutput {
     pub errors: Vec<ParseError>,
 }
 
+/// What the parser keeps.
+#[derive(Clone, Copy, Debug)]
+pub struct ParseOptions {
+    /// Attach `///` doc comments to declarations. Tools (documentation, hover text, the formatter)
+    /// want them; a plain compile does not, and skips the work.
+    pub keep_docs: bool,
+}
+
+impl Default for ParseOptions {
+    fn default() -> ParseOptions {
+        ParseOptions { keep_docs: true }
+    }
+}
+
+impl ParseOptions {
+    /// For compiling: nothing that only tools need.
+    pub fn compile() -> ParseOptions {
+        ParseOptions { keep_docs: false }
+    }
+}
+
 /// Parses tokens produced by the lexer for `src`.
 pub fn parse(src: &str, tokens: &[Token]) -> ParseOutput {
-    let mut p = Parser::new(src, tokens);
+    parse_with(src, tokens, ParseOptions::default())
+}
+
+/// Like [`parse`], with options.
+pub fn parse_with(src: &str, tokens: &[Token], options: ParseOptions) -> ParseOutput {
+    let mut p = Parser::new(src, tokens, options.keep_docs);
     let file = p.parse_file();
     ParseOutput {
         file,
@@ -68,7 +94,14 @@ pub fn parse_source(src: &str) -> (ParseOutput, Vec<LexError>) {
 /// Lexes, parses and runs the syntax checks of [`crate::check`]. This is what a compile uses.
 /// Errors from all stages are sorted by position.
 pub fn parse_and_check(src: &str) -> (ParseOutput, Vec<LexError>) {
-    let (mut out, lex) = parse_source(src);
+    parse_and_check_with(src, ParseOptions::default())
+}
+
+/// Like [`parse_and_check`], with options.
+pub fn parse_and_check_with(src: &str, options: ParseOptions) -> (ParseOutput, Vec<LexError>) {
+    let lexed = tokenize(src);
+    let mut out = parse_with(src, &lexed.tokens, options);
+    let lex = lexed.errors;
     let checked = crate::check::check_file(&out.file, src);
     out.errors.extend(checked);
     out.errors.sort_by_key(|e| e.span.start);
@@ -89,7 +122,7 @@ fn parse_fragment(src: &str, offset: u32, text: &str) -> (crate::ast::Expr, Vec<
             )
         })
         .collect();
-    let mut p = Parser::new(src, &tokens);
+    let mut p = Parser::new(src, &tokens, false);
     p.nl_ignore = 1;
     p.settle();
     let expr = p.parse_expr();
@@ -153,15 +186,17 @@ pub(crate) struct Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
-    fn new(src: &'a str, tokens: &[Token]) -> Parser<'a> {
+    fn new(src: &'a str, tokens: &[Token], keep_docs: bool) -> Parser<'a> {
         let mut toks: Vec<Token> = Vec::with_capacity(tokens.len());
         let mut docs: Vec<Token> = Vec::new();
         for t in tokens {
             if t.kind.is_trivia() {
-                if matches!(
-                    t.kind,
-                    TokenKind::DocLineComment | TokenKind::DocBlockComment
-                ) {
+                if keep_docs
+                    && matches!(
+                        t.kind,
+                        TokenKind::DocLineComment | TokenKind::DocBlockComment
+                    )
+                {
                     docs.push(*t);
                 }
                 continue;

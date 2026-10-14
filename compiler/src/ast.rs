@@ -638,13 +638,37 @@ pub enum ItemKind {
     },
 }
 
+/// `import std.io`, `import fmt = std.io`, `import { read, write: put, ... } = std.io`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Import {
     /// `use` is another spelling of `import`.
     pub is_use: bool,
-    /// `import a, b from std.io` names `a` and `b`; empty for `import std.io`.
-    pub names: Vec<Ident>,
+    pub kind: ImportKind,
+    /// Where from. `levels` counts leading dots: 0 is a path from a package name (`std.io`),
+    /// 1 is relative to this file's directory (`.sibling`), 2 goes up one (`..util`).
+    pub levels: u8,
     pub path: Path,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ImportKind {
+    /// `import std.io`: the module, under its last name.
+    Module,
+    /// `import fmt = std.io`: the module under another name.
+    Alias(Ident),
+    /// `import { read, write: put, ... } = std.io`
+    Names {
+        names: Vec<ImportName>,
+        /// A `...` in the list: everything else the module makes public.
+        glob: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImportName {
+    pub name: Ident,
+    /// `write: put` brings `write` in as `put`.
+    pub alias: Option<Ident>,
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
