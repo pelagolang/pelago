@@ -237,7 +237,7 @@ impl<'a> Lowerer<'a> {
         let reached = match r {
             Res::Never => false,
             Res::Val(v) if matches!(repr, Repr::Scalar(_)) => {
-                self.pop_scope();
+                self.pop_scope_carrying(&r);
                 self.jump(join, vec![v]);
                 true
             }

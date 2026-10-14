@@ -209,6 +209,7 @@ impl<'a> Lowerer<'a> {
         if let Res::Never = self.fill_struct(e, inits, body, t) {
             return Res::Never;
         }
+        self.fresh_scalar(p, t);
         Res::Val(p)
     }
 
@@ -237,7 +238,10 @@ impl<'a> Lowerer<'a> {
         }
         match self.call_with(e, init, &map, srcs, None) {
             Res::Never => Res::Never,
-            _ => Res::Val(p),
+            _ => {
+                self.fresh_scalar(p, t);
+                Res::Val(p)
+            }
         }
     }
 

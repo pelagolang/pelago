@@ -73,6 +73,10 @@ exists, because they change the rules for generics. The word `linear` is reserve
 
 ---
 
+## Temporaries
+
+A value that is made but never named (a function result you ignore, the object behind `make_dog("a").name`, an argument built on the spot) is destroyed at the **end of its statement**, in the reverse order it was made. If something takes it (a variable, a field, a `sink` parameter, `return`) the new owner destroys it later instead. The compiler keeps these books while it builds the code (the ledger, IR22); there is no run-time cost in straight-line code beyond what variables already pay.
+
 ## Decisions from draft 1
 
 - **M1** AoS is the default layout. `soa<T>` is the opt-in collection, with `soa<T, 8>` as the blocked variant.

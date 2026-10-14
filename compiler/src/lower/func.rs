@@ -58,6 +58,10 @@ pub(crate) struct FnState<'a> {
     /// Names of the `scope s { ... }` blocks being lowered.
     /// A closure written right at a call that only reads its function parameter: it cannot outlive the call, so its environment may live on the stack.
     pub stack_env: Option<(u32, u32)>,
+    /// Fresh owning scalars (an object, a box) nobody has taken yet, with the flag that says whether this scope still owes their drop.
+    pub owed: HashMap<Value, (Vec<Value>, Ty)>,
+    /// Owed values that a jump passes to a block parameter: the parameter owns their flags once the block starts.
+    pub joins: HashMap<(BlockId, usize), (Vec<Value>, Ty)>,
     /// The function being lowered, and the block a tail call to it jumps to (when it can).
     pub cur_def: Option<DefId>,
     pub tail_head: Option<BlockId>,
@@ -81,6 +85,8 @@ impl<'a> FnState<'a> {
     pub fn empty(void: Ty) -> FnState<'a> {
         FnState {
             stack_env: None,
+            owed: HashMap::new(),
+            joins: HashMap::new(),
             cur_def: None,
             tail_head: None,
             func: Func::new("", &[], IrTy::Void),
@@ -136,6 +142,16 @@ impl<'a> Lowerer<'a> {
     }
 
     pub(crate) fn jump(&mut self, to: BlockId, args: Vec<Value>) {
+        for (i, a) in args.iter().enumerate() {
+            if let Some((flags, ty)) = self.f.owed.get(a).cloned() {
+                self.f
+                    .joins
+                    .entry((to, i))
+                    .or_insert_with(|| (Vec::new(), ty))
+                    .0
+                    .extend(flags);
+            }
+        }
         self.terminate(Term::Jump(Target { block: to, args }));
     }
 
@@ -155,6 +171,12 @@ impl<'a> Lowerer<'a> {
 
     pub(crate) fn start(&mut self, b: BlockId) {
         self.f.cur = Some(b);
+        let params = self.f.func.block_params(b).to_vec();
+        for (i, p) in params.into_iter().enumerate() {
+            if let Some(entry) = self.f.joins.remove(&(b, i)) {
+                self.f.owed.insert(p, entry);
+            }
+        }
     }
 
     pub(crate) fn new_block(&mut self, params: &[IrTy]) -> BlockId {
@@ -321,6 +343,44 @@ impl<'a> Lowerer<'a> {
             });
         }
         Some(f)
+    }
+
+    /// A fresh owning scalar (an object or a box that a call or a literal just made): it is owed a
+    /// drop at the end of the current scope unless a consumer settles it first.
+    pub(crate) fn fresh_scalar(&mut self, v: Value, ty: Ty) {
+        if !self.needs_drop(ty) {
+            return;
+        }
+        let slot = self.slot_for(ty);
+        self.store_scalar_ty(slot, v);
+        if let Some(flag) = self.own(slot, ty, true) {
+            self.f.owed.insert(v, (vec![flag], ty));
+        }
+    }
+
+    /// A consumer took ownership of `v`: nothing is owed for it any more.
+    pub(crate) fn settle(&mut self, v: Value) {
+        if let Some((flags, _)) = self.f.owed.remove(&v) {
+            for flag in flags {
+                self.clear_flag(flag);
+            }
+        }
+    }
+
+    /// Ends a scope whose result is `r`: a fresh owning scalar that is the result moves out to the
+    /// enclosing scope instead of being dropped here.
+    pub(crate) fn pop_scope_carrying(&mut self, r: &Res) {
+        let carried = match r {
+            Res::Val(v) => self.f.owed.get(v).map(|(_, ty)| (*v, *ty)),
+            _ => None,
+        };
+        if let Some((v, _)) = carried {
+            self.settle(v);
+        }
+        self.pop_scope();
+        if let (Some((v, ty)), Some(_)) = (carried, self.f.cur) {
+            self.fresh_scalar(v, ty);
+        }
     }
 
     pub(crate) fn clear_flag(&mut self, flag: Value) {

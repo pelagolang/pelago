@@ -764,6 +764,7 @@ impl<'a> Lowerer<'a> {
         }
         match (sig.ret_pass, r) {
             (RetPass::Val(_), Res::Val(v)) => {
+                self.settle(v);
                 self.pop_scope();
                 self.terminate(Term::Return(Some(v)));
             }

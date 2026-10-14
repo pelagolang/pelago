@@ -304,7 +304,10 @@ impl<'a> Lowerer<'a> {
         }
         match sig.ret_pass {
             RetPass::Val(_) => match result {
-                Some(v) => Res::Val(v),
+                Some(v) => {
+                    self.fresh_scalar(v, sig.ret);
+                    Res::Val(v)
+                }
                 None => Res::Never,
             },
             RetPass::Void => Res::Unit,

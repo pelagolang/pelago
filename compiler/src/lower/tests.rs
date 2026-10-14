@@ -804,3 +804,91 @@ fn scope_tasks_finish_with_the_scope() {
     let src = "fn main() { var a = 0\n var b = 0\n scope s { s.spawn([inout a] ~> { a += 1 })\n s.spawn([inout b] ~> { b += 2 })\n print(\"spawned\") }\n print(a, b) }\n";
     assert_eq!(output_of(src), "spawned\n1 2\n");
 }
+
+// ---- A-03: the ledger (a fresh value nobody binds is dropped where its statement ends) -----------
+
+#[test]
+fn object_temporaries_are_dropped() {
+    let src = r#"obj dog { name: string
+    fn speak(self) -> string = "woof #(self.name)" }
+fn make_dog(sink n: string) -> dog { dog { name: n } }
+fn show(d: dog) { print(d.name) }
+fn pick(c: bool) -> dog { if c { make_dog("a") } else { make_dog("b") } }
+fn main() {
+    make_dog("a")
+    print(make_dog("b").name)
+    show(dog { name: "c" })
+    print((if true { make_dog("d") } else { make_dog("e") }).name)
+    const d = make_dog("f")
+    print(d.speak())
+    print(pick(false).speak())
+}
+"#;
+    assert_eq!(output_of(src), "b\nc\nd\nwoof f\nwoof b\n");
+}
+
+#[test]
+fn temporaries_settle_into_their_new_owner() {
+    let src = r#"obj dog { name: string
+    fn speak(self) -> string = "woof #(self.name)" }
+interface talker { fn talk(self) -> string }
+impl talker for int { fn talk(self) -> string = "int" }
+struct kennel { d: dog }
+fn make_dog(sink n: string) -> dog { dog { name: n } }
+fn show(d: dog) { print(d.name) }
+fn take(sink d: dog) { print(d.name) }
+fn find(c: bool) -> dog? { if c { make_dog("opt") } else { none } }
+fn try_it(c: bool) -> int? {
+    const d = find(c)?
+    print(d.name)
+    1
+}
+fn early(c: bool) -> string {
+    if c { return make_dog("ret").speak() }
+    "late"
+}
+fn main() {
+    var ds: [dog] = []
+    ds.push!(make_dog("p"))
+    var k = kennel { d: make_dog("k") }
+    take(make_dog("s"))
+    print(try_it(true), try_it(false))
+    print(early(true), early(false))
+    for i in 0..3 {
+        if i == 1 { continue }
+        print(make_dog("loop").name)
+        if i == 2 { break }
+    }
+    const t = true && make_dog("and").name.len() > 0
+    const o = find(false) ?? make_dog("dflt")
+    print(t, o.name)
+    const a: any talker = 5
+    const f = [sink k] ~> copy k.d.name
+    const g = [sink ds] ~> ds.len()
+    print(g())
+    var i = 0
+    while make_dog("cond").name.len() > i { i += 1 }
+    print(find(true).is_some())
+    var m: map<string, dog> = map {}
+    m.insert!("x", make_dog("m"))
+    print(m.len())
+    switch make_dog("sw") { case d: print(d.name) }
+}
+"#;
+    assert_eq!(
+        output_of(src),
+        "s\nopt\nsome(1) none\nwoof ret late\nloop\nloop\ntrue dflt\n1\ntrue\n1\nsw\n"
+    );
+}
+
+#[test]
+fn box_temporaries_are_dropped() {
+    let src = "fn main() { var m: map<box<int>, string> = map {}\n m.insert!(box(1), \"one\")\n print(box(1) in m)\n box(7)\n print(box(3), box(3) == box(3)) }\n";
+    assert_eq!(output_of(src), "true\n3 true\n");
+}
+
+#[test]
+fn temporaries_die_in_reverse_order_at_the_end_of_the_statement() {
+    let src = "obj noisy { id: int\n deinit { print(\"drop #(self.id)\") } }\nfn mk(i: int) -> noisy { noisy { id: i } }\nfn pair(a: noisy, b: noisy) -> int { a.id + b.id }\nfn main() { print(pair(mk(1), mk(2)))\n print(\"next\") }\n";
+    assert_eq!(output_of(src), "3\ndrop 2\ndrop 1\nnext\n");
+}

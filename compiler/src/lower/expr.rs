@@ -280,6 +280,7 @@ impl<'a> Lowerer<'a> {
         let v = self.scalar(e)?;
         if self.needs_drop(t) {
             self.mark_moved(e);
+            self.settle(v);
         }
         Some(v)
     }
@@ -1219,7 +1220,8 @@ impl<'a> Lowerer<'a> {
             None if self.f.cur.is_none() => Res::Never,
             None => Res::Unit,
         };
-        self.pop_scope();
+        // A fresh owning scalar that is the block's value moves out to the enclosing scope.
+        self.pop_scope_carrying(&r);
         if self.f.cur.is_none() {
             return Res::Never;
         }
@@ -1395,11 +1397,12 @@ impl<'a> Lowerer<'a> {
             return Res::Never;
         }
         self.start(join);
-        self.pop_scope();
-        match repr {
+        let res = match repr {
             Repr::Scalar(_) => Res::Val(self.f.func.block_params(join)[0]),
             _ => Res::Unit,
-        }
+        };
+        self.pop_scope_carrying(&res);
+        res
     }
 
     /// An arm that is an expression (`else` branch, ternary side, `case` body expression).
@@ -1419,7 +1422,7 @@ impl<'a> Lowerer<'a> {
             _ => self.expr(e),
         };
         if self.f.cur.is_some() {
-            self.pop_scope();
+            self.pop_scope_carrying(&r);
         } else {
             self.f.scopes.pop();
         }
@@ -1480,11 +1483,12 @@ impl<'a> Lowerer<'a> {
             return Res::Never;
         }
         self.start(join);
-        self.pop_scope();
-        match repr {
+        let res = match repr {
             Repr::Scalar(_) => Res::Val(self.f.func.block_params(join)[0]),
             _ => Res::Unit,
-        }
+        };
+        self.pop_scope_carrying(&res);
+        res
     }
 
     fn while_loop(&mut self, cond: &'a Expr, body: &'a Block) -> Res {

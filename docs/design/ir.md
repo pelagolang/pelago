@@ -165,6 +165,13 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 - **IR19** `become f(...)` on the function itself with plain number parameters is a jump to the top (no stack growth); any other `become` is a
   call followed by `return`.
 - **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa` and `async` (see the plans in `docs/plans/`).
+- **IR22** **The ledger.** A fresh owning value that is an SSA scalar (an `obj`, a `box`: a call result, an object literal or constructor)
+  is *entered* in the ledger when it is made: it is owed a drop at the end of the statement that made it. A consumer that takes it
+  (binding, a `sink` argument, a field, `return`, a push, a closure capture, a block's or branch's result) *settles* it. Anything still
+  owed at the end of the statement is *swept*: dropped right there. A value that is the result of a block or branch moves out to the
+  enclosing scope, and through a join it moves to the block parameter. Memory temporaries (strings, lists, structs) were already owned by
+  the statement's scope. Today the entries use a flag slot, as variables do; the optimiser (A-04) turns these into constants.
+  Entry and consumers: `fresh_scalar`, `settle`, `pop_scope_carrying` in `lower/func.rs`.
 - **IR21** `box<T>` is a bare pointer to a heap block that holds the `T` (no header, unlike `obj`). `box(v)` calls the library function
   `rt_box_new<T>`; `b.get()` is a place (the pointer itself); fields, methods and indexing go through the pointer; `set` and `take` are
   library methods. Environments of closures that are not passed straight to a call live on the heap, so a closure can be boxed or returned.
