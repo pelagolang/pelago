@@ -86,6 +86,10 @@ pub(crate) enum Job<'a> {
         ty: Ty,
     },
     Closure(closure::ClosureJob<'a>),
+    EnvDrop {
+        id: FuncId,
+        owned: Vec<(u32, Ty)>,
+    },
 }
 
 /// How a parameter is passed in the IR.
@@ -521,6 +525,7 @@ impl<'a> Lowerer<'a> {
                 Job::Fn { id, def, subst } => self.lower_fn_job(id, def, subst),
                 Job::Glue { id, kind, ty } => self.lower_glue_job(id, kind, ty),
                 Job::Closure(j) => self.lower_closure_job(j),
+                Job::EnvDrop { id, owned } => self.lower_env_drop(id, owned),
             }
             while let Some(t) = self.thunks.pop() {
                 self.lower_thunk(t);
@@ -585,6 +590,18 @@ impl<'a> Lowerer<'a> {
             next = 1;
         }
         self.push_scope();
+        // The program's `main`: tasks nobody waited for run before it ends.
+        let in_core = self.program.package(self.program.module(self.f.file).package).name == "core";
+        if !in_core
+            && decl.kind == FnKind::Fn
+            && info.self_ty.is_none()
+            && decl.params.is_empty()
+            && self.src_text(decl.name.span) == "main"
+        {
+            if let Some(s) = self.f.scopes.last_mut() {
+                s.push(ScopeItem::CoreCall("rt_run_pending"));
+            }
+        }
         // The parameters: the receiver, then the declared ones.
         let file = self.f.file;
         let mut decl_params: Vec<Option<DefId>> = Vec::new();

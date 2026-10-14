@@ -50,6 +50,8 @@ pub(crate) enum ScopeItem<'a> {
     },
     /// Code to run when the scope ends.
     Defer(&'a Expr),
+    /// A library function to call when the scope ends (`rt_run_pending` at the end of `main`).
+    CoreCall(&'static str),
 }
 
 pub(crate) struct FnState<'a> {
@@ -253,6 +255,9 @@ impl<'a> Lowerer<'a> {
                     let e: &'a Expr = e;
                     self.expr(e);
                 }
+                ScopeItem::CoreCall(name) => {
+                    self.call_core(name, vec![]);
+                }
             }
         }
     }
@@ -273,6 +278,7 @@ impl<'a> Lowerer<'a> {
                         flag: *flag,
                     },
                     ScopeItem::Defer(e) => ScopeItem::Defer(e),
+                    ScopeItem::CoreCall(n) => ScopeItem::CoreCall(n),
                 })
                 .collect();
             self.run_scope_items(&items);

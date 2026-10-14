@@ -397,7 +397,18 @@ impl<'a> Lowerer<'a> {
                 Repr::Mem(_) => Res::Val(ptr),
                 Repr::Zst => Res::Unit,
             },
-            None => self.global_value(e, def),
+            None => {
+                // A variable with no value in it (type `void`) was never given a place.
+                if matches!(self.res.def(def).kind, DefKind::Local | DefKind::Param) {
+                    if let Some(t) = self.typed.local_tys.get(&def).copied() {
+                        let t = self.conc(t);
+                        if matches!(self.repr(t), Repr::Zst) {
+                            return Res::Unit;
+                        }
+                    }
+                }
+                self.global_value(e, def)
+            }
         }
     }
 

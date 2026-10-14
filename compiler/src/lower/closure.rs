@@ -10,6 +10,8 @@ use super::call::ArgSource;
 use super::*;
 use crate::visit::{self, Visitor};
 
+pub(crate) const ENV_HEADER: u32 = 16;
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CapKind {
     /// The address of the variable.
@@ -169,12 +171,37 @@ impl<'a> Lowerer<'a> {
                 off: 0,
             });
         }
-        let fields = self.place_fields(0, &tys);
+        // The environment starts with a table pointer for dropping it (null while it lives on the stack)
+        // and a flag that says the body has taken over the captured values.
+        let fields = self.place_fields(ENV_HEADER, &tys);
         for (c, f) in caps.iter_mut().zip(fields.iter()) {
             c.off = f.off;
         }
         let layout = self.fields_layout(&fields);
-        let env = self.slot_bytes(layout.size.max(1), layout.align);
+        let owning = caps.iter().any(|c| matches!(c.kind, CapKind::Sink));
+        let env = if owning {
+            let n = self.i64c(layout.size.max(ENV_HEADER) as i64);
+            match self.emit(Op::Alloc(n), Some(IrTy::Ptr), e.span) {
+                Some(p) => p,
+                None => return Res::Never,
+            }
+        } else {
+            self.slot_bytes(layout.size.max(ENV_HEADER), layout.align.max(8))
+        };
+        let zero = self.i64c(0);
+        self.store_at(env, 8, zero);
+        if owning {
+            let id = self.env_drop_fn(&caps);
+            match self.emit(Op::FuncAddr(id), Some(IrTy::Ptr), e.span) {
+                Some(a) => self.store_at(env, 0, a),
+                None => return Res::Never,
+            }
+        } else {
+            let np = self
+                .emit(Op::Cast(CastKind::IntToPtr, zero, IrTy::Ptr), Some(IrTy::Ptr), e.span)
+                .unwrap_or(env);
+            self.store_at(env, 0, np);
+        }
         for cap in &caps {
             let local = self.f.locals.get(&cap.def).copied();
             let at = self.addr(env, cap.off);
@@ -218,6 +245,50 @@ impl<'a> Lowerer<'a> {
         Res::Unit
     }
 
+    /// The function that drops a heap environment: the captured values (unless the body took them), then the block.
+    fn env_drop_fn(&mut self, caps: &[CapInfo]) -> FuncId {
+        let name = self.unique_name(format!("env drop in {}", self.f.func.name));
+        let mut func = Func::new(&name, &[IrTy::Ptr], IrTy::Void);
+        let entry = func.entry();
+        func.terminate(entry, Term::Stop("not lowered yet".to_string()));
+        let id = self.module.add(func);
+        let owned: Vec<(u32, Ty)> = caps
+            .iter()
+            .filter(|c| matches!(c.kind, CapKind::Sink))
+            .map(|c| (c.off, c.ty))
+            .collect();
+        self.jobs.push(Job::EnvDrop { id, owned });
+        id
+    }
+
+    pub(crate) fn lower_env_drop(&mut self, id: FuncId, owned: Vec<(u32, Ty)>) {
+        let placeholder = self.module.funcs[id.0 as usize].clone();
+        let void = self.types.void;
+        let mut state = FnState::empty(void);
+        state.func = Func::new(&placeholder.name, &placeholder.params, placeholder.ret);
+        state.cur = Some(state.func.entry());
+        self.f = state;
+        let entry = self.f.func.entry();
+        let env = self.f.func.block_params(entry)[0];
+        let sp = Span::new(0, 0);
+        let taken = self.load_at(env, 8, IrTy::I64);
+        let zero = self.i64c(0);
+        if let Some(untaken) = self.emit(Op::Cmp(CmpOp::Eq, taken, zero), Some(IrTy::Bool), sp) {
+            self.if_then_pub(untaken, |s| {
+                for (off, ty) in &owned {
+                    let p = s.addr(env, *off);
+                    s.drop_at(p, *ty);
+                }
+            });
+        }
+        self.emit(Op::Free(env), None, sp);
+        self.terminate(Term::Return(None));
+        let st = std::mem::replace(&mut self.f, FnState::empty(void));
+        let mut func = st.func;
+        func.compact();
+        self.module.funcs[id.0 as usize] = func;
+    }
+
     /// Lowers the body of a closure as a function of its own.
     pub(crate) fn lower_closure_job(&mut self, job: ClosureJob<'a>) {
         let Some(sig) = self.fn_value_sig(job.fn_ty) else {
@@ -242,6 +313,11 @@ impl<'a> Lowerer<'a> {
         let env = ps[next];
         next += 1;
         self.push_scope();
+        if job.caps.iter().any(|c| matches!(c.kind, CapKind::Sink)) {
+            // The body now owns what was moved in.
+            let one = self.i64c(1);
+            self.store_at(env, 8, one);
+        }
         // The captured variables.
         for cap in &job.caps {
             let at = self.addr(env, cap.off);

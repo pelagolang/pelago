@@ -281,6 +281,13 @@ impl<'a> Lowerer<'a> {
     ) -> Option<Value> {
         let arg = match src {
             ArgSource::Expr(arg) => arg,
+            ArgSource::Default(file, arg) => {
+                let saved = self.f.file;
+                self.f.file = file;
+                let r = self.lower_arg(pass, ty, mode, ArgSource::Expr(arg), span);
+                self.f.file = saved;
+                return r;
+            }
             ArgSource::Val(v) => return Some(v),
             ArgSource::Addr(p) => {
                 return match pass {
@@ -424,7 +431,10 @@ impl<'a> Lowerer<'a> {
                         out.push(ArgSource::Pack(&[]));
                     } else if info.params[i].has_default {
                         match self.default_arg(def, i) {
-                            Some(e) => out.push(ArgSource::Expr(e)),
+                            Some(e) => {
+                                let file = self.fns.get(&def).map(|x| x.file).unwrap_or(self.f.file);
+                                out.push(ArgSource::Default(file, e));
+                            }
                             None => {
                                 self.unsupported(span, "a default argument");
                                 return None;
@@ -630,4 +640,6 @@ pub(crate) enum ArgSource<'a> {
     Addr(Value),
     /// A ready scalar value.
     Val(Value),
+    /// A default written in another file, where its names and types are known.
+    Default(ModuleId, &'a Expr),
 }

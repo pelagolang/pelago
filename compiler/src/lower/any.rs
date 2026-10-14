@@ -227,4 +227,47 @@ impl<'a> Lowerer<'a> {
         self.call_core("rt_str_push", vec![out, d, n]);
         self.drop_at(tmp, string);
     }
+
+    /// Is this address not null?
+    pub(crate) fn nonnull(&mut self, p: Value) -> Option<Value> {
+        let sp = Span::new(0, 0);
+        let n = self.emit(Op::Cast(CastKind::PtrToInt, p, IrTy::I64), Some(IrTy::I64), sp)?;
+        let zero = self.i64c(0);
+        self.emit(Op::Cmp(CmpOp::Ne, n, zero), Some(IrTy::Bool), sp)
+    }
+
+    /// Drops a function value: a closure that owns its environment frees it through the environment's table.
+    pub(crate) fn drop_fn_value(&mut self, p: Value) {
+        let sp = Span::new(0, 0);
+        let env = self.load_at(p, 8, IrTy::Ptr);
+        let Some(has_env) = self.nonnull(env) else { return };
+        self.if_then_pub(has_env, |s| {
+            let hdr = s.load_at(env, 0, IrTy::Ptr);
+            if let Some(owns) = s.nonnull(hdr) {
+                s.if_then_pub(owns, |s| {
+                    s.emit(Op::CallPtr(vec![IrTy::Ptr], IrTy::Void, hdr, vec![env]), None, sp);
+                });
+            }
+        });
+    }
+
+    /// Copies a function value; one that owns its environment cannot be copied.
+    pub(crate) fn clone_fn_value(&mut self, s: Value, d: Value) {
+        let code = self.load_at(s, 0, IrTy::Ptr);
+        let env = self.load_at(s, 8, IrTy::Ptr);
+        if let Some(has_env) = self.nonnull(env) {
+            self.if_then_pub(has_env, |s| {
+                let hdr = s.load_at(env, 0, IrTy::Ptr);
+                if let Some(owns) = s.nonnull(hdr) {
+                    s.if_then_pub(owns, |s| {
+                        s.terminate(Term::Stop("a closure that owns data cannot be copied".to_string()));
+                        let b = s.new_block(&[]);
+                        s.start(b);
+                    });
+                }
+            });
+        }
+        self.store_at(d, 0, code);
+        self.store_at(d, 8, env);
+    }
 }

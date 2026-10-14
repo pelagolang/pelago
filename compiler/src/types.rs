@@ -521,6 +521,16 @@ impl TypeTable {
     }
 
     /// How many variables exist so far.
+    /// Gives up the variables made at or after `from` that nothing solved (a trial that is over).
+    pub fn retire_vars_from(&mut self, from: u32) {
+        let unknown = self.unknown;
+        for v in from as usize..self.bind.len() {
+            if self.bind[v].is_none() {
+                self.bind[v] = Some(unknown);
+            }
+        }
+    }
+
     pub fn var_count(&self) -> u32 {
         self.bind.len() as u32
     }

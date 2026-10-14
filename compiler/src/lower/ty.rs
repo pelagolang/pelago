@@ -336,6 +336,7 @@ impl<'a> Lowerer<'a> {
             | TyKind::Box(_) => true,
             TyKind::Error => true,
             TyKind::Any(_) => true,
+            TyKind::Fn(..) => true,
             TyKind::Adt(d, _) if self.res.def(d).kind == DefKind::Obj => true,
             TyKind::Adt(d, _) => {
                 if self.res.member(d, "deinit").is_some() {

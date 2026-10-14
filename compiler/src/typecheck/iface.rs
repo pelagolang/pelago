@@ -182,7 +182,13 @@ impl<'p> Checker<'p> {
     // ---- What a type provides ---------------------------------------------------------------------
 
     pub(crate) fn provides(&mut self, t: Ty, iface: DefId) -> bool {
-        self.provides_d(t, iface, 0)
+        // Matching an `impl<T> ...` makes variables for its parameters; they are only a trial.
+        let from = self.tt.var_count();
+        let r = self.provides_d(t, iface, 0);
+        let mark = self.tt.snapshot();
+        let _ = mark;
+        self.tt.retire_vars_from(from);
+        r
     }
 
     fn provides_d(&mut self, t: Ty, iface: DefId, depth: u32) -> bool {

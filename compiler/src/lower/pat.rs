@@ -679,6 +679,42 @@ impl<'a> Lowerer<'a> {
         if matches!(r, Res::Never) {
             return;
         }
+        // A tuple of plain names: each name takes over its part, so a part can be moved on its own.
+        if let (PatternKind::Tuple(ps), TyKind::Tuple(_)) = (&d.pattern.kind, self.kind(t)) {
+            let simple = ps.iter().all(|p| {
+                matches!(
+                    p.kind,
+                    PatternKind::Binding { mode: None, .. } | PatternKind::Wildcard
+                )
+            });
+            let fs = self.struct_fields(t);
+            if simple && ps.len() == fs.len() {
+                for (p, f) in ps.iter().zip(fs.iter()) {
+                    let part = self.addr(slot, f.off);
+                    match &p.kind {
+                        PatternKind::Binding { name, .. } => {
+                            let own_slot = self.slot_for(f.ty);
+                            self.copy_mem(own_slot, part, f.ty);
+                            let flag = self.own(own_slot, f.ty, true);
+                            if let Some(def) = self.binding_def(name) {
+                                self.f.locals.insert(
+                                    def,
+                                    Local::Slot {
+                                        ptr: own_slot,
+                                        ty: f.ty,
+                                        flag,
+                                    },
+                                );
+                            }
+                        }
+                        _ => {
+                            self.own(part, f.ty, false);
+                        }
+                    }
+                }
+                return;
+            }
+        }
         self.own(slot, t, false);
         let fail = self.stop_block("pattern did not match");
         if !self.pat_test(&d.pattern, slot, t, fail) {

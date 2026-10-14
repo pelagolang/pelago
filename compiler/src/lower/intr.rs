@@ -257,8 +257,37 @@ impl<'a> Lowerer<'a> {
                 let Some(arg) = args.first() else {
                     return Res::Never;
                 };
-                match self.repr(a) {
-                    Repr::Mem(_) => self.with_dst(dst, b, |s, d| s.into(&arg.value, d, a)),
+                match (self.repr(a), self.repr(b)) {
+                    (Repr::Mem(_), Repr::Mem(_)) => {
+                        self.with_dst(dst, b, |s, d| s.into(&arg.value, d, a))
+                    }
+                    (Repr::Mem(_), Repr::Scalar(sb)) => {
+                        let slot = self.slot_for(a);
+                        if let Res::Never = self.into(&arg.value, slot, a) {
+                            return Res::Never;
+                        }
+                        Res::Val(self.load_at(slot, 0, sb))
+                    }
+                    (Repr::Scalar(_), Repr::Mem(_)) => self.with_dst(dst, b, |s, d| {
+                        match s.consume_scalar(&arg.value) {
+                            Some(v) => {
+                                s.store_scalar_ty(d, v);
+                                Res::Unit
+                            }
+                            None => Res::Never,
+                        }
+                    }),
+                    (Repr::Scalar(sa), Repr::Scalar(sb)) => match self.consume_scalar(&arg.value) {
+                        Some(v) if sa == sb => Res::Val(v),
+                        Some(v) if sa == IrTy::Ptr && matches!(sb, IrTy::Int(_)) => {
+                            self.wrap(Op::Cast(CastKind::PtrToInt, v, sb), sb, sp)
+                        }
+                        Some(v) if sb == IrTy::Ptr && matches!(sa, IrTy::Int(_)) => {
+                            self.wrap(Op::Cast(CastKind::IntToPtr, v, sb), sb, sp)
+                        }
+                        Some(v) => Res::Val(v),
+                        None => Res::Never,
+                    },
                     _ => match self.consume_scalar(&arg.value) {
                         Some(v) => Res::Val(v),
                         None => Res::Never,

@@ -269,6 +269,7 @@ impl<'a> Lowerer<'a> {
             TyKind::Option(_) | TyKind::Result(..) => self.drop_enum(p, ty),
             TyKind::Map(..) | TyKind::Set(_) => self.drop_collection(p, ty),
             TyKind::Any(_) => self.drop_any(p, ty),
+            TyKind::Fn(..) => self.drop_fn_value(p),
             _ => {
                 self.unsupported(Span::new(0, 0), "dropping this type");
             }
@@ -326,6 +327,23 @@ impl<'a> Lowerer<'a> {
 
     /// Copies the value at `src` into the (uninitialised) memory at `dst`, duplicating what it owns.
     fn clone_body(&mut self, src: Value, dst: Value, ty: Ty) {
+        // A type with its own `clone` (an `impl clone for ...`) copies the way it says.
+        if let TyKind::Adt(d, _) = self.kind(ty) {
+            if self.res.def(d).kind != DefKind::Obj {
+                if let Some((m, map)) = self.find_impl_method(ty, "clone") {
+                    let own = self
+                        .fns
+                        .get(&m)
+                        .is_some_and(|e| !matches!(e.decl.body, FnBody::None));
+                    if own {
+                        if let Some(f) = self.request_fn(m, &map) {
+                            self.emit(Op::Call(f, vec![dst, src]), None, Span::new(0, 0));
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         match self.kind(ty) {
             TyKind::String => {
                 let len = self.load_at(src, 8, IrTy::I64);
@@ -418,6 +436,7 @@ impl<'a> Lowerer<'a> {
             TyKind::Option(_) | TyKind::Result(..) => self.clone_enum(src, dst, ty),
             TyKind::Map(..) | TyKind::Set(_) => self.clone_collection(src, dst, ty),
             TyKind::Any(_) => self.clone_any(src, dst, ty),
+            TyKind::Fn(..) => self.clone_fn_value(src, dst),
             _ => {
                 self.unsupported(Span::new(0, 0), "copying this type");
             }
