@@ -2,13 +2,13 @@
 
 Last updated when every card on the first list was finished (A-01 to A-08 and B-03). What is left is on the shelf: it waits for the backend or for a measured need.
 
-**Order of work.** Nothing is open on tracks A and B. The next real step is the machine-code backend (a new card when the owner decides how to start it: from the IR in `docs/design/ir.md`), which also unlocks S-01, S-02 and S-04 on the shelf.
+**Order of work.** The next real step is the machine-code backend: card [A-09](cards/A-09-native-backend.md) is written and waits for the owner's answers to its seven questions. The editor work (Tree-sitter grammar, Zed extension, language server) is shelved on purpose (S-05, S-06) until the backend is under way.
 
 ## Track A: compiler
 
 | Column | Card | Title | Size |
 |---|---|---|---|
-| (empty) | | | |
+| Needs decision | [A-09](cards/A-09-native-backend.md) | Native backend: x86-64 machine code and ELF straight from the IR (stages N1 to N7) | XL |
 
 ## Track B: tooling and identity
 
@@ -24,6 +24,8 @@ Nothing is waiting on this track.
 | [S-01](cards/S-01-map-storage.md) | Our own map and set storage: O(1) removal, still insertion-ordered | A benchmark shows removal or iteration is slow, or the backend exists |
 | [S-02](cards/S-02-real-threads.md) | Real threads for tasks | The machine-code backend can emit atomics and thread start |
 | [S-03](cards/S-03-limits.md) | Smaller limits: many-call closures, static tables, a few more | Each line names its own trigger |
+| [S-05](cards/S-05-zed-and-tree-sitter.md) | Tree-sitter grammar and the Zed extension (repos `pelagolang/tree-sitter-pelago`, `pelagolang/zed-pelago` exist, empty) | The owner wants Zed/Neovim/Helix, or before the first public release |
+| [S-06](cards/S-06-language-server.md) | `pelago lsp`: diagnostics, semantic tokens, hover, go to definition | Editor features beyond colours are wanted, or the backend's N3 is done |
 | [S-04](cards/S-04-async-suspension.md) | async: suspension in the middle of a body (state machines) | Real threads exist, or a program needs many concurrent waits |
 
 ## Done

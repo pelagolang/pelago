@@ -129,6 +129,8 @@ No compiler code yet. Everything here is cheap to change.
 
 ## Phase 3: Own backend
 
+Plan: `docs/plans/cards/A-09-native-backend.md` (stages N1 to N7; waits for the owner's answers; first target x86-64 Linux ELF, no linker, no libc).
+
 - [ ] x86-64 instruction selection
 - [ ] Register allocation (linear scan first, because it is fast to compile)
 - [ ] Emit object files / ELF directly

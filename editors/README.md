@@ -33,5 +33,7 @@ miss a few cases; the highlighter is the reference.
 
 ## Not done yet
 
+Planned and shelved by the owner's decision: a Tree-sitter grammar and the Zed extension (`docs/plans/cards/S-05-zed-and-tree-sitter.md`; empty repositories `pelagolang/tree-sitter-pelago` and `pelagolang/zed-pelago` exist) and a language server (`S-06`).
+
 GitHub colouring (needs a Linguist registration once the language is public), a Tree-sitter grammar for Neovim, Helix and Zed, and
 semantic colouring from a language server.

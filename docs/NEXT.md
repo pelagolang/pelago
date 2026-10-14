@@ -18,7 +18,7 @@
 
 ## The task board
 
-Work is tracked as cards in `docs/plans/` (read `README.md` there, then `BOARD.md`). Cards A-01 to A-08 and B-03 are done (box, the ledger, the optimiser, meta, soa, async at stage 0, the highlighter). Next: the machine-code backend, then the shelf (S-01 maps, S-02 threads, S-04 async suspension).
+Work is tracked as cards in `docs/plans/` (read `README.md` there, then `BOARD.md`). Cards A-01 to A-08 and B-03 are done (box, the ledger, the optimiser, meta, soa, async at stage 0, the highlighter). Next: the machine-code backend, planned in card A-09 (waiting for the owner's seven answers), then the shelf (S-01 maps, S-02 threads, S-04 async suspension). Parked on purpose: the Tree-sitter grammar and Zed extension (S-05) and the language server (S-06); the two empty repositories exist under `pelagolang`.
 
 ## Open questions for the owner
 
