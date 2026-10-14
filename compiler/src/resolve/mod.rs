@@ -504,14 +504,29 @@ impl<'p> Resolver<'p> {
     fn collect_expr(&mut self, scope: usize, e: &'p Expr) {
         if let ExprKind::MetaIf(i) = &e.kind {
             self.in_meta += 1;
-            self.collect_stmts(scope, &i.then.stmts);
-            if let Some(el) = &i.else_ {
+            if self.meta_choice(scope, i) {
+                self.collect_stmts(scope, &i.then.stmts);
+            } else if let Some(el) = &i.else_ {
                 self.collect_expr(scope, el);
             }
             self.in_meta -= 1;
         } else if let ExprKind::Block(b) = &e.kind {
             if self.in_meta > 0 {
                 self.collect_stmts(scope, &b.stmts);
+            }
+        }
+    }
+
+    /// The branch of a `meta if` that is taken (true: `then`). A condition that cannot be decided
+    /// is reported.
+    fn meta_choice(&mut self, scope: usize, i: &'p IfExpr) -> bool {
+        let file = self.scopes[scope].file;
+        let src = &self.program.module(file).src;
+        match crate::meta::eval_cond(&i.cond, src, &self.program.target) {
+            Ok(b) => b,
+            Err((span, msg)) => {
+                self.error_in(file, span, msg);
+                true
             }
         }
     }

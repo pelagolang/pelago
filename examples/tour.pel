@@ -269,6 +269,29 @@ fn pipeline() {
     par_for(inout xs, x ~> x *= 2)
 }
 
+// ---- Boxes -----------------------------------------------------------------------------
+enum tree { leaf, node(box<tree>, int, box<tree>) }
+
+async fn fetch_len(text: string) -> int { text.len() }
+
+async fn total() -> int {
+    const n = await fetch_len("abc")
+    n + 1
+}
+
+fn columns() {
+    var cloud: soa<point> = soa []
+    cloud.push!(point { x: 1.0, y: 2.0 })
+    const xs = cloud.x
+}
+
+fn boxes() {
+    var b = box(5)
+    b.set!(6)
+    const seen = b.get() + 1
+    const taken = b.take!!()
+}
+
 // ---- More syntax -----------------------------------------------------------------------
 import { list, map: dict } = std.collections
 import fmt = std.io

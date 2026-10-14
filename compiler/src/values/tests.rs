@@ -388,3 +388,36 @@ fn unreachable_arms_are_warnings() {
         .any(|d| d.warning && d.message.contains("can never match")));
     assert!(typed.diagnostics.iter().all(|d| d.warning));
 }
+
+#[test]
+fn boxes_follow_the_move_rules() {
+    flagged(
+        "struct p { name: string }\nfn t(b: box<p>) { const n = b.get().name }",
+        "write `copy b.get().name`",
+    );
+    flagged(
+        "fn t(b: box<string>) { const s = b.get() }",
+        "write `copy b.get()`",
+    );
+    clean("struct p { name: string }\nfn t(b: box<p>) { const n = copy b.get().name }");
+    clean("fn t(b: box<int>) -> int { b.get() + 1 }");
+    clean("fn t(sink b: box<string>) -> string { b.take!!() }");
+    flagged(
+        "fn t(sink b: box<string>) { const s = b.take!!()\n print(b.get()) }",
+        "`b`",
+    );
+    flagged(
+        "fn t() { const b = box(1)\n b.set!(2) }",
+        "`b` is a `const`",
+    );
+    clean("fn t() { var b = box(1)\n b.set!(2) }");
+}
+
+#[test]
+fn scope_tasks_cannot_share_a_changed_variable() {
+    flagged(
+        "fn t() { var a = 0\n scope s { s.spawn([inout a] ~> { a += 1 })\n s.spawn([inout a] ~> { a += 2 }) } }",
+        "captured by two tasks",
+    );
+    clean("fn t() { var a = 0\n var b = 0\n scope s { s.spawn([inout a] ~> { a += 1 })\n s.spawn([inout b] ~> { b += 2 }) } }");
+}

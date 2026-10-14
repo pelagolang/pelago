@@ -80,7 +80,8 @@ pub enum FloatKind {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum ArrayLen {
     Known(u64),
-    Param(DefId),
+    /// A length that is a type-level term: a `meta N` parameter, an inference variable for one, or a known value.
+    Term(Ty),
     Unknown,
 }
 
@@ -109,8 +110,14 @@ pub enum TyKind {
     Adt(DefId, Vec<Ty>),
     /// A generic parameter, inside the generic item.
     Param(DefId),
+    /// A compile-time number given as a generic argument (`zeros<8>`).
+    Const(i128),
+    /// Arithmetic on compile-time numbers (`N + 1`, `N * 2`); folds to a `Const` once both sides are known.
+    ConstOp(u8, Ty, Ty),
     List(Ty),
     Array(Ty, ArrayLen),
+    /// `soa<T>`: one column per field of `T` (the length is the block size of `soa<T, N>`, or unknown).
+    Soa(Ty, ArrayLen),
     Tuple(Vec<Ty>),
     /// `(A, B; N)`
     AltTuple(Vec<Ty>, ArrayLen),
@@ -293,13 +300,17 @@ impl TypeTable {
                 args.iter().any(|a| self.occurs(v, *a))
             }
             TyKind::List(a)
-            | TyKind::Array(a, _)
             | TyKind::Option(a)
             | TyKind::Set(a)
             | TyKind::Range(a)
             | TyKind::Iter(a)
             | TyKind::Box(a) => self.occurs(v, *a),
-            TyKind::Result(a, b) | TyKind::Map(a, b) => self.occurs(v, *a) || self.occurs(v, *b),
+            TyKind::Array(a, n) | TyKind::Soa(a, n) => {
+                self.occurs(v, *a) || matches!(n, ArrayLen::Term(t) if self.occurs(v, *t))
+            }
+            TyKind::Result(a, b) | TyKind::Map(a, b) | TyKind::ConstOp(_, a, b) => {
+                self.occurs(v, *a) || self.occurs(v, *b)
+            }
             TyKind::Fn(ps, r) => ps.iter().any(|p| self.occurs(v, p.ty)) || self.occurs(v, *r),
             _ => false,
         }
@@ -376,12 +387,18 @@ impl TypeTable {
             | (TyKind::Range(x), TyKind::Range(y))
             | (TyKind::Iter(x), TyKind::Iter(y))
             | (TyKind::Box(x), TyKind::Box(y)) => self.unify_inner(*x, *y),
-            (TyKind::Array(x, n), TyKind::Array(y, m)) => {
-                (n == m || *n == ArrayLen::Unknown || *m == ArrayLen::Unknown)
-                    && self.unify_inner(*x, *y)
+            (TyKind::Array(x, n), TyKind::Array(y, m)) | (TyKind::Soa(x, n), TyKind::Soa(y, m)) => {
+                self.unify_len(*n, *m) && self.unify_inner(*x, *y)
             }
             (TyKind::Tuple(x), TyKind::Tuple(y)) => self.unify_all(x, y),
-            (TyKind::AltTuple(x, n), TyKind::AltTuple(y, m)) => n == m && self.unify_all(x, y),
+            (TyKind::ConstOp(o1, x1, y1), TyKind::ConstOp(o2, x2, y2)) => {
+                o1 == o2 && self.unify_inner(*x1, *x2) && self.unify_inner(*y1, *y2)
+            }
+            (TyKind::ConstOp(op, x, y), TyKind::Const(k))
+            | (TyKind::Const(k), TyKind::ConstOp(op, x, y)) => self.solve_const_op(*op, *x, *y, *k),
+            (TyKind::AltTuple(x, n), TyKind::AltTuple(y, m)) => {
+                self.unify_len(*n, *m) && self.unify_all(x, y)
+            }
             (TyKind::Result(t1, e1), TyKind::Result(t2, e2))
             | (TyKind::Map(t1, e1), TyKind::Map(t2, e2)) => {
                 self.unify_inner(*t1, *t2) && self.unify_inner(*e1, *e2)
@@ -398,6 +415,49 @@ impl TypeTable {
         }
     }
 
+    /// `x op y == k` where one side is a known number: solve for the other side.
+    fn solve_const_op(&mut self, op: u8, x: Ty, y: Ty, k: i128) -> bool {
+        let x = self.shallow(x);
+        let y = self.shallow(y);
+        let (kx, ky) = (self.kind(x).clone(), self.kind(y).clone());
+        let (unknown, other, known_left) = match (&kx, &ky) {
+            (_, TyKind::Const(c)) => (x, *c, false),
+            (TyKind::Const(c), _) => (y, *c, true),
+            _ => return false,
+        };
+        let want = match (op, known_left) {
+            (b'+', _) => k.checked_sub(other),
+            (b'-', false) => k.checked_add(other),
+            (b'-', true) => other.checked_sub(k),
+            (b'*', _) => (other != 0 && k % other == 0).then(|| k / other),
+            _ => None,
+        };
+        match want {
+            Some(w) => {
+                let c = self.mk(TyKind::Const(w));
+                self.unify_inner(unknown, c)
+            }
+            None => false,
+        }
+    }
+
+    /// `a op b`, folded when both are numbers.
+    pub fn const_op(&mut self, op: u8, a: Ty, b: Ty) -> Ty {
+        let (a, b) = (self.shallow(a), self.shallow(b));
+        if let (TyKind::Const(x), TyKind::Const(y)) = (self.kind(a), self.kind(b)) {
+            let r = match op {
+                b'+' => x.checked_add(*y),
+                b'-' => x.checked_sub(*y),
+                b'*' => x.checked_mul(*y),
+                _ => None,
+            };
+            if let Some(r) = r {
+                return self.mk(TyKind::Const(r));
+            }
+        }
+        self.mk(TyKind::ConstOp(op, a, b))
+    }
+
     fn unify_all(&mut self, a: &[Ty], b: &[Ty]) -> bool {
         a.len() == b.len()
             && a.iter()
@@ -408,19 +468,58 @@ impl TypeTable {
     // ---- Walking ------------------------------------------------------------------------------
 
     /// Replaces every solved variable by its type, all the way down.
+    /// Two array lengths agree: equal numbers, or a term that can be made to match.
+    fn unify_len(&mut self, n: ArrayLen, m: ArrayLen) -> bool {
+        match (n, m) {
+            (ArrayLen::Unknown, _) | (_, ArrayLen::Unknown) => true,
+            (ArrayLen::Known(a), ArrayLen::Known(b)) => a == b,
+            (ArrayLen::Term(a), ArrayLen::Term(b)) => self.unify_inner(a, b),
+            (ArrayLen::Known(k), ArrayLen::Term(t)) | (ArrayLen::Term(t), ArrayLen::Known(k)) => {
+                let c = self.mk(TyKind::Const(k as i128));
+                self.unify_inner(t, c)
+            }
+        }
+    }
+
+    /// A length term that has become a number is a plain length.
+    fn norm_len(&mut self, n: ArrayLen, f: impl FnOnce(&mut Self, Ty) -> Ty) -> ArrayLen {
+        match n {
+            ArrayLen::Term(t) => {
+                let t = f(self, t);
+                match self.kind(t) {
+                    TyKind::Const(k) if *k >= 0 => ArrayLen::Known(*k as u64),
+                    _ => ArrayLen::Term(t),
+                }
+            }
+            other => other,
+        }
+    }
+
     pub fn zonk(&mut self, t: Ty) -> Ty {
         let t = self.shallow(t);
         let k = self.kind(t).clone();
         let new = match k {
+            TyKind::ConstOp(op, a, b) => {
+                let (a, b) = (self.zonk(a), self.zonk(b));
+                return self.const_op(op, a, b);
+            }
             TyKind::Adt(d, args) => {
                 TyKind::Adt(d, args.into_iter().map(|a| self.zonk(a)).collect())
             }
             TyKind::Tuple(ts) => TyKind::Tuple(ts.into_iter().map(|a| self.zonk(a)).collect()),
             TyKind::AltTuple(ts, n) => {
+                let n = self.norm_len(n, |c, t| c.zonk(t));
                 TyKind::AltTuple(ts.into_iter().map(|a| self.zonk(a)).collect(), n)
             }
             TyKind::List(a) => TyKind::List(self.zonk(a)),
-            TyKind::Array(a, n) => TyKind::Array(self.zonk(a), n),
+            TyKind::Array(a, n) => {
+                let n = self.norm_len(n, |c, t| c.zonk(t));
+                TyKind::Array(self.zonk(a), n)
+            }
+            TyKind::Soa(a, n) => {
+                let n = self.norm_len(n, |c, t| c.zonk(t));
+                TyKind::Soa(self.zonk(a), n)
+            }
             TyKind::Option(a) => TyKind::Option(self.zonk(a)),
             TyKind::Set(a) => TyKind::Set(self.zonk(a)),
             TyKind::Range(a) => TyKind::Range(self.zonk(a)),
@@ -451,6 +550,10 @@ impl TypeTable {
         let k = self.kind(t).clone();
         let new = match k {
             TyKind::Param(d) => return map.get(&d).copied().unwrap_or(t),
+            TyKind::ConstOp(op, a, b) => {
+                let (a, b) = (self.subst(a, map), self.subst(b, map));
+                return self.const_op(op, a, b);
+            }
             TyKind::Adt(d, args) => {
                 TyKind::Adt(d, args.into_iter().map(|a| self.subst(a, map)).collect())
             }
@@ -458,10 +561,18 @@ impl TypeTable {
                 TyKind::Tuple(ts.into_iter().map(|a| self.subst(a, map)).collect())
             }
             TyKind::AltTuple(ts, n) => {
+                let n = self.norm_len(n, |c, t| c.subst(t, map));
                 TyKind::AltTuple(ts.into_iter().map(|a| self.subst(a, map)).collect(), n)
             }
             TyKind::List(a) => TyKind::List(self.subst(a, map)),
-            TyKind::Array(a, n) => TyKind::Array(self.subst(a, map), n),
+            TyKind::Array(a, n) => {
+                let n = self.norm_len(n, |c, t| c.subst(t, map));
+                TyKind::Array(self.subst(a, map), n)
+            }
+            TyKind::Soa(a, n) => {
+                let n = self.norm_len(n, |c, t| c.subst(t, map));
+                TyKind::Soa(self.subst(a, map), n)
+            }
             TyKind::Option(a) => TyKind::Option(self.subst(a, map)),
             TyKind::Set(a) => TyKind::Set(self.subst(a, map)),
             TyKind::Range(a) => TyKind::Range(self.subst(a, map)),
@@ -492,13 +603,17 @@ impl TypeTable {
                 args.iter().any(|a| self.has_vars(*a))
             }
             TyKind::List(a)
-            | TyKind::Array(a, _)
             | TyKind::Option(a)
             | TyKind::Set(a)
             | TyKind::Range(a)
             | TyKind::Iter(a)
             | TyKind::Box(a) => self.has_vars(*a),
-            TyKind::Result(a, b) | TyKind::Map(a, b) => self.has_vars(*a) || self.has_vars(*b),
+            TyKind::Array(a, n) | TyKind::Soa(a, n) => {
+                self.has_vars(*a) || matches!(n, ArrayLen::Term(t) if self.has_vars(*t))
+            }
+            TyKind::Result(a, b) | TyKind::Map(a, b) | TyKind::ConstOp(_, a, b) => {
+                self.has_vars(*a) || self.has_vars(*b)
+            }
             TyKind::Fn(ps, r) => ps.iter().any(|p| self.has_vars(p.ty)) || self.has_vars(*r),
             _ => false,
         }
@@ -572,11 +687,18 @@ impl TypeTable {
                 }
             }
             TyKind::Param(def) => name_of(*def),
+            TyKind::Const(k) => k.to_string(),
+            TyKind::ConstOp(op, a, b) => format!("{} {} {}", d(*a), *op as char, d(*b)),
             TyKind::List(e) => format!("[{}]", d(*e)),
             TyKind::Array(e, n) => match n {
                 ArrayLen::Known(n) => format!("[{}; {n}]", d(*e)),
-                ArrayLen::Param(p) => format!("[{}; {}]", d(*e), name_of(*p)),
+                ArrayLen::Term(t) => format!("[{}; {}]", d(*e), d(*t)),
                 ArrayLen::Unknown => format!("[{}; _]", d(*e)),
+            },
+            TyKind::Soa(e, n) => match n {
+                ArrayLen::Known(n) => format!("soa<{}, {n}>", d(*e)),
+                ArrayLen::Term(t) => format!("soa<{}, {}>", d(*e), d(*t)),
+                ArrayLen::Unknown => format!("soa<{}>", d(*e)),
             },
             TyKind::Tuple(ts) => format!(
                 "({})",
@@ -585,7 +707,7 @@ impl TypeTable {
             TyKind::AltTuple(ts, n) => {
                 let len = match n {
                     ArrayLen::Known(n) => n.to_string(),
-                    ArrayLen::Param(p) => name_of(*p),
+                    ArrayLen::Term(t) => d(*t),
                     ArrayLen::Unknown => "_".to_string(),
                 };
                 format!(

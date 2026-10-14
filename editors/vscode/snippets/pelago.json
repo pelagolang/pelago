@@ -1,0 +1,81 @@
+{
+  "function": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2:params}) -> ${3:int} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "function"
+  },
+  "struct": {
+    "prefix": "struct",
+    "body": [
+      "struct ${1:name} {",
+      "\t${2:field}: ${3:int}",
+      "}"
+    ],
+    "description": "struct"
+  },
+  "enum": {
+    "prefix": "enum",
+    "body": [
+      "enum ${1:name} {",
+      "\t${2:first}",
+      "\t${3:second}",
+      "}"
+    ],
+    "description": "enum"
+  },
+  "switch": {
+    "prefix": "switch",
+    "body": [
+      "switch ${1:value} {",
+      "\tcase ${2:pattern}: ${3:result}",
+      "\tdefault: ${0:other}",
+      "}"
+    ],
+    "description": "switch with cases"
+  },
+  "for": {
+    "prefix": "for",
+    "body": [
+      "for ${1:item} of ${2:items} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "for loop"
+  },
+  "closure": {
+    "prefix": "closure",
+    "body": [
+      "${1:x} ~> ${0:x}"
+    ],
+    "description": "closure"
+  },
+  "derive": {
+    "prefix": "derive",
+    "body": [
+      "@derive(${1:eq, show})"
+    ],
+    "description": "derive attribute"
+  },
+  "meta fn": {
+    "prefix": "metafn",
+    "body": [
+      "meta fn ${1:name}() -> ${2:int} {",
+      "\t$0",
+      "}"
+    ],
+    "description": "compile-time function"
+  },
+  "test": {
+    "prefix": "test",
+    "body": [
+      "test \"${1:what it checks}\" {",
+      "\tassert(${0:true})",
+      "}"
+    ],
+    "description": "test"
+  }
+}

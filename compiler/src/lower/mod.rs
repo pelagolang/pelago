@@ -25,12 +25,13 @@ mod expr;
 mod func;
 mod glue;
 mod intr;
+mod meta;
 mod obj;
 mod ops;
 mod pat;
 mod select;
 mod seq;
-mod stubs;
+mod soa;
 mod ty;
 
 use crate::ast::*;
@@ -87,6 +88,7 @@ pub(crate) enum Job<'a> {
         ty: Ty,
     },
     Closure(closure::ClosureJob<'a>),
+    Meta(meta::MetaJob<'a>),
     EnvDrop {
         id: FuncId,
         owned: Vec<(u32, Ty)>,
@@ -159,6 +161,11 @@ pub(crate) struct Lowerer<'a> {
     pub any_tables: HashMap<(Ty, DefId), u32>,
     pub any_thunks: Vec<any::AnyThunkJob>,
     pub f: FnState<'a>,
+    /// Compile-time results already computed, and the constants being computed now.
+    pub meta_cache: HashMap<(ModuleId, u32, u32), Rc<meta::Cv>>,
+    pub meta_stack: Vec<(ModuleId, u32, u32)>,
+    /// `@meta_limit(n)`: the item it is written on, and the step budget.
+    pub meta_limits: Vec<(ModuleId, Span, u64)>,
 }
 
 pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
@@ -190,6 +197,9 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         any_tables: HashMap::new(),
         any_thunks: Vec::new(),
         f: FnState::empty(void),
+        meta_cache: HashMap::new(),
+        meta_stack: Vec::new(),
+        meta_limits: Vec::new(),
     };
     lw.index();
     // Roots: every function of the program that needs no type arguments.
@@ -198,7 +208,10 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         .iter()
         .filter(|(d, e)| {
             let in_core = program.package(program.module(e.file).package).name == "core";
-            !in_core && !matches!(e.decl.body, FnBody::None) && lw.is_plain_fn(**d)
+            !in_core
+                && !e.mods.is_meta
+                && !matches!(e.decl.body, FnBody::None)
+                && lw.is_plain_fn(**d)
         })
         .map(|(d, _)| *d)
         .collect();
@@ -256,12 +269,39 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 }
-                StmtKind::Expr(_) => {}
+                StmtKind::Expr(e) => self.index_meta_expr(file, e),
             }
         }
     }
 
+    /// Declarations inside a module-level `meta if`: only the branch the target selects.
+    fn index_meta_expr(&mut self, file: ModuleId, e: &'a Expr) {
+        match &e.kind {
+            ExprKind::MetaIf(i) => {
+                let src = &self.program.module(file).src;
+                if crate::meta::chooses_then(i, src, &self.program.target) {
+                    self.index_stmts(file, &i.then.stmts);
+                } else if let Some(el) = &i.else_ {
+                    self.index_meta_expr(file, el);
+                }
+            }
+            ExprKind::Block(b) => self.index_stmts(file, &b.stmts),
+            _ => {}
+        }
+    }
+
     pub(crate) fn index_item(&mut self, file: ModuleId, item: &'a Item) {
+        for a in &item.attrs {
+            let src = &self.program.module(file).src;
+            if a.name.text(src) == "meta_limit" {
+                if let Some(arg) = a.args.first() {
+                    let text = src[arg.span.start as usize..arg.span.end as usize].replace('_', "");
+                    if let Ok(n) = text.parse::<u64>() {
+                        self.meta_limits.push((file, item.span, n));
+                    }
+                }
+            }
+        }
         match &item.kind {
             ItemKind::Fn(f) => {
                 if let Some(&d) = self.res.item_defs.get(&(file, item.span.start)) {
@@ -548,6 +588,7 @@ impl<'a> Lowerer<'a> {
                 Job::Fn { id, def, subst } => self.lower_fn_job(id, def, subst),
                 Job::Glue { id, kind, ty } => self.lower_glue_job(id, kind, ty),
                 Job::Closure(j) => self.lower_closure_job(j),
+                Job::Meta(j) => self.lower_meta_job(j),
                 Job::EnvDrop { id, owned } => self.lower_env_drop(id, owned),
             }
             while let Some(t) = self.thunks.pop() {
@@ -765,6 +806,7 @@ impl<'a> Lowerer<'a> {
         }
         match (sig.ret_pass, r) {
             (RetPass::Val(_), Res::Val(v)) => {
+                self.settle(v);
                 self.pop_scope();
                 self.terminate(Term::Return(Some(v)));
             }

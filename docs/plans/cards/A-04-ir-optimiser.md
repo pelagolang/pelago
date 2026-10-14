@@ -1,6 +1,6 @@
 Id: A-04
 Title: IR optimiser: slots to registers, drop flags away, inlining
-Column: Ready
+Column: Done for stages 1 to 7 (default-on, bounds-check removal and the extras of section 7 remain)
 Order: 4
 Depends on: A-03 (not strictly; the ledger removes many flags first, the optimiser removes the rest)
 Size: XL (do it in the stages below; each stage ships on its own)

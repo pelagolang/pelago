@@ -33,6 +33,15 @@ impl<'a> Lowerer<'a> {
         mark: CallMark,
         dst: Option<Value>,
     ) -> Res {
+        if self.box_get_base(e).is_some() {
+            let Some(t) = self.ty_of(e) else {
+                return self.unsupported(e.span, "a value of unknown type");
+            };
+            return match self.place(e) {
+                Some(p) => self.read_place(p, t, e.span),
+                None => Res::Never,
+            };
+        }
         let callee = strip_parens(callee);
         match &callee.kind {
             ExprKind::Name(id) => {
@@ -65,14 +74,6 @@ impl<'a> Lowerer<'a> {
                 if *optional {
                     return self.opt_call(e, base, args, dst);
                 }
-                // `s.spawn(task)` inside `scope s { ... }`: the task runs right here.
-                if let ExprKind::Name(id) = &strip_parens(base).kind {
-                    if let Some(d) = self.res.use_at(self.f.file, id.span.start) {
-                        if self.f.scope_names.contains(&d) && args.len() == 1 {
-                            return self.run_scope_task(e, &args[0].value);
-                        }
-                    }
-                }
                 self.method_call(e, base, name, args, mark, dst)
             }
             _ => self.call_value(e, callee, args, dst),
@@ -96,6 +97,12 @@ impl<'a> Lowerer<'a> {
                 self.emit_call(e, target, map, recv, args, mark, dst)
             }
             DefKind::Variant => self.variant_call(e, def, args, dst),
+            DefKind::BuiltinType if self.res.def(def).name == "box" => {
+                let Some((target, map)) = self.call_target(e.span) else {
+                    return self.unsupported(e.span, "a call the checker did not record");
+                };
+                self.emit_call(e, target, map, None, args, mark, dst)
+            }
             DefKind::Struct | DefKind::Obj => self.construct(e, def, args, dst),
             DefKind::BuiltinFn | DefKind::BuiltinCase => {
                 let name = self.res.def(def).name.clone();
@@ -160,7 +167,14 @@ impl<'a> Lowerer<'a> {
         let mut sources: Vec<ArgSource<'a>> = Vec::new();
         if info.has_self {
             match recv {
-                Some(r) => sources.push(ArgSource::Expr(r)),
+                Some(r) => {
+                    let through = self.through_boxes(r, def, &info, &map);
+                    match through {
+                        Some(Some(p)) => sources.push(ArgSource::Addr(p)),
+                        Some(None) => return Res::Never,
+                        None => sources.push(ArgSource::Expr(r)),
+                    }
+                }
                 None => return self.unsupported(e.span, "a method called without a receiver"),
             }
         }
@@ -169,6 +183,33 @@ impl<'a> Lowerer<'a> {
             None => return Res::Never,
         }
         self.call_with(e, def, &map, sources, dst)
+    }
+
+    /// A receiver that is a `box` whose method belongs to the value inside: the address of that
+    /// value. `None` when the receiver is passed as it is; `Some(None)` when lowering failed.
+    fn through_boxes(
+        &mut self,
+        r: &'a Expr,
+        def: DefId,
+        info: &crate::typecheck::FnInfo,
+        map: &HashMap<DefId, Ty>,
+    ) -> Option<Option<Value>> {
+        let rt = self.ty_of(r)?;
+        if !matches!(self.kind(rt), TyKind::Box(_)) {
+            return None;
+        }
+        let info = self.fn_info_for(def, info);
+        let want = self.sig_of(&info, map).params.first().map(|p| p.1)?;
+        if matches!(self.kind(want), TyKind::Box(_)) {
+            return None;
+        }
+        let mut p = self.scalar(r)?;
+        let mut t = self.peel_box(rt);
+        while let TyKind::Box(inner) = self.kind(t) {
+            p = self.load_at(p, 0, IrTy::Ptr);
+            t = inner;
+        }
+        Some(Some(p))
     }
 
     /// Calls `def` with the pieces already matched to its parameters (the receiver first).
@@ -261,9 +302,39 @@ impl<'a> Lowerer<'a> {
             self.terminate(Term::Unreachable);
             return Res::Never;
         }
+        // A call of an `async fn` gives a `future<T>`, which has the layout of a `T`: a scalar result
+        // is put in memory, and nothing else changes.
+        let future = if self.typed.async_fns.contains(&def) {
+            self.ty_of(e)
+        } else {
+            None
+        };
         match sig.ret_pass {
+            RetPass::Val(_) if future.is_some() => match (result, future) {
+                (Some(v), Some(ft)) => {
+                    let slot = match dst {
+                        Some(d) => d,
+                        None => self.slot_for(ft),
+                    };
+                    self.store_scalar_ty(slot, v);
+                    if dst.is_none() {
+                        self.own(slot, ft, false);
+                        return Res::Val(slot);
+                    }
+                    Res::Unit
+                }
+                _ => Res::Never,
+            },
+            RetPass::Void if future.is_some() => match (future, dst) {
+                (Some(_), Some(_)) => Res::Unit,
+                (Some(ft), None) => Res::Val(self.slot_for(ft)),
+                _ => Res::Never,
+            },
             RetPass::Val(_) => match result {
-                Some(v) => Res::Val(v),
+                Some(v) => {
+                    self.fresh_scalar(v, sig.ret);
+                    Res::Val(v)
+                }
                 None => Res::Never,
             },
             RetPass::Void => Res::Unit,
@@ -290,7 +361,15 @@ impl<'a> Lowerer<'a> {
         span: Span,
     ) -> Option<Value> {
         let arg = match src {
-            ArgSource::Expr(arg) => arg,
+            ArgSource::Expr(arg) => {
+                if mode != Some(Mode::Sink) {
+                    if let ExprKind::Closure(_) = &strip_parens(arg).kind {
+                        let sp = strip_parens(arg).span;
+                        self.f.stack_env = Some((sp.start, sp.end));
+                    }
+                }
+                arg
+            }
             ArgSource::Default(file, arg) => {
                 let saved = self.f.file;
                 self.f.file = file;
@@ -333,6 +412,13 @@ impl<'a> Lowerer<'a> {
                 }
             }
             Pass::Ptr => match mode {
+                Some(Mode::Inout) if self.is_soa_index(arg) => {
+                    self.unsupported(
+                        arg.span,
+                        "`inout` on an element of a `soa` (use a field: `points[i].x`)",
+                    );
+                    None
+                }
                 Some(Mode::Inout) => match self.place(arg) {
                     Some(p) => Some(p),
                     None => {

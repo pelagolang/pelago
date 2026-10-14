@@ -60,6 +60,10 @@ impl<'a> Lowerer<'a> {
             .collect()
     }
 
+    pub(crate) fn arg_value(&mut self, args: &'a [Arg], i: usize) -> Option<Value> {
+        self.arg_scalar(args, i)
+    }
+
     fn arg_scalar(&mut self, args: &'a [Arg], i: usize) -> Option<Value> {
         match args.get(i) {
             Some(a) => self.scalar(&a.value),
@@ -81,6 +85,12 @@ impl<'a> Lowerer<'a> {
         let sp = e.span;
         let ptr = IrTy::Ptr;
         match name.as_str() {
+            "rt_soa_len" | "rt_soa_push" | "rt_soa_insert" | "rt_soa_remove" | "rt_soa_clear" => {
+                let Some(t) = self.intr_type(def, map) else {
+                    return self.unsupported(sp, "a `soa` operation on an unknown type");
+                };
+                self.intr_soa(&name, e, t, args, dst)
+            }
             "rt_null" => {
                 let z = self.i64c(0);
                 self.wrap(Op::Cast(CastKind::IntToPtr, z, ptr), ptr, sp)

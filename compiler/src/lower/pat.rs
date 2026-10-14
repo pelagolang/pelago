@@ -601,11 +601,12 @@ impl<'a> Lowerer<'a> {
             return Res::Never;
         }
         self.start(join);
-        self.pop_scope();
-        match repr {
+        let res = match repr {
             Repr::Scalar(_) => Res::Val(self.f.func.block_params(join)[0]),
             _ => Res::Unit,
-        }
+        };
+        self.pop_scope_carrying(&res);
+        res
     }
 
     /// Tests the patterns of one arm. Control continues with their names bound when one matches, and

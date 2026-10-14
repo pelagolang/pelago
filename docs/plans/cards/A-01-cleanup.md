@@ -1,6 +1,6 @@
 Id: A-01
 Title: Remove `stubs.rs` and other leftovers
-Column: Ready
+Column: Done
 Order: 1
 Depends on: nothing
 Size: S

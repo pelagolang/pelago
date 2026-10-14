@@ -29,6 +29,7 @@ use crate::ast::*;
 use crate::package::{Diagnostic, ModuleId, PackageId, Program};
 use crate::resolve::{Def, DefId, DefKind, Resolved};
 use crate::span::Span;
+use crate::token::Punct;
 use crate::types::*;
 use std::collections::HashMap;
 
@@ -101,6 +102,8 @@ pub struct Typed {
     pub owning: std::collections::HashSet<DefId>,
     /// The types declared `linear`: they must be consumed exactly once.
     pub linear: std::collections::HashSet<DefId>,
+    /// The `async fn` functions: they are lowered returning their value, and a call wraps it in a `future`.
+    pub async_fns: std::collections::HashSet<DefId>,
     /// The return type of each function with a body.
     pub fn_rets: HashMap<DefId, Ty>,
     pub fn_infos: HashMap<DefId, FnInfo>,
@@ -125,6 +128,7 @@ impl Typed {
         match self.types.kind(t) {
             TyKind::String
             | TyKind::List(_)
+            | TyKind::Soa(..)
             | TyKind::Map(..)
             | TyKind::Set(_)
             | TyKind::Box(_)
@@ -238,6 +242,7 @@ enum Head {
     Adt(DefId),
     List,
     Array,
+    Soa,
     Tuple,
     Option,
     Result,
@@ -351,6 +356,15 @@ pub(crate) struct Checker<'p> {
     /// Top-level statements and constants of modules, checked as one pseudo-function each.
     tests: Vec<(ModuleId, usize, &'p Block)>,
     top_stmts: Vec<(ModuleId, usize, &'p [Stmt])>,
+    /// The `meta N: int` parameters.
+    meta_params: std::collections::HashSet<DefId>,
+    /// The `meta fn` functions.
+    meta_fns: std::collections::HashSet<DefId>,
+    /// `async fn` functions and the type of the value they produce (callers see `future<T>`).
+    async_fns_decl: std::collections::HashSet<DefId>,
+    async_inner: HashMap<DefId, Ty>,
+    /// How many `meta` expressions or `meta fn` bodies enclose the code being checked.
+    meta_depth: u32,
     /// The interfaces each generic parameter must provide, as written.
     param_bounds: HashMap<DefId, Vec<&'p Type>>,
     /// `@derive(...)` names of types.
@@ -413,6 +427,11 @@ impl<'p> Checker<'p> {
             var_floor: 0,
             tests: Vec::new(),
             top_stmts: Vec::new(),
+            meta_params: std::collections::HashSet::new(),
+            meta_fns: std::collections::HashSet::new(),
+            async_fns_decl: std::collections::HashSet::new(),
+            async_inner: HashMap::new(),
+            meta_depth: 0,
             param_bounds: HashMap::new(),
             derives: HashMap::new(),
             pending_bounds: Vec::new(),
@@ -461,7 +480,9 @@ impl<'p> Checker<'p> {
         for (d, owner) in fn_defs {
             let Some(sig) = self.fn_sig(d) else { continue };
             let self_ty = self.owner_self_ty(owner);
-            let ret = self.tt.zonk(sig.ret);
+            let ret = self
+                .tt
+                .zonk(self.async_inner.get(&d).copied().unwrap_or(sig.ret));
             let params = sig
                 .params
                 .iter()
@@ -524,6 +545,7 @@ impl<'p> Checker<'p> {
             }
             adts.insert(d, info);
         }
+        self.check_finite_sizes(&adts);
         let impls: Vec<ImplEntry> = (0..self.impls.len())
             .map(|i| {
                 let im = &self.impls[i];
@@ -557,6 +579,7 @@ impl<'p> Checker<'p> {
         Typed {
             owning,
             linear,
+            async_fns: self.async_inner.keys().copied().collect(),
             fn_rets,
             fn_infos,
             adts,
@@ -567,6 +590,97 @@ impl<'p> Checker<'p> {
             names: self.res.defs.iter().map(|d| d.name.clone()).collect(),
             types: self.tt,
             diagnostics,
+        }
+    }
+
+    // ---- Recursive types ------------------------------------------------------------------
+
+    /// A struct or enum may hold itself only through a `box`, a list, a map, a set or an object:
+    /// anything else would have infinite size.
+    fn check_finite_sizes(&mut self, adts: &HashMap<DefId, AdtInfo>) {
+        let mut defs: Vec<DefId> = adts.keys().copied().collect();
+        defs.sort();
+        for d in defs {
+            if matches!(self.def(d).kind, DefKind::Obj) {
+                continue;
+            }
+            let info = &adts[&d];
+            let parts: Vec<Ty> = info
+                .fields
+                .iter()
+                .map(|(_, t)| *t)
+                .chain(
+                    info.variants
+                        .iter()
+                        .flat_map(|(_, fs)| fs.iter().map(|(_, t)| *t)),
+                )
+                .collect();
+            let mut seen = std::collections::HashSet::new();
+            if parts
+                .into_iter()
+                .any(|t| self.holds_inline(t, d, adts, &mut seen))
+            {
+                let def = self.def(d);
+                let (name, span, file) = (def.name.clone(), def.span, def.file);
+                if let Some(file) = file {
+                    self.diags.push(Diagnostic {
+                        module: file,
+                        span,
+                        message: format!(
+                            "`{name}` contains itself, so it would be infinitely large; put the inner one in a `box<{name}>`"
+                        ),
+                        warning: false,
+                    });
+                }
+            }
+        }
+    }
+
+    /// Does a value of type `t` contain a `target` right inside it (not behind a pointer)?
+    fn holds_inline(
+        &mut self,
+        t: Ty,
+        target: DefId,
+        adts: &HashMap<DefId, AdtInfo>,
+        seen: &mut std::collections::HashSet<DefId>,
+    ) -> bool {
+        match self.kind_of(t) {
+            TyKind::Adt(d, args) => {
+                if d == target {
+                    return true;
+                }
+                if self.def(d).kind == DefKind::Obj || !seen.insert(d) {
+                    return false;
+                }
+                let Some(info) = adts.get(&d) else {
+                    return false;
+                };
+                let map: HashMap<DefId, Ty> = info.generics.iter().copied().zip(args).collect();
+                let parts: Vec<Ty> = info
+                    .fields
+                    .iter()
+                    .map(|(_, t)| *t)
+                    .chain(
+                        info.variants
+                            .iter()
+                            .flat_map(|(_, fs)| fs.iter().map(|(_, t)| *t)),
+                    )
+                    .collect();
+                parts.into_iter().any(|p| {
+                    let p = self.tt.subst(p, &map);
+                    self.holds_inline(p, target, adts, seen)
+                })
+            }
+            TyKind::Tuple(ts) | TyKind::AltTuple(ts, _) => ts
+                .into_iter()
+                .any(|x| self.holds_inline(x, target, adts, seen)),
+            TyKind::Array(e, _) | TyKind::Option(e) | TyKind::Range(e) => {
+                self.holds_inline(e, target, adts, seen)
+            }
+            TyKind::Result(a, b) => {
+                self.holds_inline(a, target, adts, seen) || self.holds_inline(b, target, adts, seen)
+            }
+            _ => false,
         }
     }
 
@@ -700,8 +814,10 @@ impl<'p> Checker<'p> {
     fn index_meta_expr(&mut self, file: ModuleId, scope: usize, e: &'p Expr) {
         match &e.kind {
             ExprKind::MetaIf(i) => {
-                self.index_stmts(file, scope, &i.then.stmts, false);
-                if let Some(el) = &i.else_ {
+                let src = &self.program.module(file).src;
+                if crate::meta::chooses_then(i, src, &self.program.target) {
+                    self.index_stmts(file, scope, &i.then.stmts, false);
+                } else if let Some(el) = &i.else_ {
                     self.index_meta_expr(file, scope, el);
                 }
             }
@@ -733,6 +849,12 @@ impl<'p> Checker<'p> {
         match &item.kind {
             ItemKind::Fn(f) => {
                 self.register_generics(file, &f.generics, &f.where_);
+                if let (Some(d), true) = (def, item.mods.is_meta) {
+                    self.meta_fns.insert(d);
+                }
+                if let (Some(d), true) = (def, item.mods.is_async) {
+                    self.async_fns_decl.insert(d);
+                }
                 if let Some(d) = def {
                     self.nodes.insert(
                         d,
@@ -869,6 +991,9 @@ impl<'p> Checker<'p> {
             ItemKind::Fn(f) => {
                 self.register_generics(file, &f.generics, &f.where_);
                 if let Some(&d) = self.res.item_defs.get(&(file, i.span.start)) {
+                    if i.mods.is_async {
+                        self.async_fns_decl.insert(d);
+                    }
                     self.nodes.insert(
                         d,
                         Node::Fn {
@@ -900,6 +1025,7 @@ impl<'p> Checker<'p> {
             TyKind::Adt(d, _) => Head::Adt(*d),
             TyKind::List(_) => Head::List,
             TyKind::Array(..) => Head::Array,
+            TyKind::Soa(..) => Head::Soa,
             TyKind::Tuple(_) => Head::Tuple,
             TyKind::Option(_) => Head::Option,
             TyKind::Result(..) => Head::Result,
@@ -1061,6 +1187,18 @@ impl<'p> Checker<'p> {
             }
         });
         self.sig_busy.pop();
+        let mut sig = sig;
+        // An `async fn` is called like any function, but gives a `future` of what its body gives.
+        if self.async_fns_decl.contains(&def) {
+            let future = (0..self.res.defs.len() as u32).map(DefId).find(|d| {
+                let dd = self.def(*d);
+                dd.kind == DefKind::Struct && dd.name == "future" && self.is_core_def(*d)
+            });
+            if let Some(fd) = future {
+                self.async_inner.insert(def, sig.ret);
+                sig.ret = self.tt.mk(TyKind::Adt(fd, vec![sig.ret]));
+            }
+        }
         self.fn_sigs.insert(def, sig.clone());
         Some(sig)
     }
@@ -1206,26 +1344,69 @@ impl<'p> Checker<'p> {
         }
     }
 
-    fn array_len(&mut self, n: &'p Expr) -> ArrayLen {
-        match &n.kind {
+    /// A number given as a generic argument (`zeros<8>`), as a type-level constant.
+    fn const_arg(&mut self, e: &'p Expr) -> Ty {
+        match self.const_term(e) {
+            Some(t) => t,
+            None => {
+                self.err(
+                    e.span,
+                    "a value argument must be a whole number, a `meta` parameter, or `+ - *` of those",
+                );
+                self.tt.unknown
+            }
+        }
+    }
+
+    /// A compile-time number written with literals, `meta` parameters and `+ - *`.
+    pub(crate) fn const_term(&mut self, e: &'p Expr) -> Option<Ty> {
+        match &e.kind {
             ExprKind::Int => {
-                let text =
-                    &self.program.module(self.file).src[n.span.start as usize..n.span.end as usize];
-                int_text(text).map_or(ArrayLen::Unknown, |v| ArrayLen::Known(v as u64))
+                let src = &self.program.module(self.file).src;
+                let v = int_text(&src[e.span.start as usize..e.span.end as usize])?;
+                Some(self.tt.mk(TyKind::Const(v as i128)))
             }
             ExprKind::Name(id) => match self.used(id) {
-                Some(d) if self.def(d).kind == DefKind::GenericParam => ArrayLen::Param(d),
-                _ => ArrayLen::Unknown,
+                Some(d) if self.def(d).kind == DefKind::GenericParam => {
+                    Some(self.tt.mk(TyKind::Param(d)))
+                }
+                _ => None,
             },
-            _ => ArrayLen::Unknown,
+            ExprKind::Paren(inner) => self.const_term(inner),
+            ExprKind::Binary { op, lhs, rhs } => {
+                let c = match op {
+                    Punct::Plus => b'+',
+                    Punct::Minus => b'-',
+                    Punct::Star => b'*',
+                    _ => return None,
+                };
+                let a = self.const_term(lhs)?;
+                let b = self.const_term(rhs)?;
+                Some(self.tt.const_op(c, a, b))
+            }
+            _ => None,
         }
+    }
+
+    pub(crate) fn len_of(&mut self, n: &'p Expr) -> ArrayLen {
+        match self.const_term(n) {
+            Some(t) => match self.tt.kind(t) {
+                TyKind::Const(k) if *k >= 0 => ArrayLen::Known(*k as u64),
+                _ => ArrayLen::Term(t),
+            },
+            None => ArrayLen::Unknown,
+        }
+    }
+
+    fn array_len(&mut self, n: &'p Expr) -> ArrayLen {
+        self.len_of(n)
     }
 
     fn lower_generic_args(&mut self, args: &'p [GenericArg]) -> Vec<Ty> {
         args.iter()
-            .filter_map(|a| match a {
-                GenericArg::Type(t) => Some(self.lower_type(t)),
-                GenericArg::Const(_) => None,
+            .map(|a| match a {
+                GenericArg::Type(t) => self.lower_type(t),
+                GenericArg::Const(e) => self.const_arg(e),
             })
             .collect()
     }
@@ -1296,6 +1477,22 @@ impl<'p> Checker<'p> {
         self.tt.subst(t, &map)
     }
 
+    /// `soa<T>` needs a struct: one column per field.
+    pub(crate) fn soa_elem_ok(&mut self, elem: Ty, span: Span) {
+        let ok = match self.kind_of(elem) {
+            TyKind::Adt(d, _) => self.def(d).kind == DefKind::Struct,
+            TyKind::Unknown | TyKind::Var(_) | TyKind::Param(_) | TyKind::Error => true,
+            _ => false,
+        };
+        if !ok {
+            let s = self.show(elem);
+            self.err(
+                span,
+                format!("`soa<{s}>` needs a struct (one column is kept per field); enums, objects, tuples and generic parameters cannot be stored this way"),
+            );
+        }
+    }
+
     fn builtin_type(&mut self, name: &str, args: &'p [GenericArg], span: Span) -> Ty {
         let lowered = self.lower_generic_args(args);
         let want = |c: &mut Self, n: usize| -> bool {
@@ -1333,6 +1530,25 @@ impl<'p> Checker<'p> {
             "error" => tt.error,
             "ptr" => tt.mk(TyKind::Ptr),
             "list" if want(self, 1) => self.tt.list(lowered[0]),
+            "soa" if lowered.len() == 1 || lowered.len() == 2 => {
+                let len = match lowered.get(1).map(|t| self.tt.kind(*t).clone()) {
+                    None => ArrayLen::Unknown,
+                    Some(TyKind::Const(n)) if n > 0 && (n as u64).is_power_of_two() => {
+                        ArrayLen::Known(n as u64)
+                    }
+                    Some(TyKind::Const(_)) => {
+                        self.err(span, "the block size of `soa<T, N>` must be a power of two");
+                        ArrayLen::Unknown
+                    }
+                    Some(_) => ArrayLen::Term(lowered[1]),
+                };
+                self.soa_elem_ok(lowered[0], span);
+                self.tt.mk(TyKind::Soa(lowered[0], len))
+            }
+            "soa" => {
+                self.err(span, "`soa` takes an element type and an optional block size: `soa<point>`, `soa<point, 8>`");
+                self.tt.unknown
+            }
             "set" if want(self, 1) => self.tt.mk(TyKind::Set(lowered[0])),
             "range" if want(self, 1) => self.tt.mk(TyKind::Range(lowered[0])),
             "iter" if want(self, 1) => self.tt.mk(TyKind::Iter(lowered[0])),
@@ -1483,8 +1699,16 @@ impl<'p> Checker<'p> {
         if matches!(f.body, FnBody::None) {
             return;
         }
-        let Some(sig) = self.fn_sig(def) else { return };
+        let Some(mut sig) = self.fn_sig(def) else {
+            return;
+        };
+        // The body of an `async fn` gives the value itself; the call wraps it.
+        if let Some(inner) = self.async_inner.get(&def) {
+            sig.ret = *inner;
+        }
         let self_ty = self.owner_self_ty(owner);
+        let saved_meta = self.meta_depth;
+        self.meta_depth = u32::from(self.meta_fns.contains(&def));
         let st = self.begin_unit(file, scope, self_ty);
         // `init` and `deinit` have an implicit `self`.
         if f.kind != FnKind::Fn {
@@ -1542,7 +1766,10 @@ impl<'p> Checker<'p> {
                 span = e.span;
                 self.check_expr(e, exp)
             }
-            FnBody::None => return,
+            FnBody::None => {
+                self.meta_depth = saved_meta;
+                return;
+            }
         };
         if let Exp::Is(t) = exp {
             self.coerce_at(found, t, span, "this function's value");
@@ -1552,6 +1779,7 @@ impl<'p> Checker<'p> {
                 self.coerce_at(found, sig.ret, span, "this function's value");
             }
         }
+        self.meta_depth = saved_meta;
         self.fn_ctx.pop();
         self.end_unit(st);
     }
@@ -1642,6 +1870,7 @@ pub(crate) fn linear_in(tt: &TypeTable, linear: &std::collections::HashSet<DefId
         }
         TyKind::List(e)
         | TyKind::Array(e, _)
+        | TyKind::Soa(e, _)
         | TyKind::Option(e)
         | TyKind::Box(e)
         | TyKind::Set(e) => linear_in(tt, linear, *e),
@@ -1660,6 +1889,7 @@ pub(crate) fn holds_view(tt: &TypeTable, t: Ty) -> bool {
         TyKind::Str | TyKind::Fn(..) => true,
         TyKind::List(e)
         | TyKind::Array(e, _)
+        | TyKind::Soa(e, _)
         | TyKind::Option(e)
         | TyKind::Set(e)
         | TyKind::Range(e) => holds_view(tt, *e),

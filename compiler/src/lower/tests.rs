@@ -330,9 +330,29 @@ fn run_main(src: &str) -> Outcome {
 }
 
 fn output_of(src: &str) -> String {
-    let o = run_main(src);
+    let l = lowered(src);
+    let o = run_full(&l.module, "main", &[]);
     assert_eq!(o.result.clone().map(|_| ()), Ok(()), "{src}");
     assert_eq!(o.leaked, 0, "leaked memory in {src}");
+    // Differential test: the optimised program must do exactly the same.
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    crate::ir::opt::prune(&mut m, &["main"]);
+    let v = verify_module(&m);
+    assert!(
+        v.is_empty(),
+        "the optimised IR does not verify: {v:?} in {src}"
+    );
+    let p = run_full(&m, "main", &[]);
+    assert_eq!(
+        p.result, o.result,
+        "result changed by the optimiser in {src}"
+    );
+    assert_eq!(
+        p.output, o.output,
+        "output changed by the optimiser in {src}"
+    );
+    assert_eq!(p.leaked, 0, "the optimiser caused a leak in {src}");
     o.output
 }
 
@@ -684,7 +704,7 @@ fn program_generic() {
 #[test]
 fn example_programs_run() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/programs");
-    for name in ["shapes", "words", "stack"] {
+    for name in ["shapes", "words", "stack", "tree", "tables"] {
         let mut program = Program::with_core();
         program
             .add_package_from_path(&dir.join(format!("{name}.pel")))
@@ -705,6 +725,16 @@ fn example_programs_run() {
         assert_eq!(o.result.clone().map(|_| ()), Ok(()), "{name}");
         assert_eq!(o.leaked, 0, "{name} leaks");
         assert!(!o.output.is_empty(), "{name} printed nothing");
+        let mut m = l.module.clone();
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        crate::ir::opt::prune(&mut m, &["main"]);
+        let p = crate::ir::run_full(&m, "main", &[]);
+        assert_eq!(
+            p.output, o.output,
+            "{name}: the optimiser changed the output"
+        );
+        assert_eq!(p.leaked, 0, "{name}: the optimiser caused a leak");
+        assert!(p.steps < o.steps, "{name}: no faster");
     }
 }
 
@@ -742,4 +772,450 @@ fn program_f5() {
         output_of(src),
         "h\né\nl\nl\no\nh� 97 3 3 1 7\n1260 -2 16 2 7 5\n"
     );
+}
+
+// ---- Boxes -------------------------------------------------------------------------------------
+
+#[test]
+fn box_make_read_set_take() {
+    let src = "struct pt { x: int, y: int }\nfn main() {\n var n = box(1)\n n.set!(2)\n print(n.get(), n.take!!())\n var s = box(\"hi\")\n s.set!(\"there\")\n print(s.get(), s.len(), s.take!!())\n var p = box(pt { x: 1, y: 2 })\n p.get().x = 10\n print(p.x, p.y)\n const q = p.take!!()\n print(q.x + q.y) }\n";
+    assert_eq!(output_of(src), "2 2\nthere 5 there\n10 2\n12\n");
+}
+
+#[test]
+fn box_tree_insert_and_walk() {
+    let tree = "enum tree { leaf\n node(box<tree>, int, box<tree>) }\nfn insert(t: tree, v: int) -> tree { switch t {\n case .leaf: tree.node(box(tree.leaf), v, box(tree.leaf))\n case .node(l, x, r): if v < x { tree.node(box(insert(l.get(), v)), x, copy r) } else { tree.node(copy l, x, box(insert(r.get(), v))) } } }\nfn sum(t: tree) -> int { switch t { case .leaf: 0\n case .node(l, x, r): sum(l.get()) + x + sum(r.get()) } }\n";
+    let small = format!("{tree}fn main() {{ var t = tree.leaf\n for v in [2, 1, 3] {{ t = insert(t, v) }}\n print(sum(t)) }}\n");
+    assert_eq!(output_of(&small), "6\n");
+    let big = format!("{tree}fn main() {{ var t = tree.leaf\n var i = 0\n while i < 1000 {{ t = insert(t, (i * 7919) % 1000)\n i += 1 }}\n print(sum(t)) }}\n");
+    assert_eq!(output_of(&big), "499500\n");
+}
+
+#[test]
+fn box_linked_list_and_deep_chain() {
+    let src = "enum chain { nil\n cons(int, box<chain>) }\nfn len(c: chain) -> int { switch c { case .nil: 0\n case .cons(_, rest): 1 + len(rest.get()) } }\nfn len_loop(c: chain) -> int { become count(c, 0) }\nfn count(c: chain, acc: int) -> int { switch c { case .nil: acc\n case .cons(_, rest): become count(rest.get(), acc + 1) } }\nfn main() { var c = chain.nil\n for i in 0..10000 { c = chain.cons(i, box(sink c)) }\n print(len(c)) }\n";
+    assert_eq!(output_of(src), "10000\n");
+}
+
+#[test]
+fn box_copy_is_deep() {
+    let src = "fn main() { var a = box([1, 2])\n const b = copy a\n a[0] = 9\n print(a, b)\n const s = box(\"x\")\n const t = copy s\n print(s, t) }\n";
+    assert_eq!(output_of(src), "[9, 2] [1, 2]\nx x\n");
+}
+
+#[test]
+fn box_holds_a_function() {
+    let src = "fn adder(n: int) -> box<fn(int) -> int> { box((x: int) ~> x + n) }\nfn main() { const f = adder(5)\n print(f.get()(1)) }\n";
+    assert_eq!(output_of(src), "6\n");
+}
+
+#[test]
+fn box_compares_and_keys_a_map() {
+    let src = "fn main() { const a = box(2)\n const b = box(3)\n print(a == b, a < b, a == a)\n var m: map<box<int>, string> = map {}\n m.insert!(box(1), \"one\")\n const k = box(1)\n print(m.len(), k in m) }\n";
+    assert_eq!(output_of(src), "false true true\n1 true\n");
+}
+
+#[test]
+fn box_inside_an_option_field() {
+    let src = "struct pt { x: int }\nstruct holder { next: box<pt>? }\nfn main() { const h = holder { next: box(pt { x: 5 }) }\n if h.next is some(q) { print(q.x) }\n const e = holder { next: none }\n print(e.next.is_none()) }\n";
+    assert_eq!(output_of(src), "5\ntrue\n");
+}
+
+// ---- A-08: `inout` closure parameters and the `scope` handle ------------------------------------
+
+#[test]
+fn inout_closure_parameters() {
+    let src = "fn twice(inout x: int, f: fn(inout int)) { f(inout x)\n f(inout x) }\nfn main() { const h = lock(0)\n h.with(inout n ~> { n += 5 })\n print(h.with((inout n) ~> { n += 0\n n }))\n var k = 1\n twice(inout k, inout n ~> { n *= 3 })\n twice(inout k, n ~> { n += 1 })\n print(k) }\n";
+    assert_eq!(output_of(src), "5\n11\n");
+}
+
+#[test]
+fn scope_tasks_finish_with_the_scope() {
+    let src = "fn main() { var a = 0\n var b = 0\n scope s { s.spawn([inout a] ~> { a += 1 })\n s.spawn([inout b] ~> { b += 2 })\n print(\"spawned\") }\n print(a, b) }\n";
+    assert_eq!(output_of(src), "spawned\n1 2\n");
+}
+
+// ---- A-03: the ledger (a fresh value nobody binds is dropped where its statement ends) -----------
+
+#[test]
+fn object_temporaries_are_dropped() {
+    let src = r#"obj dog { name: string
+    fn speak(self) -> string = "woof #(self.name)" }
+fn make_dog(sink n: string) -> dog { dog { name: n } }
+fn show(d: dog) { print(d.name) }
+fn pick(c: bool) -> dog { if c { make_dog("a") } else { make_dog("b") } }
+fn main() {
+    make_dog("a")
+    print(make_dog("b").name)
+    show(dog { name: "c" })
+    print((if true { make_dog("d") } else { make_dog("e") }).name)
+    const d = make_dog("f")
+    print(d.speak())
+    print(pick(false).speak())
+}
+"#;
+    assert_eq!(output_of(src), "b\nc\nd\nwoof f\nwoof b\n");
+}
+
+#[test]
+fn temporaries_settle_into_their_new_owner() {
+    let src = r#"obj dog { name: string
+    fn speak(self) -> string = "woof #(self.name)" }
+interface talker { fn talk(self) -> string }
+impl talker for int { fn talk(self) -> string = "int" }
+struct kennel { d: dog }
+fn make_dog(sink n: string) -> dog { dog { name: n } }
+fn show(d: dog) { print(d.name) }
+fn take(sink d: dog) { print(d.name) }
+fn find(c: bool) -> dog? { if c { make_dog("opt") } else { none } }
+fn try_it(c: bool) -> int? {
+    const d = find(c)?
+    print(d.name)
+    1
+}
+fn early(c: bool) -> string {
+    if c { return make_dog("ret").speak() }
+    "late"
+}
+fn main() {
+    var ds: [dog] = []
+    ds.push!(make_dog("p"))
+    var k = kennel { d: make_dog("k") }
+    take(make_dog("s"))
+    print(try_it(true), try_it(false))
+    print(early(true), early(false))
+    for i in 0..3 {
+        if i == 1 { continue }
+        print(make_dog("loop").name)
+        if i == 2 { break }
+    }
+    const t = true && make_dog("and").name.len() > 0
+    const o = find(false) ?? make_dog("dflt")
+    print(t, o.name)
+    const a: any talker = 5
+    const f = [sink k] ~> copy k.d.name
+    const g = [sink ds] ~> ds.len()
+    print(g())
+    var i = 0
+    while make_dog("cond").name.len() > i { i += 1 }
+    print(find(true).is_some())
+    var m: map<string, dog> = map {}
+    m.insert!("x", make_dog("m"))
+    print(m.len())
+    switch make_dog("sw") { case d: print(d.name) }
+}
+"#;
+    assert_eq!(
+        output_of(src),
+        "s\nopt\nsome(1) none\nwoof ret late\nloop\nloop\ntrue dflt\n1\ntrue\n1\nsw\n"
+    );
+}
+
+#[test]
+fn box_temporaries_are_dropped() {
+    let src = "fn main() { var m: map<box<int>, string> = map {}\n m.insert!(box(1), \"one\")\n print(box(1) in m)\n box(7)\n print(box(3), box(3) == box(3)) }\n";
+    assert_eq!(output_of(src), "true\n3 true\n");
+}
+
+#[test]
+fn temporaries_die_in_reverse_order_at_the_end_of_the_statement() {
+    let src = "obj noisy { id: int\n deinit { print(\"drop #(self.id)\") } }\nfn mk(i: int) -> noisy { noisy { id: i } }\nfn pair(a: noisy, b: noisy) -> int { a.id + b.id }\nfn main() { print(pair(mk(1), mk(2)))\n print(\"next\") }\n";
+    assert_eq!(output_of(src), "3\ndrop 2\ndrop 1\nnext\n");
+}
+
+// ---- A-05 stage M1: `meta if` ---------------------------------------------------------------------
+
+#[test]
+fn meta_if_lowers_only_the_chosen_branch() {
+    let src = "meta if target.os == linux {\n fn platform() -> string = \"linux\"\n} else {\n fn platform() -> string = \"other\"\n}\nfn main() { print(platform())\n const n = meta if target.pointer_bits == 64 { 8 } else { missing_name }\n print(n) }\n";
+    let mut program = Program::with_core();
+    program.target = crate::meta::Target {
+        os: "linux".into(),
+        pointer_bits: 64,
+        ..crate::meta::Target::host()
+    };
+    program.add_package("app", &[("main", src)]);
+    let res = resolve(&program);
+    let typed = check(&program, &res);
+    assert!(typed.diagnostics.is_empty(), "{:?}", typed.diagnostics);
+    let l = lower(&program, &res, &typed);
+    let o = run_full(&l.module, "main", &[]);
+    assert_eq!(o.output, "linux\n8\n");
+}
+
+// ---- A-05 stage M2: `meta N: int` value parameters ------------------------------------------------
+
+#[test]
+fn value_parameters_make_one_instance_per_value() {
+    let src = "fn zeros<meta N: int>() -> [int; N] { [0; N] }\nfn total<meta N: int>(xs: [int; N]) -> int { var t = 0\n for i in 0..N { t += xs[i] }\n t }\nfn main() { const a = zeros<3>()\n const b: [int; 5] = zeros<5>()\n print(a, b)\n print(total([1, 2, 3, 4]), total(a)) }\n";
+    assert_eq!(output_of(src), "[0, 0, 0] [0, 0, 0, 0, 0]\n10 0\n");
+}
+
+#[test]
+fn value_parameters_on_a_struct() {
+    let src = "struct buf<meta N: int> { data: [int; N]\n fn size(self) -> int = N }\nfn main() { const b = buf<4> { data: [1, 2, 3, 4] }\n print(b.size(), b.data[2]) }\n";
+    assert_eq!(output_of(src), "4 3\n");
+}
+
+// ---- A-06: soa<T> ----------------------------------------------------------------------------------
+
+#[test]
+fn soa_works_like_a_list_of_structs() {
+    let src = r#"struct point { x: float, y: float }
+struct person { name: string, age: int }
+fn main() {
+    var ps: soa<point> = soa []
+    ps.push!(point { x: 1.0, y: 2.0 })
+    ps.push!(point { x: 3.0, y: 4.0 })
+    ps[1].x = 30.0
+    ps[0].y += 5.0
+    print(ps.len(), ps[0].x, ps[1].x, ps[0].y)
+    print(ps.x, ps.y)
+    for inout p of ps { p.x += 1.0 }
+    var total = 0.0
+    for p of ps { total += p.x + p.y }
+    print(total)
+    const q = ps[1]
+    print(q.x, q.y)
+    ps[0] = point { x: 9.0, y: 9.0 }
+    print(ps.x)
+    var people: soa<person> = soa [person { name: "ann", age: 3 }, person { name: "bo", age: 5 }]
+    people.push!(person { name: "cy", age: 7 })
+    const gone = people.remove!(1)
+    print(gone.name, people.len(), people.name, people.age)
+    people.insert!(0, person { name: "zed", age: 1 })
+    print(people.name)
+    print(people.pop!().is_some(), people.len())
+    people.clear!()
+    print(people.len())
+    const copy_of = copy ps
+    print(copy_of == ps, copy_of.len())
+}
+"#;
+    assert_eq!(
+        output_of(src),
+        "2 1 30 7\n[1, 30] [7, 4]\n44\n31 4\n[9, 31]\nbo 2 [\"ann\", \"cy\"] [3, 7]\n[\"zed\", \"ann\", \"cy\"]\ntrue 2\n0\ntrue 2\n"
+    );
+}
+
+#[test]
+fn soa_prints_as_a_list_of_structs_and_has_blocked_form() {
+    let src = "@derive(show)\nstruct point { x: int, y: int }\nfn main() { var ps: soa<point, 4> = soa []\n for i in 0..10 { ps.push!(point { x: i, y: i * i }) }\n print(ps.len(), ps[9].y, ps.x)\n var small: soa<point> = soa [point { x: 1, y: 2 }]\n print(small) }\n";
+    assert_eq!(
+        output_of(src),
+        "10 81 [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]\n[point { x: 1, y: 2 }]\n"
+    );
+}
+
+// ---- A-05 stage M3: `meta expr` and `meta fn` -------------------------------------------------------
+
+fn lowered_diags(src: &str) -> Vec<(String, bool)> {
+    let mut program = Program::with_core();
+    program.add_package("app", &[("main", src)]);
+    let res = resolve(&program);
+    let typed = check(&program, &res);
+    assert!(typed.diagnostics.is_empty(), "{:?}", typed.diagnostics);
+    let l = lower(&program, &res, &typed);
+    l.diagnostics
+        .iter()
+        .map(|d| (d.message.clone(), d.warning))
+        .collect()
+}
+
+#[test]
+fn meta_values_are_baked_in() {
+    let src = r#"meta fn build_table() -> [int; 8] {
+    var t = [0; 8]
+    for i in 0..8 { t[i] = i * i }
+    t
+}
+meta fn greeting(name: string) -> string = "hello, #name"
+meta fn squares() -> [int] {
+    var xs: [int] = []
+    for i in 0..5 { xs.push!(i * 2) }
+    xs
+}
+struct pair { a: int, b: string }
+meta fn make_pair() -> pair = pair { a: 7, b: "seven" }
+const table = meta build_table()
+fn main() {
+    print(table[3], table)
+    print(meta greeting("pelago"))
+    print(meta squares())
+    const p = meta make_pair()
+    print(p.a, p.b)
+    const o: int? = meta 5
+    print(o)
+}
+"#;
+    assert_eq!(
+        output_of(src),
+        "9 [0, 1, 4, 9, 16, 25, 36, 49]\nhello, pelago\n[0, 2, 4, 6, 8]\n7 seven\nsome(5)\n"
+    );
+}
+
+#[test]
+fn meta_runs_that_cannot_finish_are_errors() {
+    let d = lowered_diags("meta fn spin() -> int { var i = 0\n while true { i += 1 }\n i }\n@meta_limit(500)\nconst c = meta spin()\nfn main() { print(c) }\n");
+    assert!(
+        d.iter().any(|(m, w)| !w && m.contains("ran too long")),
+        "{d:?}"
+    );
+    let d = lowered_diags("meta fn inner() -> int { var i = 0\n while true { i += 1 }\n i }\nmeta fn outer() -> int = inner() + 1\n@meta_limit(500)\nconst c = meta outer()\nfn main() { print(c) }\n");
+    assert!(
+        d.iter()
+            .any(|(m, w)| !w && m.contains("(in inner <- outer)")),
+        "{d:?}"
+    );
+    let d = lowered_diags("meta fn fail() -> int { meta_error(\"nope\") }\nfn main() { const c = meta fail()\n print(c) }\n");
+    assert!(d.iter().any(|(m, w)| !w && m.contains("nope")), "{d:?}");
+    let d = lowered_diags(
+        "meta fn f() -> int = a + 1\nconst a: int = meta f()\nfn main() { print(a) }\n",
+    );
+    assert!(
+        d.iter().any(|(m, w)| !w && m.contains("needs itself")),
+        "{d:?}"
+    );
+}
+
+#[test]
+fn meta_values_that_hold_closures_are_errors() {
+    let d = lowered_diags("meta fn mk() -> box<fn(int) -> int> { box((x: int) ~> x + 1) }\nfn main() { const f = meta mk()\n print(f.get()(1)) }\n");
+    assert!(
+        d.iter()
+            .any(|(m, w)| !w && m.contains("cannot be computed at compile time")),
+        "{d:?}"
+    );
+}
+
+#[test]
+fn meta_note_is_a_compile_time_message() {
+    let d = lowered_diags("meta fn f() -> int { meta_note(\"building\")\n 4 }\nfn main() { const c = meta f()\n print(c) }\n");
+    assert!(
+        d.iter().any(|(m, w)| *w && m.contains("meta: building")),
+        "{d:?}"
+    );
+}
+
+// ---- A-07: async / await (stage 0: a call runs the body to the end) -----------------------------------
+
+#[test]
+fn async_functions_and_await() {
+    let src = "async fn double(x: int) -> int { x * 2 }\nasync fn greet(name: string) -> string { \"hello #name\" }\nasync fn say(s: string) { print(s) }\nasync fn both() -> int {\n const a = double(4)\n const b = double(5)\n await say(\"working\")\n await a + await b }\nstruct counter { n: int\n async fn bump(inout self) -> int { self.n += 1\n self.n } }\nasync fn boxed(v: int) -> box<int> { box(v) }\nfn main() { print(block_on(both()))\n print(block_on(greet(\"pelago\")))\n var c = counter { n: 0 }\n print(block_on(c.bump!()), block_on(c.bump!()))\n const b = block_on(boxed(7))\n print(b.get()) }\n";
+    assert_eq!(output_of(src), "working\n18\nhello pelago\n1 2\n7\n");
+}
+
+#[test]
+fn async_with_results_and_channels() {
+    let src = r#"async fn safe_div(a: int, b: int) -> int ! string {
+    if b == 0 { return err("zero") }
+    ok(a / b)
+}
+async fn run() -> int ! string {
+    const x = await safe_div(8, 2)?
+    ok(x + 1)
+}
+async fn total(sink rx: receiver<int>) -> int {
+    var t = 0
+    var n = 0
+    while n < 2 {
+        const v = rx.recv()
+        switch v {
+            case some(x): t += x
+            case none: {}
+        }
+        n += 1
+    }
+    t
+}
+fn main() {
+    print(block_on(safe_div(1, 0)).is_err(), block_on(run()))
+    const (tx, rx) = chan<int>()
+    tx.send(1)
+    tx.send(2)
+    print(block_on(total(sink rx)))
+}
+"#;
+    assert_eq!(output_of(src), "true ok(5)\n3\n");
+}
+
+#[test]
+fn any_show_of_builtin_shapes() {
+    // Numbers, strings and lists have no `show` method of their own: the table gets the library's.
+    let src = r#"
+fn f(x: any show) { print(x) }
+fn main() {
+    const c = true
+    f(8)
+    f("hi")
+    f([1, 2])
+    print(if c { 8 } else { 4 })
+    f(if c { 7 } else { 1 })
+}
+"#;
+    assert_eq!(output_of(src), "8\nhi\n[1, 2]\n8\n7\n");
+}
+
+#[test]
+fn array_length_arithmetic() {
+    // `N + 1`, `N * 2` in types: the length folds once `N` is known.
+    let src = r#"
+fn push_end<meta N: int>(xs: [int; N], x: int) -> [int; N + 1] {
+    var out = [0; N + 1]
+    for i in 0..N { out[i] = xs[i] }
+    out[N] = x
+    out
+}
+fn twice<meta N: int>(xs: [int; N]) -> [int; N * 2] {
+    var out = [0; N * 2]
+    for i in 0..N {
+        out[i] = xs[i]
+        out[i + N] = xs[i]
+    }
+    out
+}
+fn main() {
+    const a = push_end([1, 2, 3], 4)
+    const b: [int; 8] = twice(a)
+    print(a, b)
+    print(push_end(push_end([7], 8), 9))
+}
+"#;
+    assert_eq!(
+        output_of(src),
+        "[1, 2, 3, 4] [1, 2, 3, 4, 1, 2, 3, 4]\n[7, 8, 9]\n"
+    );
+}
+
+#[test]
+fn meta_bakes_maps_sets_and_boxes() {
+    let src = r#"
+enum tree { leaf
+    node(box<tree>, int, box<tree>) }
+meta fn names() -> map<string, int> {
+    var m = map { "k0": 0 }
+    for i in 1..4 { m.insert!("k#i", i * i) }
+    m
+}
+meta fn evens() -> set<int> {
+    var s = set { 0 }
+    for i in 1..10 { if i % 2 == 0 { s.insert!(i) } }
+    s
+}
+meta fn small() -> tree = tree.node(box(tree.leaf), 5, box(tree.node(box(tree.leaf), 6, box(tree.leaf))))
+fn sum(t: tree) -> int {
+    switch t {
+        case .leaf: 0
+        case .node(l, v, r): sum(l.get()) + v + sum(r.get())
+    }
+}
+fn main() {
+    const m = meta names()
+    const s = meta evens()
+    const t = meta small()
+    print(m.get("k2"), m.len(), s.contains(4), s.contains(5), s.len())
+    print(sum(t))
+}
+"#;
+    assert_eq!(output_of(src), "some(4) 4 true false 5\n11\n");
 }

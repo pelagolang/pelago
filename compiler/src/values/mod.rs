@@ -159,6 +159,8 @@ struct Walker<'a> {
     state: State,
     loops: Vec<LoopFrame>,
     closures: Vec<ClosureFrame>,
+    /// The open `scope` handles, with the variables their tasks have captured to change or consume.
+    task_scopes: Vec<(DefId, Vec<DefId>)>,
     pending_label: Option<String>,
     /// Variables introduced in each open block, to check `linear` values at its end.
     scopes: Vec<Vec<DefId>>,
@@ -179,6 +181,7 @@ impl<'a> Walker<'a> {
             state: State::default(),
             loops: Vec::new(),
             closures: Vec::new(),
+            task_scopes: Vec::new(),
             pending_label: None,
             scopes: Vec::new(),
             defers: 0,
@@ -240,6 +243,29 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// `b.get()` on a box: the base `b`. It is a place inside the box, like a field.
+    fn box_get_base<'e>(&self, e: &'e Expr) -> Option<&'e Expr> {
+        let ExprKind::Call { callee, args, .. } = &Self::strip(e).kind else {
+            return None;
+        };
+        let ExprKind::Field {
+            base,
+            name,
+            optional: false,
+        } = &Self::strip(callee).kind
+        else {
+            return None;
+        };
+        if !args.is_empty() || self.text(name.span) != "get" {
+            return None;
+        }
+        let t = self
+            .typed
+            .tys
+            .get(&(self.file, base.span.start, base.span.end))?;
+        matches!(self.typed.types.kind_of(*t), TyKind::Box(_)).then_some(&**base)
+    }
+
     /// The variable at the root of a chain of fields and indexes, and the path from it.
     fn place_of(&self, e: &Expr) -> Option<PlaceKey> {
         match &Self::strip(e).kind {
@@ -273,6 +299,11 @@ impl<'a> Walker<'a> {
             ExprKind::Index { base, .. } => {
                 let mut p = self.place_of(base)?;
                 p.segs.push(Seg::Index);
+                Some(p)
+            }
+            ExprKind::Call { .. } => {
+                let mut p = self.place_of(self.box_get_base(e)?)?;
+                p.segs.push(Seg::Field("*".to_string()));
                 Some(p)
             }
             _ => None,
@@ -747,6 +778,11 @@ impl<'a> Walker<'a> {
                 self.place_read(base);
                 self.expr(index, Ctx::Read);
             }
+            ExprKind::Call { .. } if self.box_get_base(e).is_some() => {
+                if let Some(b) = self.box_get_base(e) {
+                    self.place_read(b);
+                }
+            }
             _ => self.expr(e, Ctx::Read),
         }
     }
@@ -823,7 +859,7 @@ impl<'a> Walker<'a> {
                     self.expr(x, Ctx::Consume);
                 }
             }
-            ExprKind::List(items) | ExprKind::Set(items) => {
+            ExprKind::List(items) | ExprKind::Set(items) | ExprKind::Soa(items) => {
                 for i in items {
                     self.expr(&i.value, if i.spread { Ctx::Read } else { Ctx::Consume });
                 }
@@ -857,6 +893,11 @@ impl<'a> Walker<'a> {
                         }
                         StructInit::Spread(s) => self.expr(s, Ctx::Read),
                     }
+                }
+            }
+            ExprKind::Call { .. } if self.box_get_base(e).is_some() => {
+                if let Some(b) = self.box_get_base(e) {
+                    self.chain(e, b, ctx);
                 }
             }
             ExprKind::Call { callee, args, mark } => self.call(e, callee, args, *mark),
@@ -898,7 +939,16 @@ impl<'a> Walker<'a> {
                 }
             }
             ExprKind::Block(b) | ExprKind::Unsafe(b) => self.block(b, ctx),
-            ExprKind::Scope { body, .. } => self.block(body, Ctx::Read),
+            ExprKind::Scope { name, body } => {
+                let handle = self.res.decls.get(&(self.file, name.span.start)).copied();
+                if let Some(h) = handle {
+                    self.task_scopes.push((h, Vec::new()));
+                }
+                self.block(body, Ctx::Read);
+                if handle.is_some() {
+                    self.task_scopes.pop();
+                }
+            }
             ExprKind::Loop(b) => {
                 let label = self.pending_label.take();
                 self.run_loop(true, label, |w| w.block(b, Ctx::Read));
@@ -982,7 +1032,15 @@ impl<'a> Walker<'a> {
                 }
                 self.state.dead = true;
             }
-            ExprKind::Meta(_) | ExprKind::MetaIf(_) => {}
+            ExprKind::Meta(_) => {}
+            ExprKind::MetaIf(i) => {
+                let src = &self.program.module(self.file).src;
+                if crate::meta::chooses_then(i, src, &self.program.target) {
+                    self.block(&i.then, ctx);
+                } else if let Some(el) = &i.else_ {
+                    self.expr(el, ctx);
+                }
+            }
             _ => {
                 let mut v = Generic { w: self };
                 visit::walk_expr(&mut v, e);
@@ -1214,8 +1272,22 @@ impl<'a> Walker<'a> {
             span: e.span,
             caps,
         });
-        for p in &c.params {
-            self.bind_pattern(&p.pattern, Bind::View);
+        // The modes the closure's type gives its parameters (`fn(inout int)`).
+        let modes: Vec<Option<Mode>> = self
+            .typed
+            .tys
+            .get(&(self.file, e.span.start, e.span.end))
+            .map(|t| match self.typed.types.kind_of(*t) {
+                TyKind::Fn(ps, _) => ps.iter().map(|p| p.mode).collect(),
+                _ => Vec::new(),
+            })
+            .unwrap_or_default();
+        for (i, p) in c.params.iter().enumerate() {
+            let default = match modes.get(i).copied().flatten() {
+                Some(Mode::Inout) => Bind::ViewInout,
+                _ => Bind::View,
+            };
+            self.bind_pattern(&p.pattern, default);
         }
         self.expr(&c.body, Ctx::Consume);
         let owned: Vec<DefId> = self
@@ -1353,7 +1425,50 @@ impl<'a> Walker<'a> {
         }
     }
 
+    /// `s.spawn(closure)` on a `scope` handle: no two tasks may change or consume the same variable.
+    fn check_scope_task(&mut self, callee: &Expr, args: &[Arg]) {
+        let ExprKind::Field { base, name, .. } = &Self::strip(callee).kind else {
+            return;
+        };
+        if self.text(name.span) != "spawn" {
+            return;
+        }
+        let ExprKind::Name(id) = &Self::strip(base).kind else {
+            return;
+        };
+        let Some(h) = self.def_at_use(id.span.start) else {
+            return;
+        };
+        let Some(idx) = self.task_scopes.iter().position(|(d, _)| *d == h) else {
+            return;
+        };
+        for a in args {
+            let ExprKind::Closure(c) = &Self::strip(&a.value).kind else {
+                continue;
+            };
+            for cap in &c.captures {
+                if !matches!(cap.mode, Some(Mode::Inout | Mode::Sink)) {
+                    continue;
+                }
+                let Some(d) = self.def_at_use(cap.name.span.start) else {
+                    continue;
+                };
+                if self.task_scopes[idx].1.contains(&d) {
+                    let n = self.name_of(d);
+                    self.report(
+                        cap.name.span,
+                        "spawn",
+                        format!("`{n}` is captured by two tasks, and at least one of them changes or consumes it"),
+                    );
+                } else {
+                    self.task_scopes[idx].1.push(d);
+                }
+            }
+        }
+    }
+
     fn call(&mut self, e: &Expr, callee: &Expr, args: &[Arg], mark: CallMark) {
+        self.check_scope_task(callee, args);
         if self.is_spawn(callee) {
             for a in args {
                 if let ExprKind::Closure(c) = &Self::strip(&a.value).kind {

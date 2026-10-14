@@ -326,7 +326,7 @@ pub fn walk_expr<V: Visitor>(v: &mut V, e: &Expr) {
                 v.visit_expr(e);
             }
         }
-        ExprKind::List(items) | ExprKind::Set(items) => {
+        ExprKind::List(items) | ExprKind::Set(items) | ExprKind::Soa(items) => {
             for i in items {
                 v.visit_expr(&i.value);
             }

@@ -51,7 +51,11 @@ impl<'p> Checker<'p> {
                 let f = self.tt.float;
                 self.tt.unify(t, f);
             }
-            _ => {}
+            _ => {
+                if let TyKind::Box(inner) = self.kind_of(t) {
+                    self.settle_literal(inner);
+                }
+            }
         }
     }
 
@@ -200,7 +204,10 @@ impl<'p> Checker<'p> {
 
     /// The call site repeats `inout` and `sink` for places; temporaries need no `sink`.
     fn check_arg_mode(&mut self, want: Option<Mode>, a: &'p Arg, what: &str) {
-        let place = Self::is_place_expr(&a.value);
+        // `tree.leaf` names a case, not a variable: nothing to move out of.
+        let path =
+            matches!(&a.value.kind, ExprKind::Field { name, .. } if self.used(name).is_some());
+        let place = Self::is_place_expr(&a.value) && !path;
         match (want, a.mode) {
             (Some(Mode::Inout), Some(Mode::Inout)) => {
                 if !place {
@@ -257,6 +264,7 @@ impl<'p> Checker<'p> {
         } else {
             (bt, false)
         };
+        let recv = self.peel_boxes(recv);
         let n = self.text(name);
         let t = match self.kind_of(recv) {
             TyKind::Adt(def, args) => match self.find_field(def, &args, n, name.span) {
@@ -284,6 +292,20 @@ impl<'p> Checker<'p> {
                     self.tt.unknown
                 }
             },
+            // `points.x`: the whole column of one field, as a list.
+            TyKind::Soa(elem, _) if self.lookup_method(recv, n, name.span).is_none() => {
+                match self.kind_of(elem) {
+                    TyKind::Adt(def, args) => match self.find_field(def, &args, n, name.span) {
+                        Some(ft) => self.tt.list(ft),
+                        None => {
+                            let tn = self.def(def).name.clone();
+                            self.err(name.span, format!("`{tn}` has no field `{n}`"));
+                            self.tt.unknown
+                        }
+                    },
+                    _ => self.tt.unknown,
+                }
+            }
             TyKind::Unknown | TyKind::Var(_) => self.tt.unknown,
             _ => {
                 if self.lookup_method(recv, n, name.span).is_some() {
@@ -670,6 +692,7 @@ impl<'p> Checker<'p> {
         let d = self.def(def);
         match d.kind {
             DefKind::Fn => {
+                self.check_meta_call(e, def);
                 let Some(sig) = self.fn_sig(def) else {
                     for a in args {
                         self.check_expr(&a.value, Exp::Any);
@@ -699,6 +722,7 @@ impl<'p> Checker<'p> {
             }
             DefKind::Struct | DefKind::Obj => self.construct(e, def, args, exp),
             DefKind::Variant => self.variant_call(e, def, args, exp),
+            DefKind::BuiltinType if d.name == "box" => self.box_ctor(e, args, exp),
             DefKind::BuiltinFn if d.name == "ok" || d.name == "err" => {
                 let name = d.name.clone();
                 self.result_ctor(e, &name, args, exp)
@@ -718,6 +742,39 @@ impl<'p> Checker<'p> {
                 }
                 self.tt.unknown
             }
+        }
+    }
+
+    /// `meta fn` only inside `meta`; and inside `meta`: no output, no outside functions.
+    fn check_meta_call(&mut self, e: &'p Expr, def: DefId) {
+        let name = self.def(def).name.clone();
+        if self.meta_fns.contains(&def) && self.meta_depth == 0 {
+            self.err(
+                e.span,
+                format!("`{name}` is a `meta fn`; it can only be called inside `meta`"),
+            );
+        }
+        if self.meta_depth == 0 {
+            return;
+        }
+        let core = self.is_core_def(def);
+        if core && name == "print" {
+            self.err(
+                e.span,
+                "`print` is not available at compile time; use `meta_note(\"...\")`",
+            );
+        }
+        let outside = matches!(
+            self.nodes.get(&def),
+            Some(Node::Fn { f, .. }) if matches!(f.body, FnBody::None)
+        );
+        if outside && !core {
+            self.err(
+                e.span,
+                format!(
+                    "`{name}` is defined outside the language, so it cannot run at compile time"
+                ),
+            );
         }
     }
 
@@ -909,6 +966,37 @@ impl<'p> Checker<'p> {
         self.tt.result(okt, errt)
     }
 
+    /// `box(value)`: calls the library function `rt_box_new`, which fixes the type to `box<T>`.
+    fn box_ctor(&mut self, e: &'p Expr, args: &'p [Arg], exp: Exp) -> Ty {
+        let found = (0..self.res.defs.len() as u32).map(DefId).find(|d| {
+            let def = self.def(*d);
+            def.kind == DefKind::Fn && def.name == "rt_box_new" && self.is_core_def(*d)
+        });
+        match found {
+            Some(def) => {
+                let exp = match exp.ty().map(|t| self.kind_of(t)) {
+                    Some(TyKind::Box(_)) => exp,
+                    _ => Exp::Any,
+                };
+                self.call_def(e, def, args, exp, None)
+            }
+            None => {
+                for a in args {
+                    self.check_expr(&a.value, Exp::Any);
+                }
+                self.tt.unknown
+            }
+        }
+    }
+
+    /// The type behind any number of boxes: fields, methods and indexing go through them.
+    pub(crate) fn peel_boxes(&mut self, mut t: Ty) -> Ty {
+        while let TyKind::Box(inner) = self.kind_of(t) {
+            t = inner;
+        }
+        t
+    }
+
     /// `value.method(args)`
     #[allow(clippy::too_many_arguments)]
     fn method_call(
@@ -930,7 +1018,11 @@ impl<'p> Checker<'p> {
         } else {
             (bt, false)
         };
-        let n = self.text(name);
+        // `await x` was read as `x.await()`: the library method is `wait`.
+        let n = match self.text(name) {
+            "await" => "wait",
+            other => other,
+        };
         self.record(callee, self.tt.unknown);
         self.settle_literal(recv);
         let rk = self.kind_of(recv);

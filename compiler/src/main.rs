@@ -8,7 +8,15 @@ use pelago::token::{Punct, TokenKind};
 fn main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
-        Some("keywords") => print_keywords(),
+        Some("keywords") => match args.next().as_deref() {
+            Some("--json") => println!("{}", pelago::editors::keywords_json()),
+            _ => print_keywords(),
+        },
+        Some("highlight") => {
+            let rest: Vec<String> = args.collect();
+            highlight_command(&rest);
+        }
+        Some("grammar") => print!("{}", pelago::editors::textmate_grammar()),
         Some("tokens") => print_punct(),
         Some("lex-bench") => match args.next() {
             Some(path) => lex_bench(&path),
@@ -38,20 +46,21 @@ fn main() {
                 std::process::exit(2);
             }
         },
-        Some("ir") => match args.next() {
-            Some(path) => ir_path(&path),
-            None => {
-                eprintln!("usage: pelago ir <file or directory>");
-                std::process::exit(2);
+        Some(cmd @ ("ir" | "run")) => {
+            let rest: Vec<String> = args.collect();
+            let flags: Vec<&str> = rest
+                .iter()
+                .filter(|a| a.starts_with("--"))
+                .map(|a| a.as_str())
+                .collect();
+            match rest.iter().find(|a| !a.starts_with("--")) {
+                Some(path) => ir_or_run(path, cmd == "run", &flags),
+                None => {
+                    eprintln!("usage: pelago {cmd} [--opt] [--stats] <file or directory>");
+                    std::process::exit(2);
+                }
             }
-        },
-        Some("run") => match args.next() {
-            Some(path) => run_path(&path),
-            None => {
-                eprintln!("usage: pelago run <file or directory>");
-                std::process::exit(2);
-            }
-        },
+        }
         Some("parse-bench") => match args.next() {
             Some(path) => parse_bench(&path),
             None => {
@@ -107,6 +116,56 @@ fn print_keywords() {
     }
 }
 
+/// `pelago highlight <file> [--ansi | --html | --html-page | --plain] [--theme dark|light]`
+fn highlight_command(args: &[String]) {
+    let mut mode = "ansi";
+    let mut theme = pelago::highlight::Theme::Dark;
+    let mut path: Option<&str> = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--ansi" => mode = "ansi",
+            "--html" => mode = "html",
+            "--html-page" => mode = "html-page",
+            "--plain" => mode = "plain",
+            "--theme" => {
+                i += 1;
+                theme = match args.get(i).map(|s| s.as_str()) {
+                    Some("light") => pelago::highlight::Theme::Light,
+                    Some("dark") => pelago::highlight::Theme::Dark,
+                    _ => {
+                        eprintln!("usage: pelago highlight <file> [--ansi | --html | --html-page | --plain] [--theme dark|light]");
+                        std::process::exit(2);
+                    }
+                };
+            }
+            other if other.starts_with("--") => {
+                eprintln!("unknown option `{other}`");
+                std::process::exit(2);
+            }
+            other => path = Some(other),
+        }
+        i += 1;
+    }
+    let Some(path) = path else {
+        eprintln!("usage: pelago highlight <file> [--ansi | --html | --html-page | --plain] [--theme dark|light]");
+        std::process::exit(2);
+    };
+    let src = read_source(path);
+    let pieces = pelago::highlight::classify(&src);
+    // NO_COLOR asks for no escape codes.
+    if mode == "ansi" && std::env::var_os("NO_COLOR").is_some() {
+        mode = "plain";
+    }
+    let text = match mode {
+        "html" => pelago::highlight::render_html(&src, &pieces, false),
+        "html-page" => pelago::highlight::render_html(&src, &pieces, true),
+        "plain" => pelago::highlight::render_plain(&src, &pieces),
+        _ => pelago::highlight::render_ansi(&src, &pieces, theme),
+    };
+    print!("{text}");
+}
+
 fn print_punct() {
     let texts: Vec<&str> = Punct::ALL.iter().map(|p| p.as_str()).collect();
     println!("{} tokens", texts.len());
@@ -152,15 +211,7 @@ fn check_path(path: &str) {
 }
 
 /// Checks the program, lowers it to the IR, verifies it and prints it.
-fn ir_path(path: &str) {
-    ir_or_run(path, false)
-}
-
-fn run_path(path: &str) {
-    ir_or_run(path, true)
-}
-
-fn ir_or_run(path: &str, run: bool) {
+fn ir_or_run(path: &str, run: bool, flags: &[&str]) {
     let mut program = pelago::package::Program::with_core();
     if let Err(e) = program.add_package_from_path(std::path::Path::new(path)) {
         eprintln!("{e}");
@@ -186,18 +237,36 @@ fn ir_or_run(path: &str, run: bool) {
         let module = program.module(d.module);
         let index = LineIndex::new(&module.src);
         let (line, col) = index.line_col(&module.src, d.span.start);
-        eprintln!("{}:{line}:{col}: note: {}", module.path, d.message);
+        let kind = if d.warning { "note" } else { "error" };
+        eprintln!("{}:{line}:{col}: {kind}: {}", module.path, d.message);
+        if !d.warning {
+            failed = true;
+        }
     }
     for e in pelago::ir::verify_module(&lowered.module) {
         eprintln!("ir error: {e}");
         failed = true;
     }
+    let mut module = lowered.module;
+    let before = pelago::ir::opt::stats_of(&module);
+    if flags.contains(&"--opt") {
+        pelago::ir::opt::optimize(&mut module, pelago::ir::opt::Options::default());
+        pelago::ir::opt::prune(&mut module, &["main"]);
+    }
+    if flags.contains(&"--stats") {
+        let after = pelago::ir::opt::stats_of(&module);
+        eprintln!("before: {before:?}");
+        eprintln!("after:  {after:?}");
+    }
     if run {
         if failed {
             std::process::exit(1);
         }
-        let out = pelago::ir::run_full(&lowered.module, "main", &[]);
+        let out = pelago::ir::run_full(&module, "main", &[]);
         print!("{}", out.output);
+        if flags.contains(&"--stats") {
+            eprintln!("steps: {}", out.steps);
+        }
         if let Err(e) = out.result {
             eprintln!("stopped: {e}");
             std::process::exit(1);
@@ -207,7 +276,7 @@ fn ir_or_run(path: &str, run: bool) {
         }
         return;
     }
-    print!("{}", pelago::ir::print_module(&lowered.module));
+    print!("{}", pelago::ir::print_module(&module));
     if failed {
         std::process::exit(1);
     }

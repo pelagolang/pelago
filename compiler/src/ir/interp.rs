@@ -63,7 +63,11 @@ fn bits_of(t: IrTy) -> u32 {
 
 /// Function addresses are numbers far outside memory, so a stray load cannot hit one.
 const FUNC_BASE: usize = 1 << 40;
-const STACK_SIZE: usize = 1 << 20;
+const STACK_SIZE: usize = 8 << 20;
+/// Deep chains (a list of ten thousand boxes) recurse once per node; the host thread that runs the
+/// machine gets a big stack for it.
+const HOST_STACK: usize = 1 << 30;
+const MAX_DEPTH: u32 = 200_000;
 
 struct Machine<'m> {
     m: &'m Module,
@@ -78,7 +82,9 @@ struct Machine<'m> {
     heap: BTreeMap<usize, (usize, bool)>,
     out: Vec<u8>,
     steps: u64,
+    max_steps: u64,
     depth: u32,
+    trace: Vec<String>,
 }
 
 /// What a run gave: the result (or the message of a stop), the text written, and the bytes of heap
@@ -88,6 +94,10 @@ pub struct Outcome {
     pub result: Result<Val, String>,
     pub output: String,
     pub leaked: usize,
+    /// Instructions executed: the metric for the optimiser.
+    pub steps: u64,
+    /// When the run stopped with an error: the functions that were running, innermost first (at most 12).
+    pub trace: Vec<String>,
 }
 
 /// Runs the function called `name`. `Err` holds the message of a stop.
@@ -96,12 +106,51 @@ pub fn run(m: &Module, name: &str, args: &[Val]) -> Result<Val, String> {
 }
 
 pub fn run_full(m: &Module, name: &str, args: &[Val]) -> Outcome {
+    run_inner(m, name, args, DEFAULT_STEPS, None).0
+}
+
+/// A run that also keeps what is left in memory, for compile-time code (`meta`).
+pub struct Capture {
+    pub outcome: Outcome,
+    /// All of memory when the run ended.
+    pub image: Vec<u8>,
+    /// Where the result block was (when one was asked for).
+    pub ret_addr: usize,
+}
+
+/// Runs `name` with a step budget. With `ret_size`, a block of that many bytes is allocated first
+/// and its address is the only argument (the function writes its result there, as functions
+/// returning memory values do); the block does not count as a leak.
+pub fn run_capture(m: &Module, name: &str, ret_size: Option<usize>, max_steps: u64) -> Capture {
+    let (outcome, image, ret_addr) = run_inner(m, name, &[], max_steps, ret_size);
+    Capture {
+        outcome,
+        image,
+        ret_addr,
+    }
+}
+
+const DEFAULT_STEPS: u64 = 200_000_000;
+
+fn run_inner(
+    m: &Module,
+    name: &str,
+    args: &[Val],
+    max_steps: u64,
+    ret_size: Option<usize>,
+) -> (Outcome, Vec<u8>, usize) {
     let Some(i) = m.funcs.iter().position(|f| f.name == name) else {
-        return Outcome {
-            result: Err(format!("no function `{name}`")),
-            output: String::new(),
-            leaked: 0,
-        };
+        return (
+            Outcome {
+                result: Err(format!("no function `{name}`")),
+                output: String::new(),
+                leaked: 0,
+                steps: 0,
+                trace: Vec::new(),
+            },
+            Vec::new(),
+            0,
+        );
     };
     let mut mem = vec![0u8; 16];
     let mut data_at = Vec::new();
@@ -128,32 +177,72 @@ pub fn run_full(m: &Module, name: &str, args: &[Val]) -> Outcome {
         heap: BTreeMap::new(),
         out: Vec::new(),
         steps: 0,
+        max_steps,
         depth: 0,
+        trace: Vec::new(),
     };
-    let result = mc.call(i, args);
+    let mut call_args: Vec<Val> = args.to_vec();
+    let mut ret_addr = 0;
+    if let Some(n) = ret_size {
+        ret_addr = mc.alloc(n.max(1));
+        call_args = vec![Val::Ptr(ret_addr)];
+    }
+    let result = std::thread::scope(|s| {
+        std::thread::Builder::new()
+            .stack_size(HOST_STACK)
+            .spawn_scoped(s, || mc.call(i, &call_args))
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Err("the interpreter crashed".to_string()))
+            })
+            .unwrap_or_else(|_| Err("cannot start the interpreter thread".to_string()))
+    });
+    if ret_size.is_some() {
+        if let Some(b) = mc.heap.get_mut(&ret_addr) {
+            b.1 = false;
+        }
+    }
     let leaked = mc
         .heap
         .values()
         .filter(|(_, live)| *live)
         .map(|(s, _)| *s)
         .sum();
-    Outcome {
+    let outcome = Outcome {
         result,
         output: String::from_utf8_lossy(&mc.out).into_owned(),
         leaked,
-    }
+        steps: mc.steps,
+        trace: std::mem::take(&mut mc.trace),
+    };
+    let image = if ret_size.is_some() {
+        std::mem::take(&mut mc.mem)
+    } else {
+        Vec::new()
+    };
+    (outcome, image, ret_addr)
 }
 
 impl Machine<'_> {
     fn call(&mut self, fi: usize, args: &[Val]) -> Result<Val, String> {
+        let r = self.call_inner(fi, args);
+        if r.is_err() && self.trace.len() < 12 {
+            self.trace.push(self.m.funcs[fi].name.clone());
+        }
+        r
+    }
+
+    fn call_inner(&mut self, fi: usize, args: &[Val]) -> Result<Val, String> {
         self.depth += 1;
-        if self.depth > 5000 {
+        if self.depth > MAX_DEPTH {
             return Err("the stack is full".to_string());
         }
         let f = &self.m.funcs[fi];
         let frame = self.sp;
         let mut vals: Vec<Val> = vec![Val::Unit; f.values.len()];
         let mut block = 0usize;
+        // A slot is one piece of the frame: executed again (in a loop), it is zeroed, not allocated anew.
+        let mut slot_at: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
         for (p, a) in f.blocks[0].params.iter().zip(args.iter()) {
             vals[p.0 as usize] = *a;
         }
@@ -161,11 +250,32 @@ impl Machine<'_> {
             let b = &f.blocks[block];
             for &id in &b.insts {
                 self.steps += 1;
-                if self.steps > 200_000_000 {
+                if self.steps > self.max_steps {
                     return Err("the step limit was reached".to_string());
                 }
                 let inst = &f.insts[id];
-                let v = self.exec(f, &vals, &inst.op)?;
+                let v = match &inst.op {
+                    Op::Slot(size, align) => {
+                        let at = match slot_at.get(&id) {
+                            Some(at) => {
+                                for b in &mut self.mem[*at..*at + *size as usize] {
+                                    *b = 0;
+                                }
+                                *at
+                            }
+                            None => {
+                                let Val::Ptr(at) = self.exec(f, &vals, &inst.op)? else {
+                                    return Err("a slot gave no address".to_string());
+                                };
+                                slot_at.insert(id, at);
+                                at
+                            }
+                        };
+                        let _ = align;
+                        Val::Ptr(at)
+                    }
+                    op => self.exec(f, &vals, op)?,
+                };
                 if let Some(r) = inst.result {
                     vals[r.0 as usize] = v;
                 }
@@ -310,32 +420,7 @@ impl Machine<'_> {
                 Const::Bool(b) => Val::Bool(*b),
             },
             Op::Bin(o, a, b) => bin(*o, get(a), get(b), ty(a))?,
-            Op::Checked(o, signed, a, b) => {
-                let bits = bits_of(ty(a));
-                let (x, y) = (get(a), get(b));
-                let (Val::Int(xu), Val::Int(yu)) = (x, y) else {
-                    return Err("checked arithmetic needs integers".to_string());
-                };
-                let (lo, hi, xv, yv): (i128, i128, i128, i128) = if *signed {
-                    (
-                        -(1i128 << (bits - 1)),
-                        (1i128 << (bits - 1)) - 1,
-                        sign_extend(xu, bits),
-                        sign_extend(yu, bits),
-                    )
-                } else {
-                    (0, (1i128 << bits.min(126)) - 1, xu as i128, yu as i128)
-                };
-                let r = match o {
-                    BinOp::Add => xv.checked_add(yv),
-                    BinOp::Sub => xv.checked_sub(yv),
-                    _ => xv.checked_mul(yv),
-                };
-                match r {
-                    Some(r) if r >= lo && r <= hi => Val::Int(mask(r as u128, bits)),
-                    _ => return Err("arithmetic overflow".to_string()),
-                }
-            }
+            Op::Checked(o, signed, a, b) => checked(*o, *signed, get(a), get(b), bits_of(ty(a)))?,
             Op::Cmp(o, a, b) => Val::Bool(cmp(*o, get(a), get(b), bits_of(ty(a)))),
             Op::Neg(a) => match get(a) {
                 Val::Float(x) => Val::Float(-x),
@@ -426,6 +511,65 @@ fn enter(f: &Func, vals: &mut [Val], t: &Target) -> usize {
         vals[p.0 as usize] = a;
     }
     t.block.0 as usize
+}
+
+/// `add`, `sub` or `mul` that stops on overflow.
+fn checked(o: BinOp, signed: bool, x: Val, y: Val, bits: u32) -> Result<Val, String> {
+    let (Val::Int(xu), Val::Int(yu)) = (x, y) else {
+        return Err("checked arithmetic needs integers".to_string());
+    };
+    let (lo, hi, xv, yv): (i128, i128, i128, i128) = if signed {
+        (
+            -(1i128 << (bits - 1)),
+            (1i128 << (bits - 1)) - 1,
+            sign_extend(xu, bits),
+            sign_extend(yu, bits),
+        )
+    } else {
+        (0, (1i128 << bits.min(126)) - 1, xu as i128, yu as i128)
+    };
+    let r = match o {
+        BinOp::Add => xv.checked_add(yv),
+        BinOp::Sub => xv.checked_sub(yv),
+        _ => xv.checked_mul(yv),
+    };
+    match r {
+        Some(r) if r >= lo && r <= hi => Ok(Val::Int(mask(r as u128, bits))),
+        _ => Err("arithmetic overflow".to_string()),
+    }
+}
+
+/// The value of a pure operation on known operands, for the optimiser: `None` when the operation
+/// would stop, is not pure, or its operands are not all known integers or booleans.
+pub(crate) fn fold(op: &Op, f: &Func, get: &dyn Fn(Value) -> Option<Val>) -> Option<Val> {
+    let known = |v: &Value| get(*v).filter(|x| matches!(x, Val::Int(_) | Val::Bool(_)));
+    let r = match op {
+        Op::Const(t, c) => match c {
+            Const::Int(n) => Val::Int(mask(*n as u128, bits_of(*t))),
+            Const::Bool(b) => Val::Bool(*b),
+            Const::Float(_) => return None,
+        },
+        Op::Bin(o, a, b) => bin(*o, known(a)?, known(b)?, f.ty(*a)).ok()?,
+        Op::Checked(o, signed, a, b) => {
+            checked(*o, *signed, known(a)?, known(b)?, bits_of(f.ty(*a))).ok()?
+        }
+        Op::Cmp(o, a, b) => Val::Bool(cmp(*o, known(a)?, known(b)?, bits_of(f.ty(*a)))),
+        Op::Neg(a) => match known(a)? {
+            Val::Int(n) => Val::Int(mask(0u128.wrapping_sub(n), bits_of(f.ty(*a)))),
+            _ => return None,
+        },
+        Op::Not(a) => match known(a)? {
+            Val::Bool(b) => Val::Bool(!b),
+            Val::Int(n) => Val::Int(mask(!n, bits_of(f.ty(*a)))),
+            _ => return None,
+        },
+        Op::Cast(k, a, to) if !matches!(k, CastKind::PtrToInt | CastKind::IntToPtr) => {
+            let v = cast(*k, known(a)?, bits_of(f.ty(*a)), *to);
+            matches!(v, Val::Int(_) | Val::Bool(_)).then_some(v)?
+        }
+        _ => return None,
+    };
+    Some(r)
 }
 
 fn bin(o: BinOp, a: Val, b: Val, t: IrTy) -> Result<Val, String> {

@@ -113,6 +113,10 @@ pub ext fn rt_eq_fn<T>() -> ptr
 pub ext fn rt_cmp_fn<T>() -> ptr
 pub ext fn rt_hash_fn<T>() -> ptr
 pub ext fn rt_show_fn<T>() -> ptr
+/// The `show` slot of an `any show` table for a type that has no `show` method of its own (numbers, lists, ...).
+fn rt_any_show<T>(out: ptr, src: ptr) {
+    rt_show_to<T>(src, out)
+}
 pub ext fn rt_call_void1(f: ptr, a: ptr)
 pub ext fn rt_call_void2(f: ptr, a: ptr, b: ptr)
 pub ext fn rt_call_bool2(f: ptr, a: ptr, b: ptr) -> bool
@@ -1559,8 +1563,10 @@ var rt_pending: [int] = []
 
 /// Runs a task block once (the closure at offset 8 moves out and runs). A detached task frees itself.
 fn rt_task_run(s: ptr) {
-    if rt_load_int(s) != 0 { return }
-    rt_store_int(s, 1)
+    const state = rt_load_int(s)
+    // 0: waiting, 3: waiting and detached (the task frees itself when done); anything else already ran.
+    if state != 0 && state != 3 { return }
+    if state == 0 { rt_store_int(s, 1) }
     const g = rt_read<fn()>(rt_offset(s, 8))
     g()
 }
@@ -1627,6 +1633,15 @@ pub fn spawn<T>(sink f: fn() -> T) -> task<T> {
     rt_write<fn()>(rt_offset(s, 8), sink runner)
     rt_pending.push!(rt_addr_int(s))
     task<T> { state: s }
+}
+
+/// The handle of `scope s { ... }`. `s.spawn(task)` starts a task that is finished when the scope ends.
+pub struct scope_handle {
+    id: int
+}
+
+impl scope_handle {
+    fn spawn<T>(self, sink f: fn() -> T) -> task<T> = spawn(sink f)
 }
 
 // A channel block: [queue: list 24 bytes][senders: int][receiver alive: int].
@@ -1770,6 +1785,140 @@ impl<T> lock<T> {
         const r = f(inout v)
         rt_write<T>(self.p, sink v)
         r
+    }
+}
+
+// ---- Boxes -------------------------------------------------------------------------------------
+
+/// `box(value)`: one value on the heap with a single owner. The block holds the bare value.
+fn rt_box_new<T>(sink value: T) -> box<T> {
+    const p = rt_alloc(rt_size_of<T>() + 1)
+    rt_write<T>(p, sink value)
+    rt_cast<ptr, box<T>>(p)
+}
+
+impl<T> box<T> {
+    /// A view of the value inside. The compiler treats a call of `get` as a place (like a field).
+    ext fn get(self) -> T
+
+    /// Drops the old value and puts a new one in.
+    fn set(inout self, sink value: T) {
+        const p = rt_load_ptr(rt_addr_of(self))
+        rt_drop_at<T>(p)
+        rt_write<T>(p, sink value)
+    }
+
+    /// Takes the value out and frees the block.
+    fn take(sink self) -> T {
+        const p = rt_cast<box<T>, ptr>(sink self)
+        const v = rt_read<T>(p)
+        rt_free(p)
+        v
+    }
+}
+
+// ---- async ---------------------------------------------------------------------------------------
+
+/// What an `async fn` gives. At this stage a call runs the body to the end and the future holds the
+/// result; `await f()` takes it out (`wait`). The layout of a `future<T>` is that of a `T`.
+pub struct future<T> {
+    value: T
+}
+
+impl<T> future<T> {
+    fn wait(sink self) -> T = rt_cast<future<T>, T>(sink self)
+}
+
+/// Runs a future to the end from ordinary code.
+pub fn block_on<T>(sink f: future<T>) -> T = f.wait!!()
+
+// ---- Compile-time code -------------------------------------------------------------------------
+
+/// Compile-time code says something: it is shown as a note while compiling.
+pub fn meta_note(message: string) { print("meta: #message") }
+
+/// Compile-time code stops the compilation with this message.
+pub fn meta_error(message: string) -> never { panic(message) }
+
+// ---- soa: struct-of-arrays ---------------------------------------------------------------------
+
+pub ext fn rt_soa_len<T>(h: ptr) -> int
+pub ext fn rt_soa_push<T>(h: ptr, sink item: T)
+pub ext fn rt_soa_insert<T>(h: ptr, index: int, sink item: T)
+pub ext fn rt_soa_remove<T>(h: ptr, index: int) -> T
+pub ext fn rt_soa_clear<T>(h: ptr)
+
+/// One column is a plain list: these work on its header at `h`, taking and giving the field by address.
+fn rt_col_push<F>(h: ptr, src: ptr) {
+    const size = rt_size_of<F>()
+    const len = rt_hdr_len(h)
+    rt_grow(h, size, len + 1)
+    rt_copy(rt_offset(rt_hdr_data(h), len * size), src, size)
+    rt_hdr_set_len(h, len + 1)
+}
+
+fn rt_col_insert<F>(h: ptr, index: int, src: ptr) {
+    const size = rt_size_of<F>()
+    const len = rt_hdr_len(h)
+    rt_grow(h, size, len + 1)
+    var i = len - 1
+    while i >= index {
+        rt_copy(rt_offset(rt_hdr_data(h), (i + 1) * size), rt_offset(rt_hdr_data(h), i * size), size)
+        i -= 1
+    }
+    rt_copy(rt_offset(rt_hdr_data(h), index * size), src, size)
+    rt_hdr_set_len(h, len + 1)
+}
+
+fn rt_col_remove<F>(h: ptr, index: int, dst: ptr) {
+    const size = rt_size_of<F>()
+    const len = rt_hdr_len(h)
+    rt_copy(dst, rt_offset(rt_hdr_data(h), index * size), size)
+    var i = index
+    while i < len - 1 {
+        rt_copy(rt_offset(rt_hdr_data(h), i * size), rt_offset(rt_hdr_data(h), (i + 1) * size), size)
+        i += 1
+    }
+    rt_hdr_set_len(h, len - 1)
+}
+
+fn rt_col_clear<F>(h: ptr) {
+    const size = rt_size_of<F>()
+    var i = 0
+    const len = rt_hdr_len(h)
+    while i < len {
+        rt_drop_at<F>(rt_offset(rt_hdr_data(h), i * size))
+        i += 1
+    }
+    rt_hdr_set_len(h, 0)
+}
+
+impl<T> soa<T> {
+    fn len(self) -> int = rt_soa_len<T>(rt_addr_of(self))
+    fn is_empty(self) -> bool = rt_soa_len<T>(rt_addr_of(self)) == 0
+
+    fn push(inout self, sink item: T) {
+        rt_soa_push<T>(rt_addr_of(self), sink item)
+    }
+
+    fn insert(inout self, index: int, sink item: T) {
+        if index < 0 || index > self.len() { panic("insert: index out of range") }
+        rt_soa_insert<T>(rt_addr_of(self), index, sink item)
+    }
+
+    fn remove(inout self, index: int) -> T {
+        if index < 0 || index >= self.len() { panic("remove: index out of range") }
+        rt_soa_remove<T>(rt_addr_of(self), index)
+    }
+
+    fn pop(inout self) -> T? {
+        const n = self.len()
+        if n == 0 { return none }
+        return self.remove!(n - 1)
+    }
+
+    fn clear(inout self) {
+        rt_soa_clear<T>(rt_addr_of(self))
     }
 }
 

@@ -262,6 +262,30 @@
       (const hits (call lock 0))
       (call! (. hits with) (~> (n) (+= n 1)))
       (tail (call par_for (arg inout xs) (~> (x) (*= x 2))))))
+  (enum tree (case leaf) (case node (box tree) int (box tree)))
+  (fn async fetch_len ((text : string)) -> int (block (tail (call (. text len)))))
+  (fn
+    async
+    total
+    ()
+    ->
+    int
+    (block (const n (call!! (. (call fetch_len (str "abc")) await))) (tail (+ n 1))))
+  (fn
+    columns
+    ()
+    (block
+      (var cloud (: (soa point)) (soa))
+      (call! (. cloud push) (new point (: x 1.0) (: y 2.0)))
+      (const xs (. cloud x))))
+  (fn
+    boxes
+    ()
+    (block
+      (var b (call box 5))
+      (call! (. b set) 6)
+      (const seen (+ (call (. b get)) 1))
+      (const taken (call!! (. b take)))))
   (import (list (: map dict)) = std.collections)
   (import fmt = std.io)
   (import (...) = std.math)

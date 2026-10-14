@@ -380,12 +380,12 @@ impl<'a> Lowerer<'a> {
     ) -> Res {
         // The right side may need converting to the left's type (a value into an option).
         let rt = self.ty_of(rhs).unwrap_or(lt);
-        let Res::Val(a) = self.expr(lhs) else {
+        let Some(a) = self.operand_addr(lhs, lt) else {
             return Res::Never;
         };
         let b = if rt == lt || self.is_text(rt) && self.is_text(lt) {
-            match self.expr(rhs) {
-                Res::Val(b) => b,
+            match self.operand_addr(rhs, rt) {
+                Some(b) => b,
                 _ => return Res::Never,
             }
         } else {
@@ -436,6 +436,20 @@ impl<'a> Lowerer<'a> {
             _ => CmpOp::Ge,
         };
         self.wrap(Op::Cmp(o, c, zero), IrTy::Bool, e.span)
+    }
+
+    /// The address of an operand's value; a scalar (a box) is first stored in a temporary.
+    fn operand_addr(&mut self, e: &'a Expr, t: Ty) -> Option<Value> {
+        if let Repr::Scalar(_) = self.repr(t) {
+            let v = self.scalar(e)?;
+            let slot = self.slot_for(t);
+            self.store_scalar_ty(slot, v);
+            return Some(slot);
+        }
+        match self.expr(e) {
+            Res::Val(p) => Some(p),
+            _ => None,
+        }
     }
 
     pub(crate) fn is_text(&self, t: Ty) -> bool {
@@ -733,7 +747,12 @@ impl<'a> Lowerer<'a> {
         };
         let mut val_ty = None;
         let mut array_len = None;
+        let mut soa_elem = None;
         let elem = match self.kind(it) {
+            TyKind::Soa(x, _) => {
+                soa_elem = Some(x);
+                x
+            }
             TyKind::List(x) | TyKind::Iter(x) | TyKind::Set(x) => x,
             TyKind::Array(x, len) => {
                 array_len = Some(self.array_len(len));
@@ -771,9 +790,15 @@ impl<'a> Lowerer<'a> {
         let off = self
             .emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), iter.span)
             .unwrap_or(i);
-        let ep = self
+        let mut ep = self
             .emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), iter.span)
             .unwrap_or(data);
+        // A `soa` element is gathered from the columns for the length of one turn.
+        let soa_tmp = soa_elem.map(|x| self.slot_for(x));
+        if let (Some(x), Some(tmp)) = (soa_elem, soa_tmp) {
+            self.soa_gather(h, i, tmp, x);
+            ep = tmp;
+        }
         let int = self.types.int;
         let bind_fail = self.stop_block("pattern did not match");
         let depth = self.f.scopes.len();
@@ -860,6 +885,20 @@ impl<'a> Lowerer<'a> {
         }
         self.f.loops.pop();
         self.start(step);
+        // `for inout p of points`: what the turn changed goes back into the columns.
+        if let (Some(x), Some(tmp)) = (soa_elem, soa_tmp) {
+            if pats.iter().any(|p| {
+                matches!(
+                    p.kind,
+                    PatternKind::Binding {
+                        mode: Some(Mode::Inout),
+                        ..
+                    }
+                )
+            }) {
+                self.soa_scatter(h, i, tmp, x);
+            }
+        }
         let one = self.i64c(1);
         if let Some(next) = self.emit(Op::Bin(BinOp::Add, i, one), Some(IrTy::I64), iter.span) {
             self.jump(head, vec![next]);

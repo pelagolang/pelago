@@ -1,30 +1,21 @@
 # Board
 
-Last updated with the plans written after the lowering milestone (IR9 to IR20 in `docs/design/ir.md`).
+Last updated when every card on the first list was finished (A-01 to A-08 and B-03). What is left is on the shelf: it waits for the backend or for a measured need.
 
-**Order of work.** Track A goes strictly in this order: `A-01`, `A-02` (box), `A-03` (temporaries), `A-04` (IR optimiser),
-`A-05` (meta), `A-06` (soa), then `A-07` (async) only after the compiler is self-hosting. `A-08` is a small checker fix and should be taken right after `A-02`. Track B is independent of A: the name and extension are settled (Pelago, `.pel`), so only `B-03` (highlighter) is left.
+**Order of work.** Nothing is open on tracks A and B. The next real step is the machine-code backend (a new card when the owner decides how to start it: from the IR in `docs/design/ir.md`), which also unlocks S-01, S-02 and S-04 on the shelf.
 
 ## Track A: compiler
 
 | Column | Card | Title | Size |
 |---|---|---|---|
-| **Needs decision** | [A-02](cards/A-02-box.md) | `box<T>`: make, read, move out (owner answers 6 questions) | L |
-| **Ready** | [A-01](cards/A-01-cleanup.md) | Remove `stubs.rs` and other leftovers | S |
-| **Ready** | [A-03](cards/A-03-temporaries-ledger.md) | The ledger: no leaked temporaries (our own ownership model) | L |
-| **Ready** | [A-04](cards/A-04-ir-optimiser.md) | IR optimiser: slots to registers, drop flags away, inlining | XL |
-| **Needs decision** | [A-05](cards/A-05-meta.md) | `meta`: compile-time code (stages M1 and M2 can start now; 4 questions gate M3) | XL |
-| **Ready** | [A-06](cards/A-06-soa.md) | `soa<T>`: struct-of-arrays collection (after A-05 in order; 3 small questions) | L |
-| **Inbox** | [A-08](cards/A-08-checker-closures.md) | Checker bugs: `inout` closure parameters, the `scope` handle type (found while testing locks) | S |
-| **Shelf** | [A-07](cards/A-07-async.md) | `async` / `await` (deferred by decision G5) | XL |
+| (empty) | | | |
 
 ## Track B: tooling and identity
 
 | Column | Card | Title | Size |
 |---|---|---|---|
-| **Ready** | [B-03](cards/B-03-highlighter.md) | Syntax highlighter for `.pel`: TextMate grammar, VS Code extension, `pelago highlight` | M |
 
-`B-03` has no blockers.
+Nothing is waiting on this track.
 
 ## Shelf (parked on purpose)
 
@@ -33,12 +24,21 @@ Last updated with the plans written after the lowering milestone (IR9 to IR20 in
 | [S-01](cards/S-01-map-storage.md) | Our own map and set storage: O(1) removal, still insertion-ordered | A benchmark shows removal or iteration is slow, or the backend exists |
 | [S-02](cards/S-02-real-threads.md) | Real threads for tasks | The machine-code backend can emit atomics and thread start |
 | [S-03](cards/S-03-limits.md) | Smaller limits: many-call closures, static tables, a few more | Each line names its own trigger |
-| [A-07](cards/A-07-async.md) | `async` / `await` | The compiler compiles itself |
+| [S-04](cards/S-04-async-suspension.md) | async: suspension in the middle of a body (state machines) | Real threads exist, or a program needs many concurrent waits |
 
 ## Done
 
 | Card | What | Where |
 |---|---|---|
+| [A-01](cards/A-01-cleanup.md) | `stubs.rs` removed | `compiler/src/lower/` |
+| [A-07](cards/A-07-async.md) | `async fn` / `await` / `future<T>` / `block_on` at stage 0 (eager); suspension is S-04 | `core.pel`, IR26 |
+| [B-03](cards/B-03-highlighter.md) | Highlighter: `pelago highlight`, generated TextMate grammar, VS Code extension | `compiler/src/highlight.rs`, `editors/` |
+| [A-05](cards/A-05-meta.md) | `meta`: `meta if` and `target`, `meta N`, `meta expr`, `meta fn`, `meta_note`/`meta_error`, `@meta_limit`; example `tables.pel` (CRC table at compile time) | `lower/meta.rs`, `meta.rs`, IR25 |
+| [A-06](cards/A-06-soa.md) | `soa<T>`: columns per field, element views, loops, library operations (IR24); blocked layout left for the backend | `lower/soa.rs` |
+| [A-04](cards/A-04-ir-optimiser.md) | IR optimiser: CFG, DCE, mem2reg, SROA, SCCP, inlining, `--opt`; steps down 30 to 40 percent on the samples (IR23). Remaining: default on, check removal, copies between slots | `compiler/src/ir/opt/` |
+| [A-03](cards/A-03-temporaries-ledger.md) | The ledger for owning scalar temporaries (objects, boxes); IR22. Memory temporaries already ended with their statement; removing the flags is A-04's job | `lower/func.rs`, IR22 |
+| [A-08](cards/A-08-checker-closures.md) | `inout n ~> ...` closure parameters; `scope` handle is the library type `scope_handle`; tasks finish at scope end; a detached task now runs | `core.pel`, `values/mod.rs` |
+| [A-02](cards/A-02-box.md) | `box<T>`: `box(v)`, `get`, `set!`, `take!!`, auto-deref, infinite-size check, heap environments for stored closures | `docs/design/types.md` 6a, IR21 |
 | [B-01](cards/B-01-name.md) | Name chosen: **Pelago** | `NAMES.md` |
 | B-02 | Extension chosen: **`.pel`** | `NAMES.md` |
 | B-04 | Rename done: crate, binary, library, examples, docs | this commit |

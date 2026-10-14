@@ -1,6 +1,6 @@
 Id: A-03
 Title: The ledger: every fresh value is settled or swept (no leaked temporaries)
-Column: Ready
+Column: Done (scalar owning temporaries; flags remain until A-04)
 Order: 3
 Depends on: nothing (A-02 will use it)
 Size: L

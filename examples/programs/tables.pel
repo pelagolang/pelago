@@ -1,0 +1,29 @@
+// Compile-time code: the CRC-32 table is computed while compiling and baked into the program.
+
+meta fn crc_table() -> [int; 256] {
+    var table = [0; 256]
+    for n in 0..256 {
+        var c = n
+        for k in 0..8 {
+            if c & 1 == 1 { c = 3988292384 ^ (c >> 1) } else { c = c >> 1 }
+        }
+        table[n] = c
+    }
+    table
+}
+
+const table = meta crc_table()
+
+fn crc32(text: string) -> int {
+    var crc = 4294967295
+    for ch of text.chars() {
+        crc = table[(crc ^ (ch to int)) & 255] ^ (crc >> 8)
+    }
+    crc ^ 4294967295
+}
+
+fn main() {
+    print(crc32("hello"))
+    print(crc32("The quick brown fox jumps over the lazy dog"))
+    print(table[1], table[255])
+}

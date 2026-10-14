@@ -56,6 +56,8 @@ pub struct Program {
     pub modules: Vec<Module>,
     /// Syntax errors and syntax-check errors from all modules.
     pub diagnostics: Vec<Diagnostic>,
+    /// What `target` means in a `meta if`.
+    pub target: crate::meta::Target,
 }
 
 impl Program {

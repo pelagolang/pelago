@@ -1,6 +1,6 @@
 Id: B-03
 Title: Syntax highlighter (TextMate grammar, VS Code extension, `pelago highlight`)
-Column: Ready (no blockers; the extension is `.pel`)
+Column: Done (all three layers; scope tests of the grammar are not automated, see editors/README.md)
 Order: 3 (track B)
 Depends on: nothing. B-01 and B-02 only change names, not the work.
 Size: M

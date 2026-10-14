@@ -311,6 +311,7 @@ impl Printer<'_> {
             ExprKind::List(items) => {
                 list("list", items.iter().map(|i| self.list_item(i)).collect())
             }
+            ExprKind::Soa(items) => list("soa", items.iter().map(|i| self.list_item(i)).collect()),
             ExprKind::Repeat { value, count } => {
                 list("repeat", vec![self.expr(value), self.expr(count)])
             }

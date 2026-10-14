@@ -28,7 +28,7 @@ A serious, self-hosting systems language:
 | Functions | Optional named arguments; no overloading; `c.bump!()` marks calls that change or consume the receiver; shorthand types `T?` and `T ! E`; `main` in three forms | decided |
 | Compile-time code | `meta`: expression, `meta fn`, `meta N: int`, `meta if` | decided |
 | Tail calls | Explicit and guaranteed: `become f(x)` | decided |
-| Async | Deferred; threads and channels first; `async` / `await` reserved | decided |
+| Async | Stage 0 built: `async fn` runs to the end and gives `future<T>`, `await` unwraps it; real suspension (state machines) is card S-04 | built at stage 0 |
 | Optimizer hints | Attributes: `@inline`, `@noinline`, `@cold` | decided |
 | `switch` | One pattern-matching construct (`docs/design/switch.md`); `break` leaves the loop; bare names bind; `is` tests in conditions | draft |
 | Types | `docs/design/types.md` decisions T1 to T9 recorded | decided |
@@ -123,7 +123,7 @@ No compiler code yet. Everything here is cheap to change.
 - [x] IR data types, printer and verifier (`compiler/src/ir/`, `docs/design/ir.md`, IR1 to IR8 decided)
 - [x] First lowering (numbers, control flow, calls) and the IR interpreter (`compiler/src/lower/`, `pelago ir`)
 - [x] Lowering of aggregates, `switch`, ownership and drops, monomorphisation, closures, maps and sets, `obj` and `any`, `init`, tasks and channels; `pelago run` runs programs in the interpreter (IR9 to IR20 in `docs/design/ir.md`)
-- [ ] Still not lowered: `meta`, `soa`, `async`, `box<T>` values (needs checker support first)
+- [x] Everything checked is now lowered: `box`, `soa`, `meta` (if, N, expr, fn) and `async` (stage 0)
 
 **Milestone:** programs are type-checked and lowered to IR, and the checker rejects the unsafe examples.
 

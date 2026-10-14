@@ -167,6 +167,7 @@ Where it lives: `values/` (its own pass after the types, reading `Typed`). It fo
   values, and a container of linear values is linear. `linear` is not an interface, so the resolver skips it as a bound.
 - **VS14. Linear values and closures.** A closure consumes an outer linear variable only if it captures it with `[sink x]`, and then it
   must consume it before the closure ends.
+- **VS16. Boxes.** `b.get()` is a place inside the box (a view, like a field): taking an owning part out of it needs `copy` (VS3). `b.take!!()` is the only way to move the value out. Fields, methods and indexing go through a box. A type that contains itself without a pointer is rejected ("infinitely large").
 - **VS15. Warnings.** Diagnostics now have a severity. An unreachable `switch` arm is a warning; `pelago check` prints it and does not
   fail on it. Everything else stays an error. (Tests count warnings as unexpected output, so they stay at zero.)
 - **`async`** stays deferred (G5): the words are reserved, and nothing in the checker needs it.

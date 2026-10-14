@@ -6,10 +6,13 @@
 pub mod ast;
 pub mod ast_print;
 pub mod check;
+pub mod editors;
+pub mod highlight;
 pub mod ir;
 pub mod keyword;
 pub mod lexer;
 pub mod lower;
+pub mod meta;
 pub mod package;
 pub mod parser;
 pub mod resolve;

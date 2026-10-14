@@ -417,10 +417,27 @@ impl<'p> Checker<'p> {
                         _ => self.var(e.span),
                     },
                 };
-                let mode = want
+                let given = want
                     .as_ref()
                     .and_then(|(ps, _)| ps.get(i))
                     .and_then(|p| p.mode);
+                let written = match &p.pattern.kind {
+                    PatternKind::Binding { mode, .. } => *mode,
+                    _ => None,
+                };
+                if let (Some(w), Some(g)) = (written, given) {
+                    if w != g {
+                        self.err(
+                            p.pattern.span,
+                            format!(
+                                "this parameter is written `{}`, but the function type wants `{}`",
+                                w.as_str(),
+                                g.as_str()
+                            ),
+                        );
+                    }
+                }
+                let mode = written.or(given);
                 params.push(ParamTy { mode, ty });
                 self.check_pattern(&p.pattern, ty);
             }

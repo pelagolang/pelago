@@ -249,6 +249,7 @@ impl<'p> Checker<'p> {
             ExprKind::Paren(inner) => self.check_expr(inner, exp),
             ExprKind::Tuple(items) => self.tuple_expr(items, exp),
             ExprKind::List(items) => self.list_expr(e, items, exp),
+            ExprKind::Soa(items) => self.soa_expr(e, items, exp),
             ExprKind::Set(items) => self.set_expr(e, items, exp),
             ExprKind::Repeat { value, count } => self.repeat_expr(value, count, exp),
             ExprKind::Map(items) => self.map_expr(e, items, exp),
@@ -314,10 +315,32 @@ impl<'p> Checker<'p> {
             ExprKind::Closure(c) => self.closure(e, c, exp),
             ExprKind::If(i) => self.if_expr(i, exp, false),
             ExprKind::Unless(i) => self.if_expr(i, exp, true),
-            ExprKind::MetaIf(i) => self.if_expr(i, exp, false),
+            ExprKind::MetaIf(i) => {
+                let src = &self.program.module(self.file).src;
+                if crate::meta::chooses_then(i, src, &self.program.target) {
+                    self.check_block(&i.then, exp)
+                } else {
+                    match &i.else_ {
+                        Some(el) => self.check_expr(el, exp),
+                        None => self.tt.void,
+                    }
+                }
+            }
             ExprKind::Switch(s) => self.switch_expr(e, s, exp),
             ExprKind::Select(arms) => self.select_expr(arms, exp),
-            ExprKind::Scope { body, .. } => {
+            ExprKind::Scope { name, body } => {
+                // The handle `s` is a library value, so `s.spawn(...)` is an ordinary method call.
+                let handle = (0..self.res.defs.len() as u32).map(DefId).find(|d| {
+                    let def = self.def(*d);
+                    def.kind == DefKind::Struct
+                        && def.name == "scope_handle"
+                        && self.is_core_def(*d)
+                });
+                let decl = self.res.decls.get(&(self.file, name.span.start)).copied();
+                if let (Some(h), Some(d)) = (handle, decl) {
+                    let ht = self.own_adt_ty(h);
+                    self.local_tys.insert(d, ht);
+                }
                 let t = self.check_block(body, Exp::Discard);
                 let _ = t;
                 self.tt.void
@@ -366,7 +389,12 @@ impl<'p> Checker<'p> {
                 }
                 self.tt.void
             }
-            ExprKind::Meta(inner) => self.check_expr(inner, exp),
+            ExprKind::Meta(inner) => {
+                self.meta_depth += 1;
+                let t = self.check_expr(inner, exp);
+                self.meta_depth -= 1;
+                t
+            }
             ExprKind::Labeled { label, body } => self.labeled(label, body, exp),
             ExprKind::Error => self.tt.unknown,
         }
@@ -410,7 +438,16 @@ impl<'p> Checker<'p> {
                 self.local_tys.get(&def).copied().unwrap_or(self.tt.unknown)
             }
             DefKind::Const | DefKind::Var => match self.nodes.get(&def) {
-                Some(Node::Global { .. }) => self.global_ty(def),
+                Some(Node::Global { .. }) => {
+                    if self.meta_depth > 0 && d.kind == DefKind::Var {
+                        let name = d.name.clone();
+                        self.err(
+                            span,
+                            format!("`{name}` is a `var`; compile-time code cannot read it"),
+                        );
+                    }
+                    self.global_ty(def)
+                }
                 _ => self.local_tys.get(&def).copied().unwrap_or(self.tt.unknown),
             },
             DefKind::Fn => match self.fn_value(def, span) {
@@ -419,6 +456,13 @@ impl<'p> Checker<'p> {
             },
             DefKind::Variant => self.variant_value(def, exp),
             DefKind::Field => self.tt.unknown,
+            // A `meta N: int` parameter used as a value in the body.
+            DefKind::GenericParam if self.meta_params.contains(&def) => self.tt.int,
+            DefKind::GenericParam => {
+                let name = d.name.clone();
+                self.err(span, format!("`{name}` is a type, not a value"));
+                self.tt.unknown
+            }
             DefKind::BuiltinFn => {
                 let name = d.name.clone();
                 self.err(
@@ -565,7 +609,11 @@ impl<'p> Checker<'p> {
     fn expected_elem(&self, exp: Exp) -> Option<Ty> {
         let t = exp.ty()?;
         match self.tt.kind_of(self.peel_option(t)) {
-            TyKind::List(e) | TyKind::Array(e, _) | TyKind::Set(e) | TyKind::Iter(e) => Some(*e),
+            TyKind::List(e)
+            | TyKind::Array(e, _)
+            | TyKind::Set(e)
+            | TyKind::Iter(e)
+            | TyKind::Soa(e, _) => Some(*e),
             _ => None,
         }
     }
@@ -634,6 +682,23 @@ impl<'p> Checker<'p> {
         self.tt.list(elem)
     }
 
+    /// `soa [a, b]`: the element type comes from the expected type or from the items.
+    fn soa_expr(&mut self, e: &'p Expr, items: &'p [ListItem], exp: Exp) -> Ty {
+        let want = exp
+            .ty()
+            .and_then(|t| match self.kind_of(self.peel_option(t)) {
+                TyKind::Soa(el, _) => Some(el),
+                _ => None,
+            });
+        let elem = self.elements(items, want, e.span);
+        self.soa_elem_ok(elem, e.span);
+        let len = match exp.ty().map(|t| self.kind_of(self.peel_option(t))) {
+            Some(TyKind::Soa(_, n)) => n,
+            _ => ArrayLen::Unknown,
+        };
+        self.tt.mk(TyKind::Soa(elem, len))
+    }
+
     fn set_expr(&mut self, e: &'p Expr, items: &'p [ListItem], exp: Exp) -> Ty {
         let want = self.expected_elem(exp);
         let elem = self.elements(items, want, e.span);
@@ -647,14 +712,7 @@ impl<'p> Checker<'p> {
             None => self.check_expr(value, Exp::Any),
         };
         self.check_coerce(count, self.tt.int);
-        let len = match &count.kind {
-            ExprKind::Int => {
-                let text = &self.program.module(self.file).src
-                    [count.span.start as usize..count.span.end as usize];
-                literal_value(text).map_or(ArrayLen::Unknown, |v| ArrayLen::Known(v as u64))
-            }
-            _ => ArrayLen::Unknown,
-        };
+        let len = self.len_of(count);
         self.tt.mk(TyKind::Array(t, len))
     }
 
@@ -718,6 +776,7 @@ impl<'p> Checker<'p> {
         match k {
             TyKind::List(e)
             | TyKind::Array(e, _)
+            | TyKind::Soa(e, _)
             | TyKind::Iter(e)
             | TyKind::Set(e)
             | TyKind::Range(e) => one(self, e),
@@ -823,6 +882,7 @@ impl<'p> Checker<'p> {
 
     fn index_expr(&mut self, e: &'p Expr, base: &'p Expr, index: &'p Expr) -> Ty {
         let bt = self.check_expr(base, Exp::Any);
+        let bt = self.peel_boxes(bt);
         let k = self.kind_of(bt);
         match k {
             TyKind::List(elem) | TyKind::Array(elem, _) => {
@@ -831,6 +891,10 @@ impl<'p> Checker<'p> {
                     self.check_expr(index, Exp::Is(r));
                     return self.tt.list(elem);
                 }
+                self.check_coerce(index, self.tt.int);
+                elem
+            }
+            TyKind::Soa(elem, _) => {
                 self.check_coerce(index, self.tt.int);
                 elem
             }
@@ -1107,6 +1171,7 @@ impl<'p> Checker<'p> {
             return self.tt.bool_;
         }
         let ordering = !matches!(op, Punct::EqEq | Punct::NotEq);
+        self.settle_literal(lt);
         let k = self.kind_of(lt);
         let against_none = matches!(rhs.kind, ExprKind::None) || matches!(lhs.kind, ExprKind::None);
         if !against_none
@@ -1158,6 +1223,7 @@ impl<'p> Checker<'p> {
                     | TyKind::Param(_)
                     | TyKind::List(_)
                     | TyKind::Tuple(_)
+                    | TyKind::Box(_)
             )
         {
             let s = self.show(lt);

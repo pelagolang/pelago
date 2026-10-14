@@ -164,6 +164,43 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
   forth need real threads (a later stage).
 - **IR19** `become f(...)` on the function itself with plain number parameters is a jump to the top (no stack growth); any other `become` is a
   call followed by `return`.
-- **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa`, `async`, and `box<T>` values (the checker has no way to make or
-  open a box yet; recursive types through `box` wait for that design).
+- **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa` and `async` (see the plans in `docs/plans/`).
+- **IR27** Small closing fixes. `any show` tables for types without a `show` method of their own (numbers, lists, strings...) point their `show`
+  slot at the library function `rt_any_show<T>`; this was the real cause of `print(if c { 8 } else { 4 })` failing (the table had no `show`).
+  `meta` results can hold `box`, maps and sets (`Cv::Boxed`, `Cv::Entries`; maps and sets are rebuilt with `rt_map_put`/`rt_set_put`).
+  The interpreter records the call chain of a failing run (`Outcome.trace`) and meta errors print it. Types carry `+ - *` on compile-time
+  numbers (`TyKind::ConstOp`).
+- **IR26** `async fn` is lowered as an ordinary function that returns its value; the checker gives callers `future<T>`, and a call site puts a scalar
+  result into memory (a `future<T>` has the layout of a `T`). `await x` is parsed as `x.wait!!()`, whose library body is a bit-move out of
+  the future. No state machines yet.
+- **IR25** `meta expr` runs in the IR interpreter during lowering (`lower/meta.rs`, `run_capture` in the interpreter): the jobs the expression
+  needs are lowered first (others wait), the entry function writes its result to a block the interpreter provides, the value is read back
+  by type into a tree of constants and emitted as code at the use site. The step limit is a parameter of the run.
+- **IR24** `soa<T>` (`lower/soa.rs`): one list header (24 bytes) per field of the struct `T`, one after the other, all the same length. The
+  element is never stored whole. `points[i].x` is the address `x_data + i * size` (bounds checked against the length); `points.x` is the
+  column header itself, read as a `[float]`; a whole element (`const p = points[i]`) is gathered into a temporary; `points[i] = v` drops the old
+  fields and writes the new ones; `for p of points` gathers each element, and `for inout p` scatters the turn's changes back. Drop, clone
+  and `==` are those of the tuple of columns; `show` prints a list of structs. `push`, `insert`, `remove`, `clear` loop over the columns
+  with the library functions `rt_col_*`. `soa<T, N>` is accepted (N a power of two) and behaves exactly the same; the blocked
+  memory layout waits for the backend, where it can be measured. Not supported: `inout points[i]` as a whole-element argument (use a
+  field), `soa` of enums, objects or tuples (an error), `...` in a `soa` literal.
+- **IR23** **The optimiser** (`compiler/src/ir/opt/`, `pelago run --opt`, `pelago ir --opt --stats`). Per function, repeated until nothing
+  changes: simplify the CFG (fold branches, skip empty blocks, merge blocks), dead code, promote slots to values (Braun et al., block
+  parameters), split slots at constant offsets (SROA), sparse conditional constant propagation. Then inlining (callees first; small
+  functions or single call sites; never recursive ones) and the per-function passes again. Drop flags need no pass of their own: once their
+  slot is a value, constant propagation folds the test. Every lowering test runs the program with and without the pipeline and compares
+  output, result and leaks. Measured on the sample programs (interpreter steps, before to after): shapes 3658 to 2384, stack 780 to 534,
+  tree 7458 to 5462, words 8735 to 5594; slots 31 to 5, 22 to 5, 45 to 16, 96 to 21. `fib` has no slots and no flags. Not yet: whole-slot
+  copies between two slots, redundant check removal, common subexpressions, escape analysis (see card A-04, section 7).
+- **IR22** **The ledger.** A fresh owning value that is an SSA scalar (an `obj`, a `box`: a call result, an object literal or constructor)
+  is *entered* in the ledger when it is made: it is owed a drop at the end of the statement that made it. A consumer that takes it
+  (binding, a `sink` argument, a field, `return`, a push, a closure capture, a block's or branch's result) *settles* it. Anything still
+  owed at the end of the statement is *swept*: dropped right there. A value that is the result of a block or branch moves out to the
+  enclosing scope, and through a join it moves to the block parameter. Memory temporaries (strings, lists, structs) were already owned by
+  the statement's scope. Today the entries use a flag slot, as variables do; the optimiser (A-04) turns these into constants.
+  Entry and consumers: `fresh_scalar`, `settle`, `pop_scope_carrying` in `lower/func.rs`.
+- **IR21** `box<T>` is a bare pointer to a heap block that holds the `T` (no header, unlike `obj`). `box(v)` calls the library function
+  `rt_box_new<T>`; `b.get()` is a place (the pointer itself); fields, methods and indexing go through the pointer; `set` and `take` are
+  library methods. Environments of closures that are not passed straight to a call live on the heap, so a closure can be boxed or returned.
+  The interpreter runs on a thread with a large host stack so that dropping or walking a chain of ten thousand boxes works.
 

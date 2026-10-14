@@ -226,6 +226,8 @@ impl<'a> Lowerer<'a> {
             }
             // string: pointer, length, capacity (capacity 0 means the text is borrowed or static).
             TyKind::String | TyKind::List(_) | TyKind::Iter(_) => vec![ptr, int, int],
+            // `soa<T>`: one list of each field's type.
+            TyKind::Soa(e, _) => self.soa_column_types(e),
             TyKind::Str => vec![ptr, int],
             TyKind::Map(..) | TyKind::Set(_) => vec![ptr, int, int, int],
             TyKind::Range(e) => vec![e, e, self.types.bool_],
@@ -329,6 +331,7 @@ impl<'a> Lowerer<'a> {
             TyKind::String
             | TyKind::List(_)
             | TyKind::Iter(_)
+            | TyKind::Soa(..)
             | TyKind::Map(..)
             | TyKind::Set(_)
             | TyKind::Box(_) => true,

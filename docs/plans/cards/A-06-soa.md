@@ -1,6 +1,6 @@
 Id: A-06
 Title: `soa<T>`: struct-of-arrays collection
-Column: Inbox (design decided in `memory.md` M1 to M3; build plan here)
+Column: Done (recommended answers used; blocked layout deferred) (design decided in `memory.md` M1 to M3; build plan here)
 Order: 6
 Depends on: A-02 (box is not needed, but recursive types are), A-04 (the optimiser makes columns fast), A-05 stage M2 for `soa<T, N>`
 Size: L
