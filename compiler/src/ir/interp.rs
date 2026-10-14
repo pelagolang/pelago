@@ -84,6 +84,7 @@ struct Machine<'m> {
     steps: u64,
     max_steps: u64,
     depth: u32,
+    trace: Vec<String>,
 }
 
 /// What a run gave: the result (or the message of a stop), the text written, and the bytes of heap
@@ -95,6 +96,8 @@ pub struct Outcome {
     pub leaked: usize,
     /// Instructions executed: the metric for the optimiser.
     pub steps: u64,
+    /// When the run stopped with an error: the functions that were running, innermost first (at most 12).
+    pub trace: Vec<String>,
 }
 
 /// Runs the function called `name`. `Err` holds the message of a stop.
@@ -143,6 +146,7 @@ fn run_inner(
                 output: String::new(),
                 leaked: 0,
                 steps: 0,
+                trace: Vec::new(),
             },
             Vec::new(),
             0,
@@ -175,6 +179,7 @@ fn run_inner(
         steps: 0,
         max_steps,
         depth: 0,
+        trace: Vec::new(),
     };
     let mut call_args: Vec<Val> = args.to_vec();
     let mut ret_addr = 0;
@@ -208,6 +213,7 @@ fn run_inner(
         output: String::from_utf8_lossy(&mc.out).into_owned(),
         leaked,
         steps: mc.steps,
+        trace: std::mem::take(&mut mc.trace),
     };
     let image = if ret_size.is_some() {
         std::mem::take(&mut mc.mem)
@@ -219,6 +225,14 @@ fn run_inner(
 
 impl Machine<'_> {
     fn call(&mut self, fi: usize, args: &[Val]) -> Result<Val, String> {
+        let r = self.call_inner(fi, args);
+        if r.is_err() && self.trace.len() < 12 {
+            self.trace.push(self.m.funcs[fi].name.clone());
+        }
+        r
+    }
+
+    fn call_inner(&mut self, fi: usize, args: &[Val]) -> Result<Val, String> {
         self.depth += 1;
         if self.depth > MAX_DEPTH {
             return Err("the stack is full".to_string());

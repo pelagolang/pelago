@@ -1061,6 +1061,12 @@ fn meta_runs_that_cannot_finish_are_errors() {
         d.iter().any(|(m, w)| !w && m.contains("ran too long")),
         "{d:?}"
     );
+    let d = lowered_diags("meta fn inner() -> int { var i = 0\n while true { i += 1 }\n i }\nmeta fn outer() -> int = inner() + 1\n@meta_limit(500)\nconst c = meta outer()\nfn main() { print(c) }\n");
+    assert!(
+        d.iter()
+            .any(|(m, w)| !w && m.contains("(in inner <- outer)")),
+        "{d:?}"
+    );
     let d = lowered_diags("meta fn fail() -> int { meta_error(\"nope\") }\nfn main() { const c = meta fail()\n print(c) }\n");
     assert!(d.iter().any(|(m, w)| !w && m.contains("nope")), "{d:?}");
     let d = lowered_diags(
@@ -1131,4 +1137,85 @@ fn main() {
 }
 "#;
     assert_eq!(output_of(src), "true ok(5)\n3\n");
+}
+
+#[test]
+fn any_show_of_builtin_shapes() {
+    // Numbers, strings and lists have no `show` method of their own: the table gets the library's.
+    let src = r#"
+fn f(x: any show) { print(x) }
+fn main() {
+    const c = true
+    f(8)
+    f("hi")
+    f([1, 2])
+    print(if c { 8 } else { 4 })
+    f(if c { 7 } else { 1 })
+}
+"#;
+    assert_eq!(output_of(src), "8\nhi\n[1, 2]\n8\n7\n");
+}
+
+#[test]
+fn array_length_arithmetic() {
+    // `N + 1`, `N * 2` in types: the length folds once `N` is known.
+    let src = r#"
+fn push_end<meta N: int>(xs: [int; N], x: int) -> [int; N + 1] {
+    var out = [0; N + 1]
+    for i in 0..N { out[i] = xs[i] }
+    out[N] = x
+    out
+}
+fn twice<meta N: int>(xs: [int; N]) -> [int; N * 2] {
+    var out = [0; N * 2]
+    for i in 0..N {
+        out[i] = xs[i]
+        out[i + N] = xs[i]
+    }
+    out
+}
+fn main() {
+    const a = push_end([1, 2, 3], 4)
+    const b: [int; 8] = twice(a)
+    print(a, b)
+    print(push_end(push_end([7], 8), 9))
+}
+"#;
+    assert_eq!(
+        output_of(src),
+        "[1, 2, 3, 4] [1, 2, 3, 4, 1, 2, 3, 4]\n[7, 8, 9]\n"
+    );
+}
+
+#[test]
+fn meta_bakes_maps_sets_and_boxes() {
+    let src = r#"
+enum tree { leaf
+    node(box<tree>, int, box<tree>) }
+meta fn names() -> map<string, int> {
+    var m = map { "k0": 0 }
+    for i in 1..4 { m.insert!("k#i", i * i) }
+    m
+}
+meta fn evens() -> set<int> {
+    var s = set { 0 }
+    for i in 1..10 { if i % 2 == 0 { s.insert!(i) } }
+    s
+}
+meta fn small() -> tree = tree.node(box(tree.leaf), 5, box(tree.node(box(tree.leaf), 6, box(tree.leaf))))
+fn sum(t: tree) -> int {
+    switch t {
+        case .leaf: 0
+        case .node(l, v, r): sum(l.get()) + v + sum(r.get())
+    }
+}
+fn main() {
+    const m = meta names()
+    const s = meta evens()
+    const t = meta small()
+    print(m.get("k2"), m.len(), s.contains(4), s.contains(5), s.len())
+    print(sum(t))
+}
+"#;
+    assert_eq!(output_of(src), "some(4) 4 true false 5\n11\n");
 }

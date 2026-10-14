@@ -7,8 +7,9 @@
 //! no compile-time code is left in the output.
 //!
 //! Bakeable: numbers, `bool`, `char`, `string`, `str`, fixed arrays, lists, tuples, structs, enums,
-//! `option` and `result` of bakeable values. Not bakeable: closures, `box`, `obj`, `any`, maps,
-//! sets, tasks, raw pointers.
+//! `option` and `result`, `box`, maps and sets of bakeable values. Maps and sets are rebuilt by
+//! inserting the entries when the code runs (the hash table itself is not static data). Not bakeable:
+//! closures, `obj`, `any`, tasks, raw pointers.
 
 use super::*;
 use crate::ir::Val;
@@ -26,6 +27,10 @@ pub(crate) enum Cv {
     Fields(Vec<Cv>),
     /// An enum, `option` or `result`: the case and its fields.
     Case(usize, Vec<Cv>),
+    /// A `box`: the value it holds.
+    Boxed(Box<Cv>),
+    /// A map (key and value) or set (key only): the entries in order.
+    Entries(Vec<(Cv, Option<Cv>)>),
 }
 
 pub(crate) struct MetaJob<'a> {
@@ -199,6 +204,19 @@ impl<'a> Lowerer<'a> {
             } else {
                 format!("compile-time code stopped: {msg}")
             };
+            // Where it was running: the call chain, innermost first, without the library's own helpers.
+            let chain: Vec<&str> = cap
+                .outcome
+                .trace
+                .iter()
+                .map(String::as_str)
+                .filter(|n| *n != name && !n.starts_with("rt_"))
+                .collect();
+            let what = if chain.is_empty() {
+                what
+            } else {
+                format!("{what} (in {})", chain.join(" <- "))
+            };
             self.meta_error(e.span, what);
             return None;
         }
@@ -227,7 +245,7 @@ impl<'a> Lowerer<'a> {
                 let s = self.typed.show(t);
                 self.meta_error(
                     e.span,
-                    format!("a value of type `{s}` cannot be computed at compile time (closures, boxes, objects, `any`, maps and sets cannot be baked in)"),
+                    format!("a value of type `{s}` cannot be computed at compile time (closures, objects and `any` cannot be baked in)"),
                 );
                 None
             }
@@ -316,6 +334,34 @@ impl<'a> Lowerer<'a> {
                 Some(Cv::Fields(out))
             }
             TyKind::Tuple(_) => self.read_fields(img, at, t),
+            TyKind::Box(e) => {
+                let p = Self::read_n(img, at, 8)? as usize;
+                Some(Cv::Boxed(Box::new(self.read_cv(img, p, e)?)))
+            }
+            TyKind::Map(k, v) => {
+                let p = Self::read_n(img, at, 8)? as usize;
+                let n = Self::read_n(img, at + 8, 8)? as usize;
+                let cap = Self::read_n(img, at + 16, 8)? as usize;
+                let (ks, vs) = (self.layout(k).size as usize, self.layout(v).size as usize);
+                let vals = (cap * ks).div_ceil(8) * 8;
+                let mut out = Vec::new();
+                for i in 0..n {
+                    let key = self.read_cv(img, p + i * ks, k)?;
+                    let val = self.read_cv(img, p + vals + i * vs, v)?;
+                    out.push((key, Some(val)));
+                }
+                Some(Cv::Entries(out))
+            }
+            TyKind::Set(e) => {
+                let p = Self::read_n(img, at, 8)? as usize;
+                let n = Self::read_n(img, at + 8, 8)? as usize;
+                let ks = self.layout(e).size as usize;
+                let mut out = Vec::new();
+                for i in 0..n {
+                    out.push((self.read_cv(img, p + i * ks, e)?, None));
+                }
+                Some(Cv::Entries(out))
+            }
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Struct => {
                     if self.res.member(d, "deinit").is_some() {
@@ -431,6 +477,46 @@ impl<'a> Lowerer<'a> {
                 for (f, it) in fields.iter().zip(items) {
                     let p = self.addr(dst, f.off);
                     self.emit_cv(it, p, f.ty, span);
+                }
+            }
+            (Cv::Boxed(inner), TyKind::Box(e)) => {
+                let size = self.layout(e).size.max(1) as i64;
+                let n = self.i64c(size);
+                if let Some(p) = self.emit(Op::Alloc(n), Some(IrTy::Ptr), span) {
+                    self.emit_cv(inner, p, e, span);
+                    self.store_at(dst, 0, p);
+                }
+            }
+            (Cv::Entries(items), TyKind::Map(..) | TyKind::Set(_)) => {
+                let zero = self.i64c(0);
+                if let Some(null) = self.emit(
+                    Op::Cast(CastKind::IntToPtr, zero, IrTy::Ptr),
+                    Some(IrTy::Ptr),
+                    span,
+                ) {
+                    self.store_at(dst, 0, null);
+                    self.store_at(dst, 24, null);
+                }
+                self.store_at(dst, 8, zero);
+                self.store_at(dst, 16, zero);
+                let (k, v) = match self.kind(t) {
+                    TyKind::Map(k, v) => (k, Some(v)),
+                    TyKind::Set(k) => (k, None),
+                    _ => return,
+                };
+                for (key, val) in items {
+                    let kt = self.slot_for(k);
+                    self.emit_cv(key, kt, k, span);
+                    match (v, val) {
+                        (Some(v), Some(val)) => {
+                            let vt = self.slot_for(v);
+                            self.emit_cv(val, vt, v, span);
+                            self.call_core_g("rt_map_put", &[k, v], vec![dst, kt, vt]);
+                        }
+                        _ => {
+                            self.call_core_g("rt_set_put", &[k], vec![dst, kt]);
+                        }
+                    }
                 }
             }
             (Cv::Case(tag, items), _) => {

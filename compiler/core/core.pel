@@ -113,6 +113,10 @@ pub ext fn rt_eq_fn<T>() -> ptr
 pub ext fn rt_cmp_fn<T>() -> ptr
 pub ext fn rt_hash_fn<T>() -> ptr
 pub ext fn rt_show_fn<T>() -> ptr
+/// The `show` slot of an `any show` table for a type that has no `show` method of its own (numbers, lists, ...).
+fn rt_any_show<T>(out: ptr, src: ptr) {
+    rt_show_to<T>(src, out)
+}
 pub ext fn rt_call_void1(f: ptr, a: ptr)
 pub ext fn rt_call_void2(f: ptr, a: ptr, b: ptr)
 pub ext fn rt_call_bool2(f: ptr, a: ptr, b: ptr) -> bool

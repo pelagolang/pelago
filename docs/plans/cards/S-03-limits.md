@@ -24,4 +24,3 @@ Notes:
 
 - Items 1, 2, 3 and 14 are *speed* items and each makes the output faster, which is the long-run aim, so none of them is blocked by a "future speed" worry.
 - Items 7 and 8 are checker bugs, not limits of lowering. They are listed here so they are not lost; they are small and should be done early.
-| 14 | `print(if c { 8 } else { 4 })`: an `if` expression passed straight to `print` (an `any show` parameter) lowers wrongly ("called a bad function address"); binding it first (`const x = if ...`) works. Found while testing `meta if`. | Build the `any` value after the branches join, not inside each branch. | No. | Soon. |

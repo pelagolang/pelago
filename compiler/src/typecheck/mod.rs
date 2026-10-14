@@ -29,6 +29,7 @@ use crate::ast::*;
 use crate::package::{Diagnostic, ModuleId, PackageId, Program};
 use crate::resolve::{Def, DefId, DefKind, Resolved};
 use crate::span::Span;
+use crate::token::Punct;
 use crate::types::*;
 use std::collections::HashMap;
 
@@ -1345,35 +1346,60 @@ impl<'p> Checker<'p> {
 
     /// A number given as a generic argument (`zeros<8>`), as a type-level constant.
     fn const_arg(&mut self, e: &'p Expr) -> Ty {
-        let src = &self.program.module(self.file).src;
-        let text = &src[e.span.start as usize..e.span.end as usize];
-        match (&e.kind, int_text(text)) {
-            (ExprKind::Int, Some(v)) => self.tt.mk(TyKind::Const(v as i128)),
-            _ => {
+        match self.const_term(e) {
+            Some(t) => t,
+            None => {
                 self.err(
                     e.span,
-                    "a value argument must be a whole-number literal for now",
+                    "a value argument must be a whole number, a `meta` parameter, or `+ - *` of those",
                 );
                 self.tt.unknown
             }
         }
     }
 
-    fn array_len(&mut self, n: &'p Expr) -> ArrayLen {
-        match &n.kind {
+    /// A compile-time number written with literals, `meta` parameters and `+ - *`.
+    pub(crate) fn const_term(&mut self, e: &'p Expr) -> Option<Ty> {
+        match &e.kind {
             ExprKind::Int => {
-                let text =
-                    &self.program.module(self.file).src[n.span.start as usize..n.span.end as usize];
-                int_text(text).map_or(ArrayLen::Unknown, |v| ArrayLen::Known(v as u64))
+                let src = &self.program.module(self.file).src;
+                let v = int_text(&src[e.span.start as usize..e.span.end as usize])?;
+                Some(self.tt.mk(TyKind::Const(v as i128)))
             }
             ExprKind::Name(id) => match self.used(id) {
                 Some(d) if self.def(d).kind == DefKind::GenericParam => {
-                    ArrayLen::Term(self.tt.mk(TyKind::Param(d)))
+                    Some(self.tt.mk(TyKind::Param(d)))
                 }
-                _ => ArrayLen::Unknown,
+                _ => None,
             },
-            _ => ArrayLen::Unknown,
+            ExprKind::Paren(inner) => self.const_term(inner),
+            ExprKind::Binary { op, lhs, rhs } => {
+                let c = match op {
+                    Punct::Plus => b'+',
+                    Punct::Minus => b'-',
+                    Punct::Star => b'*',
+                    _ => return None,
+                };
+                let a = self.const_term(lhs)?;
+                let b = self.const_term(rhs)?;
+                Some(self.tt.const_op(c, a, b))
+            }
+            _ => None,
         }
+    }
+
+    pub(crate) fn len_of(&mut self, n: &'p Expr) -> ArrayLen {
+        match self.const_term(n) {
+            Some(t) => match self.tt.kind(t) {
+                TyKind::Const(k) if *k >= 0 => ArrayLen::Known(*k as u64),
+                _ => ArrayLen::Term(t),
+            },
+            None => ArrayLen::Unknown,
+        }
+    }
+
+    fn array_len(&mut self, n: &'p Expr) -> ArrayLen {
+        self.len_of(n)
     }
 
     fn lower_generic_args(&mut self, args: &'p [GenericArg]) -> Vec<Ty> {

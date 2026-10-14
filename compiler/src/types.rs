@@ -112,6 +112,8 @@ pub enum TyKind {
     Param(DefId),
     /// A compile-time number given as a generic argument (`zeros<8>`).
     Const(i128),
+    /// Arithmetic on compile-time numbers (`N + 1`, `N * 2`); folds to a `Const` once both sides are known.
+    ConstOp(u8, Ty, Ty),
     List(Ty),
     Array(Ty, ArrayLen),
     /// `soa<T>`: one column per field of `T` (the length is the block size of `soa<T, N>`, or unknown).
@@ -306,7 +308,9 @@ impl TypeTable {
             TyKind::Array(a, n) | TyKind::Soa(a, n) => {
                 self.occurs(v, *a) || matches!(n, ArrayLen::Term(t) if self.occurs(v, *t))
             }
-            TyKind::Result(a, b) | TyKind::Map(a, b) => self.occurs(v, *a) || self.occurs(v, *b),
+            TyKind::Result(a, b) | TyKind::Map(a, b) | TyKind::ConstOp(_, a, b) => {
+                self.occurs(v, *a) || self.occurs(v, *b)
+            }
             TyKind::Fn(ps, r) => ps.iter().any(|p| self.occurs(v, p.ty)) || self.occurs(v, *r),
             _ => false,
         }
@@ -387,6 +391,11 @@ impl TypeTable {
                 self.unify_len(*n, *m) && self.unify_inner(*x, *y)
             }
             (TyKind::Tuple(x), TyKind::Tuple(y)) => self.unify_all(x, y),
+            (TyKind::ConstOp(o1, x1, y1), TyKind::ConstOp(o2, x2, y2)) => {
+                o1 == o2 && self.unify_inner(*x1, *x2) && self.unify_inner(*y1, *y2)
+            }
+            (TyKind::ConstOp(op, x, y), TyKind::Const(k))
+            | (TyKind::Const(k), TyKind::ConstOp(op, x, y)) => self.solve_const_op(*op, *x, *y, *k),
             (TyKind::AltTuple(x, n), TyKind::AltTuple(y, m)) => {
                 self.unify_len(*n, *m) && self.unify_all(x, y)
             }
@@ -404,6 +413,49 @@ impl TypeTable {
             }
             _ => false,
         }
+    }
+
+    /// `x op y == k` where one side is a known number: solve for the other side.
+    fn solve_const_op(&mut self, op: u8, x: Ty, y: Ty, k: i128) -> bool {
+        let x = self.shallow(x);
+        let y = self.shallow(y);
+        let (kx, ky) = (self.kind(x).clone(), self.kind(y).clone());
+        let (unknown, other, known_left) = match (&kx, &ky) {
+            (_, TyKind::Const(c)) => (x, *c, false),
+            (TyKind::Const(c), _) => (y, *c, true),
+            _ => return false,
+        };
+        let want = match (op, known_left) {
+            (b'+', _) => k.checked_sub(other),
+            (b'-', false) => k.checked_add(other),
+            (b'-', true) => other.checked_sub(k),
+            (b'*', _) => (other != 0 && k % other == 0).then(|| k / other),
+            _ => None,
+        };
+        match want {
+            Some(w) => {
+                let c = self.mk(TyKind::Const(w));
+                self.unify_inner(unknown, c)
+            }
+            None => false,
+        }
+    }
+
+    /// `a op b`, folded when both are numbers.
+    pub fn const_op(&mut self, op: u8, a: Ty, b: Ty) -> Ty {
+        let (a, b) = (self.shallow(a), self.shallow(b));
+        if let (TyKind::Const(x), TyKind::Const(y)) = (self.kind(a), self.kind(b)) {
+            let r = match op {
+                b'+' => x.checked_add(*y),
+                b'-' => x.checked_sub(*y),
+                b'*' => x.checked_mul(*y),
+                _ => None,
+            };
+            if let Some(r) = r {
+                return self.mk(TyKind::Const(r));
+            }
+        }
+        self.mk(TyKind::ConstOp(op, a, b))
     }
 
     fn unify_all(&mut self, a: &[Ty], b: &[Ty]) -> bool {
@@ -447,6 +499,10 @@ impl TypeTable {
         let t = self.shallow(t);
         let k = self.kind(t).clone();
         let new = match k {
+            TyKind::ConstOp(op, a, b) => {
+                let (a, b) = (self.zonk(a), self.zonk(b));
+                return self.const_op(op, a, b);
+            }
             TyKind::Adt(d, args) => {
                 TyKind::Adt(d, args.into_iter().map(|a| self.zonk(a)).collect())
             }
@@ -494,6 +550,10 @@ impl TypeTable {
         let k = self.kind(t).clone();
         let new = match k {
             TyKind::Param(d) => return map.get(&d).copied().unwrap_or(t),
+            TyKind::ConstOp(op, a, b) => {
+                let (a, b) = (self.subst(a, map), self.subst(b, map));
+                return self.const_op(op, a, b);
+            }
             TyKind::Adt(d, args) => {
                 TyKind::Adt(d, args.into_iter().map(|a| self.subst(a, map)).collect())
             }
@@ -551,7 +611,9 @@ impl TypeTable {
             TyKind::Array(a, n) | TyKind::Soa(a, n) => {
                 self.has_vars(*a) || matches!(n, ArrayLen::Term(t) if self.has_vars(*t))
             }
-            TyKind::Result(a, b) | TyKind::Map(a, b) => self.has_vars(*a) || self.has_vars(*b),
+            TyKind::Result(a, b) | TyKind::Map(a, b) | TyKind::ConstOp(_, a, b) => {
+                self.has_vars(*a) || self.has_vars(*b)
+            }
             TyKind::Fn(ps, r) => ps.iter().any(|p| self.has_vars(p.ty)) || self.has_vars(*r),
             _ => false,
         }
@@ -626,6 +688,7 @@ impl TypeTable {
             }
             TyKind::Param(def) => name_of(*def),
             TyKind::Const(k) => k.to_string(),
+            TyKind::ConstOp(op, a, b) => format!("{} {} {}", d(*a), *op as char, d(*b)),
             TyKind::List(e) => format!("[{}]", d(*e)),
             TyKind::Array(e, n) => match n {
                 ArrayLen::Known(n) => format!("[{}; {n}]", d(*e)),

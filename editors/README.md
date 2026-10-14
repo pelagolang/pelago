@@ -6,7 +6,7 @@ Three layers, all generated from or checked against the compiler's own tables:
 |---|---|---|
 | `pelago highlight` | the compiler | Colours a file in the terminal (`--ansi`), as HTML (`--html`, `--html-page`) or not at all (`--plain`). Exact: it uses the real lexer. `--theme dark|light`. `NO_COLOR` is respected. |
 | TextMate grammar | `textmate/` | The grammar editors read. `template.tmLanguage.json` is written by hand; `pelago.tmLanguage.json` is **generated** from it and from `keyword.rs` / `token.rs`. |
-| VS Code extension | `vscode/` | Wraps the grammar, adds language settings, snippets and test themes. See `vscode/README.md`. |
+| VS Code extension | `vscode/` | Wraps the grammar, adds language settings, snippets and two colour themes; `build-vsix.sh` packs it into `dist/pelago-<version>.vsix`. See `vscode/README.md`. |
 
 ## Keeping the grammar in step
 

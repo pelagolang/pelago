@@ -41,12 +41,12 @@
     ],
     "themes": [
       {
-        "label": "Pelago Dark (test)",
+        "label": "Pelago Dark",
         "uiTheme": "vs-dark",
         "path": "./themes/pelago-dark.json"
       },
       {
-        "label": "Pelago Light (test)",
+        "label": "Pelago Light",
         "uiTheme": "vs",
         "path": "./themes/pelago-light.json"
       }

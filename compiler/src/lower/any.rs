@@ -77,6 +77,20 @@ impl<'a> Lowerer<'a> {
             // The type's own method, or the interface's default.
             let (real, map) = match self.find_impl_method(t, &name) {
                 Some(x) => x,
+                None if name == "show" && self.res.def(iface).name == "show" => {
+                    // Built-in shapes show through the library.
+                    if let Some(def) = self.core_fn("rt_any_show") {
+                        let g = self.typed.fn_infos.get(&def).map(|i| i.generics.clone());
+                        let map: HashMap<DefId, Ty> =
+                            g.unwrap_or_default().into_iter().zip([t]).collect();
+                        if let Some(id) = self.request_fn(def, &map) {
+                            if let Some(a) = self.emit(Op::FuncAddr(id), Some(IrTy::Ptr), sp) {
+                                self.store_at(vt, ((FIRST_METHOD + i) * 8) as u32, a);
+                            }
+                        }
+                    }
+                    continue;
+                }
                 None => {
                     let mut map = HashMap::new();
                     map.insert(iface, t);

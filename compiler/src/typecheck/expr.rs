@@ -712,20 +712,7 @@ impl<'p> Checker<'p> {
             None => self.check_expr(value, Exp::Any),
         };
         self.check_coerce(count, self.tt.int);
-        let len = match &count.kind {
-            ExprKind::Int => {
-                let text = &self.program.module(self.file).src
-                    [count.span.start as usize..count.span.end as usize];
-                literal_value(text).map_or(ArrayLen::Unknown, |v| ArrayLen::Known(v as u64))
-            }
-            ExprKind::Name(id) => match self.used(id) {
-                Some(d) if self.def(d).kind == DefKind::GenericParam => {
-                    ArrayLen::Term(self.tt.mk(TyKind::Param(d)))
-                }
-                _ => ArrayLen::Unknown,
-            },
-            _ => ArrayLen::Unknown,
-        };
+        let len = self.len_of(count);
         self.tt.mk(TyKind::Array(t, len))
     }
 

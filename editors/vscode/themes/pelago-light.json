@@ -1,176 +1,176 @@
 {
-  "name": "Pelago Light (test)",
+  "name": "Pelago Light",
   "type": "light",
   "colors": {},
   "tokenColors": [
     {
       "scope": "keyword.control.pelago",
       "settings": {
-        "foreground": "#af00db"
+        "foreground": "#b3470d"
       }
     },
     {
       "scope": "storage.type.pelago",
       "settings": {
-        "foreground": "#0000ff"
+        "foreground": "#00727f"
       }
     },
     {
       "scope": "storage.type.function.pelago",
       "settings": {
-        "foreground": "#0000ff"
+        "foreground": "#00727f"
       }
     },
     {
       "scope": "keyword.declaration.pelago",
       "settings": {
-        "foreground": "#0000ff"
+        "foreground": "#00727f"
       }
     },
     {
       "scope": "storage.modifier.binding.pelago",
       "settings": {
-        "foreground": "#0000ff",
+        "foreground": "#00727f",
         "fontStyle": "bold"
       }
     },
     {
       "scope": "storage.modifier.access.pelago",
       "settings": {
-        "foreground": "#b45f06",
+        "foreground": "#8a5a00",
         "fontStyle": "bold"
       }
     },
     {
       "scope": "constant.language.pelago",
       "settings": {
-        "foreground": "#0070c1"
+        "foreground": "#6a3fc0"
       }
     },
     {
       "scope": "variable.language.pelago",
       "settings": {
-        "foreground": "#001080",
+        "foreground": "#0b6a86",
         "fontStyle": "italic"
       }
     },
     {
       "scope": "keyword.other.pelago",
       "settings": {
-        "foreground": "#af00db"
+        "foreground": "#b3470d"
       }
     },
     {
       "scope": "keyword.other.soft.pelago",
       "settings": {
-        "foreground": "#2b6cb0"
+        "foreground": "#2f7f94"
       }
     },
     {
       "scope": "support.type.pelago",
       "settings": {
-        "foreground": "#267f99"
+        "foreground": "#0b7a63"
       }
     },
     {
       "scope": "entity.name.type.pelago",
       "settings": {
-        "foreground": "#267f99"
+        "foreground": "#0b7a63"
       }
     },
     {
       "scope": "entity.name.function.pelago",
       "settings": {
-        "foreground": "#795e26"
+        "foreground": "#2748c9"
       }
     },
     {
       "scope": "entity.name.function.call.pelago",
       "settings": {
-        "foreground": "#795e26"
+        "foreground": "#2748c9"
       }
     },
     {
       "scope": "support.function.builtin.pelago",
       "settings": {
-        "foreground": "#795e26"
+        "foreground": "#2748c9"
       }
     },
     {
       "scope": "constant.numeric",
       "settings": {
-        "foreground": "#098658"
+        "foreground": "#9a6200"
       }
     },
     {
       "scope": "string.quoted",
       "settings": {
-        "foreground": "#a31515"
+        "foreground": "#2f7d1f"
       }
     },
     {
       "scope": "constant.character.escape.pelago",
       "settings": {
-        "foreground": "#ee0000"
+        "foreground": "#4c8f00"
       }
     },
     {
       "scope": "meta.interpolation.pelago",
       "settings": {
-        "foreground": "#001080",
+        "foreground": "#0b6a86",
         "fontStyle": "bold"
       }
     },
     {
       "scope": "variable.other.interpolation.pelago",
       "settings": {
-        "foreground": "#001080"
+        "foreground": "#0b6a86"
       }
     },
     {
       "scope": "comment",
       "settings": {
-        "foreground": "#008000",
+        "foreground": "#6b8497",
         "fontStyle": "italic"
       }
     },
     {
       "scope": "comment.line.documentation.pelago",
       "settings": {
-        "foreground": "#00692c",
+        "foreground": "#4f6f86",
         "fontStyle": "italic"
       }
     },
     {
       "scope": "entity.name.function.attribute.pelago",
       "settings": {
-        "foreground": "#ee0000"
+        "foreground": "#8a5a00"
       }
     },
     {
       "scope": "keyword.operator.mark.pelago",
       "settings": {
-        "foreground": "#cd3131",
+        "foreground": "#c0213f",
         "fontStyle": "bold"
       }
     },
     {
       "scope": "keyword.operator.arrow.pelago",
       "settings": {
-        "foreground": "#d9480f",
+        "foreground": "#c23c56",
         "fontStyle": "bold"
       }
     },
     {
       "scope": "keyword.operator.optional.pelago",
       "settings": {
-        "foreground": "#6f42c1"
+        "foreground": "#6a3fc0"
       }
     },
     {
       "scope": "keyword.operator.pelago",
       "settings": {
-        "foreground": "#383838"
+        "foreground": "#4a5968"
       }
     }
   ]

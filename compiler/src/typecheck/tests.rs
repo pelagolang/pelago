@@ -1390,3 +1390,20 @@ fn await_needs_a_future() {
         "future<int>"
     );
 }
+
+#[test]
+fn length_arithmetic_is_checked() {
+    let grow = "fn grow<meta N: int>(xs: [int; N]) -> [int; N + 1] { [0; N + 1] }\n";
+    clean(&format!(
+        "{grow}fn t() {{ const a: [int; 4] = grow([1, 2, 3]) }}"
+    ));
+    let e = run(&format!(
+        "{grow}fn t() {{ const a: [int; 5] = grow([1, 2, 3]) }}"
+    ))
+    .errors();
+    assert!(
+        e.iter()
+            .any(|m| m.contains("[int; 4]") && m.contains("[int; 5]")),
+        "{e:?}"
+    );
+}

@@ -1,6 +1,6 @@
 Id: A-05
 Title: `meta`: code that runs while compiling
-Column: Done (all four stages; the owner's answers were the recommendations; call stacks in diagnostics and baked maps are left)
+Column: Done (all four stages; the owner's answers were the recommendations; the leftovers (call chain in errors, baked maps, sets and boxes, `[T; N + 1]`) were closed afterwards)
 Order: 5
 Depends on: A-02 (box, for compile-time data structures), A-04 stage 2 or later (a faster evaluator), the lowering (done)
 Size: XL (four stages, each shippable)

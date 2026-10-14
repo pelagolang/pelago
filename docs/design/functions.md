@@ -257,18 +257,19 @@ at first, and has a step limit so a runaway loop becomes an error, not a hang.
   A condition that is not known at compile time is an error. `Program.target` holds the machine; it defaults to the host.
 - **`meta N: int`** (stage M2): a value as a generic parameter on functions and types. `zeros<3>()`, or inferred from an array length
   (`total([1, 2, 3, 4])` makes `N = 4`). Array lengths are type-level terms (`ArrayLen::Term`), `TyKind::Const` carries the number, and each
-  value gets its own instance. In the body `N` is an `int` constant. Arithmetic on parameters in types (`[int; N + 1]`) is not built yet.
+  value gets its own instance. In the body `N` is an `int` constant. Arithmetic on parameters in types works: `[int; N + 1]`, `N * 2`, `N - 1`
+  (`TyKind::ConstOp`, folded once the parameter is known; a known result such as `[int; 4]` unifies with `N + 1` by solving for `N`).
 - **`meta expr` and `meta fn`** (stages M3 and M4, `compiler/src/lower/meta.rs`): `const table = meta build_table()` and `meta
   greeting("x")`. The expression becomes a function of its own; everything it reaches is lowered, the module built so far runs in the IR
   interpreter with a step budget, and the value left in memory is read back and written into the program as code (numbers as constants,
   text as static data, lists as an allocation that is filled). Bakeable: numbers, `bool`, `char`, `string`, `str`, arrays, lists, tuples,
-  structs, enums, `option`, `result`. Not bakeable (a clear error): closures, `box`, `obj`, `any`, maps, sets. Rules (checker): a `meta
+  structs, enums, `option`, `result`, `box`, maps and sets (the last two are rebuilt by inserting the entries when the code runs). Not bakeable
+  (a clear error): closures, `obj`, `any`. Rules (checker): a `meta
   fn` can be called only inside `meta`; compile-time code cannot `print` (use `meta_note("...")`), call `ext` functions of its own program
   or read a `var`; `meta_error("...")` stops the compilation with a message. The step budget is 10 million, or `@meta_limit(n)` on the
   declaration. Results are cached per expression; a constant that needs itself is an error. Owner answers (recommendations used): reflection
-  later, budget 10 million with `@meta_limit`, baked data is built where it is used (a copy), `target` fields as listed above. Not built:
-  a compile-time call stack in diagnostics, baked maps and sets, `[int; N + 1]` arithmetic in types, and static data with relocations
-  (the code that builds the value is generated instead).
+  later, budget 10 million with `@meta_limit`, baked data is built where it is used (a copy), `target` fields as listed above. A failing compile-time run reports its call chain
+  (`... (in inner <- outer)`). Not built: static data with relocations (the code that builds the value is generated instead).
 
 ### Built so far: async at stage 0 (card A-07)
 

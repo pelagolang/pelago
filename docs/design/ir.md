@@ -165,6 +165,11 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 - **IR19** `become f(...)` on the function itself with plain number parameters is a jump to the top (no stack growth); any other `become` is a
   call followed by `return`.
 - **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa` and `async` (see the plans in `docs/plans/`).
+- **IR27** Small closing fixes. `any show` tables for types without a `show` method of their own (numbers, lists, strings...) point their `show`
+  slot at the library function `rt_any_show<T>`; this was the real cause of `print(if c { 8 } else { 4 })` failing (the table had no `show`).
+  `meta` results can hold `box`, maps and sets (`Cv::Boxed`, `Cv::Entries`; maps and sets are rebuilt with `rt_map_put`/`rt_set_put`).
+  The interpreter records the call chain of a failing run (`Outcome.trace`) and meta errors print it. Types carry `+ - *` on compile-time
+  numbers (`TyKind::ConstOp`).
 - **IR26** `async fn` is lowered as an ordinary function that returns its value; the checker gives callers `future<T>`, and a call site puts a scalar
   result into memory (a `future<T>` has the layout of a `T`). `await x` is parsed as `x.wait!!()`, whose library body is a bit-move out of
   the future. No state machines yet.
