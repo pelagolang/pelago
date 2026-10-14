@@ -159,10 +159,7 @@ impl Parser<'_> {
                 }
                 TokenKind::Keyword(Keyword::Async) => {
                     m.is_async = true;
-                    self.error(
-                        t.span,
-                        "`async` is reserved for later; use threads and channels",
-                    );
+                    self.next_fn_async = true;
                 }
                 TokenKind::Keyword(Keyword::Unsafe)
                     if self.peek_sig(1).kind != TokenKind::Punct(Punct::LBrace) =>
@@ -264,6 +261,8 @@ impl Parser<'_> {
     /// `fn name<T>(params) -> ret where ... { body }`. Also `init` and `deinit`.
     pub(super) fn parse_fn(&mut self, kind: FnKind) -> FnDecl {
         let head = self.bump(); // `fn`, `init` or `deinit`
+        let is_async = std::mem::take(&mut self.next_fn_async);
+        let saved_async = std::mem::replace(&mut self.in_async, is_async);
         let name = match kind {
             FnKind::Fn => self.ident("a function name"),
             _ => Ident { span: head.span },
@@ -305,6 +304,7 @@ impl Parser<'_> {
             FnBody::None
         };
         self.labels = saved_labels;
+        self.in_async = saved_async;
         FnDecl {
             kind,
             name,

@@ -1090,3 +1090,45 @@ fn meta_note_is_a_compile_time_message() {
         "{d:?}"
     );
 }
+
+// ---- A-07: async / await (stage 0: a call runs the body to the end) -----------------------------------
+
+#[test]
+fn async_functions_and_await() {
+    let src = "async fn double(x: int) -> int { x * 2 }\nasync fn greet(name: string) -> string { \"hello #name\" }\nasync fn say(s: string) { print(s) }\nasync fn both() -> int {\n const a = double(4)\n const b = double(5)\n await say(\"working\")\n await a + await b }\nstruct counter { n: int\n async fn bump(inout self) -> int { self.n += 1\n self.n } }\nasync fn boxed(v: int) -> box<int> { box(v) }\nfn main() { print(block_on(both()))\n print(block_on(greet(\"pelago\")))\n var c = counter { n: 0 }\n print(block_on(c.bump!()), block_on(c.bump!()))\n const b = block_on(boxed(7))\n print(b.get()) }\n";
+    assert_eq!(output_of(src), "working\n18\nhello pelago\n1 2\n7\n");
+}
+
+#[test]
+fn async_with_results_and_channels() {
+    let src = r#"async fn safe_div(a: int, b: int) -> int ! string {
+    if b == 0 { return err("zero") }
+    ok(a / b)
+}
+async fn run() -> int ! string {
+    const x = await safe_div(8, 2)?
+    ok(x + 1)
+}
+async fn total(sink rx: receiver<int>) -> int {
+    var t = 0
+    var n = 0
+    while n < 2 {
+        const v = rx.recv()
+        switch v {
+            case some(x): t += x
+            case none: {}
+        }
+        n += 1
+    }
+    t
+}
+fn main() {
+    print(block_on(safe_div(1, 0)).is_err(), block_on(run()))
+    const (tx, rx) = chan<int>()
+    tx.send(1)
+    tx.send(2)
+    print(block_on(total(sink rx)))
+}
+"#;
+    assert_eq!(output_of(src), "true ok(5)\n3\n");
+}

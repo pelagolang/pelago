@@ -1,6 +1,6 @@
 Id: A-07
 Title: `async` / `await`
-Column: Shelf
+Column: Done at stage 0 (the owner asked for everything to be completed): eager, run-to-completion futures. True suspension moved to S-04.
 Order: 7
 Depends on: self-hosting compiler (the decision G5 says to revisit then), S-02 (real threads), A-04 (an optimiser that can shrink state machines)
 Size: XL

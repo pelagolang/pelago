@@ -1403,13 +1403,50 @@ impl Parser<'_> {
                     kind: ExprKind::Unsafe(body),
                 }
             }
-            Keyword::Async | Keyword::Await => {
+            // `await f()` is `f().wait!!()`: the future is consumed and its value comes out.
+            Keyword::Await => {
+                self.bump();
+                if !self.in_async {
+                    self.error(t.span, "`await` can only be used inside an `async fn`");
+                }
+                let mut inner = self.parse_unary();
+                // `await f()?` is `(await f())?`: the `?` applies to what the future gives.
+                let try_span = if let ExprKind::Try(i) = inner.kind {
+                    let sp = inner.span;
+                    inner = *i;
+                    Some(sp)
+                } else {
+                    None
+                };
+                let span = t.span.to(inner.span);
+                let wait = Expr {
+                    kind: ExprKind::Field {
+                        base: Box::new(inner),
+                        name: Ident { span: t.span },
+                        optional: false,
+                    },
+                    span,
+                };
+                let call = Expr {
+                    kind: ExprKind::Call {
+                        callee: Box::new(wait),
+                        args: Vec::new(),
+                        mark: CallMark::Consumes,
+                    },
+                    span,
+                };
+                match try_span {
+                    Some(sp) => Expr {
+                        kind: ExprKind::Try(Box::new(call)),
+                        span: t.span.to(sp),
+                    },
+                    None => call,
+                }
+            }
+            Keyword::Async => {
                 self.error(
                     t.span,
-                    format!(
-                        "`{}` is reserved for later; use threads and channels",
-                        k.as_str()
-                    ),
+                    "async blocks and closures are not supported; write an `async fn`",
                 );
                 self.bump();
                 self.error_expr(t.span)

@@ -302,7 +302,34 @@ impl<'a> Lowerer<'a> {
             self.terminate(Term::Unreachable);
             return Res::Never;
         }
+        // A call of an `async fn` gives a `future<T>`, which has the layout of a `T`: a scalar result
+        // is put in memory, and nothing else changes.
+        let future = if self.typed.async_fns.contains(&def) {
+            self.ty_of(e)
+        } else {
+            None
+        };
         match sig.ret_pass {
+            RetPass::Val(_) if future.is_some() => match (result, future) {
+                (Some(v), Some(ft)) => {
+                    let slot = match dst {
+                        Some(d) => d,
+                        None => self.slot_for(ft),
+                    };
+                    self.store_scalar_ty(slot, v);
+                    if dst.is_none() {
+                        self.own(slot, ft, false);
+                        return Res::Val(slot);
+                    }
+                    Res::Unit
+                }
+                _ => Res::Never,
+            },
+            RetPass::Void if future.is_some() => match (future, dst) {
+                (Some(_), Some(_)) => Res::Unit,
+                (Some(ft), None) => Res::Val(self.slot_for(ft)),
+                _ => Res::Never,
+            },
             RetPass::Val(_) => match result {
                 Some(v) => {
                     self.fresh_scalar(v, sig.ret);

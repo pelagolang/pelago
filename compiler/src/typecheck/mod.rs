@@ -101,6 +101,8 @@ pub struct Typed {
     pub owning: std::collections::HashSet<DefId>,
     /// The types declared `linear`: they must be consumed exactly once.
     pub linear: std::collections::HashSet<DefId>,
+    /// The `async fn` functions: they are lowered returning their value, and a call wraps it in a `future`.
+    pub async_fns: std::collections::HashSet<DefId>,
     /// The return type of each function with a body.
     pub fn_rets: HashMap<DefId, Ty>,
     pub fn_infos: HashMap<DefId, FnInfo>,
@@ -357,6 +359,9 @@ pub(crate) struct Checker<'p> {
     meta_params: std::collections::HashSet<DefId>,
     /// The `meta fn` functions.
     meta_fns: std::collections::HashSet<DefId>,
+    /// `async fn` functions and the type of the value they produce (callers see `future<T>`).
+    async_fns_decl: std::collections::HashSet<DefId>,
+    async_inner: HashMap<DefId, Ty>,
     /// How many `meta` expressions or `meta fn` bodies enclose the code being checked.
     meta_depth: u32,
     /// The interfaces each generic parameter must provide, as written.
@@ -423,6 +428,8 @@ impl<'p> Checker<'p> {
             top_stmts: Vec::new(),
             meta_params: std::collections::HashSet::new(),
             meta_fns: std::collections::HashSet::new(),
+            async_fns_decl: std::collections::HashSet::new(),
+            async_inner: HashMap::new(),
             meta_depth: 0,
             param_bounds: HashMap::new(),
             derives: HashMap::new(),
@@ -472,7 +479,9 @@ impl<'p> Checker<'p> {
         for (d, owner) in fn_defs {
             let Some(sig) = self.fn_sig(d) else { continue };
             let self_ty = self.owner_self_ty(owner);
-            let ret = self.tt.zonk(sig.ret);
+            let ret = self
+                .tt
+                .zonk(self.async_inner.get(&d).copied().unwrap_or(sig.ret));
             let params = sig
                 .params
                 .iter()
@@ -569,6 +578,7 @@ impl<'p> Checker<'p> {
         Typed {
             owning,
             linear,
+            async_fns: self.async_inner.keys().copied().collect(),
             fn_rets,
             fn_infos,
             adts,
@@ -841,6 +851,9 @@ impl<'p> Checker<'p> {
                 if let (Some(d), true) = (def, item.mods.is_meta) {
                     self.meta_fns.insert(d);
                 }
+                if let (Some(d), true) = (def, item.mods.is_async) {
+                    self.async_fns_decl.insert(d);
+                }
                 if let Some(d) = def {
                     self.nodes.insert(
                         d,
@@ -977,6 +990,9 @@ impl<'p> Checker<'p> {
             ItemKind::Fn(f) => {
                 self.register_generics(file, &f.generics, &f.where_);
                 if let Some(&d) = self.res.item_defs.get(&(file, i.span.start)) {
+                    if i.mods.is_async {
+                        self.async_fns_decl.insert(d);
+                    }
                     self.nodes.insert(
                         d,
                         Node::Fn {
@@ -1170,6 +1186,18 @@ impl<'p> Checker<'p> {
             }
         });
         self.sig_busy.pop();
+        let mut sig = sig;
+        // An `async fn` is called like any function, but gives a `future` of what its body gives.
+        if self.async_fns_decl.contains(&def) {
+            let future = (0..self.res.defs.len() as u32).map(DefId).find(|d| {
+                let dd = self.def(*d);
+                dd.kind == DefKind::Struct && dd.name == "future" && self.is_core_def(*d)
+            });
+            if let Some(fd) = future {
+                self.async_inner.insert(def, sig.ret);
+                sig.ret = self.tt.mk(TyKind::Adt(fd, vec![sig.ret]));
+            }
+        }
         self.fn_sigs.insert(def, sig.clone());
         Some(sig)
     }
@@ -1645,7 +1673,13 @@ impl<'p> Checker<'p> {
         if matches!(f.body, FnBody::None) {
             return;
         }
-        let Some(sig) = self.fn_sig(def) else { return };
+        let Some(mut sig) = self.fn_sig(def) else {
+            return;
+        };
+        // The body of an `async fn` gives the value itself; the call wraps it.
+        if let Some(inner) = self.async_inner.get(&def) {
+            sig.ret = *inner;
+        }
         let self_ty = self.owner_self_ty(owner);
         let saved_meta = self.meta_depth;
         self.meta_depth = u32::from(self.meta_fns.contains(&def));

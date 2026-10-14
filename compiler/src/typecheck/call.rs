@@ -1018,7 +1018,11 @@ impl<'p> Checker<'p> {
         } else {
             (bt, false)
         };
-        let n = self.text(name);
+        // `await x` was read as `x.await()`: the library method is `wait`.
+        let n = match self.text(name) {
+            "await" => "wait",
+            other => other,
+        };
         self.record(callee, self.tt.unknown);
         self.settle_literal(recv);
         let rk = self.kind_of(recv);

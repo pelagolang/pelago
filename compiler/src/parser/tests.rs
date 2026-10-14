@@ -633,7 +633,15 @@ fn errors_are_reported_with_help() {
     let e = errors("null_thing = null");
     assert!(e.is_empty(), "{e:?}");
     let e = errors("async fn f() { }");
-    assert!(e.iter().any(|m| m.contains("reserved")), "{e:?}");
+    assert!(e.is_empty(), "{e:?}");
+    let e = errors("fn f() { await g() }");
+    assert!(
+        e.iter()
+            .any(|m| m.contains("only be used inside an `async fn`")),
+        "{e:?}"
+    );
+    let e = errors("async fn f() { await g() }");
+    assert!(e.is_empty(), "{e:?}");
 }
 
 #[test]

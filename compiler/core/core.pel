@@ -1813,6 +1813,21 @@ impl<T> box<T> {
     }
 }
 
+// ---- async ---------------------------------------------------------------------------------------
+
+/// What an `async fn` gives. At this stage a call runs the body to the end and the future holds the
+/// result; `await f()` takes it out (`wait`). The layout of a `future<T>` is that of a `T`.
+pub struct future<T> {
+    value: T
+}
+
+impl<T> future<T> {
+    fn wait(sink self) -> T = rt_cast<future<T>, T>(sink self)
+}
+
+/// Runs a future to the end from ordinary code.
+pub fn block_on<T>(sink f: future<T>) -> T = f.wait!!()
+
 // ---- Compile-time code -------------------------------------------------------------------------
 
 /// Compile-time code says something: it is shown as a note while compiling.

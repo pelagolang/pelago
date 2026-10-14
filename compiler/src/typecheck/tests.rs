@@ -1379,3 +1379,14 @@ fn meta_code_has_rules() {
         "{e:?}"
     );
 }
+
+#[test]
+fn await_needs_a_future() {
+    clean("async fn f() -> int { 1 }\nasync fn g() -> int { await f() + 1 }\nfn t() -> int = block_on(g())");
+    let e = run("async fn g() -> int { await 5 }").errors();
+    assert!(!e.is_empty(), "{e:?}");
+    assert_eq!(
+        run("async fn f() -> int { 1 }\nfn t() { const x = f() }").ty_of("x"),
+        "future<int>"
+    );
+}

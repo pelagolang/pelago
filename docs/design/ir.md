@@ -165,6 +165,9 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 - **IR19** `become f(...)` on the function itself with plain number parameters is a jump to the top (no stack growth); any other `become` is a
   call followed by `return`.
 - **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa` and `async` (see the plans in `docs/plans/`).
+- **IR26** `async fn` is lowered as an ordinary function that returns its value; the checker gives callers `future<T>`, and a call site puts a scalar
+  result into memory (a `future<T>` has the layout of a `T`). `await x` is parsed as `x.wait!!()`, whose library body is a bit-move out of
+  the future. No state machines yet.
 - **IR25** `meta expr` runs in the IR interpreter during lowering (`lower/meta.rs`, `run_capture` in the interpreter): the jobs the expression
   needs are lowered first (others wait), the entry function writes its result to a block the interpreter provides, the value is read back
   by type into a tree of constants and emitted as code at the use site. The step limit is a parameter of the run.

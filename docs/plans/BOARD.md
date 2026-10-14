@@ -1,15 +1,14 @@
 # Board
 
-Last updated with the plans written after the lowering milestone (IR9 to IR20 in `docs/design/ir.md`).
+Last updated when every card on the first list was finished (A-01 to A-08 and B-03). What is left is on the shelf: it waits for the backend or for a measured need.
 
-**Order of work.** Track A goes strictly in this order: `A-01`, `A-02` (box), `A-03` (temporaries), `A-04` (IR optimiser),
-`A-05` (meta), `A-06` (soa), then `A-07` (async) only after the compiler is self-hosting. `A-08` is a small checker fix and should be taken right after `A-02`. Track B is independent of A: the name and extension are settled (Pelago, `.pel`), so only `B-03` (highlighter) is left.
+**Order of work.** Nothing is open on tracks A and B. The next real step is the machine-code backend (a new card when the owner decides how to start it: from the IR in `docs/design/ir.md`), which also unlocks S-01, S-02 and S-04 on the shelf.
 
 ## Track A: compiler
 
 | Column | Card | Title | Size |
 |---|---|---|---|
-| **Shelf** | [A-07](cards/A-07-async.md) | `async` / `await` (deferred by decision G5) | XL |
+| (empty) | | | |
 
 ## Track B: tooling and identity
 
@@ -25,13 +24,14 @@ Nothing is waiting on this track.
 | [S-01](cards/S-01-map-storage.md) | Our own map and set storage: O(1) removal, still insertion-ordered | A benchmark shows removal or iteration is slow, or the backend exists |
 | [S-02](cards/S-02-real-threads.md) | Real threads for tasks | The machine-code backend can emit atomics and thread start |
 | [S-03](cards/S-03-limits.md) | Smaller limits: many-call closures, static tables, a few more | Each line names its own trigger |
-| [A-07](cards/A-07-async.md) | `async` / `await` | The compiler compiles itself |
+| [S-04](cards/S-04-async-suspension.md) | async: suspension in the middle of a body (state machines) | Real threads exist, or a program needs many concurrent waits |
 
 ## Done
 
 | Card | What | Where |
 |---|---|---|
 | [A-01](cards/A-01-cleanup.md) | `stubs.rs` removed | `compiler/src/lower/` |
+| [A-07](cards/A-07-async.md) | `async fn` / `await` / `future<T>` / `block_on` at stage 0 (eager); suspension is S-04 | `core.pel`, IR26 |
 | [B-03](cards/B-03-highlighter.md) | Highlighter: `pelago highlight`, generated TextMate grammar, VS Code extension | `compiler/src/highlight.rs`, `editors/` |
 | [A-05](cards/A-05-meta.md) | `meta`: `meta if` and `target`, `meta N`, `meta expr`, `meta fn`, `meta_note`/`meta_error`, `@meta_limit`; example `tables.pel` (CRC table at compile time) | `lower/meta.rs`, `meta.rs`, IR25 |
 | [A-06](cards/A-06-soa.md) | `soa<T>`: columns per field, element views, loops, library operations (IR24); blocked layout left for the backend | `lower/soa.rs` |

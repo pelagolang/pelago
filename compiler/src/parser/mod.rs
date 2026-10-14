@@ -176,6 +176,10 @@ pub(crate) struct Parser<'a> {
     no_struct: bool,
     /// `name ~>` is not a closure (the source of a builder clause).
     no_arrow: bool,
+    /// Set by the `async` modifier for the function parsed next.
+    next_fn_async: bool,
+    /// Inside the body of an `async fn`, where `await` is allowed.
+    in_async: bool,
     frames: Vec<Frame>,
     /// Doc comment tokens, in source order.
     docs: Vec<Token>,
@@ -225,6 +229,8 @@ impl<'a> Parser<'a> {
             nl_ignore: 0,
             no_struct: false,
             no_arrow: false,
+            next_fn_async: false,
+            in_async: false,
             frames: Vec::new(),
             docs,
             labels: Vec::new(),

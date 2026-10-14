@@ -263,6 +263,14 @@
       (call! (. hits with) (~> (n) (+= n 1)))
       (tail (call par_for (arg inout xs) (~> (x) (*= x 2))))))
   (enum tree (case leaf) (case node (box tree) int (box tree)))
+  (fn async fetch_len ((text : string)) -> int (block (tail (call (. text len)))))
+  (fn
+    async
+    total
+    ()
+    ->
+    int
+    (block (const n (call!! (. (call fetch_len (str "abc")) await))) (tail (+ n 1))))
   (fn
     columns
     ()

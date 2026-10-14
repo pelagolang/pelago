@@ -270,6 +270,15 @@ at first, and has a step limit so a runaway loop becomes an error, not a hang.
   a compile-time call stack in diagnostics, baked maps and sets, `[int; N + 1]` arithmetic in types, and static data with relocations
   (the code that builds the value is generated instead).
 
+### Built so far: async at stage 0 (card A-07)
+
+`async fn f(...) -> T` is called like any function and gives a `future<T>`; `await e` (only inside an `async fn`) consumes the future and gives
+the `T`; `block_on(future)` does the same from ordinary code. At this stage a call **runs the body to the end** (like the cooperative tasks
+of stage 0, IR18) and the future holds the result, so `await` never has to wait. `await f()?` means `(await f())?`. Futures have the layout
+of a `T`, and no executor exists. What is not built: suspension in the middle of a body (a state machine per `async fn`, with the rule
+that no view or `inout` lives across an `await`), `async` closures and blocks, `select` over futures. Those wait for real threads (S-02)
+and the backend; the card is S-04.
+
 ## 16. Hints to the optimizer
 
 ```
@@ -337,7 +346,7 @@ const p = point.polar(1.0, 0.5)
 - **G2** Tail calls are explicit and guaranteed: `become f(x)`.
 - **G3** `meta` has four uses: `meta expr`, `meta fn`, `meta N: int` as a generic value parameter, and `meta if`. The `when` keyword is dropped.
 - **G4** Optimizer hints are attributes (`@inline`, `@noinline`, `@cold`), not keywords.
-- **G5** Async is deferred. `async` and `await` are reserved. Threads and channels come first.
+- **G5** Async was deferred; the owner asked for everything to be completed, so stage 0 now has `async fn` and `await` (see the note after section 17): a call runs the body to the end and gives a `future<T>`, `await` takes the value out. True suspension (a state machine per `async fn`) is still future work (card S-04).
 - **G6** Several ways to create a value are associated functions (`point.polar(...)`).
 - **G7** Consuming a value looks different from changing it.
 
