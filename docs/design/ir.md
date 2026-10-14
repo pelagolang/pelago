@@ -1,4 +1,4 @@
-# Lowering to IR (draft 1)
+# Lowering to IR (draft 2)
 
 What happens between "the checker accepted the program" and "the backend turns it into machine code", why it is shaped
 this way, and the choices that are yours. Nothing here is built yet.
@@ -103,18 +103,19 @@ compile-time cost is paid only for what is reachable, which also removes dead co
 
 The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step 5, with step 7 as the proof.
 
-## 7. Questions for you
+## 7. Decisions (IR1 to IR8, all as recommended)
 
-1. **IR form.** SSA with block parameters (recommended) or a simpler non-SSA "three-address with variables" first? SSA costs a little
-   more to build and pays back in every later pass.
-2. **Interpreter first.** Build the IR interpreter (step 7) early, so lowering can be tested by running programs before the backend
-   exists? Recommended yes: it is small and it also becomes the base of `meta`.
-3. **Drop flags vs. forbidding.** Variables moved on only some paths need a drop flag. Keep that (recommended, matches the checker), or
-   make the checker reject "moved on some paths" unless the variable is reassigned?
-4. **Plain `let` parameters.** Pass values up to 16 bytes by value and larger ones by pointer (recommended), or always by pointer for
-   simplicity?
-5. **Stops.** One shared stop block per function with a table of messages (recommended: small code), or inline a call at each check?
-6. **Where the library lives.** `list`, `string` and `map` written in the language over allocator intrinsics (recommended; also the
-   first self-hosting exercise), or built-in to the compiler for speed first?
-7. **Integer width of `int`.** Fixed at 64 bits on all targets (as `int64` today), or target-sized?
-8. **Naming.** The IR printer's text form is also the test format. Keep the syntax above (`v0 = add v1, v2`, `b1(acc: int):`)?
+- **IR1** SSA with block parameters instead of phi nodes.
+- **IR2** An IR interpreter is built early (step 7 moves up right after the first lowering), to test lowering by running programs; it later
+  becomes the base of `meta`.
+- **IR3** Variables moved on only some paths get a one-bit drop flag; the checker keeps allowing them.
+- **IR4** `let` parameters of plain types up to 16 bytes are passed by value, larger ones by pointer.
+- **IR5** One shared `stop` block per function, with a table of messages and spans.
+- **IR6** `list`, `string` and `map` are written in the language over allocator intrinsics (the first self-hosting exercise).
+- **IR7** `int` is 64 bits on every target.
+- **IR8** The printed IR syntax above (`v0 = add v1, v2`, `b1(acc: int):`) is also the test format.
+
+## 8. Progress
+
+- Step 1 (IR types, printer, verifier) is built: `compiler/src/ir/` (`mod.rs` data and builder, `print.rs`, `verify.rs`). The verifier checks
+  one terminator per block, single assignment, definitions that dominate their uses, and types of operands, jumps, calls and returns.

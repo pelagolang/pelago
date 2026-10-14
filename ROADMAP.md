@@ -120,7 +120,8 @@ No compiler code yet. Everything here is cheap to change.
 - [x] **Interfaces and bounds, exhaustiveness, value semantics** (`typecheck/iface.rs`, `typecheck/exhaust.rs`, `values/`): bounds, `impl` completeness, operators, orphan rule; `switch` coverage; moves, `inout` exclusivity, `const` depth. Stage 6 done: `converts`, `main` forms, `defer`; also `become`, `linear`, view escape, `spawn` captures (VS7 to VS15, including `T: linear` and warnings)
 - [x] Pattern-match exhaustiveness (`typecheck/exhaust.rs`)
 - [ ] Generics via monomorphization
-- [ ] A first IR (SSA-based) and an IR printer
+- [x] IR data types, printer and verifier (`compiler/src/ir/`, `docs/design/ir.md`, IR1 to IR8 decided)
+- [ ] Lowering to IR, monomorphisation, IR interpreter
 
 **Milestone:** programs are type-checked and lowered to IR, and the checker rejects the unsafe examples.
 
