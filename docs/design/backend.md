@@ -78,7 +78,8 @@ the runtime does not depend on the alignment of its caller. Our own functions ke
 
 How it is tested: where Windows programs can run, `native_must_agree` and `native_agrees_on_the_edge_cases` also build and run the Windows executable.
 Directly on Windows (the `windows` job in `.github/workflows/ci.yml`, on `windows-latest`), and on Linux through Wine when `PELAGO_WINE=1 cargo test` is set (Wine is
-slower, so it is opt-in; `apt-get install wine64` is enough). With Wine all 391 tests pass, including the Windows column.
+slower, so it is opt-in; `apt-get install wine64` is enough). With Wine all 391 tests pass, including the Windows column. The `windows` CI job passes too (run 88): the
+compiler's own tests, with real Windows executables built and run on a Windows runner.
 
 ## 6. Registers (N5) and first measurements
 
