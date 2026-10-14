@@ -22,12 +22,6 @@ impl<'a> Lowerer<'a> {
     ) -> Res {
         self.unsupported(e.span, "a builder")
     }
-    pub(crate) fn map_lit(&mut self, e: &'a Expr, _i: &'a [MapItem], _dst: Value, _t: Ty) -> Res {
-        self.unsupported(e.span, "a map")
-    }
-    pub(crate) fn set_lit(&mut self, e: &'a Expr, _i: &'a [ListItem], _dst: Value, _t: Ty) -> Res {
-        self.unsupported(e.span, "a set")
-    }
     pub(crate) fn range_value(&mut self, e: &'a Expr, _dst: Value, _t: Ty) -> Res {
         self.unsupported(e.span, "a range value")
     }
@@ -54,21 +48,5 @@ impl<'a> Lowerer<'a> {
         _t: Ty,
     ) -> Res {
         self.unsupported(e.span, "an object")
-    }
-    pub(crate) fn eq_collection(&mut self, _a: Value, _b: Value, _ty: Ty, _fail: BlockId) -> bool {
-        false
-    }
-    pub(crate) fn show_collection(&mut self, _v: Value, _out: Value, _ty: Ty) {
-        self.unsupported(Span::new(0, 0), "printing a map or set");
-    }
-    pub(crate) fn in_collection(
-        &mut self,
-        e: &'a Expr,
-        _l: &'a Expr,
-        _r: &'a Expr,
-        _lt: Ty,
-        _rt: Ty,
-    ) -> Res {
-        self.unsupported(e.span, "`in` on this type")
     }
 }

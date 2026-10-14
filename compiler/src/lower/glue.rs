@@ -469,12 +469,6 @@ impl<'a> Lowerer<'a> {
     fn clone_object(&mut self, _s: Value, _d: Value, _ty: Ty) {
         self.unsupported(Span::new(0, 0), "copying an object");
     }
-    fn drop_collection(&mut self, _p: Value, _ty: Ty) {
-        self.unsupported(Span::new(0, 0), "dropping a map or set");
-    }
-    fn clone_collection(&mut self, _s: Value, _d: Value, _ty: Ty) {
-        self.unsupported(Span::new(0, 0), "copying a map or set");
-    }
     fn drop_any(&mut self, _p: Value, _ty: Ty) {
         self.unsupported(Span::new(0, 0), "dropping an `any`");
     }

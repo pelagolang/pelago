@@ -491,3 +491,13 @@ fn list_closures_and_option_map() {
     let src = "fn main() {\n const names = [\"a\", \"bb\"]\n print(names.map(s ~> s.len()).to_list())\n const o: int? = 4\n print(o.map(x ~> x + 1), o.or_err(\"no\"))\n const r: int ! string = err(\"e\")\n print(r.map_err(s ~> s.len())) }";
     assert_eq!(output_of(src), "[1, 2]\nsome(5) ok(4)\nerr(1)\n");
 }
+
+#[test]
+fn maps_and_sets() {
+    let src = "fn main() {\n var m = map { \"a\": 1, \"b\": 2 }\n m.insert!(\"c\", 3)\n m.insert!(\"a\", 10)\n print(m, m.len(), m.get(\"a\"), m.get(\"z\"), m[\"b\"])\n m.remove!(\"b\")\n print(m, m.contains_key(\"b\"))\n for k, v of m { print(k, v) }\n for k in m { print(k) } }";
+    assert_eq!(output_of(src), "{\"a\": 10, \"b\": 2, \"c\": 3} 3 some(10) none 2\n{\"a\": 10, \"c\": 3} false\na 10\nc 3\na\nc\n");
+    let src = "fn main() {\n var s = set { 3, 1, 3, 2 }\n s.insert!(9)\n s.remove!(1)\n print(s, s.len(), 2 in s, 5 in s)\n const t = copy s\n print(t == s, set { 1 } == set { 2 }) }";
+    assert_eq!(output_of(src), "{3, 2, 9} 3 true false\ntrue false\n");
+    let src = "fn main() { var total = 0\n for (var i = 0; i < 4; i += 1) { total += i }\n print(total, [1, 2].iter().to_set(), [\"a\", \"b\"].join(\"-\"), [0, ...[1, 2], 3]) }";
+    assert_eq!(output_of(src), "6 {1, 2} a-b [0, 1, 2, 3]\n");
+}

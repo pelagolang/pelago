@@ -16,6 +16,7 @@
 mod agg;
 mod call;
 mod closure;
+mod coll;
 mod cmp;
 mod ctl;
 mod expr;

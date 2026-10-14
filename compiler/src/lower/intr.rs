@@ -184,7 +184,7 @@ impl<'a> Lowerer<'a> {
                     sp,
                 )
             }
-            "rt_show_to" => {
+            "rt_show_to" | "rt_show_item_to" => {
                 let Some(t) = self.intr_type(def, map) else {
                     return self.unsupported(sp, "`rt_show_to` of an unknown type");
                 };
@@ -192,7 +192,7 @@ impl<'a> Lowerer<'a> {
                 else {
                     return Res::Never;
                 };
-                if self.show_at(p, t, out, false) {
+                if self.show_at(p, t, out, name == "rt_show_item_to") {
                     Res::Unit
                 } else {
                     Res::Never

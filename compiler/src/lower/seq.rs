@@ -37,6 +37,25 @@ impl<'a> Lowerer<'a> {
         self.emit(Op::Call(fid, args), r, Span::new(0, 0))
     }
 
+    /// Calls a generic library function with its type arguments (in declaration order).
+    pub(crate) fn call_core_g(&mut self, name: &str, tys: &[Ty], args: Vec<Value>) -> Option<Value> {
+        let Some(def) = self.core_fn(name) else {
+            self.unsupported(Span::new(0, 0), &format!("the library function `{name}`"));
+            return None;
+        };
+        let gens = self
+            .typed
+            .fn_infos
+            .get(&def)
+            .map(|i| i.generics.clone())
+            .unwrap_or_default();
+        let map: HashMap<DefId, Ty> = gens.iter().copied().zip(tys.iter().copied()).collect();
+        let fid = self.request_fn(def, &map)?;
+        let ret = self.module.funcs[fid.0 as usize].ret;
+        let r = if ret == IrTy::Void { None } else { Some(ret) };
+        self.emit(Op::Call(fid, args), r, Span::new(0, 0))
+    }
+
     // ---- Text ----------------------------------------------------------------------------------------------------------
 
     /// The bytes of a string literal part, with escapes resolved.
@@ -495,11 +514,8 @@ impl<'a> Lowerer<'a> {
                 let Res::Val(src) = self.expr(&it.value) else {
                     return Res::Never;
                 };
-                let n = self.load_at(src, 8, IrTy::I64);
-                let data = self.load_at(src, 0, IrTy::Ptr);
-                let sz = self.i64c(esize);
-                let _ = (n, data, sz, t);
-                return self.unsupported(it.value.span, "spreading a list into a literal");
+                self.call_core_g("rt_list_spread", &[elem], vec![dst, src]);
+                continue;
             }
             // Push one element.
             let len = self.load_at(dst, 8, IrTy::I64);
@@ -672,14 +688,17 @@ impl<'a> Lowerer<'a> {
         pats: &'a [Pattern],
         iter: &'a Expr,
         body: &'a Block,
+        keys_only: bool,
     ) -> Res {
         let Some(it) = self.ty_of(iter) else {
             return self.unsupported(iter.span, "looping over a value of unknown type");
         };
+        let mut val_ty = None;
         let elem = match self.kind(it) {
-            TyKind::List(x) | TyKind::Iter(x) => x,
-            TyKind::Map(..) | TyKind::Set(_) => {
-                return self.for_each_collection(label, pats, iter, body, it)
+            TyKind::List(x) | TyKind::Iter(x) | TyKind::Set(x) => x,
+            TyKind::Map(k, v) => {
+                val_ty = Some(v);
+                k
             }
             _ => return self.unsupported(iter.span, "looping over this"),
         };
@@ -713,13 +732,62 @@ impl<'a> Lowerer<'a> {
         let int = self.types.int;
         let bind_fail = self.stop_block("pattern did not match");
         let depth = self.f.scopes.len();
-        match pats {
-            [p] => {
+        // A map's values live after its keys, in the same block.
+        let vp = match val_ty {
+            Some(vt) if !keys_only => {
+                let ksz = self.i64c(esize);
+                let cap = self.load_at(h, 16, IrTy::I64);
+                let span_ = iter.span;
+                let raw = self
+                    .emit(Op::Bin(BinOp::Mul, cap, ksz), Some(IrTy::I64), span_)
+                    .unwrap_or(cap);
+                let seven = self.i64c(7);
+                let up = self
+                    .emit(Op::Bin(BinOp::Add, raw, seven), Some(IrTy::I64), span_)
+                    .unwrap_or(raw);
+                let mask = self.i64c(-8);
+                let base_off = self
+                    .emit(Op::Bin(BinOp::And, up, mask), Some(IrTy::I64), span_)
+                    .unwrap_or(up);
+                let vsize = self.layout(vt).size as i64;
+                let vsz = self.i64c(vsize);
+                let voff = self
+                    .emit(Op::Bin(BinOp::Mul, i, vsz), Some(IrTy::I64), span_)
+                    .unwrap_or(i);
+                let tot = self
+                    .emit(Op::Bin(BinOp::Add, base_off, voff), Some(IrTy::I64), span_)
+                    .unwrap_or(voff);
+                let p = self
+                    .emit(Op::PtrAdd(data, tot), Some(IrTy::Ptr), span_)
+                    .unwrap_or(data);
+                Some((p, vt))
+            }
+            _ => None,
+        };
+        match (pats, vp) {
+            ([p], None) => {
                 if !self.pat_test(p, ep, elem, bind_fail) {
                     return Res::Never;
                 }
             }
-            [pi, pe] => {
+            ([p], Some((vp, vt))) => {
+                // The pair `(key, value)` as one tuple value that owns nothing.
+                let tt = self.types.tuple(vec![elem, vt]);
+                let slot = self.slot_for(tt);
+                let fs = self.struct_fields(tt);
+                let (k0, v0) = (self.at(slot, fs[0].off), self.at(slot, fs[1].off));
+                self.copy_mem(k0, ep, elem);
+                self.copy_mem(v0, vp, vt);
+                if !self.pat_test(p, slot, tt, bind_fail) {
+                    return Res::Never;
+                }
+            }
+            ([pk, pv], Some((vp, vt))) => {
+                if !self.pat_test(pk, ep, elem, bind_fail) || !self.pat_test(pv, vp, vt, bind_fail) {
+                    return Res::Never;
+                }
+            }
+            ([pi, pe], None) => {
                 // `for i, x of xs`: the position, then the element.
                 let slot = self.slot_for(int);
                 self.store_scalar_ty(slot, i);
@@ -753,16 +821,5 @@ impl<'a> Lowerer<'a> {
         self.start(exit);
         self.pop_scope();
         Res::Unit
-    }
-
-    pub(crate) fn for_each_collection(
-        &mut self,
-        _label: Option<String>,
-        _pats: &'a [Pattern],
-        iter: &'a Expr,
-        _body: &'a Block,
-        _t: Ty,
-    ) -> Res {
-        self.unsupported(iter.span, "looping over a map or set")
     }
 }

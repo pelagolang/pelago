@@ -548,6 +548,18 @@ impl<'a> Lowerer<'a> {
                 let off = self.emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), e.span)?;
                 self.emit(Op::PtrAdd(p, off), Some(IrTy::Ptr), e.span)
             }
+            TyKind::Map(k, v) => {
+                let hdr = match self.expr(base) {
+                    Res::Val(p) => p,
+                    _ => return None,
+                };
+                let ks = self.slot_for(k);
+                if let Res::Never = self.into(index, ks, k) {
+                    return None;
+                }
+                self.own(ks, k, false);
+                self.call_core_g("rt_map_at", &[k, v], vec![hdr, ks])
+            }
             _ => {
                 self.unsupported(e.span, "indexing this kind of value");
                 None
@@ -1409,8 +1421,12 @@ impl<'a> Lowerer<'a> {
 
     fn for_loop(&mut self, e: &'a Expr, f: &'a ForExpr) -> Res {
         let label = self.f.pending_label.take();
-        let ForHead::Of { pats, iter } = &f.head else {
-            return self.unsupported(e.span, "this kind of `for`");
+        let (pats, iter, keys_only): (&'a [Pattern], &'a Expr, bool) = match &f.head {
+            ForHead::Of { pats, iter } => (pats, iter, false),
+            ForHead::In { pat, iter } => (std::slice::from_ref(pat), iter, true),
+            ForHead::C { init, cond, step } => {
+                return self.c_for(label, init.as_deref(), cond.as_ref(), step.as_ref(), &f.body)
+            }
         };
         if let ExprKind::Range {
             start: Some(start),
@@ -1421,7 +1437,69 @@ impl<'a> Lowerer<'a> {
         {
             return self.for_range(label, pats, start, end, *inclusive, &f.body, iter.span);
         }
-        self.for_each(label, pats, iter, &f.body)
+        let _ = e;
+        self.for_each(label, pats, iter, &f.body, keys_only)
+    }
+
+    /// `for (init; cond; step) { body }`.
+    fn c_for(
+        &mut self,
+        label: Option<String>,
+        init: Option<&'a Stmt>,
+        cond: Option<&'a Expr>,
+        step: Option<&'a Expr>,
+        body: &'a Block,
+    ) -> Res {
+        self.push_scope();
+        if let Some(s) = init {
+            self.stmt(s);
+        }
+        let head = self.new_block(&[]);
+        let body_b = self.new_block(&[]);
+        let no_b = self.new_block(&[]);
+        let step_b = self.new_block(&[]);
+        let exit = self.new_block(&[]);
+        self.jump(head, vec![]);
+        self.start(head);
+        let depth = self.f.scopes.len();
+        self.push_scope();
+        match cond {
+            Some(c) => self.cond_branch(c, body_b, no_b),
+            None => self.jump(body_b, vec![]),
+        }
+        let saved = self.f.cur;
+        self.start(no_b);
+        self.exit_scopes(depth);
+        self.jump(exit, vec![]);
+        self.f.cur = saved;
+        self.f.loops.push(LoopCtx {
+            label,
+            cont: step_b,
+            exit,
+            break_ty: None,
+            break_dst: None,
+            scope_depth: depth,
+        });
+        self.start(body_b);
+        let void = self.types.void;
+        let r = self.block(body, None, void);
+        if !matches!(r, Res::Never) {
+            self.pop_scope();
+            self.jump(step_b, vec![]);
+        } else {
+            self.f.scopes.pop();
+        }
+        self.f.loops.pop();
+        self.start(step_b);
+        if let Some(st) = step {
+            self.push_scope();
+            self.expr(st);
+            self.pop_scope();
+        }
+        self.jump(head, vec![]);
+        self.start(exit);
+        self.pop_scope();
+        Res::Unit
     }
 
     #[allow(clippy::too_many_arguments)]

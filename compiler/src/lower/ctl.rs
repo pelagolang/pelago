@@ -419,7 +419,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// An address holding the left side of `in`, converted to the element type if needed.
-    fn probe_addr(&mut self, lhs: &'a Expr, lt: Ty, el: Ty) -> Option<Value> {
+    pub(crate) fn probe_addr(&mut self, lhs: &'a Expr, lt: Ty, el: Ty) -> Option<Value> {
         if lt == el {
             match self.repr(lt) {
                 Repr::Scalar(_) => {
