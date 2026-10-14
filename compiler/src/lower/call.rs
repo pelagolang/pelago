@@ -148,10 +148,6 @@ impl<'a> Lowerer<'a> {
         let Some(info) = self.typed.fn_infos.get(&def).cloned() else {
             return self.unsupported(e.span, "a function without a signature");
         };
-        let sig = self.sig_of(&info, &map);
-        let Some(fid) = self.request_fn(def, &map) else {
-            return self.unsupported(e.span, "a function that cannot be lowered");
-        };
         // The pieces to pass: the receiver, then each declared parameter.
         let mut sources: Vec<ArgSource<'a>> = Vec::new();
         if info.has_self {
@@ -164,6 +160,25 @@ impl<'a> Lowerer<'a> {
             Some(mut v) => sources.append(&mut v),
             None => return Res::Never,
         }
+        self.call_with(e, def, &map, sources, dst)
+    }
+
+    /// Calls `def` with the pieces already matched to its parameters (the receiver first).
+    pub(crate) fn call_with(
+        &mut self,
+        e: &'a Expr,
+        def: DefId,
+        map: &HashMap<DefId, Ty>,
+        sources: Vec<ArgSource<'a>>,
+        dst: Option<Value>,
+    ) -> Res {
+        let Some(info) = self.typed.fn_infos.get(&def).cloned() else {
+            return self.unsupported(e.span, "a function without a signature");
+        };
+        let sig = self.sig_of(&info, map);
+        let Some(fid) = self.request_fn(def, map) else {
+            return self.unsupported(e.span, "a function that cannot be lowered");
+        };
         let mut ir_args: Vec<Value> = Vec::new();
         // Where a memory result goes.
         let mut ret_slot = None;
@@ -224,8 +239,25 @@ impl<'a> Lowerer<'a> {
         src: ArgSource<'a>,
         span: Span,
     ) -> Option<Value> {
-        let ArgSource::Expr(arg) = src;
-        let _ = span;
+        let arg = match src {
+            ArgSource::Expr(arg) => arg,
+            ArgSource::Addr(p) => {
+                return match pass {
+                    Pass::Skip => None,
+                    Pass::Val(t) => self.emit(Op::Load(t, p), Some(t), span),
+                    Pass::Ptr => Some(p),
+                };
+            }
+            ArgSource::Pack(items) => {
+                let tmp = self.slot_for(ty);
+                let exprs: Vec<&'a Expr> = items.iter().map(|a| &a.value).collect();
+                if let Res::Never = self.list_from(span, &exprs, tmp, ty) {
+                    return None;
+                }
+                self.own(tmp, ty, false);
+                return Some(tmp);
+            }
+        };
         match pass {
             Pass::Skip => {
                 self.expr(arg);
@@ -305,12 +337,9 @@ impl<'a> Lowerer<'a> {
     ) -> Option<Vec<ArgSource<'a>>> {
         let n = info.params.len();
         let mut slots: Vec<Option<ArgSource<'a>>> = vec![None; n];
+        let mut packs: HashMap<usize, (usize, usize)> = HashMap::new();
         let mut next = 0usize;
-        for a in args {
-            if a.spread {
-                self.unsupported(a.value.span, "a spread argument");
-                return None;
-            }
+        for (pos, a) in args.iter().enumerate() {
             let idx = match &a.label {
                 Some(l) => {
                     let name = self.src_text(l.span);
@@ -328,17 +357,31 @@ impl<'a> Lowerer<'a> {
                 return None;
             }
             if info.params[idx].variadic {
-                self.unsupported(a.value.span, "a variadic argument");
+                if a.spread {
+                    slots[idx] = Some(ArgSource::Expr(&a.value));
+                } else {
+                    let e = packs.entry(idx).or_insert((pos, 0));
+                    e.1 += 1;
+                }
+                continue;
+            }
+            if a.spread {
+                self.unsupported(a.value.span, "a spread argument");
                 return None;
             }
             slots[idx] = Some(ArgSource::Expr(&a.value));
+        }
+        for (idx, (start, count)) in packs {
+            slots[idx] = Some(ArgSource::Pack(&args[start..start + count]));
         }
         let mut out = Vec::new();
         for (i, s) in slots.into_iter().enumerate() {
             match s {
                 Some(s) => out.push(s),
                 None => {
-                    if info.params[i].has_default {
+                    if info.params[i].variadic {
+                        out.push(ArgSource::Pack(&[]));
+                    } else if info.params[i].has_default {
                         match self.default_arg(def, i) {
                             Some(e) => out.push(ArgSource::Expr(e)),
                             None => {
@@ -529,4 +572,8 @@ impl<'a> Lowerer<'a> {
 #[derive(Clone, Copy)]
 pub(crate) enum ArgSource<'a> {
     Expr(&'a Expr),
+    /// The arguments of a variadic parameter, collected into a list.
+    Pack(&'a [Arg]),
+    /// An existing value of the parameter's type, given by address.
+    Addr(Value),
 }

@@ -45,6 +45,13 @@ fn main() {
                 std::process::exit(2);
             }
         },
+        Some("run") => match args.next() {
+            Some(path) => run_path(&path),
+            None => {
+                eprintln!("usage: langc run <file or directory>");
+                std::process::exit(2);
+            }
+        },
         Some("parse-bench") => match args.next() {
             Some(path) => parse_bench(&path),
             None => {
@@ -77,6 +84,7 @@ fn usage() {
     eprintln!("  lex-bench <file>  time the lexer alone on a file");
     eprintln!("  parse [--no-docs] <file>  print the syntax tree and any errors (`-` reads standard input)");
     eprintln!("  ir <path>  check, lower to the IR, verify and print it");
+    eprintln!("  run <path>  lower to the IR and run `main` in the interpreter");
     eprintln!("  check <path>  parse and resolve names of a file or a directory of `.lang` files");
     eprintln!("  parse-bench <file>  time lexing plus parsing on a file");
     eprintln!("  lex <file> print the tokens of a source file (`-` reads standard input)");
@@ -145,6 +153,14 @@ fn check_path(path: &str) {
 
 /// Checks the program, lowers it to the IR, verifies it and prints it.
 fn ir_path(path: &str) {
+    ir_or_run(path, false)
+}
+
+fn run_path(path: &str) {
+    ir_or_run(path, true)
+}
+
+fn ir_or_run(path: &str, run: bool) {
     let mut program = langc::package::Program::with_core();
     if let Err(e) = program.add_package_from_path(std::path::Path::new(path)) {
         eprintln!("{e}");
@@ -175,6 +191,21 @@ fn ir_path(path: &str) {
     for e in langc::ir::verify_module(&lowered.module) {
         eprintln!("ir error: {e}");
         failed = true;
+    }
+    if run {
+        if failed {
+            std::process::exit(1);
+        }
+        let out = langc::ir::run_full(&lowered.module, "main", &[]);
+        print!("{}", out.output);
+        if let Err(e) = out.result {
+            eprintln!("stopped: {e}");
+            std::process::exit(1);
+        }
+        if out.leaked > 0 {
+            eprintln!("leaked {} allocation(s)", out.leaked);
+        }
+        return;
     }
     print!("{}", langc::ir::print_module(&lowered.module));
     if failed {

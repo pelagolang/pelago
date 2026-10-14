@@ -394,7 +394,13 @@ impl<'a> Lowerer<'a> {
             ExprKind::Paren(i) => self.place(i),
             ExprKind::Name(id) => {
                 let def = self.res.use_at(self.f.file, id.span.start)?;
-                self.local_place(def)
+                if let Some(p) = self.local_place(def) {
+                    return Some(p);
+                }
+                if self.res.def(def).kind == DefKind::Var && self.globals.contains_key(&def) {
+                    return self.global_place(def);
+                }
+                None
             }
             ExprKind::SelfValue => {
                 let def = self.res.use_at(self.f.file, e.span.start)?;
@@ -614,7 +620,10 @@ impl<'a> Lowerer<'a> {
                 return self.compare(e, op, lhs, rhs);
             }
             Punct::QuestionQuestion => return self.rvalue_expr(e),
-            Punct::PipeGt => return self.unsupported(e.span, "the pipe operator"),
+            Punct::PipeGt => {
+                let srcs = vec![super::call::ArgSource::Expr(lhs)];
+                return self.call_value_with(e, rhs, srcs, None);
+            }
             _ => {}
         }
         if let Some(r) = self.user_operator(e, e.span) {
@@ -656,6 +665,15 @@ impl<'a> Lowerer<'a> {
             if matches!(self.kind(t), TyKind::String) {
                 return self.concat(e, lhs, rhs, dst);
             }
+        }
+        if let ExprKind::Binary {
+            op: Punct::PipeGt,
+            lhs,
+            rhs,
+        } = &e.kind
+        {
+            let srcs = vec![super::call::ArgSource::Expr(lhs)];
+            return self.call_value_with(e, rhs, srcs, Some(dst));
         }
         if let Some(r) = self.user_operator_into(e, dst) {
             return r;
@@ -815,7 +833,29 @@ impl<'a> Lowerer<'a> {
             return self.store_new(p, lt, rhs, lhs);
         }
         if op == Punct::QuestionQuestionEq {
-            return self.unsupported(e.span, "`??=`");
+            let Some(info) = self.enum_info(lt) else {
+                return self.unsupported(e.span, "`??=` on this type");
+            };
+            let tag = self.load_at(p, 0, info.tag);
+            let zero = self.konst(info.tag, Const::Int(0), e.span);
+            let Some(is_none) = self.emit(Op::Cmp(CmpOp::Eq, tag, zero), Some(IrTy::Bool), e.span)
+            else {
+                return Res::Never;
+            };
+            let none_b = self.new_block(&[]);
+            let join = self.new_block(&[]);
+            self.branch(is_none, none_b, join);
+            self.start(none_b);
+            self.push_scope();
+            let r = self.store_new(p, lt, rhs, lhs);
+            if matches!(r, Res::Never) {
+                self.f.scopes.pop();
+            } else {
+                self.pop_scope();
+                self.jump(join, vec![]);
+            }
+            self.start(join);
+            return Res::Unit;
         }
         // `a op= b`: numbers (and text for `+=`).
         let Repr::Scalar(ty) = self.repr(lt) else {
@@ -971,6 +1011,11 @@ impl<'a> Lowerer<'a> {
         let (Some(from), Some(to)) = (self.ty_of(value), self.ty_of(e)) else {
             return self.unsupported(e.span, "this conversion");
         };
+        if self.is_scalar(to) {
+            if let Some(r) = self.user_convert(e, value, None) {
+                return r;
+            }
+        }
         if !self.is_scalar(to) {
             return self.rvalue_expr(e);
         }

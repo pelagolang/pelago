@@ -453,6 +453,16 @@ impl<'a> Lowerer<'a> {
         if items.iter().any(|i| i.spread) {
             return self.list_with_spreads(e, items, dst, t, elem);
         }
+        let exprs: Vec<&'a Expr> = items.iter().map(|i| &i.value).collect();
+        self.list_from(e.span, &exprs, dst, t)
+    }
+
+    /// A list of exactly these values.
+    pub(crate) fn list_from(&mut self, span: Span, items: &[&'a Expr], dst: Value, t: Ty) -> Res {
+        let elem = match self.kind(t) {
+            TyKind::List(x) | TyKind::Iter(x) => x,
+            _ => return self.unsupported(span, "a list of this type"),
+        };
         let n = items.len() as i64;
         let esize = self.layout(elem).size as i64;
         let (buf, cap) = if n == 0 {
@@ -461,21 +471,21 @@ impl<'a> Lowerer<'a> {
                 .emit(
                     Op::Cast(CastKind::IntToPtr, z, IrTy::Ptr),
                     Some(IrTy::Ptr),
-                    e.span,
+                    span,
                 )
                 .unwrap_or(dst);
             (np, self.i64c(0))
         } else {
             let bytes = self.i64c((n * esize).max(1));
             let b = self
-                .emit(Op::Alloc(bytes), Some(IrTy::Ptr), e.span)
+                .emit(Op::Alloc(bytes), Some(IrTy::Ptr), span)
                 .unwrap_or(dst);
             (b, self.i64c(n))
         };
         // The list is complete (and owned) only at the end; elements that fail midway are not tracked.
         for (i, it) in items.iter().enumerate() {
             let p = self.addr(buf, (i as i64 * esize) as u32);
-            if let Res::Never = self.into(&it.value, p, elem) {
+            if let Res::Never = self.into(it, p, elem) {
                 return Res::Never;
             }
         }

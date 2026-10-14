@@ -23,6 +23,7 @@ mod expr;
 mod func;
 mod glue;
 mod intr;
+mod ops;
 mod pat;
 mod seq;
 mod stubs;
@@ -129,6 +130,7 @@ pub(crate) struct Lowerer<'a> {
     pub field_defaults: HashMap<DefId, (ModuleId, &'a Expr)>,
     pub instances: HashMap<(DefId, Vec<(DefId, Ty)>), FuncId>,
     pub jobs: Vec<Job<'a>>,
+    pub global_data: HashMap<DefId, u32>,
     pub thunks: Vec<closure::ThunkJob>,
     pub names: HashMap<String, u32>,
     pub layouts: HashMap<Ty, Layout>,
@@ -155,6 +157,7 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         field_defaults: HashMap::new(),
         instances: HashMap::new(),
         jobs: Vec::new(),
+        global_data: HashMap::new(),
         thunks: Vec::new(),
         names: HashMap::new(),
         layouts: HashMap::new(),
@@ -327,7 +330,12 @@ impl<'a> Lowerer<'a> {
             }
         }
         for p in &info.params {
-            srcs.push((p.ty, p.mode));
+            let t = if p.variadic {
+                self.types.list(p.ty)
+            } else {
+                p.ty
+            };
+            srcs.push((t, p.mode));
         }
         let mut ir_params = Vec::new();
         let ret = self.conc_with(info.ret, map);

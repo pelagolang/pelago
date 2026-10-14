@@ -395,6 +395,22 @@ impl<'a> Lowerer<'a> {
     pub(crate) fn global_value(&mut self, e: &'a Expr, def: DefId) -> Res {
         match self.res.def(def).kind {
             DefKind::Variant => self.rvalue_expr(e),
+            DefKind::Var if self.globals.contains_key(&def) => {
+                let Some(p) = self.global_place(def) else {
+                    return Res::Never;
+                };
+                let Some(t) = self.ty_of(e) else {
+                    return self.unsupported(e.span, "a global of unknown type");
+                };
+                match self.repr(t) {
+                    Repr::Scalar(s) => match self.emit(Op::Load(s, p), Some(s), e.span) {
+                        Some(v) => Res::Val(v),
+                        None => Res::Never,
+                    },
+                    Repr::Mem(_) => Res::Val(p),
+                    Repr::Zst => Res::Unit,
+                }
+            }
             DefKind::Const | DefKind::Var | DefKind::Local => {
                 let Some(g) = self.globals.get(&def) else {
                     return self.unsupported(e.span, "a name that is not a variable");
@@ -410,6 +426,49 @@ impl<'a> Lowerer<'a> {
             DefKind::Fn => self.fn_as_value(e, def),
             _ => self.unsupported(e.span, "a name that is not a variable"),
         }
+    }
+
+    /// The address of a module-level `var`, initialized the first time it is reached.
+    pub(crate) fn global_place(&mut self, def: DefId) -> Option<Value> {
+        let g = self.globals.get(&def)?;
+        let (file, init) = (g.file, g.init);
+        let saved = self.f.file;
+        self.f.file = file;
+        let t = self.ty_of(init);
+        let result = (|| {
+            let t = t?;
+            let size = self.layout(t).size as usize;
+            let idx = match self.global_data.get(&def) {
+                Some(i) => *i,
+                None => {
+                    let i = self.module.add_zeroed_data(size + 1);
+                    self.global_data.insert(def, i);
+                    i
+                }
+            };
+            let sp = init.span;
+            let p = self.emit(Op::DataAddr(idx), Some(IrTy::Ptr), sp)?;
+            let flag = self.addr(p, size as u32);
+            let set = self.load_at(flag, 0, IrTy::Bool);
+            let go = self.new_block(&[]);
+            let join = self.new_block(&[]);
+            self.branch(set, join, go);
+            self.start(go);
+            let one = self.konst(IrTy::Bool, Const::Bool(true), sp);
+            self.emit(Op::Store(flag, one), None, sp);
+            self.push_scope();
+            let r = self.into(init, p, t);
+            if matches!(r, Res::Never) {
+                self.f.scopes.pop();
+            } else {
+                self.pop_scope();
+                self.jump(join, vec![]);
+            }
+            self.start(join);
+            Some(p)
+        })();
+        self.f.file = saved;
+        result
     }
 
     pub(crate) fn global_or_variant(&mut self, e: &'a Expr) -> Res {

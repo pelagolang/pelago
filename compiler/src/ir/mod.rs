@@ -282,6 +282,12 @@ impl Module {
         self.data.len() as u32 - 1
     }
 
+    /// Adds `size` bytes of zeroed static data of its own (for variables that live for the whole program).
+    pub fn add_zeroed_data(&mut self, size: usize) -> u32 {
+        self.data.push(vec![0; size]);
+        self.data.len() as u32 - 1
+    }
+
     pub fn add(&mut self, f: Func) -> FuncId {
         self.funcs.push(f);
         FuncId(self.funcs.len() as u32 - 1)

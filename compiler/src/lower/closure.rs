@@ -453,6 +453,17 @@ impl<'a> Lowerer<'a> {
         args: &'a [Arg],
         dst: Option<Value>,
     ) -> Res {
+        let srcs: Vec<ArgSource<'a>> = args.iter().map(|a| ArgSource::Expr(&a.value)).collect();
+        self.call_value_with(e, callee, srcs, dst)
+    }
+
+    pub(crate) fn call_value_with(
+        &mut self,
+        e: &'a Expr,
+        callee: &'a Expr,
+        srcs: Vec<ArgSource<'a>>,
+        dst: Option<Value>,
+    ) -> Res {
         let Some(ft) = self.ty_of(callee) else {
             return self.unsupported(e.span, "calling a value of unknown type");
         };
@@ -475,11 +486,11 @@ impl<'a> Lowerer<'a> {
             ir_args.push(d);
         }
         ir_args.push(env);
-        if args.len() != sig.params.len() {
+        if srcs.len() != sig.params.len() {
             return self.unsupported(e.span, "a call with a different number of arguments");
         }
-        for ((pass, ty, mode), a) in sig.params.iter().zip(args.iter()) {
-            let v = self.lower_arg(*pass, *ty, *mode, ArgSource::Expr(&a.value), e.span);
+        for ((pass, ty, mode), src) in sig.params.iter().zip(srcs) {
+            let v = self.lower_arg(*pass, *ty, *mode, src, e.span);
             match (pass, v) {
                 (Pass::Skip, _) => {}
                 (_, Some(v)) => ir_args.push(v),
