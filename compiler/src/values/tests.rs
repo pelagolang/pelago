@@ -227,3 +227,105 @@ fn the_tour_runs_through_without_panicking() {
     let e = errors(&src);
     assert!(!e.is_empty());
 }
+
+#[test]
+fn defer_moves_happen_at_the_end() {
+    clean("obj f { x: int\n fn close(sink self) { } }\nfn t() { const a = f { x: 1 }\n defer a.close!!()\n print(a.x) }");
+}
+
+#[test]
+fn become_cannot_lend_locals() {
+    let sum = "fn sum_to(n: int, acc: int) -> int { if n == 0 { return acc }\n become sum_to(n - 1, acc + n) }\n";
+    clean(sum);
+    flagged(
+        "fn use2(xs: [int]) -> int = 1\nfn t() -> int { const xs = [1]\n become use2(xs) }",
+        "would be gone when `become`",
+    );
+    clean("fn use2(xs: [int]) -> int = 1\nfn t(xs: [int]) -> int { become use2(xs) }");
+    clean("fn use2(sink xs: [int]) -> int = 1\nfn t() -> int { const xs = [1]\n become use2(sink xs) }");
+    flagged(
+        "fn use2(xs: [int]) -> int = 1\nfn t() -> int { defer print(1)\n become use2([1]) }",
+        "cannot follow a `defer`",
+    );
+}
+
+#[test]
+fn views_do_not_outlive_their_source() {
+    flagged(
+        "fn t() -> str { const s = \"a\" + \"b\"\n s.trim() }",
+        "points into `s`",
+    );
+    clean("fn t(s: str) -> str = s.trim()");
+    clean("fn t(s: string) -> str = s.trim()");
+    clean("fn t() -> str = \"literal\"");
+    flagged("struct b { name: str }", "cannot hold a view");
+    flagged("enum e { a(str) }", "cannot hold a view");
+    flagged(
+        "fn make() -> fn(int) -> int { ~> it }",
+        "cannot return a function value",
+    );
+    clean("fn make(sink f: box<fn(int) -> int>) -> box<fn(int) -> int> = f");
+}
+
+#[test]
+fn spawn_moves_what_it_uses() {
+    flagged("fn work(xs: [int]) -> int = 1\nfn t() { const data = [1]\n const h = spawn(~> work(data)) }", "must be moved in");
+    clean("fn work(xs: [int]) -> int = 1\nfn t() { const data = [1]\n const h = spawn([sink data] ~> work(data))\n h.join!!() }");
+    clean("fn t() { const n = 3\n const h = spawn(~> n + 1)\n h.join!!() }");
+    flagged(
+        "fn t() { var total = 0\n const h = spawn([inout total] ~> total += 1) }",
+        "captured with `inout`",
+    );
+    clean("fn t() { const (tx, rx) = chan<int>()\n spawn([sink tx] ~> { tx.send(1) })\n for x of rx { print(x) } }");
+}
+
+#[test]
+fn linear_values_are_consumed_exactly_once() {
+    let tx = "linear struct txn { id: int\n fn commit(sink self) { _ = self }\n fn rollback(sink self) { _ = self } }\nfn begin() -> txn = txn { id: 1 }\n";
+    clean(&format!(
+        "{tx}fn t() {{ const t = begin()\n t.commit!!() }}"
+    ));
+    flagged(
+        &format!("{tx}fn t() {{ const t = begin() }}"),
+        "must be consumed",
+    );
+    flagged(
+        &format!("{tx}fn t(c: bool) {{ const t = begin()\n if c {{ t.commit!!() }} }}"),
+        "must be consumed",
+    );
+    clean(&format!("{tx}fn t(c: bool) {{ const t = begin()\n if c {{ t.commit!!() }} else {{ t.rollback!!() }} }}"));
+    flagged(
+        &format!("{tx}fn t(c: bool) {{ const t = begin()\n if c {{ return }}\n t.commit!!() }}"),
+        "must be consumed before this `return`",
+    );
+    flagged(
+        &format!("{tx}fn t() {{ begin()\n print(1) }}"),
+        "thrown away",
+    );
+    flagged(
+        &format!("{tx}fn t() {{ var t = begin()\n t = begin()\n t.commit!!() }}"),
+        "assigning over it would drop",
+    );
+    flagged(
+        &format!("{tx}fn t() {{ const t = begin()\n t.commit!!()\n t.commit!!() }}"),
+        "was moved",
+    );
+    clean(&format!(
+        "{tx}fn finish(sink t: txn) {{ t.commit!!() }}\nfn t() {{ finish(sink begin()) }}"
+    ));
+    flagged(
+        &format!("{tx}fn finish(sink t: txn) {{ }}"),
+        "must be consumed",
+    );
+    clean(&format!("{tx}fn peek(t: txn) -> int = t.id"));
+    flagged(
+        &format!("{tx}struct holder {{ t: txn }}"),
+        "must be declared `linear` too",
+    );
+    clean(&format!("{tx}linear struct holder {{ t: txn }}"));
+    flagged(
+        "linear struct a { x: int\n deinit() { } }",
+        "cannot have `deinit`",
+    );
+    flagged(&format!("{tx}fn t() -> int ! error {{ const t = begin()\n const n = \"1\".parse_int()?\n t.commit!!()\n ok(n) }}"), "before `?` can return");
+}

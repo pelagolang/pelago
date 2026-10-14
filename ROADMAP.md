@@ -117,7 +117,7 @@ No compiler code yet. Everything here is cheap to change.
 
 - [x] Name resolution and modules (`compiler/src/resolve/`, `package.rs`; `langc check`); see `docs/design/checker.md`
 - [x] **Type checker, stage 2**: local inference, structs, enums, patterns, methods, closures, basic generics (`compiler/src/typecheck/`, `types.rs`, `compiler/core/core.lang`). Interfaces, bounds and exhaustiveness are stage 3 and 4 of `docs/design/checker.md`
-- [x] **Interfaces and bounds, exhaustiveness, value semantics** (`typecheck/iface.rs`, `typecheck/exhaust.rs`, `values/`): bounds, `impl` completeness, operators, orphan rule; `switch` coverage; moves, `inout` exclusivity, `const` depth. Still open: errors/entry points (stage 6), `become`, second-class reference escape
+- [x] **Interfaces and bounds, exhaustiveness, value semantics** (`typecheck/iface.rs`, `typecheck/exhaust.rs`, `values/`): bounds, `impl` completeness, operators, orphan rule; `switch` coverage; moves, `inout` exclusivity, `const` depth. Stage 6 done: `converts`, `main` forms, `defer`; also `become`, `linear`, view escape, `spawn` captures (VS7 to VS12)
 - [ ] Pattern-match exhaustiveness
 - [ ] Generics via monomorphization
 - [ ] A first IR (SSA-based) and an IR printer

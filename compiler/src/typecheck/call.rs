@@ -207,11 +207,10 @@ impl<'p> Checker<'p> {
                 format!("{what} is changed in place; write `inout ...` at the call"),
             ),
             (Some(Mode::Sink), None) => {
+                // Plain values are copied, so only a value that owns something needs the mark.
                 if place {
-                    self.err(
-                        a.value.span,
-                        format!("{what} takes the value away; write `sink ...` at the call"),
-                    );
+                    self.pending_sinks
+                        .push((self.file, a.value.span, what.to_string()));
                 }
             }
             (_, Some(m)) => self.err(

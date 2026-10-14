@@ -14,8 +14,8 @@ cargo run -- check <file or directory>     # parse + resolve names; later: + typ
 | 2. Types | a type for every expression, local inference, method lookup, operators | **done** (`compiler/src/types.rs`, `typecheck/`) |
 | 3. Generics and interfaces | bounds, `impl` lookup, `any`, operators, the orphan rule | **done** (`typecheck/iface.rs`) |
 | 4. Patterns | exhaustiveness of `switch`, irrefutable patterns, list-pattern lengths | **done** (`typecheck/exhaust.rs`) |
-| 5. Value semantics | `inout` exclusivity, moves, `copy`, `const` depth, closure captures | **done** (`values/`); `become` and linear types still open |
-| 6. Errors and entry points | `?` and `converts`, `main` forms, overflow operators, `defer` | with 5 |
+| 5. Value semantics | `inout` exclusivity, moves, `copy`, `const` depth, closure captures | **done** (`values/`), including `become`, `linear`, view escape, `spawn` captures |
+| 6. Errors and entry points | `?` and `converts`, `main` forms, overflow operators, `defer` | **done** |
 
 Each stage reports its own errors and leaves a table for the next. The end product is a typed form of the program
 that lowering to IR (Phase 2, last bullets) reads.
@@ -148,8 +148,35 @@ Where it lives: `values/` (its own pass after the types, reading `Typed`). It fo
   that are copied do not count. Use `xs.swap!(0, 1)` for two elements of one list.
 - **VS6. Closures.** A closure changes an outer variable only if it captures it with `inout` (`[inout total] x ~> total += x`); `sink`
   moves it in at the closure.
-- **Not done yet:** `become` rules, second-class reference escape (returning or storing a `str` view of a parameter), `defer` ordering, a
-  report for unreachable `switch` arms, `linear` types, and the value rules for `spawn` captures.
+- **VS7. `become`.** The call replaces this function's frame, so nothing local may be lent to it: a local owning value is passed with
+  `sink x` or `copy x`, a local may not be passed `inout`, and `become` cannot follow a `defer`. Parameters that came from the caller
+  (read-only or `inout`) can be passed on.
+- **VS8. Views do not outlive their source.** `str` and function values are views: a struct field or enum case cannot hold one (use
+  `string`, or `box<fn ...>`), a function cannot return a function value, and a function returning `str` cannot return a view into
+  one of its own owning locals (`const s = a + b; s.trim()` is an error; `s to string` is not).
+- **VS9. `spawn`.** A closure given to `spawn` must move in what it uses: an owning outer variable needs `[sink x]` (or `copy x`
+  first), plain values are copied, and `[inout x]` is an error (use `lock`). `spawn`, `chan`, `task`, `shared`, `lock` are in the
+  library (`core.lang`); `for x of rx` loops over a receiver; more senders come from `copy tx`.
+- **VS10. `linear` types.** A `linear` struct, obj or enum must be consumed exactly once: on every path out of its scope (end of
+  block, `return`, `?`, `break`, `continue`) a variable holding one must have been moved (a `sink` call, a `!!` call, `_ = x`,
+  destructuring); dropping it by assignment or by ignoring a call's result is an error. It cannot have `deinit`, and a non-linear type
+  cannot hold one. `sink` parameters of a linear type count as variables. Not yet: `T: linear` bounds, so generic code treats `T` as
+  never linear; linear values inside closures.
+- **VS11. `defer`.** Code in `defer` cannot `return`, `?`, `break`, `continue` or `become`, and its result cannot be a `result`
+  (nowhere to send the error). Names it uses are checked where the `defer` is written; what it moves happens at scope end.
+- **VS12. Plain values need no `sink`.** The `sink` mark at a call is required only for values that own something; `tx.send(i)` with an
+  `int` is a copy. (Refines TC9.)
+
+## Stage 6: errors and entry points (done)
+
+- **`converts`.** `?` and `to` use `impl converts<app_error> for parse_error { fn convert(self) -> app_error = ... }`. `?` accepts an
+  error type when it equals the function's, when the function returns the catch-all `error`, or when such an `impl` exists. The orphan
+  rule counts the interface's type argument as local (`app_error` is yours). `converts` is still a placeholder name.
+- **`main`.** `fn main()` or `fn main(args: [string])`, returning nothing or `void ! E`; not generic.
+- **Overflow.** `+%`, `-%`, `*%` and their assignment forms are for integers (checked in stage 2); plain `+ - *` stop the program on
+  overflow at run time.
+- **`defer`** rules are VS11 above.
+- **Unreachable `switch` arms** are errors: "this case can never match: the cases above already cover it" (there are no warnings yet).
 
 ## Decisions from draft 1 (TC1 to TC8)
 

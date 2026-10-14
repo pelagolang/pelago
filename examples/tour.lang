@@ -249,10 +249,10 @@ fn parallel_total(xs: [int]) -> int {
 }
 
 fn pipeline() {
-    const task = spawn(sink data ~> crunch(data))
+    const task = spawn([sink data] ~> crunch(data))
     const total = task.join!!()
     const (tx, rx) = chan<int>()
-    spawn(sink tx ~> {
+    spawn([sink tx] ~> {
         for i of 0..10 { tx.send(i)? }
     })
     for x of rx { print("got #x") }

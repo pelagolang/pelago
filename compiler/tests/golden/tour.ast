@@ -242,14 +242,15 @@
     pipeline
     ()
     (block
-      (const task (call spawn (arg sink (~> (data) (call crunch data)))))
+      (const task (call spawn (~> (capture (sink data)) () (call crunch data))))
       (const total (call!! (. task join)))
       (const (tuple tx rx) (call (apply chan int)))
       (call
         spawn
-        (arg
-          sink
-          (~> (tx) (block (tail (for-of (i) (.. 0 10) (block (tail (try (call (. tx send) i))))))))))
+        (~>
+          (capture (sink tx))
+          ()
+          (block (tail (for-of (i) (.. 0 10) (block (tail (try (call (. tx send) i)))))))))
       (for-of (x) rx (block (tail (call print (str "got " (# x))))))
       (select
         (case (= v (call (. a recv))) (block (tail (call print (str "a: " (# v))))))

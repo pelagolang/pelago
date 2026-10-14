@@ -42,10 +42,17 @@ pub struct Typed {
     pub diagnostics: Vec<Diagnostic>,
     /// The structs, enums and objs that own something (so they move instead of copying).
     pub owning: std::collections::HashSet<DefId>,
+    /// The types declared `linear`: they must be consumed exactly once.
+    pub linear: std::collections::HashSet<DefId>,
     names: Vec<String>,
 }
 
 impl Typed {
+    /// Is a value of this type linear (it, or something inside it, was declared `linear`)?
+    pub fn is_linear(&self, t: Ty) -> bool {
+        linear_in(&self.types, &self.linear, t)
+    }
+
     /// Does a value of this type own something, so that it moves instead of being copied?
     /// Type parameters count as plain for now: generic code cannot say yet whether `T` copies.
     pub fn is_owning(&self, t: Ty) -> bool {
@@ -83,6 +90,7 @@ pub fn check(program: &Program, resolved: &Resolved) -> Typed {
     c.prepare_impls();
     c.check_impls();
     c.check_entry();
+    c.check_declarations();
     c.check_all();
     c.finish()
 }
@@ -286,6 +294,10 @@ pub(crate) struct Checker<'p> {
     core_ifaces: HashMap<String, DefId>,
     pat_ctors: HashMap<(ModuleId, u32, u32), exhaust::PatCtor>,
     pending_matches: Vec<exhaust::PendingMatch<'p>>,
+    /// Places passed to a `sink` parameter without `sink`: an error only if they own something.
+    pending_sinks: Vec<(ModuleId, Span, String)>,
+    owning_cache: Option<std::collections::HashSet<DefId>>,
+    linear: std::collections::HashSet<DefId>,
 }
 
 fn int_text(text: &str) -> Option<u128> {
@@ -338,12 +350,16 @@ impl<'p> Checker<'p> {
             core_ifaces: HashMap::new(),
             pat_ctors: HashMap::new(),
             pending_matches: Vec::new(),
+            pending_sinks: Vec::new(),
+            owning_cache: None,
+            linear: std::collections::HashSet::new(),
         }
     }
 
     fn finish(mut self) -> Typed {
         self.flush_bounds();
         self.flush_matches();
+        self.flush_sinks();
         let mut tys = HashMap::new();
         let entries = std::mem::take(&mut self.expr_tys);
         for (f, s, e, t) in entries {
@@ -357,10 +373,12 @@ impl<'p> Checker<'p> {
             local_tys.insert(d, z);
         }
         let owning = self.compute_owning();
+        let linear = std::mem::take(&mut self.linear);
         let mut diagnostics = self.res.diagnostics.clone();
         diagnostics.extend(self.diags);
         Typed {
             owning,
+            linear,
             tys,
             local_tys,
             names: self.res.defs.iter().map(|d| d.name.clone()).collect(),
@@ -530,6 +548,9 @@ impl<'p> Checker<'p> {
                 self.register_generics(file, &d.generics, &d.where_);
                 let Some(def) = def else { return };
                 self.register_derives(file, def, &item.attrs);
+                if item.mods.is_linear {
+                    self.linear.insert(def);
+                }
                 self.nodes.insert(
                     def,
                     Node::Adt {
@@ -546,6 +567,9 @@ impl<'p> Checker<'p> {
                 self.register_generics(file, &e.generics, &e.where_);
                 let Some(def) = def else { return };
                 self.register_derives(file, def, &item.attrs);
+                if item.mods.is_linear {
+                    self.linear.insert(def);
+                }
                 self.nodes.insert(
                     def,
                     Node::Adt {
@@ -1218,6 +1242,7 @@ impl<'p> Checker<'p> {
         }
         self.flush_bounds();
         self.flush_matches();
+        self.flush_sinks();
         let lits = std::mem::take(&mut self.lits);
         for l in lits {
             if let Some(k) = self.tt.int_kind(l.ty) {
@@ -1403,6 +1428,42 @@ pub(crate) struct UnitState {
     loops: Vec<LoopCtx>,
     floor: u32,
     self_depth: usize,
+}
+
+/// Does a value of this type have to be consumed exactly once?
+pub(crate) fn linear_in(tt: &TypeTable, linear: &std::collections::HashSet<DefId>, t: Ty) -> bool {
+    let t = tt.shallow(t);
+    match tt.kind(t) {
+        TyKind::Adt(d, args) => {
+            linear.contains(d) || args.iter().any(|a| linear_in(tt, linear, *a))
+        }
+        TyKind::List(e)
+        | TyKind::Array(e, _)
+        | TyKind::Option(e)
+        | TyKind::Box(e)
+        | TyKind::Set(e) => linear_in(tt, linear, *e),
+        TyKind::Tuple(ts) | TyKind::AltTuple(ts, _) => ts.iter().any(|x| linear_in(tt, linear, *x)),
+        TyKind::Result(a, b) | TyKind::Map(a, b) => {
+            linear_in(tt, linear, *a) || linear_in(tt, linear, *b)
+        }
+        _ => false,
+    }
+}
+
+/// Is this a view (`str`, a function value) or does it hold one? Views cannot be stored.
+pub(crate) fn holds_view(tt: &TypeTable, t: Ty) -> bool {
+    let t = tt.shallow(t);
+    match tt.kind(t) {
+        TyKind::Str | TyKind::Fn(..) => true,
+        TyKind::List(e)
+        | TyKind::Array(e, _)
+        | TyKind::Option(e)
+        | TyKind::Set(e)
+        | TyKind::Range(e) => holds_view(tt, *e),
+        TyKind::Tuple(ts) | TyKind::AltTuple(ts, _) => ts.iter().any(|x| holds_view(tt, *x)),
+        TyKind::Result(a, b) | TyKind::Map(a, b) => holds_view(tt, *a) || holds_view(tt, *b),
+        _ => false,
+    }
 }
 
 /// A literal's value as written, for range checks.

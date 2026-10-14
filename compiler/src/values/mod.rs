@@ -82,6 +82,8 @@ enum Ctx {
 struct State {
     /// Variables that may have been moved, and where.
     moved: HashMap<DefId, Span>,
+    /// `linear` variables that may still hold their value (not consumed on some path).
+    held: HashSet<DefId>,
     /// After `return`, `break`, `continue` or a call that never returns.
     dead: bool,
 }
@@ -97,16 +99,21 @@ fn merge(a: State, b: State) -> State {
     for (d, s) in b.moved {
         out.moved.entry(d).or_insert(s);
     }
+    out.held.extend(b.held);
     out
 }
 
 struct LoopFrame {
+    /// How many scopes were open outside the loop.
+    scope_depth: usize,
     label: Option<String>,
     breaks: Vec<State>,
     continues: Vec<State>,
 }
 
 struct ClosureFrame {
+    /// How many scopes were open outside the closure.
+    scope_base: usize,
     span: Span,
     caps: Vec<(DefId, Option<Mode>)>,
 }
@@ -153,6 +160,10 @@ struct Walker<'a> {
     loops: Vec<LoopFrame>,
     closures: Vec<ClosureFrame>,
     pending_label: Option<String>,
+    /// Variables introduced in each open block, to check `linear` values at its end.
+    scopes: Vec<Vec<DefId>>,
+    /// `defer`s seen in the current function.
+    defers: u32,
 }
 
 impl<'a> Walker<'a> {
@@ -169,6 +180,8 @@ impl<'a> Walker<'a> {
             loops: Vec::new(),
             closures: Vec::new(),
             pending_label: None,
+            scopes: Vec::new(),
+            defers: 0,
         }
     }
 
@@ -278,7 +291,11 @@ impl<'a> Walker<'a> {
         let saved_state = std::mem::take(&mut self.state);
         let saved_loops = std::mem::take(&mut self.loops);
         let saved_closures = std::mem::take(&mut self.closures);
+        let saved_scopes = std::mem::take(&mut self.scopes);
+        let saved_defers = std::mem::take(&mut self.defers);
         f(self);
+        self.scopes = saved_scopes;
+        self.defers = saved_defers;
         self.state = saved_state;
         self.loops = saved_loops;
         self.closures = saved_closures;
@@ -322,6 +339,7 @@ impl<'a> Walker<'a> {
 
     fn fn_decl(&mut self, f: &FnDecl) {
         let is_init = f.kind != FnKind::Fn;
+        self.scopes.push(Vec::new());
         if is_init {
             if let Some(&d) = self.res.decls.get(&(self.file, f.name.span.start)) {
                 self.binds.insert(d, Bind::Inout);
@@ -336,15 +354,157 @@ impl<'a> Walker<'a> {
                     _ => Bind::Let,
                 };
                 self.binds.insert(d, b);
+                if matches!(b, Bind::Sink | Bind::Owned) {
+                    self.track_linear(d);
+                }
             }
             if let Some(v) = &p.default {
                 self.expr(v, Ctx::Consume);
             }
         }
         match &f.body {
-            FnBody::Block(b) => self.block(b, Ctx::Consume),
-            FnBody::Expr(e) => self.expr(e, Ctx::Consume),
+            FnBody::Block(b) => {
+                self.block(b, Ctx::Consume);
+                if let Some(t) = &b.tail {
+                    self.check_escape(t);
+                }
+            }
+            FnBody::Expr(e) => {
+                self.expr(e, Ctx::Consume);
+                self.check_escape(e);
+            }
             FnBody::None => {}
+        }
+        let end = f.name.span;
+        self.leave_scope(end, "the function ends");
+    }
+
+    // ---- `linear` values -----------------------------------------------------------------------------
+
+    fn is_linear_def(&self, d: DefId) -> bool {
+        self.typed
+            .local_tys
+            .get(&d)
+            .is_some_and(|t| self.typed.is_linear(*t))
+    }
+
+    /// A new variable that owns a `linear` value must be consumed before it goes away.
+    fn track_linear(&mut self, d: DefId) {
+        if self.is_linear_def(d) {
+            self.state.held.insert(d);
+            if let Some(s) = self.scopes.last_mut() {
+                s.push(d);
+            }
+        }
+    }
+
+    /// Reports the `linear` variables of the innermost scope that still hold their value.
+    fn leave_scope(&mut self, at: Span, why: &str) {
+        let Some(vars) = self.scopes.pop() else {
+            return;
+        };
+        self.report_held(&vars, at, why);
+    }
+
+    fn report_held(&mut self, vars: &[DefId], at: Span, why: &str) {
+        for d in vars {
+            if self.state.held.contains(d) && !self.state.dead {
+                let n = self.name_of(*d);
+                self.report(
+                    at,
+                    "linear",
+                    format!("`{n}` is a `linear` value and must be consumed before {why}; consume it with a `!!` call or pass it with `sink`"),
+                );
+            }
+        }
+    }
+
+    /// An early exit (`return`, `?`, `break`, `continue`) leaves every scope above `depth`.
+    fn exit_scopes(&mut self, depth: usize, at: Span, why: &str) {
+        let base = self.closures.last().map_or(0, |c| c.scope_base);
+        let from = depth.max(base);
+        let vars: Vec<DefId> = self.scopes.iter().skip(from).flatten().copied().collect();
+        self.report_held(&vars, at, why);
+    }
+
+    // ---- Views that outlive their source ----------------------------------------------------------------
+
+    /// A `str` returned from a function must not point into a local that is about to go away.
+    fn check_escape(&mut self, e: &Expr) {
+        if !self.closures.is_empty() {
+            return;
+        }
+        match &Self::strip(e).kind {
+            ExprKind::Block(b) | ExprKind::Unsafe(b) => {
+                if let Some(t) = &b.tail {
+                    self.check_escape(t);
+                }
+            }
+            ExprKind::If(i) | ExprKind::Unless(i) => {
+                if let Some(t) = &i.then.tail {
+                    self.check_escape(t);
+                }
+                if let Some(el) = &i.else_ {
+                    self.check_escape(el);
+                }
+            }
+            ExprKind::Ternary { then, else_, .. } => {
+                self.check_escape(then);
+                self.check_escape(else_);
+            }
+            ExprKind::Switch(s) => {
+                for arm in &s.arms {
+                    if let Some(t) = &arm.body.tail {
+                        self.check_escape(t);
+                    }
+                }
+            }
+            _ => {
+                let is_str = self
+                    .typed
+                    .tys
+                    .get(&(self.file, e.span.start, e.span.end))
+                    .is_some_and(|t| matches!(self.typed.types.kind_of(*t), TyKind::Str));
+                if !is_str {
+                    return;
+                }
+                let Some(root) = self.origin_root(e) else {
+                    return;
+                };
+                let local = matches!(
+                    self.binds.get(&root),
+                    Some(Bind::Var | Bind::Const | Bind::Sink | Bind::Owned)
+                );
+                let owns = self
+                    .typed
+                    .local_tys
+                    .get(&root)
+                    .is_some_and(|t| self.typed.is_owning(*t));
+                if local && owns {
+                    let n = self.name_of(root);
+                    self.report(
+                        e.span,
+                        "escape",
+                        format!("this `str` points into `{n}`, which is gone when the function ends; return a `string` instead (`... to string`)"),
+                    );
+                }
+            }
+        }
+    }
+
+    /// The variable a view was taken from: `s` in `s`, `s[1..]`, `s.trim()`, `p.name`.
+    fn origin_root(&self, e: &Expr) -> Option<DefId> {
+        match &Self::strip(e).kind {
+            ExprKind::Name(id) => self.def_at_use(id.span.start),
+            ExprKind::SelfValue => self.def_at_use(Self::strip(e).span.start),
+            ExprKind::Field { base, .. }
+            | ExprKind::TupleIndex { base, .. }
+            | ExprKind::Index { base, .. } => self.origin_root(base),
+            ExprKind::Call { callee, .. } => match &Self::strip(callee).kind {
+                ExprKind::Field { base, .. } => self.origin_root(base),
+                _ => None,
+            },
+            _ => None,
         }
     }
 
@@ -353,7 +513,22 @@ impl<'a> Walker<'a> {
     fn stmt(&mut self, s: &Stmt) {
         match &s.kind {
             StmtKind::Decl(d) => self.decl(d),
-            StmtKind::Expr(e) => self.expr(e, Ctx::Read),
+            StmtKind::Expr(e) => {
+                self.expr(e, Ctx::Read);
+                let linear = self
+                    .typed
+                    .tys
+                    .get(&(self.file, e.span.start, e.span.end))
+                    .is_some_and(|t| self.typed.is_linear(*t));
+                if linear && !matches!(Self::strip(e).kind, ExprKind::Name(_)) {
+                    self.report(
+                        e.span,
+                        "linear",
+                        "this produces a `linear` value that is thrown away; it must be consumed"
+                            .to_string(),
+                    );
+                }
+            }
             StmtKind::Item(i) => self.item(i),
         }
     }
@@ -423,15 +598,21 @@ impl<'a> Walker<'a> {
         };
         self.binds.insert(d, b);
         self.state.moved.remove(&d);
+        if matches!(b, Bind::Var | Bind::Const | Bind::Sink | Bind::Owned) {
+            self.track_linear(d);
+        }
     }
 
     fn block(&mut self, b: &Block, ctx: Ctx) {
+        self.scopes.push(Vec::new());
         for s in &b.stmts {
             self.stmt(s);
         }
         if let Some(t) = &b.tail {
             self.expr(t, ctx);
         }
+        let end = Span::new(b.span.end.saturating_sub(1), b.span.end);
+        self.leave_scope(end, "this block ends");
     }
 
     // ---- Names, moves and permission --------------------------------------------------------------------
@@ -482,6 +663,7 @@ impl<'a> Walker<'a> {
             Bind::Var | Bind::Const | Bind::Sink | Bind::Owned => {
                 if !self.declared_outside_closure(d) {
                     self.state.moved.insert(d, span);
+                    self.state.held.remove(&d);
                 }
             }
         }
@@ -582,7 +764,12 @@ impl<'a> Walker<'a> {
             }
             ExprKind::Paren(i) => self.expr(i, ctx),
             ExprKind::Copy(i) => self.place_read(i),
-            ExprKind::Try(i) => self.expr(i, ctx),
+            ExprKind::Try(i) => {
+                self.expr(i, ctx);
+                if self.closures.is_empty() {
+                    self.exit_scopes(0, e.span, "`?` can return from here");
+                }
+            }
             ExprKind::Field { base, name, .. } => {
                 if self.def_at_use(name.span.start).is_some() {
                     return;
@@ -734,20 +921,38 @@ impl<'a> Walker<'a> {
             ExprKind::Return(v) | ExprKind::Yield(v) => {
                 if let Some(v) = v {
                     self.expr(v, Ctx::Consume);
+                    if matches!(e.kind, ExprKind::Return(_)) {
+                        self.check_escape(v);
+                    }
                 }
                 if matches!(e.kind, ExprKind::Return(_)) {
+                    self.exit_scopes(0, e.span, "this `return`");
                     self.state.dead = true;
                 }
             }
             ExprKind::Become(v) => {
                 self.expr(v, Ctx::Consume);
+                self.check_become(v);
+                self.exit_scopes(0, e.span, "this `become`");
                 self.state.dead = true;
+            }
+            ExprKind::Defer(inner) => {
+                // The deferred code runs when the scope ends: its uses are checked here, its moves
+                // happen later.
+                self.defers += 1;
+                let saved = self.state.clone();
+                self.expr(inner, Ctx::Read);
+                self.state = saved;
             }
             ExprKind::Break { label, value } => {
                 if let Some(v) = value {
                     self.expr(v, Ctx::Consume);
                 }
                 let name = label.as_ref().map(|l| self.text(l.span).to_string());
+                let depth = self.find_loop(name.as_deref()).map(|f| f.scope_depth);
+                if let Some(d) = depth {
+                    self.exit_scopes(d, e.span, "this `break`");
+                }
                 let st = self.state.clone();
                 if let Some(f) = self.find_loop(name.as_deref()) {
                     f.breaks.push(st);
@@ -756,6 +961,10 @@ impl<'a> Walker<'a> {
             }
             ExprKind::Continue { label } => {
                 let name = label.as_ref().map(|l| self.text(l.span).to_string());
+                let depth = self.find_loop(name.as_deref()).map(|f| f.scope_depth);
+                if let Some(d) = depth {
+                    self.exit_scopes(d, e.span, "this `continue`");
+                }
                 let st = self.state.clone();
                 if let Some(f) = self.find_loop(name.as_deref()) {
                     f.continues.push(st);
@@ -814,7 +1023,18 @@ impl<'a> Walker<'a> {
             if let Some(p) = whole {
                 // A new value revives a moved variable.
                 self.may_change(p.root, Self::strip(lhs).span);
+                if self.state.held.contains(&p.root) {
+                    let n = self.name_of(p.root);
+                    self.report(
+                        Self::strip(lhs).span,
+                        "linear",
+                        format!(
+                            "`{n}` still holds a `linear` value; assigning over it would drop it"
+                        ),
+                    );
+                }
                 self.state.moved.remove(&p.root);
+                self.track_linear(p.root);
                 return;
             }
             self.place_read(lhs);
@@ -914,6 +1134,7 @@ impl<'a> Walker<'a> {
     fn run_loop(&mut self, forever: bool, label: Option<String>, mut one: impl FnMut(&mut Self)) {
         let s0 = self.state.clone();
         self.loops.push(LoopFrame {
+            scope_depth: self.scopes.len(),
             label,
             breaks: Vec::new(),
             continues: Vec::new(),
@@ -952,6 +1173,7 @@ impl<'a> Walker<'a> {
     }
 
     fn closure(&mut self, e: &Expr, c: &Closure) {
+        let pre = self.state.clone();
         let mut caps = Vec::new();
         for cap in &c.captures {
             let Some(d) = self.def_at_use(cap.name.span.start) else {
@@ -974,14 +1196,61 @@ impl<'a> Walker<'a> {
                 _ => self.touch(d, cap.name.span, Ctx::Read, false),
             }
         }
-        let saved = self.state.clone();
-        self.closures.push(ClosureFrame { span: e.span, caps });
+        // Inside the body the captured names are live; outside, the captures have taken effect.
+        let after_captures = std::mem::replace(&mut self.state, pre);
+        self.closures.push(ClosureFrame {
+            scope_base: self.scopes.len(),
+            span: e.span,
+            caps,
+        });
         for p in &c.params {
             self.bind_pattern(&p.pattern, Bind::View);
         }
         self.expr(&c.body, Ctx::Consume);
         self.closures.pop();
-        self.state = saved;
+        self.state = after_captures;
+    }
+
+    /// `become f(args)` replaces this function's frame, so nothing local may be lent to the call.
+    fn check_become(&mut self, call: &Expr) {
+        if self.defers > 0 {
+            self.report(
+                call.span,
+                "become",
+                "`become` cannot follow a `defer`: the deferred code would have to run after the call".to_string(),
+            );
+        }
+        let ExprKind::Call { callee, args, .. } = &Self::strip(call).kind else {
+            return;
+        };
+        let mut lent: Vec<(&Expr, bool)> = Vec::new();
+        if let ExprKind::Field { base, name, .. } = &Self::strip(callee).kind {
+            if self.def_at_use(name.span.start).is_none() {
+                lent.push((base, false));
+            }
+        }
+        for a in args {
+            match a.mode {
+                Some(Mode::Inout) => lent.push((&a.value, true)),
+                Some(Mode::Sink) => {}
+                _ => lent.push((&a.value, false)),
+            }
+        }
+        for (x, changes) in lent {
+            let Some(p) = self.place_of(x) else { continue };
+            let local = matches!(
+                self.binds.get(&p.root),
+                Some(Bind::Var | Bind::Const | Bind::Sink | Bind::Owned)
+            );
+            if local && (changes || self.ty_owning(x)) {
+                let n = self.name_of(p.root);
+                self.report(
+                    Self::strip(x).span,
+                    "become",
+                    format!("`{n}` is a local variable and would be gone when `become` replaces this call; pass `sink {n}` or `copy {n}`"),
+                );
+            }
+        }
     }
 
     // ---- Calls and exclusive access ---------------------------------------------------------------------
@@ -1003,7 +1272,72 @@ impl<'a> Walker<'a> {
         }
     }
 
+    fn is_spawn(&self, callee: &Expr) -> bool {
+        match &Self::strip(callee).kind {
+            ExprKind::Name(id) => self.def_at_use(id.span.start).is_some_and(|d| {
+                let def = self.res.def(d);
+                def.kind == DefKind::Fn && def.name == "spawn"
+            }),
+            _ => false,
+        }
+    }
+
+    /// A thread may outlive the function that starts it, so what its closure uses must be copied
+    /// or moved in; nothing changeable may be shared.
+    fn check_spawn(&mut self, closure: &Expr, c: &Closure) {
+        let mut found = Used { starts: Vec::new() };
+        found.visit_expr(&c.body);
+        let mut seen: Vec<DefId> = Vec::new();
+        for start in found.starts {
+            let Some(d) = self.def_at_use(start) else {
+                continue;
+            };
+            if seen.contains(&d) || !self.binds.contains_key(&d) {
+                continue;
+            }
+            let ds = self.res.def(d).span;
+            if ds.start >= closure.span.start && ds.start < closure.span.end {
+                continue; // declared inside the closure
+            }
+            seen.push(d);
+            let n = self.name_of(d);
+            let cap = c
+                .captures
+                .iter()
+                .find(|cap| self.def_at_use(cap.name.span.start) == Some(d));
+            match cap.map(|cp| cp.mode) {
+                Some(Some(Mode::Inout)) => self.report(
+                    closure.span,
+                    "spawn",
+                    format!("`{n}` is captured with `inout`, but another thread cannot change what this one can see; move it in with `sink {n}` or use `lock`"),
+                ),
+                Some(_) => {}
+                None => {
+                    let owning = self
+                        .typed
+                        .local_tys
+                        .get(&d)
+                        .is_some_and(|t| self.typed.is_owning(*t));
+                    if owning {
+                        self.report(
+                            closure.span,
+                            "spawn",
+                            format!("the new thread may outlive this function, so `{n}` must be moved in: capture it with `[sink {n}]` (`copy {n}` first to keep your own)"),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn call(&mut self, e: &Expr, callee: &Expr, args: &[Arg], mark: CallMark) {
+        if self.is_spawn(callee) {
+            for a in args {
+                if let ExprKind::Closure(c) = &Self::strip(&a.value).kind {
+                    self.check_spawn(&a.value, c);
+                }
+            }
+        }
         let ctor = self.is_constructor(callee);
         let mut accesses: Vec<Access> = Vec::new();
         let receiver = match &Self::strip(callee).kind {
@@ -1108,4 +1442,20 @@ impl<'w, 'a> Visitor for Generic<'w, 'a> {
         self.w.block(b, Ctx::Read);
     }
     fn visit_type(&mut self, _t: &Type) {}
+}
+
+/// Collects where names (and `self`) are used.
+struct Used {
+    starts: Vec<u32>,
+}
+
+impl Visitor for Used {
+    fn visit_expr(&mut self, e: &Expr) {
+        match &e.kind {
+            ExprKind::Name(id) => self.starts.push(id.span.start),
+            ExprKind::SelfValue => self.starts.push(e.span.start),
+            _ => {}
+        }
+        visit::walk_expr(self, e);
+    }
 }

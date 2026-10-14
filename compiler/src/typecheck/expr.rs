@@ -705,6 +705,14 @@ impl<'p> Checker<'p> {
                 _ => vec![e; pats],
             }
         };
+        if matches!(k, TyKind::Adt(..)) {
+            if let Some(m) = self.lookup_method(source, "iter", span) {
+                let r = self.tt.subst(m.sig.ret, &m.map);
+                if let TyKind::Iter(e) = self.kind_of(r) {
+                    return one(self, e);
+                }
+            }
+        }
         match k {
             TyKind::List(e)
             | TyKind::Array(e, _)

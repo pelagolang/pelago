@@ -218,3 +218,61 @@ impl char {
     ext fn to_upper(self) -> char
     ext fn to_lower(self) -> char
 }
+
+// ---- Concurrency (docs/design/concurrency.md) ----------------------------------------------------
+
+/// What `send` returns when nobody is receiving any more.
+pub struct closed {}
+
+/// A running thread that will produce a `T`. `join!!()` waits and consumes it.
+pub struct task<T> {}
+
+impl<T> task<T> {
+    ext fn join(sink self) -> T
+}
+
+/// Starts `f` on a new thread. What the closure uses must be copied or moved in (`sink x ~> ...`).
+pub ext fn spawn<T>(f: fn() -> T) -> task<T>
+
+pub struct sender<T> {}
+pub struct receiver<T> {}
+
+/// A channel: a sender end and a receiver end. A capacity of 0 means unbounded.
+pub ext fn chan<T>(capacity: int = 0) -> (sender<T>, receiver<T>)
+
+impl<T> sender<T> {
+    ext fn send(self, sink value: T) -> void ! closed
+}
+
+/// More senders: `copy tx`.
+impl<T> clone for sender<T> {
+    ext fn clone(self) -> sender<T>
+}
+
+impl<T> receiver<T> {
+    ext fn recv(self) -> T?
+    ext fn try_recv(self) -> T?
+    ext fn iter(self) -> iter<T>
+}
+
+/// Read-only data counted across threads: `shared(value)`, and `copy handle` for another handle.
+pub struct shared<T> {
+    ext init(sink value: T)
+}
+
+impl<T> shared<T> {
+    ext fn get(self) -> T
+}
+
+impl<T> clone for shared<T> {
+    ext fn clone(self) -> shared<T>
+}
+
+/// Data changed from several threads one at a time: `lock(value)`. Access is through `with`.
+pub struct lock<T> {
+    ext init(sink value: T)
+}
+
+impl<T> lock<T> {
+    ext fn with<R>(self, f: fn(inout T) -> R) -> R
+}

@@ -1027,8 +1027,7 @@ fn the_orphan_rule() {
         .map(|d| d.message.clone())
         .collect();
     assert!(
-        msgs.iter()
-            .any(|m| m.contains("neither `show`, `int`")),
+        msgs.iter().any(|m| m.contains("neither `show`, `int`")),
         "{msgs:?}"
     );
     assert!(
@@ -1178,13 +1177,17 @@ const APP_ERR: &str = "enum app_error { parse(parse_error)\n other }\nimpl conve
 
 #[test]
 fn question_mark_converts_errors() {
-    clean(&format!("{APP_ERR}fn t(s: str) -> int ! app_error {{ const n = s.parse_int()?\n ok(n) }}"));
+    clean(&format!(
+        "{APP_ERR}fn t(s: str) -> int ! app_error {{ const n = s.parse_int()?\n ok(n) }}"
+    ));
     flagged(
         "enum app_error { other }\nfn t(s: str) -> int ! app_error { const n = s.parse_int()?\n ok(n) }",
         "write `impl converts<app_error> for parse_error`",
     );
     clean("fn t(s: str) -> int ! error { const n = s.parse_int()?\n ok(n) }");
-    clean(&format!("{APP_ERR}fn t(e: parse_error) -> app_error = e to app_error"));
+    clean(&format!(
+        "{APP_ERR}fn t(e: parse_error) -> app_error = e to app_error"
+    ));
     flagged(
         "enum app_error { other }\nfn t(e: parse_error) -> app_error = e to app_error",
         "cannot convert",
@@ -1201,7 +1204,10 @@ fn main_has_fixed_forms() {
     clean("fn main(args: [string]) { }");
     clean("fn main() -> void ! error { }");
     flagged("fn main(a: int) { }", "`main` takes no parameters");
-    flagged("fn main(a: [string], b: int) { }", "`main` takes no parameters");
+    flagged(
+        "fn main(a: [string], b: int) { }",
+        "`main` takes no parameters",
+    );
     flagged("fn main() -> int { return 1 }", "`main` returns nothing");
     flagged("fn main<T>() { }", "cannot be generic");
 }
@@ -1209,26 +1215,61 @@ fn main_has_fixed_forms() {
 #[test]
 fn defer_cannot_leave_the_scope() {
     clean("fn t() { defer print(1) }");
-    flagged("fn t() -> int ! error { defer { return ok(1) }\n ok(2) }", "cannot use `return`");
-    flagged("fn t() { for i of 0..2 { defer { break } } }", "cannot use `break`");
-    flagged("fn t(s: str) -> void ! error { defer { s.parse_int()? } }", "cannot use `?`");
-    flagged("fn f() -> void ! error { }\nfn t() { defer f() }", "returns a result");
+    flagged(
+        "fn t() -> int ! error { defer { return ok(1) }\n ok(2) }",
+        "cannot use `return`",
+    );
+    flagged(
+        "fn t() { for i of 0..2 { defer { break } } }",
+        "cannot use `break`",
+    );
+    flagged(
+        "fn t(s: str) -> void ! error { defer { s.parse_int()? } }",
+        "cannot use `?`",
+    );
+    flagged(
+        "fn f() -> void ! error { }\nfn t() { defer f() }",
+        "returns a result",
+    );
 }
 
 #[test]
 fn overflow_operators_are_for_integers() {
     clean("fn t(a: uint8, b: uint8) -> uint8 = a +% b");
     clean("fn t(inout a: uint8) { a +%= 1\n a -%= 1\n a *%= 2 }");
-    flagged("fn t(a: float, b: float) -> float = a +% b", "needs integers");
+    flagged(
+        "fn t(a: float, b: float) -> float = a +% b",
+        "needs integers",
+    );
 }
 
 #[test]
 fn unreachable_switch_arms_are_reported() {
     flagged(&format!("{SHAPES}fn t(s: shape) -> int {{ switch s {{ case .circle(r): 1\n case .circle(q): 2\n default: 0 }} }}"), "can never match");
     flagged(&format!("{SHAPES}fn t(s: shape) -> int {{ switch s {{ case .circle(r): 1\n case .rect(w, h): 2\n case .empty: 3\n default: 0 }} }}"), "can never match");
-    flagged("fn t(n: int) -> int { switch n { case x: 1\n case 5: 2 } }", "can never match");
+    flagged(
+        "fn t(n: int) -> int { switch n { case x: 1\n case 5: 2 } }",
+        "can never match",
+    );
     clean(&format!("{SHAPES}fn t(s: shape) -> int {{ switch s {{ case .circle(r) if r > 1.0: 1\n case .circle(r): 2\n default: 0 }} }}"));
     clean("fn t(xs: [int]) -> int { switch xs { case []: 0\n case [a]: 1\n case [a, ...rest]: 2\n default: 3 } }".replace("\n default: 3", "").as_str());
     flagged("fn t(xs: [int]) -> int { switch xs { case [first, ...rest]: 1\n case [a]: 2\n default: 0 } }", "can never match");
-    flagged("fn t(o: int?) -> int { switch o { case some(v): v\n case none: 0\n case some(w): 1 } }", "can never match");
+    flagged(
+        "fn t(o: int?) -> int { switch o { case some(v): v\n case none: 0\n case some(w): 1 } }",
+        "can never match",
+    );
+}
+
+#[test]
+fn sink_marks_only_for_owning_values() {
+    clean("fn take(sink n: int) { }\nfn t() { const a = 1\n take(a) }");
+    flagged(
+        "fn take(sink n: string) { }\nfn t() { const a = \"x\"\n take(a) }",
+        "write `sink ...`",
+    );
+}
+
+#[test]
+fn channels_can_be_looped_over() {
+    clean("fn t() { const (tx, rx) = chan<int>()\n for x of rx { print(x) } }");
 }

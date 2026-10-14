@@ -487,6 +487,42 @@ impl<'p> Checker<'p> {
     /// Which structs, enums and objs own something. An `obj` always does; the others do when a
     /// field or payload does (found by repeating until nothing changes).
     pub(crate) fn compute_owning(&mut self) -> std::collections::HashSet<DefId> {
+        if let Some(c) = &self.owning_cache {
+            return c.clone();
+        }
+        let out = self.compute_owning_uncached();
+        self.owning_cache = Some(out.clone());
+        out
+    }
+
+    pub(crate) fn flush_sinks(&mut self) {
+        let pending = std::mem::take(&mut self.pending_sinks);
+        if pending.is_empty() {
+            return;
+        }
+        let owning = self.compute_owning();
+        for (file, span, what) in pending {
+            let ty = self
+                .expr_tys
+                .iter()
+                .rev()
+                .find(|(f, s, e, _)| *f == file && *s == span.start && *e == span.end)
+                .map(|x| x.3);
+            let Some(ty) = ty else { continue };
+            let ty = self.tt.zonk(ty);
+            if self.owns(ty, &owning) {
+                let saved = self.file;
+                self.file = file;
+                self.err(
+                    span,
+                    format!("{what} takes the value away; write `sink ...` at the call"),
+                );
+                self.file = saved;
+            }
+        }
+    }
+
+    fn compute_owning_uncached(&mut self) -> std::collections::HashSet<DefId> {
         let mut adts: Vec<DefId> = self
             .nodes
             .iter()
@@ -495,7 +531,7 @@ impl<'p> Checker<'p> {
         adts.sort();
         let mut owning = std::collections::HashSet::new();
         for d in &adts {
-            if self.def(*d).kind == DefKind::Obj {
+            if self.def(*d).kind == DefKind::Obj || self.linear.contains(d) {
                 owning.insert(*d);
             }
         }
@@ -580,7 +616,9 @@ impl<'p> Checker<'p> {
                 let ItemKind::Fn(f) = &it.kind else {
                     continue;
                 };
-                if f.kind != FnKind::Fn || m.src[f.name.span.start as usize..f.name.span.end as usize] != *"main" {
+                if f.kind != FnKind::Fn
+                    || m.src[f.name.span.start as usize..f.name.span.end as usize] != *"main"
+                {
                     continue;
                 }
                 let saved = self.file;
@@ -606,7 +644,10 @@ impl<'p> Checker<'p> {
                     }
                 }
             }
-            _ => self.err(f.name.span, "`main` takes no parameters or `args: [string]`"),
+            _ => self.err(
+                f.name.span,
+                "`main` takes no parameters or `args: [string]`",
+            ),
         }
         if let Some(r) = &f.ret {
             let ty = self.lower_type(r);
@@ -616,7 +657,97 @@ impl<'p> Checker<'p> {
                 _ => false,
             };
             if !ok {
-                self.err(r.span, "`main` returns nothing, or `void ! error` so that `?` works at the top level");
+                self.err(
+                    r.span,
+                    "`main` returns nothing, or `void ! error` so that `?` works at the top level",
+                );
+            }
+        }
+    }
+
+    /// Rules about declarations: views are not stored, functions do not return function values,
+    /// `linear` types are not hidden inside other types and have no `deinit`.
+    pub(crate) fn check_declarations(&mut self) {
+        let mut defs: Vec<DefId> = self.nodes.keys().copied().collect();
+        defs.sort();
+        for d in defs {
+            match self.nodes.get(&d).copied() {
+                Some(Node::Field {
+                    file,
+                    scope,
+                    f,
+                    owner,
+                }) => {
+                    let ft = self.field_ty(d);
+                    if holds_view(&self.tt, ft) {
+                        let _ = (scope, owner);
+                        let saved = self.file;
+                        self.file = file;
+                        self.err(
+                            f.ty.span,
+                            "a field cannot hold a view such as `str` or a function value; use `string`, or `box<fn ...>` for a function",
+                        );
+                        self.file = saved;
+                    }
+                }
+                Some(Node::Variant { file, v, .. }) => {
+                    let tys: Vec<Ty> = self.variant_fields(d).into_iter().map(|(_, t)| t).collect();
+                    for (i, t) in tys.into_iter().enumerate() {
+                        if holds_view(&self.tt, t) {
+                            let saved = self.file;
+                            self.file = file;
+                            self.err(
+                                v.fields[i].ty.span,
+                                "a case cannot hold a view such as `str` or a function value; use `string`, or `box<fn ...>` for a function",
+                            );
+                            self.file = saved;
+                        }
+                    }
+                }
+                Some(Node::Fn { file, f, .. }) => {
+                    let Some(sig) = self.fn_sig(d) else { continue };
+                    if let (Some(r), TyKind::Fn(..)) = (&f.ret, self.kind_of(sig.ret)) {
+                        let saved = self.file;
+                        self.file = file;
+                        self.err(
+                            r.span,
+                            "a function cannot return a function value, which would outlive what it uses; return `box<fn ...>`",
+                        );
+                        self.file = saved;
+                    }
+                }
+                Some(Node::Adt { file, .. }) => {
+                    if self.def(d).kind == DefKind::Interface {
+                        continue;
+                    }
+                    let own = self.own_adt_ty(d);
+                    let TyKind::Adt(_, args) = self.kind_of(own) else {
+                        continue;
+                    };
+                    let is_linear = self.linear.contains(&d);
+                    let span = self.def(d).span;
+                    let saved = self.file;
+                    self.file = file;
+                    if is_linear && self.res.member(d, "deinit").is_some() {
+                        self.err(
+                            span,
+                            "a `linear` type cannot have `deinit`: it is never dropped implicitly",
+                        );
+                    }
+                    if !is_linear {
+                        let set = self.linear.clone();
+                        let fields = self.field_types_of(d, &args);
+                        if fields.into_iter().any(|t| linear_in(&self.tt, &set, t)) {
+                            let n = self.def(d).name.clone();
+                            self.err(
+                                span,
+                                format!("`{n}` holds a `linear` value, so it must be declared `linear` too"),
+                            );
+                        }
+                    }
+                    self.file = saved;
+                }
+                _ => {}
             }
         }
     }
@@ -686,9 +817,11 @@ impl<'p> Checker<'p> {
             TyKind::Unknown => return,
             _ => false,
         };
-        let args_local = self.impls[idx].iface_args.clone().iter().any(|a| {
-            matches!(self.kind_of(*a), TyKind::Adt(d, _) if local(self, d))
-        });
+        let args_local = self.impls[idx]
+            .iface_args
+            .clone()
+            .iter()
+            .any(|a| matches!(self.kind_of(*a), TyKind::Adt(d, _) if local(self, d)));
         match iface {
             Some(i) => {
                 if !local(self, i) && !head_local && !args_local {

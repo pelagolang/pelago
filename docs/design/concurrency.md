@@ -31,7 +31,7 @@ and views cannot. There is no `Send` / `Sync` marker to write; an error says whi
 ## 2. Spawning
 
 ```
-const h = spawn(sink data ~> crunch(data))     // runs on a new thread; returns task<int>
+const h = spawn([sink data] ~> crunch(data))     // runs on a new thread; returns task<int>
 // ... do other work ...
 const total = h.join!!()                       // waits; consumes the handle; gives the int
 ```
@@ -86,7 +86,7 @@ This is the structured-concurrency model of Rust's `thread::scope`, and the safe
 ```
 const (tx, rx) = chan<int>()          // sender and receiver ends
 
-spawn(sink tx ~> {
+spawn([sink tx] ~> {
     for i of 0..10 { tx.send(i) }     // send takes its value with sink: it is *moved*, never shared
 })                                    // tx is dropped here: the channel closes for senders
 
@@ -100,7 +100,7 @@ for x of rx { print("got #x") }       // loop ends when every sender is gone
 - `rx.recv()` waits and returns `option<T>`: `none` means the channel is empty **and** every sender is gone.
   `rx.try_recv()` never waits.
 - `for x of rx` is `recv` in a loop.
-- Many senders: `tx.copy()` (explicit, as for every owning type). One receiver; a receiver is moved, not copied.
+- Many senders: `copy tx` (explicit, as for every owning type; `copy` is a keyword, so it is not a method). One receiver; a receiver is moved, not copied.
   (A many-receiver work queue is a library type later.)
 - Because a channel only moves values, **sending needs no lock-free trick from the user**, and the sent value
   cannot be touched by the sender afterwards (the compiler rejects it, as for any `sink`).
@@ -127,7 +127,8 @@ with value semantics at the edges:
 
 ```
 const config = shared(load_config())            // shared<config>: read-only, counted, cheap to copy
-spawn(sink config.copy() ~> use(config))
+const mine = copy config
+spawn([sink mine] ~> use(mine))
 
 const hits = lock(0)                            // lock<int>
 hits.with!(n ~> n += 1)                         // the only way in: a closure gets inout access
@@ -170,12 +171,13 @@ if done.load() { ... }
 
 - **CC1** `spawn` returns `task<T>`; `join!!()` consumes it; a stop in a task stops the program.
 - **CC2** `scope s { ... }` is kept (soft keyword `scope`), with disjoint `inout` captures checked by the compiler.
-- **CC3** Two channel ends from `chan<T>()`; `tx.copy()` for more senders; the receiver is moved, not copied.
+- **CC3** Two channel ends from `chan<T>()`; `copy tx` for more senders; the receiver is moved, not copied.
 - **CC4** `send` after the receiver is gone returns `result<void, closed>`.
 - **CC5** A `recv` arm in `select` binds an `option<T>`; `none` means that channel closed.
 - **CC6** Shared state types are `shared<T>`, `lock<T>` (access through `with`) and `atomic<T>`.
 - **CC7** Global `var` is forbidden; globals are `const`, or an explicit `lock<T>` / `atomic<T>`.
 - **CC8** A parallel loop helper is part of v1 (below).
+- **CC10** Captures are written in brackets: `spawn([sink data] ~> crunch(data))`. The form `spawn(sink data ~> ...)` would read as a `sink` argument holding a closure with one parameter.
 - **CC9** Durations are plain functions: `ms(50)`, `secs(2)`. No literal suffixes.
 
 ## Parallel loop helper

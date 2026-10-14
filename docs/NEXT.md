@@ -14,7 +14,7 @@
    **Imports and modules** are decided (`docs/design/modules.md`) and implemented.
 2. **Collections** (including builders) and **list patterns** are decided (`collections.md`, `list-patterns.md`). Revisit `sink` list patterns once the checker exists.
 3. **Errors** are decided (`docs/design/errors.md`). **Concurrency** is decided (`docs/design/concurrency.md`, CC1 to CC9).
-4. **Name resolution is done** (`docs/design/checker.md`, stage 1). **Stages 2 to 5 are done** (`langc check`): types, interfaces and bounds, exhaustiveness, value semantics (moves, exclusivity, `const` depth). **Next: stage 6** (`?` and `converts`, `main` forms, overflow operators, `defer`), then lowering to IR. Choices VS1 to VS6 in `checker.md` await the owner's confirmation; VS3 (taking a part of an owning value needs `copy`) is the strictest.
+4. **Name resolution is done** (`docs/design/checker.md`, stage 1). **Stages 2 to 5 are done** (`langc check`): types, interfaces and bounds, exhaustiveness, value semantics (moves, exclusivity, `const` depth). The checker is complete for version 1 (stage 6 too: `converts`, `main`, `defer`; `become`, `linear`, `spawn`). **Next: lowering to IR** (Phase 2). Choices VS1 to VS12 in `checker.md` await the owner's confirmation; VS3 (taking a part of an owning value needs `copy`) and VS10 (`linear`) are the biggest. Still open: `T: linear` bounds, `async`, warnings (everything is an error now).
 
 ## Open questions for the owner
 

@@ -515,10 +515,8 @@ impl<'p> Checker<'p> {
                             let Some(nq) = specialize_list(q, n) else {
                                 continue;
                             };
-                            let sp: Vec<Vec<Pat>> = rows
-                                .iter()
-                                .filter_map(|r| specialize_list(r, n))
-                                .collect();
+                            let sp: Vec<Vec<Pat>> =
+                                rows.iter().filter_map(|r| specialize_list(r, n)).collect();
                             let mut nt = vec![elem; n];
                             nt.extend_from_slice(rest_tys);
                             if self.useful(&sp, &nq, &nt, depth + 1) {
