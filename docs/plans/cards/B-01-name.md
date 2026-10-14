@@ -62,6 +62,52 @@ A middle path used by other languages: take the long evocative name and a short 
 3. If you pick Pacific or Atlantic, accept the search problem and plan for it (an official "lang" suffix in docs and the site)?
 4. Is the "vast expanse" idea about size (a language that scales), calm, or reach? Knowing which helps choose between Thalassa (the sea itself), Panthalassa (all of it), and Pontus (the deep).
 
+
+# 5. Head to head: Pelago and Thalassa (research after round 1)
+
+Checked October 2026 with direct registry lookups and web searches.
+
+| | **Pelago** | **Thalassa** |
+|---|---|---|
+| Meaning | Greek *pelagos* "the open sea"; the root of *archipelago* ("chief sea", then "sea of islands") | Greek "the sea"; the sea goddess |
+| Letters, syllables | 6, two (peh-LAY-go; some say peh-LAH-go) | 8, three (thuh-LASS-uh) |
+| crates.io | free | **taken** (a TLS wire-format library, 2026) |
+| npm | free | **taken** (an old service registry, 12 years) |
+| PyPI | free | **taken** (an ocean-modelling package) |
+| Language clash | none found | none found |
+| Other products | Singapore Airlines' travel marketplace (pelago.com), a Santa Barbara project-management firm (Intervals), a defunct Seattle app (Whrrl), an indie game (Puzzle Pelago). None is a programming tool. | None found in software; French TV and spas use the word. |
+| Domains | `pelago.com` / `.co` taken; `.dev`, `.org`, `.io` resolve (parked or used); `pelagolang.org` and `pelago-lang.org` do not resolve (probably free, confirm at a registrar) | not checked |
+| Search | "pelago" alone returns the airline app; "pelago lang" should be clean | "thalassa" returns spas, TV and the packages above |
+| Typing the tool | `pelago build`, short and easy | `thalassa build` is long; needs the alias `thal` |
+| Extension candidates | `.pel` (no known clash), `.pg` (clashes with PostgreSQL dumps), avoid `.pl` | `.tha`, `.thl` |
+
+## The ecosystems that grow out of each name
+
+**Pelago** gives a vocabulary that matches how the language is built (it has `pkg` and `mod`, so many small units):
+- *Archipelago* is a real, natural word for **a workspace of many packages** ("an archipelago of islands in one sea"). The package manager can call the workspace file `archipelago` or keep a plain name and use the word in docs.
+- A **package** is an island; the **standard library** is the open sea they all stand in (`core`). "Island" is for talk and docs; the keyword stays `pkg`.
+- The **registry** could be "the Strait" or simply `pelago.dev/pkg`; the **community** "islanders"; releases named by a chain: **Aegean** (1.x), ... (a naming list of real seas is endless).
+- Tool: **one tool**, `pelago` with `build`, `run`, `test`, `fmt`, `check`, `highlight`. The compiler crate can stay `pelagoc` inside it.
+- Mascot ideas that avoid clichés: a pelagic bird (an albatross), a chain of islands drawn as dots, an open horizon line. Colours: sea blue plus one warm accent.
+- Slogans in its own voice: "Open water, solid ground." "Small islands, one sea." "Stay afloat."
+
+**Thalassa** gives a grander but heavier vocabulary: the tool `thalassa` (alias `thal`), libraries as "currents" or "tides", releases named after sea gods. Beautiful, but the spelling (two `s`, double `l`?) and length cost every user a little each day, and it starts life with three registry names already taken, so every package would be `thalassa-lang` or similar.
+
+## Reading
+
+- Pelago is **shorter, easier to type, free on all three registries**, and its meaning (the open sea, the root of archipelago) fits both "vast expanse" and a language built from many small packages.
+- Its cost is brand collision **outside software**: one airline-owned travel brand is very visible. That is the same kind of overlap that Go, Swift, Ruby, Python and Java live with (all existing words), and none of the Pelago businesses is a developer tool.
+- Thalassa is cleaner of competing travel brands but **loses on length and on registries**.
+
+Recommendation: **Pelago**, with the tool named `pelago`.
+
+## Before committing (a short checklist; none blocks the decision)
+
+1. Register `pelago-lang` (or `pelagolang`) as the GitHub organisation, and reserve `pelago` on crates.io, npm and PyPI (empty placeholder packages).
+2. Confirm `pelagolang.org` / `pelago-lang.org` at a registrar.
+3. Check trademark databases (USPTO, EUIPO) in the software classes (9, 42) before any public release.
+4. Decide the pronunciation we will use in docs (**peh-LAY-go**) and say it once on the website.
+
 # Done means
 
 - The owner has chosen a name; `NAMES.md` has the decision at the top and the rest struck through.
