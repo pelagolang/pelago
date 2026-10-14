@@ -351,6 +351,8 @@ pub(crate) struct Checker<'p> {
     /// Top-level statements and constants of modules, checked as one pseudo-function each.
     tests: Vec<(ModuleId, usize, &'p Block)>,
     top_stmts: Vec<(ModuleId, usize, &'p [Stmt])>,
+    /// The `meta N: int` parameters.
+    meta_params: std::collections::HashSet<DefId>,
     /// The interfaces each generic parameter must provide, as written.
     param_bounds: HashMap<DefId, Vec<&'p Type>>,
     /// `@derive(...)` names of types.
@@ -413,6 +415,7 @@ impl<'p> Checker<'p> {
             var_floor: 0,
             tests: Vec::new(),
             top_stmts: Vec::new(),
+            meta_params: std::collections::HashSet::new(),
             param_bounds: HashMap::new(),
             derives: HashMap::new(),
             pending_bounds: Vec::new(),
@@ -1300,6 +1303,22 @@ impl<'p> Checker<'p> {
         }
     }
 
+    /// A number given as a generic argument (`zeros<8>`), as a type-level constant.
+    fn const_arg(&mut self, e: &'p Expr) -> Ty {
+        let src = &self.program.module(self.file).src;
+        let text = &src[e.span.start as usize..e.span.end as usize];
+        match (&e.kind, int_text(text)) {
+            (ExprKind::Int, Some(v)) => self.tt.mk(TyKind::Const(v as i128)),
+            _ => {
+                self.err(
+                    e.span,
+                    "a value argument must be a whole-number literal for now",
+                );
+                self.tt.unknown
+            }
+        }
+    }
+
     fn array_len(&mut self, n: &'p Expr) -> ArrayLen {
         match &n.kind {
             ExprKind::Int => {
@@ -1308,7 +1327,9 @@ impl<'p> Checker<'p> {
                 int_text(text).map_or(ArrayLen::Unknown, |v| ArrayLen::Known(v as u64))
             }
             ExprKind::Name(id) => match self.used(id) {
-                Some(d) if self.def(d).kind == DefKind::GenericParam => ArrayLen::Param(d),
+                Some(d) if self.def(d).kind == DefKind::GenericParam => {
+                    ArrayLen::Term(self.tt.mk(TyKind::Param(d)))
+                }
                 _ => ArrayLen::Unknown,
             },
             _ => ArrayLen::Unknown,
@@ -1317,9 +1338,9 @@ impl<'p> Checker<'p> {
 
     fn lower_generic_args(&mut self, args: &'p [GenericArg]) -> Vec<Ty> {
         args.iter()
-            .filter_map(|a| match a {
-                GenericArg::Type(t) => Some(self.lower_type(t)),
-                GenericArg::Const(_) => None,
+            .map(|a| match a {
+                GenericArg::Type(t) => self.lower_type(t),
+                GenericArg::Const(e) => self.const_arg(e),
             })
             .collect()
     }

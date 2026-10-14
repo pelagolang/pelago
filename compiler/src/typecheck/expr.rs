@@ -441,6 +441,13 @@ impl<'p> Checker<'p> {
             },
             DefKind::Variant => self.variant_value(def, exp),
             DefKind::Field => self.tt.unknown,
+            // A `meta N: int` parameter used as a value in the body.
+            DefKind::GenericParam if self.meta_params.contains(&def) => self.tt.int,
+            DefKind::GenericParam => {
+                let name = d.name.clone();
+                self.err(span, format!("`{name}` is a type, not a value"));
+                self.tt.unknown
+            }
             DefKind::BuiltinFn => {
                 let name = d.name.clone();
                 self.err(
@@ -675,6 +682,12 @@ impl<'p> Checker<'p> {
                     [count.span.start as usize..count.span.end as usize];
                 literal_value(text).map_or(ArrayLen::Unknown, |v| ArrayLen::Known(v as u64))
             }
+            ExprKind::Name(id) => match self.used(id) {
+                Some(d) if self.def(d).kind == DefKind::GenericParam => {
+                    ArrayLen::Term(self.tt.mk(TyKind::Param(d)))
+                }
+                _ => ArrayLen::Unknown,
+            },
             _ => ArrayLen::Unknown,
         };
         self.tt.mk(TyKind::Array(t, len))

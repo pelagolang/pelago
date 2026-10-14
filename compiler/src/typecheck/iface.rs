@@ -36,6 +36,11 @@ impl<'p> Checker<'p> {
         where_: &'p [WherePred],
     ) {
         for p in &g.params {
+            if p.is_meta {
+                if let Some(&d) = self.res.decls.get(&(file, p.name.span.start)) {
+                    self.meta_params.insert(d);
+                }
+            }
             if p.is_meta || p.bounds.is_empty() {
                 continue;
             }

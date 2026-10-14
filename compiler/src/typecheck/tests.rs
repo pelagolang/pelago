@@ -1308,3 +1308,27 @@ fn recursive_types_need_a_box() {
         );
     }
 }
+
+// ---- Value parameters (`meta N: int`) -----------------------------------------------------------------
+
+#[test]
+fn value_parameters_are_checked() {
+    clean(
+        "fn zeros<meta N: int>() -> [int; N] { [0; N] }\nfn t() { const a: [int; 3] = zeros<3>() }",
+    );
+    clean("fn first<meta N: int>(xs: [int; N]) -> int = xs[0]\nfn t() { first([1, 2]) }");
+    let e = run(
+        "fn zeros<meta N: int>() -> [int; N] { [0; N] }\nfn t() { const c: [int; 4] = zeros<3>() }",
+    )
+    .errors();
+    assert!(
+        e.iter()
+            .any(|m| m.contains("[int; 3]") && m.contains("[int; 4]")),
+        "{e:?}"
+    );
+    let e = run("fn f<T>() -> int { T }\nfn t() {}").errors();
+    assert!(
+        e.iter().any(|m| m.contains("is a type, not a value")),
+        "{e:?}"
+    );
+}

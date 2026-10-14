@@ -462,6 +462,14 @@ impl<'a> Lowerer<'a> {
                 r
             }
             DefKind::Fn => self.fn_as_value(e, def),
+            // A `meta N: int` parameter: the number this instance was made for.
+            DefKind::GenericParam => {
+                let t = self.f.subst.get(&def).copied();
+                match t.map(|t| self.kind(t)) {
+                    Some(TyKind::Const(k)) => Res::Val(self.i64c(k as i64)),
+                    _ => self.unsupported(e.span, "a value parameter that has no value here"),
+                }
+            }
             _ => self.unsupported(e.span, "a name that is not a variable"),
         }
     }

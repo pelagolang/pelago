@@ -942,3 +942,17 @@ fn meta_if_lowers_only_the_chosen_branch() {
     let o = run_full(&l.module, "main", &[]);
     assert_eq!(o.output, "linux\n8\n");
 }
+
+// ---- A-05 stage M2: `meta N: int` value parameters ------------------------------------------------
+
+#[test]
+fn value_parameters_make_one_instance_per_value() {
+    let src = "fn zeros<meta N: int>() -> [int; N] { [0; N] }\nfn total<meta N: int>(xs: [int; N]) -> int { var t = 0\n for i in 0..N { t += xs[i] }\n t }\nfn main() { const a = zeros<3>()\n const b: [int; 5] = zeros<5>()\n print(a, b)\n print(total([1, 2, 3, 4]), total(a)) }\n";
+    assert_eq!(output_of(src), "[0, 0, 0] [0, 0, 0, 0, 0]\n10 0\n");
+}
+
+#[test]
+fn value_parameters_on_a_struct() {
+    let src = "struct buf<meta N: int> { data: [int; N]\n fn size(self) -> int = N }\nfn main() { const b = buf<4> { data: [1, 2, 3, 4] }\n print(b.size(), b.data[2]) }\n";
+    assert_eq!(output_of(src), "4 3\n");
+}

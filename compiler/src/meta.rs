@@ -39,7 +39,12 @@ impl Target {
             os: os.to_string(),
             arch: arch.to_string(),
             pointer_bits: usize::BITS as i64,
-            endian: if cfg!(target_endian = "big") { "big" } else { "little" }.to_string(),
+            endian: if cfg!(target_endian = "big") {
+                "big"
+            } else {
+                "little"
+            }
+            .to_string(),
             debug: cfg!(debug_assertions),
         }
     }
@@ -62,7 +67,10 @@ enum MVal {
 pub fn eval_cond(cond: &Expr, src: &str, target: &Target) -> Result<bool, (Span, String)> {
     match eval(cond, src, target)? {
         MVal::Bool(b) => Ok(b),
-        _ => Err((cond.span, "a `meta if` condition must be true or false".to_string())),
+        _ => Err((
+            cond.span,
+            "a `meta if` condition must be true or false".to_string(),
+        )),
     }
 }
 
@@ -148,7 +156,11 @@ mod tests {
         p.add_package("app", &[("main", src)]);
         let res = resolve(&p);
         let typed = crate::typecheck::check(&p, &res);
-        typed.diagnostics.iter().map(|d| d.message.clone()).collect()
+        typed
+            .diagnostics
+            .iter()
+            .map(|d| d.message.clone())
+            .collect()
     }
 
     fn linux() -> Target {
@@ -182,7 +194,8 @@ mod tests {
 
     #[test]
     fn inside_a_function_only_the_chosen_branch_counts() {
-        let src = "fn t() -> int { meta if target.pointer_bits == 64 { 8 } else { missing_name } }\n";
+        let src =
+            "fn t() -> int { meta if target.pointer_bits == 64 { 8 } else { missing_name } }\n";
         let t64 = Target {
             pointer_bits: 64,
             ..Target::host()
@@ -205,6 +218,9 @@ mod tests {
     fn a_condition_that_is_not_constant_is_an_error() {
         let src = "fn t(n: int) -> int { meta if n == 1 { 1 } else { 2 } }\n";
         let e = diags(src, linux());
-        assert!(e.iter().any(|m| m.contains("not known at compile time")), "{e:?}");
+        assert!(
+            e.iter().any(|m| m.contains("not known at compile time")),
+            "{e:?}"
+        );
     }
 }
