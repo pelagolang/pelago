@@ -32,6 +32,8 @@ use crate::span::Span;
 use crate::types::*;
 use std::collections::HashMap;
 
+type RawCall = (ModuleId, Span, DefId, Vec<(DefId, Ty)>);
+
 /// The function an expression runs, and the types its type parameters stand for.
 #[derive(Clone, Debug)]
 pub struct CallTarget {
@@ -310,7 +312,7 @@ pub(crate) struct Checker<'p> {
     /// Places passed to a `sink` parameter without `sink`: an error only if they own something.
     pending_sinks: Vec<(ModuleId, Span, String)>,
     /// Which function each call, operator or conversion runs, with its type arguments.
-    calls: Vec<(ModuleId, Span, DefId, Vec<(DefId, Ty)>)>,
+    calls: Vec<RawCall>,
     owning_cache: Option<std::collections::HashSet<DefId>>,
     linear: std::collections::HashSet<DefId>,
     pending_nonlinear: Vec<(ModuleId, Span, Ty, DefId)>,
