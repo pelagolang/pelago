@@ -1,6 +1,6 @@
 Id: S-07
 Title: `pelago fmt` and LSP formatting
-Column: Backlog (design only; waiting for the owner's answers to the style questions)
+Column: Doing (stage 1 built; the owner is reading the style questions)
 Order: -
 Depends on: parser comment-keeping (step F1); S-06 for the editor side
 Size: L, in stages
@@ -10,9 +10,17 @@ Revisit when: the owner has answered the questions below.
 
 The formatter is on the roadmap ("Formatter, language server, editor syntax highlighting") and S-06 L6 lists formatting as left. The language server already runs; `textDocument/formatting` only needs a function from source text to source text. The roadmap also says the standard library and the formatter pick the naming style (`ROADMAP.md`, Naming row).
 
+# Status
+
+**Stage 1 built** (`compiler/src/fmt/`): a token-based layout pass. `pelago fmt [--check] <path>...` (files or directories; `-` filters stdin to stdout) and `textDocument/formatting` in the language server. It fixes indentation (4 spaces, one level for each open bracket line, plus the levels the author added for things brackets do not show, such as `case` bodies and `.method()` chains), trailing spaces, tabs, blank lines (one at most, none after `{` or before `}`), the space around commas, and one space before a trailing comment. Comments are tokens and are never touched. Safety: a file with errors is refused, the result is lexed again and must hold the same tokens, and a test checks idempotence and an unchanged tree on every example. All examples are already formatted.
+
+**Why the first stage needs no parser change (F1):** the formatter lexes the file itself, so comments are already there; the parser does not have to keep them. F1 is dropped.
+
+**Stage 2 (not built):** line breaking from the tree (questions 1, 5 to 8): wrap at the width, trailing commas when a list breaks, sorting names in import lists (10).
+
 # What it needs
 
-1. **F1, comments in the tree.** Today only `///` docs are kept (`docs` on items, fields, cases). Plain `//`, `/* */` and docs in other places are dropped. The lexer already emits all of them as tokens, so the cheapest route is to keep a side list of comment tokens (span, kind, and whether code comes before it on the line or a blank line comes before it) in `ParseOutput`, and let the printer re-attach them by position. The tree and its golden files do not change.
+1. **F1, comments in the tree (dropped, see Status).** Today only `///` docs are kept (`docs` on items, fields, cases). Plain `//`, `/* */` and docs in other places are dropped. The lexer already emits all of them as tokens, so the cheapest route is to keep a side list of comment tokens (span, kind, and whether code comes before it on the line or a blank line comes before it) in `ParseOutput`, and let the printer re-attach them by position. The tree and its golden files do not change.
 2. **F2, a source printer** (`fmt.rs`, next to `ast_print.rs`, which prints the debug tree and is not reusable). One function per node, a line-width-aware layout (try one line, else break), comments emitted when the printer passes their position.
 3. **F3, `pelago fmt <path>`** with `--check` (exit 1 if a file would change, for CI) and `-` for stdin; **F4, `textDocument/formatting`** and range formatting (whole statements only) in the language server.
 4. **Safety net:** formatting is idempotent, never changes the tree (parse, format, parse, compare trees ignoring spans), never loses a comment (count them), and runs over every file in `examples/` in a test. A file with syntax errors is left untouched.

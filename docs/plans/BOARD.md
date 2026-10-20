@@ -16,7 +16,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 
 | Column | Card | Title | Size |
 |---|---|---|---|
-| Backlog (needs the owner's style answers) | [S-07](cards/S-07-formatter.md) | `pelago fmt` and LSP formatting | L |
+| Doing (stage 1 built) | [S-07](cards/S-07-formatter.md) | `pelago fmt` and LSP formatting | L |
 
 ## Shelf (parked on purpose)
 
