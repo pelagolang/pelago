@@ -407,6 +407,109 @@ fn completion_offers_members_after_a_dot_and_names_elsewhere() {
     }
 }
 
+fn code_actions(
+    s: &mut Server,
+    uri: &str,
+    line: i64,
+    from: i64,
+    to: i64,
+) -> Vec<(String, String, String)> {
+    let params = obj(vec![
+        ("textDocument", doc(uri)),
+        (
+            "range",
+            obj(vec![("start", pos(line, from)), ("end", pos(line, to))]),
+        ),
+        ("context", obj(vec![("diagnostics", Json::Arr(vec![]))])),
+    ]);
+    let r = result(s.handle(&request(9, "textDocument/codeAction", params)));
+    r.arr()
+        .unwrap()
+        .iter()
+        .map(|a| {
+            let e = &a
+                .get("edit")
+                .unwrap()
+                .get("changes")
+                .unwrap()
+                .get(uri)
+                .unwrap()
+                .arr()
+                .unwrap()[0];
+            let r = e.get("range").unwrap();
+            let p = |k: &str| {
+                let p = r.get(k).unwrap();
+                format!(
+                    "{}:{}",
+                    p.get("line").unwrap().int().unwrap(),
+                    p.get("character").unwrap().int().unwrap()
+                )
+            };
+            (
+                a.get("title").and_then(Json::str).unwrap().to_string(),
+                format!("{}-{}", p("start"), p("end")),
+                e.get("newText").and_then(Json::str).unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn code_action_changes_a_misspelt_name_to_the_suggestion() {
+    let mut s = started();
+    let src = "fn total() -> int { 1 }\nfn main() {\n    const x = totl()\n    print(x)\n}\n";
+    open(&mut s, URI, src);
+    let acts = code_actions(&mut s, URI, 2, 14, 14);
+    assert_eq!(
+        acts,
+        vec![(
+            "Change to `total`".into(),
+            "2:14-2:18".into(),
+            "total".into()
+        )]
+    );
+    // Nothing is offered away from the problem.
+    assert!(code_actions(&mut s, URI, 0, 0, 0).is_empty());
+}
+
+#[test]
+fn code_action_removes_unused_imports() {
+    let mut s = started();
+    let src = "import { print_line, other } = std.io\nimport std.fmt\nfn main() {\n    print_line(\"hi\")\n}\n";
+    let out = open(&mut s, URI, src);
+    // Unused imports show up as hints, without making the file fail to compile.
+    let hints = out
+        .iter()
+        .flat_map(|m| {
+            m.get("params")
+                .and_then(|p| p.get("diagnostics"))
+                .and_then(Json::arr)
+                .unwrap_or(&[])
+                .to_vec()
+        })
+        .filter(|d| d.get("code").and_then(Json::str) == Some("unused-import"))
+        .count();
+    assert_eq!(hints, 2);
+    // The comma goes with the name.
+    assert_eq!(
+        code_actions(&mut s, URI, 0, 0, 40),
+        vec![(
+            "Remove unused import `other`".into(),
+            "0:19-0:26".into(),
+            String::new()
+        )]
+    );
+    // A whole unused import takes its line.
+    assert_eq!(
+        code_actions(&mut s, URI, 1, 0, 20),
+        vec![(
+            "Remove unused import".into(),
+            "1:0-2:0".into(),
+            String::new()
+        )]
+    );
+}
+
 fn rename_params(uri: &str, line: i64, ch: i64, new: &str) -> Json {
     let mut p = at(uri, line, ch);
     if let Json::Obj(f) = &mut p {
