@@ -2,6 +2,7 @@
 Fill in what applies, delete what does not. Keep it short: a reviewer should know in 30 seconds what changed and why.
 Worked examples for each kind of change: docs/contributing/pr-scenarios.md
 Branch name: <author>/<type>/<short-name>, e.g. claude/perf/const-division, dennis/feat/for-range
+Title: Conventional Commits, `type(scope): summary`, e.g. `perf(native): divide by constants with a multiply` (docs/contributing/commits.md). It becomes the squash commit.
 -->
 
 ## Summary
@@ -14,14 +15,17 @@ Branch name: <author>/<type>/<short-name>, e.g. claude/perf/const-division, denn
 
 ## Type
 
-<!-- Keep one. It should match the branch type. -->
+<!-- Keep one. It should match the branch type and the type in the PR title. -->
 
 - [ ] `feat`: new language feature, command or capability
 - [ ] `fix` / `bug`: something was wrong, now it is right
 - [ ] `perf`: faster code, a faster compiler, or a smaller output
 - [ ] `refactor`: no change in behaviour
 - [ ] `docs`: docs, plans, comments only
-- [ ] `chore`: CI, tooling, dependencies of the build, formatting
+- [ ] `test`: tests only
+- [ ] `chore`: tooling and housekeeping
+- [ ] `ci` / `build`: workflows, `Cargo.toml`, packaging
+- [ ] Breaking change: `!` in the title or a `BREAKING CHANGE:` footer
 
 ## Why
 

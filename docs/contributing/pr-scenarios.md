@@ -9,13 +9,13 @@ Common rules:
 
 - Branch: `<author>/<type>/<short-name>`, type is one of `feat`, `fix`, `bug`, `perf`, `refactor`, `docs`, `chore`.
   Claude's branches are `claude/<type>/<short-name>`.
-- PR title: imperative, under 70 characters, no trailing period. Example: `Native: divide by constants with a multiply`.
+- PR title and every commit subject: [Conventional Commits](commits.md), `type(scope): summary`, imperative, lowercase start, under 70 characters, no trailing period. Example: `perf(native): divide by constants with a multiply`. The types are `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `chore`, `ci`, `build`; add `!` for a breaking change.
 - Delete template sections that do not apply; do not leave them empty.
 - Numbers come from the tool, pasted as printed. Never round a loss into a win.
 
 ## 1. Performance change (the main case)
 
-Branch `claude/perf/const-division`, title `Native: divide by constants with a multiply`.
+Branch `claude/perf/const-division`, title `perf(native): divide by constants with a multiply`.
 
 > **Before:** `divmod` emitted `idiv` for every `/` and `%`, 0.412 s against C `-O2` at 0.301 s.
 >
@@ -54,7 +54,7 @@ Tips for perf PRs:
 
 ## 2. Bug fix
 
-Branch `claude/fix/shadowed-loop-var`, title `Fix lowering of a shadowed loop variable`.
+Branch `claude/fix/shadowed-loop-var`, title `fix(lower): give a shadowed loop variable its own slot`.
 
 > **Before:** `for i in 0..3 { let i = i * 2; ... }` printed `0 0 0` (the inner `i` overwrote the loop counter slot).
 >
@@ -77,7 +77,7 @@ Tips: always include a test that fails without the fix, and the smallest program
 
 ## 3. Language or semantics change
 
-Branch `dennis/feat/for-step`, title `Add step to for ranges`.
+Branch `dennis/feat/for-step`, title `feat(parser): add step to for ranges`.
 
 > **Before:** `for i in 0..10` always counted by one.
 >
@@ -107,7 +107,7 @@ if the change touches generated code; otherwise say "no codegen change".
 
 ## 4. Docs-only change
 
-Branch `claude/docs/pr-template`, title `Add a pull request template and scenarios`.
+Branch `claude/docs/pr-template`, title `docs: add a pull request template and scenarios`.
 
 > **Before:** PRs had free-form descriptions.
 >
@@ -126,7 +126,7 @@ Tips: skip the Checks and Performance blocks. Say "docs only" so nobody waits on
 
 ## 5. Refactor or chore (no behaviour change)
 
-Branch `claude/refactor/split-lowering`, title `Split lower/expr.rs into smaller modules`.
+Branch `claude/refactor/split-lowering`, title `refactor(lower): split expr.rs into smaller modules`.
 
 > **Before:** `lower/expr.rs` had 3,400 lines.
 >
@@ -143,7 +143,7 @@ Tips: "no behaviour change" is a claim, so show the proof: identical IR output, 
 
 ## 6. Editor, LSP or other-repo change
 
-Branch `claude/feat/hover-types`, title `LSP: show types on hover`.
+Branch `claude/feat/hover-types`, title `feat(lsp): show types on hover`.
 
 > **Before:** hovering a name in Zed showed nothing.
 >
