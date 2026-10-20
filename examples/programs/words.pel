@@ -1,4 +1,4 @@
-/// Counting words and parsing numbers: maps, strings, results and `?`.
+//~ Counting words and parsing numbers: maps, strings, results and `?`.
 
 fn count_words(text: str) -> map<string, int> {
     var counts: map<string, int> = {:}

@@ -1,40 +1,40 @@
-/// The always-available library. Names declared `pub` here are in scope in every module.
-///
-/// Functions declared `ext` have no body here: the backend provides them. The signatures are what
-/// the checker needs.
+//~ The always-available library. Names declared `pub` here are in scope in every module.
+//~
+//~ Functions declared `ext` have no body here: the backend provides them. The signatures are what
+//~ the checker needs.
 
-/// Anything that can be printed and put into a `#( )` string.
+//~ Anything that can be printed and put into a `#( )` string.
 pub interface show {
     fn show(self) -> string
 }
 
-/// Equality with `==`. Plain `struct` and `enum` types have it already; an `obj` must say so.
+//~ Equality with `==`. Plain `struct` and `enum` types have it already; an `obj` must say so.
 pub interface eq {
     fn eq(self, other: Self) -> bool
 }
 
-/// Ordering with `<`, `>`, `<=`, `>=`: a negative, zero or positive number.
+//~ Ordering with `<`, `>`, `<=`, `>=`: a negative, zero or positive number.
 pub interface order : eq {
     fn cmp(self, other: Self) -> int
 }
 
-/// Use as a key of a `map` or a member of a `set` (together with `eq`).
+//~ Use as a key of a `map` or a member of a `set` (together with `eq`).
 pub interface hash : eq {
     fn hash(self) -> int
 }
 
-/// Types that `copy` can duplicate. Plain data has it already; an `obj` must write `clone`.
+//~ Types that `copy` can duplicate. Plain data has it already; an `obj` must write `clone`.
 pub interface clone {
     fn clone(self) -> Self
 }
 
-/// Lets `?` and `to` turn one error type into another: `impl converts<app_error> for parse_error`.
-/// (`converts` is a placeholder name.)
+//~ Lets `?` and `to` turn one error type into another: `impl converts<app_error> for parse_error`.
+//~ (`converts` is a placeholder name.)
 pub interface converts<E> {
     fn convert(self) -> E
 }
 
-/// One interface per operator: `impl add for vec2 { fn add(self, other: vec2) -> vec2 ... }`.
+//~ One interface per operator: `impl add for vec2 { fn add(self, other: vec2) -> vec2 ... }`.
 pub interface add {
     fn add(self, other: Self) -> Self
 }
@@ -54,7 +54,7 @@ pub interface neg {
     fn neg(self) -> Self
 }
 
-/// A failed text-to-number conversion.
+//~ A failed text-to-number conversion.
 pub struct parse_error {
     pub message: string
 }
@@ -69,15 +69,15 @@ pub ext fn panic(message: string) -> never
 pub ext fn todo() -> never
 pub ext fn unreachable() -> never
 
-// ---- Intrinsics: what the compiler expands in place ---------------------------------------------------
-//
-// The library below is written in the language over these few operations. `ptr` is a raw address;
-// nothing here is checked, so only this file uses them.
+/// ---- Intrinsics: what the compiler expands in place ---------------------------------------------------
+///
+/// The library below is written in the language over these few operations. `ptr` is a raw address;
+/// nothing here is checked, so only this file uses them.
 
 pub ext fn rt_null() -> ptr
 pub ext fn rt_alloc(size: int) -> ptr
 pub ext fn rt_free(p: ptr)
-/// A block of `size` bytes holding the first bytes of `p` (null allocates), the rest zero; `p` is dead afterwards.
+//~ A block of `size` bytes holding the first bytes of `p` (null allocates), the rest zero; `p` is dead afterwards.
 pub ext fn rt_realloc(p: ptr, size: int) -> ptr
 pub ext fn rt_offset(p: ptr, bytes: int) -> ptr
 pub ext fn rt_copy(dst: ptr, src: ptr, bytes: int)
@@ -115,7 +115,7 @@ pub ext fn rt_eq_fn<T>() -> ptr
 pub ext fn rt_cmp_fn<T>() -> ptr
 pub ext fn rt_hash_fn<T>() -> ptr
 pub ext fn rt_show_fn<T>() -> ptr
-/// The `show` slot of an `any show` table for a type that has no `show` method of its own (numbers, lists, ...).
+//~ The `show` slot of an `any show` table for a type that has no `show` method of its own (numbers, lists, ...).
 fn rt_any_show<T>(out: ptr, src: ptr) {
     rt_show_to<T>(src, out)
 }
@@ -125,15 +125,15 @@ pub ext fn rt_call_bool2(f: ptr, a: ptr, b: ptr) -> bool
 pub ext fn rt_call_int2(f: ptr, a: ptr, b: ptr) -> int
 pub ext fn rt_call_int1(f: ptr, a: ptr) -> int
 
-// ---- Growing buffers: the header of a list or string is a pointer, a length and a capacity -----
+/// ---- Growing buffers: the header of a list or string is a pointer, a length and a capacity -----
 
 fn rt_hdr_data(h: ptr) -> ptr = rt_load_ptr(h)
 fn rt_hdr_len(h: ptr) -> int = rt_load_int(rt_offset(h, 8))
 fn rt_hdr_cap(h: ptr) -> int = rt_load_int(rt_offset(h, 16))
 fn rt_hdr_set_len(h: ptr, n: int) { rt_store_int(rt_offset(h, 8), n) }
 
-/// Makes room for `needed` elements of `size` bytes. A capacity of 0 means the buffer is not owned.
-/// Small on purpose, so the optimiser inlines the check into every push loop; only a full buffer calls `rt_grow_slow`.
+//~ Makes room for `needed` elements of `size` bytes. A capacity of 0 means the buffer is not owned.
+//~ Small on purpose, so the optimiser inlines the check into every push loop; only a full buffer calls `rt_grow_slow`.
 fn rt_grow(h: ptr, size: int, needed: int) {
     if rt_hdr_cap(h) >= needed { return }
     rt_grow_slow(h, size, needed)
@@ -146,7 +146,7 @@ fn rt_grow_slow(h: ptr, size: int, needed: int) {
     if ncap < needed { ncap = needed }
     const old = rt_hdr_data(h)
     if cap > 0 {
-        // An owned buffer: a big one is remapped by the system instead of copied.
+        /// An owned buffer: a big one is remapped by the system instead of copied.
         rt_store_ptr(h, rt_realloc(old, ncap * size))
     } else {
         const data = rt_alloc(ncap * size)
@@ -157,7 +157,7 @@ fn rt_grow_slow(h: ptr, size: int, needed: int) {
     rt_store_int(rt_offset(h, 16), ncap)
 }
 
-/// Exchanges two blocks of `size` bytes.
+//~ Exchanges two blocks of `size` bytes.
 fn rt_swap_bytes(a: ptr, b: ptr, size: int) {
     const tmp = rt_alloc(size)
     rt_copy(tmp, a, size)
@@ -166,7 +166,7 @@ fn rt_swap_bytes(a: ptr, b: ptr, size: int) {
     rt_free(tmp)
 }
 
-/// Sorts `n` elements of `size` bytes with a merge sort; `cmp` is a comparison glue function.
+//~ Sorts `n` elements of `size` bytes with a merge sort; `cmp` is a comparison glue function.
 fn rt_sort(base: ptr, n: int, size: int, cmp: ptr) {
     if n < 2 { return }
     const tmp = rt_alloc(n * size)
@@ -204,7 +204,7 @@ fn rt_sort(base: ptr, n: int, size: int, cmp: ptr) {
     rt_free(tmp)
 }
 
-/// Is the value at `probe` equal to one of the `size`-byte elements of the list at `h`?
+//~ Is the value at `probe` equal to one of the `size`-byte elements of the list at `h`?
 fn rt_list_contains(h: ptr, probe: ptr, size: int, eq: ptr) -> bool {
     var i = 0
     const n = rt_hdr_len(h)
@@ -215,7 +215,7 @@ fn rt_list_contains(h: ptr, probe: ptr, size: int, eq: ptr) -> bool {
     false
 }
 
-/// Does the text at `h` contain the text (or character) at `p`?
+//~ Does the text at `h` contain the text (or character) at `p`?
 fn rt_str_contains(h: ptr, p: ptr) -> bool {
     const n = rt_hdr_len(h)
     const pn = rt_hdr_len(p)
@@ -412,7 +412,7 @@ impl<T> list<T> {
     }
 }
 
-// ---- Text: strings are a pointer, a length and a capacity (0 means borrowed or static) ---------
+/// ---- Text: strings are a pointer, a length and a capacity (0 means borrowed or static) ---------
 
 fn rt_bytes_eq(a: ptr, b: ptr, n: int) -> bool {
     var i = 0
@@ -423,14 +423,14 @@ fn rt_bytes_eq(a: ptr, b: ptr, n: int) -> bool {
     true
 }
 
-/// Equal text. Both arguments are headers (`string` or `str`: pointer, then length).
+//~ Equal text. Both arguments are headers (`string` or `str`: pointer, then length).
 fn rt_str_eq(a: ptr, b: ptr) -> bool {
     const n = rt_hdr_len(a)
     if n != rt_hdr_len(b) { return false }
     rt_bytes_eq(rt_hdr_data(a), rt_hdr_data(b), n)
 }
 
-/// Orders text by bytes: negative, zero or positive.
+//~ Orders text by bytes: negative, zero or positive.
 fn rt_str_cmp(a: ptr, b: ptr) -> int {
     const na = rt_hdr_len(a)
     const nb = rt_hdr_len(b)
@@ -456,7 +456,7 @@ fn rt_str_hash(a: ptr) -> int {
     h
 }
 
-/// Appends bytes to the string whose header is `dst`.
+//~ Appends bytes to the string whose header is `dst`.
 fn rt_str_push(dst: ptr, data: ptr, n: int) {
     if n == 0 { return }
     const len = rt_hdr_len(dst)
@@ -480,7 +480,7 @@ fn rt_push_byte(out: ptr, b: int) {
     rt_hdr_set_len(out, len + 1)
 }
 
-/// Appends a character as UTF-8.
+//~ Appends a character as UTF-8.
 fn rt_push_char(out: ptr, c: char) {
     const n = c to int
     if n < 128 {
@@ -505,7 +505,7 @@ fn rt_show_int(out: ptr, n: int) {
         rt_push_byte(out, 48)
         return
     }
-    // Digits are produced from the end, using negative numbers so the smallest int works.
+    /// Digits are produced from the end, using negative numbers so the smallest int works.
     var digits = rt_alloc(24)
     var count = 0
     var m = n > 0 ? 0 - n : n
@@ -538,7 +538,7 @@ fn rt_show_bool(out: ptr, b: bool) {
     }
 }
 
-/// Prints a float with up to six decimals and no trailing zeros.
+//~ Prints a float with up to six decimals and no trailing zeros.
 fn rt_show_float(out: ptr, x: float) {
     if x != x {
         rt_push_char(out, 'n')
@@ -557,7 +557,7 @@ fn rt_show_float(out: ptr, x: float) {
     }
     var whole = rt_to_int(v)
     var frac = v - (whole to float)
-    // Six decimals, rounded.
+    /// Six decimals, rounded.
     var scaled = rt_to_int((frac * 1000000.0) + 0.5)
     if scaled >= 1000000 {
         whole += 1
@@ -592,13 +592,13 @@ impl list<string> {
     }
 }
 
-// ---- Maps and sets: insertion-ordered tables ---------------------------------------------------
-//
-// The header has four words: the entries block, the length, the capacity and the index table. The
-// block holds `cap` keys, then (for maps) `cap` values starting at an 8-byte boundary. The index
-// table has `rt_tab_size(cap)` slots; see `rt_map_tag` for what a slot holds.
+/// ---- Maps and sets: insertion-ordered tables ---------------------------------------------------
+///
+/// The header has four words: the entries block, the length, the capacity and the index table. The
+/// block holds `cap` keys, then (for maps) `cap` values starting at an 8-byte boundary. The index
+/// table has `rt_tab_size(cap)` slots; see `rt_map_tag` for what a slot holds.
 
-/// A capacity is always 4, 8, 16, ...: twice that is the power of two the table needs.
+//~ A capacity is always 4, 8, 16, ...: twice that is the power of two the table needs.
 fn rt_tab_size(cap: int) -> int = cap * 2
 
 fn rt_vals_off(cap: int, ksize: int) -> int = (cap * ksize + 7) / 8 * 8
@@ -609,12 +609,12 @@ fn rt_map_val_at(h: ptr, i: int, ksize: int, vsize: int) -> ptr {
     rt_offset(rt_hdr_data(h), rt_vals_off(rt_hdr_cap(h), ksize) + i * vsize)
 }
 
-/// The 32-bit tag of a key: its hash with the high bits folded in. An index slot holds the tag in
-/// its upper half and the entry's position plus one in its lower half (0 when empty), so a table
-/// can be rebuilt without hashing again and a probe skips `eq` for keys with another tag. `size` is
-/// a power of two. The first slot probed is `tag & (size - 1)`, so nearby keys stay in nearby slots;
-/// the next ones are `5 * slot + 1 + perturb` with `perturb` the tag shifted right 5 more each step
-/// (as CPython does), which pulls the higher bits in when keys collide in the low ones.
+//~ The 32-bit tag of a key: its hash with the high bits folded in. An index slot holds the tag in
+//~ its upper half and the entry's position plus one in its lower half (0 when empty), so a table
+//~ can be rebuilt without hashing again and a probe skips `eq` for keys with another tag. `size` is
+//~ a power of two. The first slot probed is `tag & (size - 1)`, so nearby keys stay in nearby slots;
+//~ the next ones are `5 * slot + 1 + perturb` with `perturb` the tag shifted right 5 more each step
+//~ (as CPython does), which pulls the higher bits in when keys collide in the low ones.
 fn rt_map_tag(hash: ptr, key: ptr) -> int {
     const h = rt_call_int1(hash, key)
     (h ^ (h >> 17)) & 4294967295
@@ -633,7 +633,7 @@ fn rt_map_zeroed(size: int) -> ptr {
     tab
 }
 
-/// Puts an entry in the first free slot of its probe sequence.
+//~ Puts an entry in the first free slot of its probe sequence.
 fn rt_map_place(tab: ptr, size: int, tag: int, e: int) {
     const mask = size - 1
     var s = tag & mask
@@ -645,7 +645,7 @@ fn rt_map_place(tab: ptr, size: int, tag: int, e: int) {
     rt_store_int(rt_offset(tab, s * 8), (tag << 32) | (e + 1))
 }
 
-/// Rebuilds the index table from the entries.
+//~ Rebuilds the index table from the entries.
 fn rt_map_reindex(h: ptr, ksize: int, hash: ptr) {
     const old = rt_map_index(h)
     if !rt_is_null(old) { rt_free(old) }
@@ -670,7 +670,7 @@ fn rt_map_find(h: ptr, key: ptr, ksize: int, eq: ptr, hash: ptr) -> int {
     return rt_map_find_tag(h, key, ksize, eq, rt_map_tag(hash, key))
 }
 
-/// The position of the entry whose key (tag `tag`) equals the one at `key`, or -1.
+//~ The position of the entry whose key (tag `tag`) equals the one at `key`, or -1.
 fn rt_map_find_tag(h: ptr, key: ptr, ksize: int, eq: ptr, tag: int) -> int {
     if rt_hdr_len(h) == 0 { return -1 }
     const tab = rt_map_index(h)
@@ -708,7 +708,7 @@ fn rt_map_grow(h: ptr, ksize: int, vsize: int, hash: ptr) {
         rt_map_reindex(h, ksize, hash)
         return
     }
-    // The tags are in the old table: move them over without hashing the keys again.
+    /// The tags are in the old table: move them over without hashing the keys again.
     const osize = rt_tab_size(cap)
     const size = rt_tab_size(ncap)
     const tab = rt_map_zeroed(size)
@@ -722,12 +722,12 @@ fn rt_map_grow(h: ptr, ksize: int, vsize: int, hash: ptr) {
     rt_store_ptr(rt_offset(h, 24), tab)
 }
 
-/// Makes room for one more entry; the next entry goes at the length.
+//~ Makes room for one more entry; the next entry goes at the length.
 fn rt_map_reserve(h: ptr, ksize: int, vsize: int, hash: ptr) {
     if rt_hdr_len(h) == rt_hdr_cap(h) { rt_map_grow(h, ksize, vsize, hash) }
 }
 
-/// Counts the entry just written at the length: it becomes visible and is indexed.
+//~ Counts the entry just written at the length: it becomes visible and is indexed.
 fn rt_map_commit(h: ptr, ksize: int, tag: int) {
     const n = rt_hdr_len(h)
     rt_hdr_set_len(h, n + 1)
@@ -736,7 +736,7 @@ fn rt_map_commit(h: ptr, ksize: int, tag: int) {
     rt_map_place(tab, size, tag, n)
 }
 
-/// Removes the entry at `i` (its key and value must already be dropped or moved out).
+//~ Removes the entry at `i` (its key and value must already be dropped or moved out).
 fn rt_map_remove_at(h: ptr, i: int, ksize: int, vsize: int, hash: ptr) {
     const n = rt_hdr_len(h)
     var j = i
@@ -746,7 +746,7 @@ fn rt_map_remove_at(h: ptr, i: int, ksize: int, vsize: int, hash: ptr) {
         j += 1
     }
     rt_hdr_set_len(h, n - 1)
-    // Entries after `i` moved down one place: rebuild the table from its tags, without hashing.
+    /// Entries after `i` moved down one place: rebuild the table from its tags, without hashing.
     const oldtab = rt_map_index(h)
     const size = rt_tab_size(rt_hdr_cap(h))
     const tab = rt_map_zeroed(size)
@@ -763,7 +763,7 @@ fn rt_map_remove_at(h: ptr, i: int, ksize: int, vsize: int, hash: ptr) {
     rt_store_ptr(rt_offset(h, 24), tab)
 }
 
-/// Used by literals: moves the key at `k` and the value at `v` in (the old value of an equal key is dropped).
+//~ Used by literals: moves the key at `k` and the value at `v` in (the old value of an equal key is dropped).
 fn rt_map_put<K, V>(h: ptr, k: ptr, v: ptr) {
     const ks = rt_size_of<K>()
     const vs = rt_size_of<V>()
@@ -822,7 +822,7 @@ fn rt_set_drop<T>(h: ptr) {
     if !rt_is_null(rt_map_index(h)) { rt_free(rt_map_index(h)) }
 }
 
-/// Copies the table: same capacity, same positions, so the index can be copied as it is.
+//~ Copies the table: same capacity, same positions, so the index can be copied as it is.
 fn rt_map_clone_to<K, V>(src: ptr, dst: ptr, vsize: int) {
     const ks = rt_size_of<K>()
     const cap = rt_hdr_cap(src)
@@ -1094,7 +1094,7 @@ impl str {
     fn len(self) -> int = rt_hdr_len(rt_addr_of(self))
     fn is_empty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
 
-    /// The characters, decoded from UTF-8.
+    //~ The characters, decoded from UTF-8.
     fn chars(self) -> iter<char> {
         var out: [char] = []
         const h = rt_addr_of(self)
@@ -1232,7 +1232,7 @@ impl str {
             i = 1
         }
         if i == n { return err(parse_error { message: "no digits" }) }
-        // Accumulated as a negative number, so the smallest int fits.
+        /// Accumulated as a negative number, so the smallest int fits.
         var value = 0
         while i < n {
             const d = (rt_load_byte(rt_offset(p, i)) to int) - 48
@@ -1283,7 +1283,7 @@ impl str {
 fn rt_is_space(b: int) -> bool = b == 32 || b == 9 || b == 10 || b == 13
 fn rt_is_digit(b: int) -> bool = b >= 48 && b <= 57
 
-/// The position of the first occurrence of `part` in `text`, or -1.
+//~ The position of the first occurrence of `part` in `text`, or -1.
 fn rt_find(text: str, part: str) -> int {
     const n = text.len()
     const pn = part.len()
@@ -1459,7 +1459,7 @@ impl<T, E> result<T, E> {
         }
     }
 
-    /// Adds a line of context to the error: `context: error`.
+    //~ Adds a line of context to the error: `context: error`.
     fn context(self, message: str) -> T ! error {
         switch self {
             case ok(v): ok(rt_clone<T>(rt_addr_of(v)))
@@ -1610,21 +1610,21 @@ impl char {
     fn to_lower(self) -> char = self.is_upper() ? rt_to_char((self to int) + 32) : self
 }
 
-// ---- Concurrency (docs/design/concurrency.md) ----------------------------------------------------
+/// ---- Concurrency (docs/design/concurrency.md) ----------------------------------------------------
 
-/// What `send` returns when nobody is receiving any more.
+//~ What `send` returns when nobody is receiving any more.
 pub struct closed {}
 
-/// A running thread that will produce a `T`. `join!!()` waits and consumes it.
-///
-/// Stage 0 runs threads one after another: a spawned task waits until something needs it (a `join`, a
-/// `recv` on an empty channel, or the end of `main`) and then runs to completion. Programs that need two
-/// tasks to talk back and forth need real threads.
+//~ A running thread that will produce a `T`. `join!!()` waits and consumes it.
+//~
+//~ Stage 0 runs threads one after another: a spawned task waits until something needs it (a `join`, a
+//~ `recv` on an empty channel, or the end of `main`) and then runs to completion. Programs that need two
+//~ tasks to talk back and forth need real threads.
 pub struct task<T> {
     state: ptr
 
     deinit {
-        // The task block: [ran: int, fn, result]. Dropping the handle detaches the task.
+        /// The task block: [ran: int, fn, result]. Dropping the handle detaches the task.
         if rt_load_int(self.state) == 0 {
             rt_store_int(self.state, 3)
         } else {
@@ -1634,20 +1634,20 @@ pub struct task<T> {
     }
 }
 
-/// Addresses of the task blocks that have not run yet.
+//~ Addresses of the task blocks that have not run yet.
 var rt_pending: [int] = []
 
-/// Runs a task block once (the closure at offset 8 moves out and runs). A detached task frees itself.
+//~ Runs a task block once (the closure at offset 8 moves out and runs). A detached task frees itself.
 fn rt_task_run(s: ptr) {
     const state = rt_load_int(s)
-    // 0: waiting, 3: waiting and detached (the task frees itself when done); anything else already ran.
+    /// 0: waiting, 3: waiting and detached (the task frees itself when done); anything else already ran.
     if state != 0 && state != 3 { return }
     if state == 0 { rt_store_int(s, 1) }
     const g = rt_read<fn()>(rt_offset(s, 8))
     g()
 }
 
-/// Runs every task that has not run yet.
+//~ Runs every task that has not run yet.
 pub fn rt_run_pending() {
     while rt_pending.len() > 0 {
         const addr = rt_pending.remove!(0)
@@ -1657,7 +1657,7 @@ pub fn rt_run_pending() {
     rt_pending = []
 }
 
-/// Runs one task that is still waiting; false when there is none.
+//~ Runs one task that is still waiting; false when there is none.
 pub fn rt_run_one_pending() -> bool {
     if rt_pending.len() == 0 { return false }
     const addr = rt_pending.remove!(0)
@@ -1665,7 +1665,7 @@ pub fn rt_run_one_pending() -> bool {
     true
 }
 
-/// Can a receive on this channel finish now: a value is queued, or no sender is left?
+//~ Can a receive on this channel finish now: a value is queued, or no sender is left?
 pub fn rt_chan_ready(ch: ptr) -> bool = rt_hdr_len(ch) > 0 || rt_load_int(rt_offset(ch, 24)) == 0
 
 fn rt_task_body<T>(s: ptr, f: fn() -> T) {
@@ -1687,7 +1687,7 @@ impl<T> task<T> {
         if rt_load_int(s) == 0 {
             rt_task_run(s)
         }
-        // The task ran; its result is at offset 40. The handle's `deinit` must not free it twice.
+        /// The task ran; its result is at offset 40. The handle's `deinit` must not free it twice.
         rt_store_int(s, 2)
         const r = rt_read<T>(rt_offset(s, 40))
         rt_free(s)
@@ -1696,12 +1696,12 @@ impl<T> task<T> {
     }
 }
 
-/// Gives up a task handle without running its `deinit`.
+//~ Gives up a task handle without running its `deinit`.
 fn rt_forget_task<T>(sink t: task<T>) {
     rt_cast<task<T>, ptr>(sink t)
 }
 
-/// Starts `f` on a new thread. What the closure uses must be copied or moved in (`sink x ~> ...`).
+//~ Starts `f` on a new thread. What the closure uses must be copied or moved in (`sink x ~> ...`).
 pub fn spawn<T>(sink f: fn() -> T) -> task<T> {
     const s = rt_alloc(48 + rt_size_of<T>())
     rt_store_int(s, 0)
@@ -1711,7 +1711,7 @@ pub fn spawn<T>(sink f: fn() -> T) -> task<T> {
     task<T> { state: s }
 }
 
-/// The handle of `scope s { ... }`. `s.spawn(task)` starts a task that is finished when the scope ends.
+//~ The handle of `scope s { ... }`. `s.spawn(task)` starts a task that is finished when the scope ends.
 pub struct scope_handle {
     id: int
 }
@@ -1720,7 +1720,7 @@ impl scope_handle {
     fn spawn<T>(self, sink f: fn() -> T) -> task<T> = spawn(sink f)
 }
 
-// A channel block: [queue: list 24 bytes][senders: int][receiver alive: int].
+/// A channel block: [queue: list 24 bytes][senders: int][receiver alive: int].
 
 pub struct sender<T> {
     ch: ptr
@@ -1746,7 +1746,7 @@ fn rt_chan_free<T>(ch: ptr) {
     rt_free(ch)
 }
 
-/// A channel: a sender end and a receiver end. A capacity of 0 means unbounded.
+//~ A channel: a sender end and a receiver end. A capacity of 0 means unbounded.
 pub fn chan<T>(capacity: int = 0) -> (sender<T>, receiver<T>) {
     const ch = rt_alloc(48)
     var q: list<T> = []
@@ -1765,7 +1765,7 @@ impl<T> sender<T> {
     }
 }
 
-/// More senders: `copy tx`.
+//~ More senders: `copy tx`.
 impl<T> clone for sender<T> {
     fn clone(self) -> sender<T> {
         rt_store_int(rt_offset(self.ch, 24), rt_load_int(rt_offset(self.ch, 24)) + 1)
@@ -1782,7 +1782,7 @@ impl<T> receiver<T> {
         return v
     }
 
-    /// Waits for a value: other tasks run while the queue is empty. `none` when every sender is gone.
+    //~ Waits for a value: other tasks run while the queue is empty. `none` when every sender is gone.
     fn recv(self) -> T? {
         while rt_hdr_len(self.ch) == 0 {
             if rt_load_int(rt_offset(self.ch, 24)) == 0 { return none }
@@ -1807,7 +1807,7 @@ impl<T> receiver<T> {
     }
 }
 
-/// Read-only data counted across threads: `shared(value)`, and `copy handle` for another handle.
+//~ Read-only data counted across threads: `shared(value)`, and `copy handle` for another handle.
 pub struct shared<T> {
     p: ptr
 
@@ -1839,7 +1839,7 @@ impl<T> clone for shared<T> {
     }
 }
 
-/// Data changed from several threads one at a time: `lock(value)`. Access is through `with`.
+//~ Data changed from several threads one at a time: `lock(value)`. Access is through `with`.
 pub struct lock<T> {
     p: ptr
 
@@ -1864,9 +1864,9 @@ impl<T> lock<T> {
     }
 }
 
-// ---- Boxes -------------------------------------------------------------------------------------
+/// ---- Boxes -------------------------------------------------------------------------------------
 
-/// `box(value)`: one value on the heap with a single owner. The block holds the bare value.
+//~ `box(value)`: one value on the heap with a single owner. The block holds the bare value.
 fn rt_box_new<T>(sink value: T) -> box<T> {
     const p = rt_alloc(rt_size_of<T>() + 1)
     rt_write<T>(p, sink value)
@@ -1874,17 +1874,17 @@ fn rt_box_new<T>(sink value: T) -> box<T> {
 }
 
 impl<T> box<T> {
-    /// A view of the value inside. The compiler treats a call of `get` as a place (like a field).
+    //~ A view of the value inside. The compiler treats a call of `get` as a place (like a field).
     ext fn get(self) -> T
 
-    /// Drops the old value and puts a new one in.
+    //~ Drops the old value and puts a new one in.
     fn set(inout self, sink value: T) {
         const p = rt_load_ptr(rt_addr_of(self))
         rt_drop_at<T>(p)
         rt_write<T>(p, sink value)
     }
 
-    /// Takes the value out and frees the block.
+    //~ Takes the value out and frees the block.
     fn take(sink self) -> T {
         const p = rt_cast<box<T>, ptr>(sink self)
         const v = rt_read<T>(p)
@@ -1893,10 +1893,10 @@ impl<T> box<T> {
     }
 }
 
-// ---- async ---------------------------------------------------------------------------------------
+/// ---- async ---------------------------------------------------------------------------------------
 
-/// What an `async fn` gives. At this stage a call runs the body to the end and the future holds the
-/// result; `await f()` takes it out (`wait`). The layout of a `future<T>` is that of a `T`.
+//~ What an `async fn` gives. At this stage a call runs the body to the end and the future holds the
+//~ result; `await f()` takes it out (`wait`). The layout of a `future<T>` is that of a `T`.
 pub struct future<T> {
     value: T
 }
@@ -1905,18 +1905,18 @@ impl<T> future<T> {
     fn wait(sink self) -> T = rt_cast<future<T>, T>(sink self)
 }
 
-/// Runs a future to the end from ordinary code.
+//~ Runs a future to the end from ordinary code.
 pub fn block_on<T>(sink f: future<T>) -> T = f.wait!!()
 
-// ---- Compile-time code -------------------------------------------------------------------------
+/// ---- Compile-time code -------------------------------------------------------------------------
 
-/// Compile-time code says something: it is shown as a note while compiling.
+//~ Compile-time code says something: it is shown as a note while compiling.
 pub fn meta_note(message: string) { print("meta: #message") }
 
-/// Compile-time code stops the compilation with this message.
+//~ Compile-time code stops the compilation with this message.
 pub fn meta_error(message: string) -> never { panic(message) }
 
-// ---- soa: struct-of-arrays ---------------------------------------------------------------------
+/// ---- soa: struct-of-arrays ---------------------------------------------------------------------
 
 pub ext fn rt_soa_len<T>(h: ptr) -> int
 pub ext fn rt_soa_push<T>(h: ptr, sink item: T)
@@ -1924,7 +1924,7 @@ pub ext fn rt_soa_insert<T>(h: ptr, index: int, sink item: T)
 pub ext fn rt_soa_remove<T>(h: ptr, index: int) -> T
 pub ext fn rt_soa_clear<T>(h: ptr)
 
-/// One column is a plain list: these work on its header at `h`, taking and giving the field by address.
+//~ One column is a plain list: these work on its header at `h`, taking and giving the field by address.
 fn rt_col_push<F>(h: ptr, src: ptr) {
     const size = rt_size_of<F>()
     const len = rt_hdr_len(h)
@@ -1998,9 +1998,9 @@ impl<T> soa<T> {
     }
 }
 
-// ---- Spreading into literals ------------------------------------------------------------------
+/// ---- Spreading into literals ------------------------------------------------------------------
 
-/// Appends copies of the elements of the list at `src` to the list at `h`.
+//~ Appends copies of the elements of the list at `src` to the list at `h`.
 fn rt_list_spread<T>(h: ptr, src: ptr) {
     const size = rt_size_of<T>()
     var i = 0
@@ -2044,7 +2044,7 @@ fn rt_map_spread<K, V>(h: ptr, src: ptr) {
     rt_free(vt)
 }
 
-/// The address of the value stored under the key at `key`; a missing key stops the program.
+//~ The address of the value stored under the key at `key`; a missing key stops the program.
 fn rt_map_at<K, V>(h: ptr, key: ptr) -> ptr {
     const ks = rt_size_of<K>()
     const i = rt_map_find(h, key, ks, rt_eq_fn<K>(), rt_hash_fn<K>())
@@ -2052,13 +2052,13 @@ fn rt_map_at<K, V>(h: ptr, key: ptr) -> ptr {
     rt_map_val_at(h, i, ks, rt_size_of<V>())
 }
 
-/// Is there an entry whose key equals the one at `key`?
+//~ Is there an entry whose key equals the one at `key`?
 fn rt_map_has(h: ptr, key: ptr, ksize: int, eq: ptr, hash: ptr) -> bool = rt_map_find(h, key, ksize, eq, hash) >= 0
 
-// ---- Objects ---------------------------------------------------------------------------------
+/// ---- Objects ---------------------------------------------------------------------------------
 
-/// Is the object at `o` of the type with this id, or of a type that extends it? The table of an object
-/// points (in its third slot) to the number of ancestors and then their ids, the object's own first.
+//~ Is the object at `o` of the type with this id, or of a type that extends it? The table of an object
+//~ points (in its third slot) to the number of ancestors and then their ids, the object's own first.
 fn rt_obj_is(o: ptr, id: int) -> bool {
     const table = rt_load_ptr(rt_offset(rt_load_ptr(o), 16))
     const n = rt_load_int(table)

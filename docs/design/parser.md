@@ -114,7 +114,7 @@ The `-> Type` goes after the parameter list, as in a function. It needs the pare
 
 ## Doc comments
 
-`///` lines and `///* ... *///` blocks that sit right before a declaration are kept in the tree (`docs` on items,
+`//~` lines and `//~* ... *~//` blocks that sit right before a declaration are kept in the tree (`docs` on items,
 fields and enum cases) and `doc_text` turns them into plain text. A doc comment on the same line as code before it
 belongs to nothing. Doc comments never reach the compiled program; they exist only for tools. A plain compile
 skips them: `ParseOptions::compile()` (or `pelago parse --no-docs`) does not even collect them. Comments elsewhere are still dropped; the formatter will keep ordinary comments later.

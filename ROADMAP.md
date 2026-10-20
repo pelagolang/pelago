@@ -56,6 +56,7 @@ A serious, self-hosting systems language:
 | Variables | `var` (changeable) and `const` (truly immutable) | decided |
 | Types | Lowercase names; sized ints `int8` to `int64`, `uint8` to `uint64` | decided |
 | Naming | The compiler accepts any identifier style; the standard library and formatter pick one | decided |
+| Comments | `/// line`, `///* block *///` (nests); documentation `//~ line`, `//~* block *~//`; `//` and `/* */` are errors with a hint (`docs/design/comments.md`) | decided |
 | `int` | Always exactly 64 bits; sized types for dense data | decided |
 | Conversions | Written `x to float`, allowed only when nothing can be lost; lossy ones get a different spelling | decided in principle |
 | Generics | `<T>` | decided |

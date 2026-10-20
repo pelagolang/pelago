@@ -17,10 +17,10 @@ fn indents_by_open_brackets_and_trims() {
 
 #[test]
 fn commas_blank_lines_and_trailing_comments() {
-    let src = "\n\nfn f(a: int,b: int , c: int) {   // note\n\n\n    g(a,b)\n\n}\n\n\n\nfn g() {}// end\n";
+    let src = "\n\nfn f(a: int,b: int , c: int) {   /// note\n\n\n    g(a,b)\n\n}\n\n\n\nfn g() {}/// end\n";
     assert_eq!(
         fmt(src),
-        "fn f(a: int, b: int, c: int) {   // note\n    g(a, b)\n}\n\nfn g() {} // end\n"
+        "fn f(a: int, b: int, c: int) {   /// note\n    g(a, b)\n}\n\nfn g() {} /// end\n"
     );
 }
 
@@ -40,11 +40,12 @@ fn levels_the_author_added_are_kept() {
 
 #[test]
 fn comments_keep_their_text_and_crlf_is_kept() {
-    let src = "/// Docs.\r\n///* a\n b *///\r\nfn f() {\r\n// inside\r\n    /* c */ f()\r\n}\r\n";
+    let src =
+        "//~ Docs.\r\n//~* a\n b *~//\r\nfn f() {\r\n/// inside\r\n    ///* c */// f()\r\n}\r\n";
     let out = fmt(src);
-    assert!(out.contains("///* a\r\n b *///"));
-    assert!(out.contains("    // inside\r\n"));
-    assert!(out.contains("    /* c */ f()"));
+    assert!(out.contains("//~* a\r\n b *~//"));
+    assert!(out.contains("    /// inside\r\n"));
+    assert!(out.contains("    ///* c */// f()"));
     assert!(out.ends_with("}\r\n"));
 }
 

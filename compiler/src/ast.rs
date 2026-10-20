@@ -802,7 +802,7 @@ pub struct ImplDecl {
     pub members: Vec<Member>,
 }
 
-/// The text of doc comments, with the `///` markers (or `///*` and `*///`) and one leading space
+/// The text of doc comments, with the `//~` markers (or `//~*` and `*~//`) and one leading space
 /// removed from each line, joined by newlines.
 pub fn doc_text(src: &str, docs: &[Span]) -> String {
     let mut lines: Vec<String> = Vec::new();
@@ -810,13 +810,13 @@ pub fn doc_text(src: &str, docs: &[Span]) -> String {
         let raw = src
             .get(span.start as usize..span.end as usize)
             .unwrap_or("");
-        if let Some(body) = raw.strip_prefix("///*") {
-            let body = body.strip_suffix("*///").unwrap_or(body);
+        if let Some(body) = raw.strip_prefix("//~*") {
+            let body = body.strip_suffix("*~//").unwrap_or(body);
             for line in body.trim().lines() {
                 lines.push(line.trim().to_string());
             }
         } else {
-            let body = raw.strip_prefix("///").unwrap_or(raw);
+            let body = raw.strip_prefix("//~").unwrap_or(raw);
             lines.push(
                 body.strip_prefix(' ')
                     .unwrap_or(body)

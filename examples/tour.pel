@@ -1,14 +1,17 @@
-/// A tour of the syntax decided so far. Not a program anyone can run yet:
-/// it exists so the lexer (and later the parser) has something real to read.
+//~ A tour of the syntax decided so far. Not a program anyone can run yet:
+//~ it exists so the lexer (and later the parser) has something real to read.
 
-///* Documentation can also
-    span many lines. *///
+//~* Documentation can also
+    span many lines. *~//
 
+/// Comments: this is a line comment.
+///* A block comment
+    can span lines, ///* and nest *///. *///
 mod tour
 
 import std
 
-// ---- Variables and types --------------------------------------------------
+/// ---- Variables and types --------------------------------------------------
 const name = "Dennis"
 var score: int = 10
 score += 5
@@ -26,10 +29,10 @@ print("Score: #score, next: #(score + 1), name: #(name), hash: \#")
 const whole = 7
 const decimal = whole to float
 
-// ---- Functions --------------------------------------------------------------
-/// Adds two numbers.
-///
-/// The last expression is the result.
+/// ---- Functions --------------------------------------------------------------
+//~ Adds two numbers.
+//~
+//~ The last expression is the result.
 fn add(a: int, b: int) -> int {
     a + b
 }
@@ -78,7 +81,7 @@ fn max<T: ordered>(a: T, b: T) -> T {
     a > b ? a : b
 }
 
-// ---- Control flow -------------------------------------------------------------
+/// ---- Control flow -------------------------------------------------------------
 const grade = {score > 90 ? "A" : score > 80 ? "B" : "C"}
 
 for i in 0..=10 {
@@ -111,7 +114,7 @@ if 0 < x && x < 10 || !done { }
 const inside = x in 1..10
 const mixed = a & b | c ^ d << 2 >> 1
 
-// ---- Types -----------------------------------------------------------------------
+/// ---- Types -----------------------------------------------------------------------
 struct point {
     x: float
     y: float
@@ -124,9 +127,9 @@ var p = point { x: 3.0, y: 4.0 }
 p.shift!(1.0, 1.0)
 const n = c.close!!()
 
-/// A shape with a size.
+//~ A shape with a size.
 enum shape {
-    /// A round one.
+    //~ A round one.
     circle(radius: float)
     rect(w: float, h: float)
     empty
@@ -153,14 +156,14 @@ struct stack<T> { items: [T] }
 const lookup: map<string, [int]> = map { "a": [1, 2], "b": [] }
 const empty = {:}
 
-// ---- Closures ---------------------------------------------------------------------
+/// ---- Closures ---------------------------------------------------------------------
 const doubled = numbers.map(x ~> x * 2)
 const tripled = numbers.map(~> it * 3)
 numbers.each([inout total] x ~> total += x)
 const cleaned = raw |> trim |> parse
 const user_name = user?.name ?? "anonymous"
 
-// ---- Builders -----------------------------------------------------------------------
+/// ---- Builders -----------------------------------------------------------------------
 const doubled_pos = [x of xs if x > 0 ~> x * 2]
 const labels = [i, x of xs ~> "#i: #x"]
 const pairs = [x of xs, y of ys if x != y ~> (x, y)]
@@ -169,7 +172,7 @@ const ages = map { u of users ~> u.name : u.age }
 const total = sum(x of xs if x > 0 ~> x * x)
 const tail = xs[-3..]
 
-// ---- Overflow ---------------------------------------------------------------------
+/// ---- Overflow ---------------------------------------------------------------------
 const hash = a *% 31 +% b
 h *%= 31
 h +%= c
@@ -177,7 +180,7 @@ const safe = a.checked_add(b)
 const capped = a.saturating_add(b)
 const wrapped = a.wrapping_add(b)
 
-// ---- List patterns ------------------------------------------------------------------
+/// ---- List patterns ------------------------------------------------------------------
 fn sum_list(xs: [int]) -> int {
     switch xs {
         case []: 0
@@ -236,7 +239,7 @@ switch result {
     case err(e): panic("failed: #e")
 }
 
-// ---- Concurrency ---------------------------------------------------------------------
+/// ---- Concurrency ---------------------------------------------------------------------
 fn parallel_total(xs: [int]) -> int {
     var left = 0
     var right = 0
@@ -269,7 +272,7 @@ fn pipeline() {
     par_for(inout xs, x ~> x *= 2)
 }
 
-// ---- Boxes -----------------------------------------------------------------------------
+/// ---- Boxes -----------------------------------------------------------------------------
 enum tree { leaf, node(box<tree>, int, box<tree>) }
 
 async fn fetch_len(text: string) -> int { text.len() }
@@ -292,7 +295,7 @@ fn boxes() {
     const taken = b.take!!()
 }
 
-// ---- More syntax -----------------------------------------------------------------------
+/// ---- More syntax -----------------------------------------------------------------------
 import { list, map: dict } = std.collections
 import fmt = std.io
 import { ... } = std.math
@@ -416,7 +419,7 @@ switch shape {
 
 switch day { case 1: "a" case 2: "b" default: "c" }
 
-// ---- Labels and closure return types ------------------------------------------------
+/// ---- Labels and closure return types ------------------------------------------------
 outer: for i of 0..10 {
     inner: for j of 0..10 {
         if i * j > 20 { break outer }

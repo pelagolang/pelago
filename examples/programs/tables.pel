@@ -1,4 +1,4 @@
-// Compile-time code: the CRC-32 table is computed while compiling and baked into the program.
+/// Compile-time code: the CRC-32 table is computed while compiling and baked into the program.
 
 meta fn crc_table() -> [int; 256] {
     var table = [0; 256]

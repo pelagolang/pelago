@@ -45,6 +45,15 @@
       "patterns": [
         {
           "name": "comment.block.documentation.pelago",
+          "begin": "//~\\*",
+          "end": "\\*~//"
+        },
+        {
+          "name": "comment.line.documentation.pelago",
+          "match": "//~.*$"
+        },
+        {
+          "name": "comment.block.pelago",
           "begin": "///\\*",
           "end": "\\*///",
           "patterns": [
@@ -54,22 +63,12 @@
           ]
         },
         {
-          "name": "comment.line.documentation.pelago",
+          "name": "comment.line.triple-slash.pelago",
           "match": "///.*$"
         },
         {
-          "name": "comment.block.pelago",
-          "begin": "/\\*",
-          "end": "\\*/",
-          "patterns": [
-            {
-              "include": "#block-inner"
-            }
-          ]
-        },
-        {
-          "name": "comment.line.double-slash.pelago",
-          "match": "//.*$"
+          "name": "invalid.illegal.not-a-comment.pelago",
+          "match": "//.*$|/\\*"
         }
       ]
     },
@@ -77,8 +76,8 @@
       "patterns": [
         {
           "name": "comment.block.pelago",
-          "begin": "/\\*",
-          "end": "\\*/",
+          "begin": "///\\*",
+          "end": "\\*///",
           "patterns": [
             {
               "include": "#block-inner"

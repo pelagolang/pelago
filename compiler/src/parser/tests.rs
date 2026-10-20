@@ -932,25 +932,25 @@ fn doc_of(src: &str) -> Vec<String> {
 
 #[test]
 fn doc_comments_attach_to_the_next_declaration() {
-    assert_eq!(doc_of("/// one\n/// two\nfn f() {}"), vec!["one\ntwo"]);
-    assert_eq!(doc_of("/// a\n\nfn f() {}\nfn g() {}"), vec!["a", ""]);
+    assert_eq!(doc_of("//~ one\n//~ two\nfn f() {}"), vec!["one\ntwo"]);
+    assert_eq!(doc_of("//~ a\n\nfn f() {}\nfn g() {}"), vec!["a", ""]);
     assert_eq!(
-        doc_of("///* big\n   text *///\nfn f() {}"),
+        doc_of("//~* big\n   text *~//\nfn f() {}"),
         vec!["big\ntext"]
     );
-    assert_eq!(doc_of("/// for g\n@inline fn g() {}"), vec!["for g"]);
-    assert_eq!(doc_of("/// for g\npub fn g() {}"), vec!["for g"]);
+    assert_eq!(doc_of("//~ for g\n@inline fn g() {}"), vec!["for g"]);
+    assert_eq!(doc_of("//~ for g\npub fn g() {}"), vec!["for g"]);
 }
 
 #[test]
 fn a_doc_comment_after_code_on_the_same_line_is_not_for_the_next_item() {
-    assert_eq!(doc_of("const a = 1 /// note\nfn f() {}"), vec![""]);
-    assert_eq!(doc_of("fn f() {} /// trailing\nfn g() {}"), vec!["", ""]);
+    assert_eq!(doc_of("const a = 1 //~ note\nfn f() {}"), vec![""]);
+    assert_eq!(doc_of("fn f() {} //~ trailing\nfn g() {}"), vec!["", ""]);
 }
 
 #[test]
 fn doc_comments_attach_to_fields_variants_and_methods() {
-    let src = "struct s {\n  /// the x\n  x: int\n  /// a method\n  fn m(self) {}\n}\nenum e {\n  /// first\n  a\n  b\n}";
+    let src = "struct s {\n  //~ the x\n  x: int\n  //~ a method\n  fn m(self) {}\n}\nenum e {\n  //~ first\n  a\n  b\n}";
     let (out, _) = parse_source(src);
     assert!(out.errors.is_empty(), "{:?}", out.errors);
     let StmtKind::Item(s) = &out.file.stmts[0].kind else {
@@ -1169,7 +1169,7 @@ fn repeated_names() {
 
 #[test]
 fn doc_comments_can_be_skipped() {
-    let src = "/// doc\nfn f() {}";
+    let src = "//~ doc\nfn f() {}";
     let (kept, _) = parse_and_check_with(src, ParseOptions::default());
     let (skipped, _) = parse_and_check_with(src, ParseOptions::compile());
     let docs = |o: &ParseOutput| match &o.file.stmts[0].kind {

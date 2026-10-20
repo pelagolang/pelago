@@ -22,7 +22,7 @@ choice. Write renames in the last column.
 - Maps are written `map { "a": 1 }`, with `{:}` as a shorthand for the empty map (`map {}` also works).
 - Closures use `~>`: `x ~> x * 2`, and `~> it * 2` with the implicit parameter. A capture list in brackets sets access modes: `[inout total] x ~> total += x`. A bare `{ "a": 1 }` is not a map.
 - `struct` and `enum` list their interfaces with `:` too, like `obj`.
-- Documentation comments: `///` for a line, `///* ... *///` for many lines.
+- Comments (decided, `docs/design/comments.md`): `/// ...` for a line, `///* ... *///` for many lines (nests); documentation is `//~ ...` and `//~* ... *~//`. `//` and `/* */` are errors with a hint.
 
 ---
 
@@ -119,10 +119,10 @@ because TS/JS programmers expect it and it can step in odd ways.
 | `self` | The value a method is working on | Smalltalk, Python, Rust, Swift | 2 | |
 | `Self` | The type of `self` inside a type or interface | Rust, Swift | 3 | |
 | `super` | The parent type's version, if inheritance is added | Java, Python | 3 | |
-| `// ...` | A comment to the end of the line | C++, Java | 1 | |
-| `/* ... */` | A comment over many lines | C | 1 | |
-| `/// ...` | A documentation comment for one line | Rust | 2 | |
-| `///* ... *///` | A documentation comment over many lines | new | 2 | |
+| `/// ...` | A comment to the end of the line | new | 1 | |
+| `///* ... *///` | A comment over many lines (nests) | new | 1 | |
+| `//~ ...` | A documentation comment for one line | new | 2 | |
+| `//~* ... *~//` | A documentation comment over many lines | new | 2 | |
 
 ## Operators and symbols (symbols only, no word forms)
 

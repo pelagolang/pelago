@@ -1,4 +1,7 @@
-# Comments: a syntax of our own (draft, waiting for the owner)
+# Comments: a syntax of our own (decided: option B with `//~`)
+
+**Decision (owner, 2026-10-20):** option B, with `//~` for documentation. `/// text` is the ordinary line comment, `///* ... *///` the ordinary block comment (nests), `//~ text` a doc line, `//~* ... *~//` a doc block (does not nest). `//` and `/* */` are lexer errors with a hint; `////` is just an ordinary comment (it starts with `///`). Documentation attaches to the item that follows; there is no separate file-level form (a doc comment before nothing belongs to nothing). The rest of this page is the discussion that led here; the spelling `//!` it mentions in option B became `//~`.
+
 
 ## Where we are
 
