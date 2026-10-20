@@ -53,7 +53,7 @@ counter). Tests run real executables: hello world, `stop`, allocation reuse and 
 decimal output. Reused blocks are cleared on allocation, because the interpreter always hands out zeroed memory. N2 (the code generator) is next.
 
 **N2 and N3 are done.** `native/gen.rs` is the simple code generator (every value in an 8-byte frame slot, zero-extended "canonical" integers, fixed templates per
-operation, a swap-safe copy for block parameters, stack arguments with padding for alignment). `pelago build [--opt] [--leak-check] [-o out] <path>` writes an
+operation, a swap-safe copy for block parameters, stack arguments with padding for alignment). `pelago build [--no-opt] [--leak-check] [-o out] <path>` writes an
 executable and `pelago run --native <path>` builds and runs it. The test suite has a third column: every `output_of` test and the example programs also run natively
 (plain and optimised IR) and must print the same and exit cleanly with no leak; `native_agrees_on_the_edge_cases` compares the stop messages and exit statuses of about
 fifty programs on the rows of the table above (division, shifts, overflow at every width, NaN, conversions, many arguments, 100,000-deep recursion). Known differences:
