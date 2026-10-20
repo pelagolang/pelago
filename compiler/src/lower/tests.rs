@@ -799,6 +799,13 @@ fn program_g1() {
 }
 
 #[test]
+fn map_keeps_every_key_across_growth_and_removal() {
+    // Keys a power-of-two stride apart collide in the low bits; removals shift the entries down.
+    let src = "fn main() { var m: map<int, int> = {:}\n for i in 0..300 { m.insert!(i * 4096, i) }\n for i in 0..300 { m.insert!(-i * 65536 - 1, i) }\n m.remove!(8 * 4096)\n m.remove!(0)\n var t = 0\n for i in 0..300 { t += m.get(i * 4096) ?? 1000 }\n for i in 0..300 { t += m.get(-i * 65536 - 1) ?? 1000 }\n print(m.len(), t, m.contains_key(0), m.contains_key(299 * 4096)) }\n";
+    assert_eq!(output_of(src), "598 91692 false true\n");
+}
+
+#[test]
 fn program_g2() {
     let src = "fn main() { const (tx, rx) = chan<int>()\n const (tx2, rx2) = chan<string>()\n tx.send(1)\n tx2.send(\"hi\")\n select { case v = rx.recv() { print(\"int #v\") }\n  case s = rx2.recv() { print(\"str #s\") } }\n select { case v = rx.recv() { print(\"again #v\") }\n  default { print(\"nothing\") } }\n select { case s = rx2.recv() { print(\"str #s\") }\n  default { print(\"nothing\") } }\n const p = spawn([sink tx] ~> { tx.send(7) })\n select { case v = rx.recv() { print(\"late #v\") } }\n p.join!!() }\n";
     assert_eq!(
