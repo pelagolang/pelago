@@ -2224,3 +2224,34 @@ fn a_growing_length_is_added_in_place() {
         }",
     );
 }
+
+/// An accumulator of a loop that runs a known number of times has no overflow check when the trip
+/// count times the biggest step stays in range; when it does not, the program still stops.
+#[test]
+fn accumulators_of_counted_loops_keep_their_traps() {
+    agree(
+        "fn main() {
+            var t = 0
+            var n = 0
+            for i in 0..2000 {
+                n += 2
+                t += n & 7
+            }
+            print(t, n)
+        }",
+    );
+    agree(
+        "fn main() {
+            var t = 0
+            for i in 0..100 { t += 4611686018427387904 }
+            print(t)
+        }",
+    );
+    agree(
+        "fn main() {
+            var t = 9223372036854775800
+            for i in 0..100 { t += 1 }
+            print(t)
+        }",
+    );
+}

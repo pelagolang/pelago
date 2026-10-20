@@ -12,7 +12,7 @@
 //! `-2` into its displacement, which costs nothing. Then `n` dies at the add, `n2` takes its register
 //! and the loop adds in place.
 //!
-//! Applies to `add_checked x, K` with a small positive constant `K` when at least one use of `x` after
+//! Applies to `add_checked x, K` (or a plain `add`, which wraps back the same way) with a small positive constant `K` when at least one use of `x` after
 //! the add is an address offset and the others after it are in blocks that call something (the slow
 //! path that grows the buffer), where one `sub` is no matter. Uses the add does not dominate (the loop's
 //! exit, which sees the loop parameter itself) are left alone.
@@ -58,7 +58,8 @@ fn once(f: &mut Func) -> bool {
             continue;
         }
         for (pos, &ai) in b.insts.iter().enumerate() {
-            let Op::Checked(BinOp::Add, _, x, c) = f.insts[ai].op else {
+            let (Op::Checked(BinOp::Add, _, x, c) | Op::Bin(BinOp::Add, x, c)) = f.insts[ai].op
+            else {
                 continue;
             };
             let Some(r) = f.insts[ai].result else {
