@@ -165,6 +165,9 @@ struct Gen<'m> {
     across: HashMap<usize, Vec<(Where, i32)>>,
     /// Frame offset of 16 bytes where the operands of a float remainder wait (the x87 unit reads memory).
     fscratch: i32,
+    /// The function uses no frame (no spills, slots or saved registers), calls nothing and takes all its
+    /// parameters in registers: it runs without `rbp`.
+    frameless: bool,
     /// The block and the position in it of the instruction being generated.
     at: (usize, usize),
     /// Frame offsets already written in the current block (a value is stored once per block).
@@ -309,6 +312,7 @@ impl<'m> Gen<'m> {
             saves: Vec::new(),
             across: HashMap::new(),
             fscratch: 0,
+            frameless: false,
             at: (0, 0),
             stored: HashSet::new(),
             stubs: Vec::new(),
@@ -592,15 +596,28 @@ impl<'m> Gen<'m> {
         self.block_labels = f.blocks.iter().map(|_| self.a.new_label()).collect();
         let l = self.funcs[fi];
         self.a.bind(l);
-        self.a.push(RBP);
-        self.a.mov_rr(RBP, RSP, 8);
-        if self.frame > 0 {
-            self.a.alu_ri(Alu::Sub, RSP, self.frame, 8);
-        }
         // Parameters: registers or the caller's stack.
         let entry = f.entry();
         let params: Vec<Value> = f.block_params(entry).to_vec();
         let tys: Vec<IrTy> = params.iter().map(|p| f.ty(*p)).collect();
+        let calls = f.blocks.iter().flat_map(|b| &b.insts).any(|&i| {
+            matches!(
+                f.insts[i].op,
+                Op::Call(..) | Op::CallPtr(..) | Op::Alloc(_) | Op::Free(_) | Op::Print(..)
+            )
+        });
+        self.frameless = self.regalloc
+            && self.frame == 0
+            && self.saves.is_empty()
+            && !calls
+            && !classify(&tys).iter().any(|l| matches!(l, Loc::Stack(_)));
+        if !self.frameless {
+            self.a.push(RBP);
+            self.a.mov_rr(RBP, RSP, 8);
+            if self.frame > 0 {
+                self.a.alu_ri(Alu::Sub, RSP, self.frame, 8);
+            }
+        }
         // Keep the callee-saved registers this function uses.
         for (r, off) in self.saves.clone() {
             self.a.store(mem(RBP, off), r, 8);
@@ -669,8 +686,10 @@ impl<'m> Gen<'m> {
         for (r, off) in self.saves.clone() {
             self.a.load(r, mem(RBP, off), 8);
         }
-        self.a.mov_rr(RSP, RBP, 8);
-        self.a.pop(RBP);
+        if !self.frameless {
+            self.a.mov_rr(RSP, RBP, 8);
+            self.a.pop(RBP);
+        }
         self.a.ret();
     }
 
