@@ -83,7 +83,7 @@ Size is S (hours), M (a day), L (several days). "Collides with" means the same f
 - **Touches:** `compiler/benches/*.pel`, `compiler/benches/c/*.c`, `compiler/benches/compare.sh`, `docs/design/backend.md` (the table).
 - **Depends on:** nothing. **Size:** S to M. **Collides with:** nothing. Do this first; everything else measures against it.
 
-### W8. What is left from A-09 (its card has the decided approach for each)
+### W8. What is left from A-09 — done (PRs #31, #33, #35)
 - **What:** buffered `print` (64 KiB buffer, flushed at exit, stop and return from `main`); `float32` rounding after every operation in the interpreter; `FloatToInt` saturating like Rust's `as` (NaN becomes 0) in both engines; a guard page and fault handler turning stack overflow and bad addresses into `stopped: ...` with exit status 1 on Linux and Windows.
 - **Touches:** `native/rt.rs`, `native/elf.rs` and `native/pe.rs` (guard page, handler), `ir/interp.rs` (`cast`, float ops), `native/gen.rs` (`cast`, `Print`), `native/tests.rs`, `lower/tests.rs`, `docs/design/backend.md`.
 - **Depends on:** nothing. **Size:** M. It splits into two threads if wanted: (a) runtime and print buffering, (b) float semantics in interpreter and `cast`.

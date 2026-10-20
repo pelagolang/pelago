@@ -10,7 +10,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 |---|---|---|---|
 | Needs decision | [A-10](cards/A-10-aarch64.md) | AArch64 (64-bit ARM) backend: Linux first, then Windows on ARM and macOS | L |
 | Doing | [A-11](cards/A-11-native-speed.md) | Native speed: S1 to S3 first rounds done (collatz 0.30 s to 0.09 s, C -O2 0.07 s); open work split in [a11-work-items.md](a11-work-items.md) | XL |
-| Doing | [A-09](cards/A-09-native-backend.md) | Native backend: x86-64 machine code, ELF and PE, straight from the IR (N1 to N5 and Windows done; N6 leftovers are item W8 of A-11) | XL |
+| Done | [A-09](cards/A-09-native-backend.md) | Native backend: x86-64 machine code, ELF and PE, straight from the IR (all stages and the leftovers: buffered print, float semantics, stack guard) | XL |
 
 ## Track B: tooling and identity
 
