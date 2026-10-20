@@ -1,0 +1,15 @@
+fn digit_sum(start: int) -> int {
+    var n = start
+    var s = 0
+    while n != 0 {
+        s += n % 10
+        n = n / 10
+    }
+    s
+}
+
+fn main() {
+    var total = 0
+    for i in 1..3000001 { total += digit_sum(i) + i % 3 + i / 7 }
+    print(total)
+}

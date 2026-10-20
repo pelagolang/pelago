@@ -1300,6 +1300,70 @@ fn agree(src: &str) {
     }
 }
 
+/// Division and remainder by constants that are not powers of two run as a high multiply (card A-11,
+/// W1); the loops give the optimiser values it cannot fold, spread over the whole range.
+#[test]
+fn native_agrees_on_division_by_constants() {
+    agree(
+        "fn main() {
+            var s = 0
+            var h = 1
+            for i in 0..4000 {
+                h = h *% 6364136223846793005 +% 1442695040888963407
+                const x = h
+                const y = i - 2000
+                s = s ^ (x / 10) ^ (x % 10) ^ (x / 3) ^ (x % 7) ^ (x / -7) ^ (x % -10)
+                s = s ^ (x / 641) ^ (x % 1000) ^ (y / 10) ^ (y % 10) ^ (y / 100) ^ (y % 3)
+                s = s ^ (x / 9223372036854775807) ^ (x / -9223372036854775807)
+            }
+            print(s)
+        }",
+    );
+    agree(
+        "fn main() {
+            var s: uint = 0
+            var h: uint = 1
+            for i in 0..4000 {
+                h = h *% 6364136223846793005 +% 1442695040888963407
+                s = s ^ (h / 10) ^ (h % 10) ^ (h / 3) ^ (h % 7) ^ (h / 641) ^ (h % 1000)
+                s = s ^ (h / 18446744073709551615) ^ (h / 9223372036854775809)
+            }
+            print(s)
+        }",
+    );
+    agree(
+        "fn main() {
+            var s: int32 = 0
+            var u: uint32 = 0
+            var h: uint32 = 1
+            var x: int32 = 1
+            for i in 0..4000 {
+                h = h *% 1664525 +% 1013904223
+                x = x *% 1664525 +% 1013904223
+                s = s ^ (x / 10) ^ (x % 10) ^ (x / 7) ^ (x % -3) ^ (x / 100)
+                u = u ^ (h / 10) ^ (h % 7) ^ (h / 641) ^ (h / 4294967295)
+            }
+            print(s, u)
+        }",
+    );
+    agree(
+        "fn main() {
+            var s: int8 = 0
+            var u: uint8 = 0
+            const lo: int8 = -128
+            const hi: int8 = 127
+            const top: uint8 = 255
+            for x of lo..=hi {
+                s = s ^ (x / 10) ^ (x % 10) ^ (x / 3) ^ (x % 7) ^ (x / -5)
+            }
+            for b of 0..=top {
+                u = u ^ (b / 10) ^ (b % 7) ^ (b / 3) ^ (b / 255) ^ (b % 100)
+            }
+            print(s, u)
+        }",
+    );
+}
+
 #[test]
 fn native_agrees_on_the_edge_cases() {
     let programs = [
