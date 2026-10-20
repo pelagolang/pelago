@@ -312,7 +312,11 @@ pub(super) fn inst_uses(op: &Op, out: &mut Vec<Value>) {
         | Op::Store(a, b)
         | Op::Realloc(a, b)
         | Op::Print(a, b) => out.extend([*a, *b]),
-        Op::MemCopy(a, b, c) => out.extend([*a, *b, *c]),
+        Op::CheckedIf(_, _, test, a, b) => {
+            test.for_each_value(|v| out.push(v));
+            out.extend([*a, *b]);
+        }
+        Op::Select(a, b, c) | Op::MemCopy(a, b, c) => out.extend([*a, *b, *c]),
         Op::Call(_, args) => out.extend(args.iter().copied()),
         Op::CallPtr(_, _, p, args) => {
             out.push(*p);
@@ -622,7 +626,10 @@ pub fn assign(
                 continue;
             }
             match (&inst.op, inst.result) {
-                (Op::Bin(_, a, c) | Op::Checked(_, _, a, c), Some(r)) => {
+                (
+                    Op::Bin(_, a, c) | Op::Checked(_, _, a, c) | Op::CheckedIf(_, _, _, a, c),
+                    Some(r),
+                ) => {
                     link(r, *a, &mut partners);
                     link(r, *c, &mut partners);
                 }

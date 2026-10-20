@@ -233,7 +233,13 @@ fn inputs(op: &Op) -> Vec<Value> {
             vec![*a]
         }
         Op::Call(_, args) => args.clone(),
-        Op::MemCopy(a, b, c) => vec![*a, *b, *c],
+        Op::CheckedIf(_, _, test, a, b) => {
+            let mut v = Vec::new();
+            test.for_each_value(|x| v.push(x));
+            v.extend([*a, *b]);
+            v
+        }
+        Op::Select(a, b, c) | Op::MemCopy(a, b, c) => vec![*a, *b, *c],
         Op::CallPtr(_, _, f, args) => {
             let mut v = vec![*f];
             v.extend(args.iter().copied());
@@ -303,6 +309,31 @@ fn check_inst(f: &Func, m: Option<&Module>, inst: &Inst) -> Vec<String> {
                 && !matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
             {
                 e.push("only add, sub and mul have checked forms".to_string());
+            }
+        }
+        Op::CheckedIf(op, _, test, a, b) => {
+            match test {
+                Test::Bool(c, _) if t(*c) != Some(IrTy::Bool) => {
+                    e.push("`checked_if` needs a bool condition".to_string());
+                }
+                Test::Cmp(_, x, y) if t(*x) != t(*y) => {
+                    e.push("a comparison needs operands of one type".to_string());
+                }
+                _ => {}
+            }
+            if t(*a) != t(*b) || !t(*a).is_some_and(|x| x.is_int()) || result_ty != t(*a) {
+                e.push("`checked_if` needs two integers of the result's type".to_string());
+            }
+            if !matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul) {
+                e.push("only add, sub and mul have checked forms".to_string());
+            }
+        }
+        Op::Select(c, a, b) => {
+            if t(*c) != Some(IrTy::Bool) {
+                e.push("`select` needs a bool condition".to_string());
+            }
+            if t(*a) != t(*b) || result_ty != t(*a) {
+                e.push("`select` needs two values of the result's type".to_string());
             }
         }
         Op::Cmp(_, a, b) => {

@@ -1935,6 +1935,57 @@ fn a_buffer_past_a_mebibyte_keeps_its_contents_while_it_grows() {
     agree(src);
 }
 
+#[test]
+fn a_branch_with_a_checked_side_becomes_a_select_and_stops_only_when_taken() {
+    // `3 * n + 1` is checked, and it runs ahead of the test on even values too: it must not stop for
+    // them, and must stop for the odd ones that overflow.
+    let step = "fn step(n: int) -> int { if n % 2 == 0 { n / 2 } else { 3 * n + 1 } }\n";
+    let l = lowered(&format!("{step}fn main() {{ print(step(7)) }}"));
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let text = crate::ir::print_func(m.funcs.iter().find(|f| f.name == "step").unwrap(), None);
+    assert!(text.contains("select"), "{text}");
+    assert!(text.contains("checked_if"), "{text}");
+    assert!(!text.contains("branch"), "{text}");
+    let go = |n: i64| {
+        run_full(&m, "step", &[Val::int(n)])
+            .result
+            .map(|v| v.as_i64())
+    };
+    assert_eq!(go(7), Ok(22));
+    assert_eq!(go(10), Ok(5));
+    assert_eq!(go(-3), Ok(-8));
+    assert_eq!(go(-4), Ok(-2));
+    assert_eq!(go(i64::MAX - 1), Ok(i64::MAX / 2));
+    assert_eq!(go(i64::MIN), Ok(i64::MIN / 2));
+    assert_eq!(go(i64::MAX), Err("arithmetic overflow".to_string()));
+    assert_eq!(go(i64::MIN + 1), Err("arithmetic overflow".to_string()));
+    assert_eq!(go(3_074_457_345_618_258_602), Ok(1_537_228_672_809_129_301));
+    assert_eq!(
+        go(3_074_457_345_618_258_603),
+        Err("arithmetic overflow".to_string())
+    );
+    // The same, native.
+    let (big, huge) = ("9223372036854775806", "9223372036854775807");
+    agree(&format!(
+        "{step}fn main() {{ print(step({big}), step(7), step(-3), step(-4)) }}"
+    ));
+    agree(&format!(
+        "{step}fn main() {{ var n = {huge}\n n += 0\n print(step(n)) }}"
+    ));
+}
+
+#[test]
+fn a_branch_with_plain_sides_becomes_a_select() {
+    let src = "fn pick(a: int, b: int) -> int { if a > b { a - b } else { b - a } }\nfn main() { var s = 0\n for i in 0..50 { s += pick(i * 7 % 13, i % 5) }\n print(s) }";
+    let l = lowered(src);
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let text = crate::ir::print_func(m.funcs.iter().find(|f| f.name == "pick").unwrap(), None);
+    assert!(text.contains("select"), "{text}");
+    agree(src);
+}
+
 // ---- Float semantics: single precision rounding and saturating float to int -------------------------------
 
 #[test]

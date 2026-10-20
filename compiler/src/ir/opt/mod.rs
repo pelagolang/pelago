@@ -19,6 +19,7 @@ mod cse;
 mod dce;
 mod divconst;
 mod dom;
+mod ifconv;
 mod inline;
 mod layout;
 mod licm;
@@ -97,6 +98,9 @@ fn passes(f: &mut Func, divs: bool) {
         }
         changed |= step(f, "cse", cse::run);
         changed |= step(f, "licm", licm::run);
+        if divs {
+            changed |= step(f, "ifconv", ifconv::run);
+        }
         changed |= step(f, "simplify", cfg::run);
         changed |= step(f, "dce", dce::run);
         if !changed {
@@ -155,7 +159,12 @@ impl Op {
             | Op::Load(_, a)
             | Op::Alloc(a)
             | Op::Free(a) => f(*a),
-            Op::MemCopy(a, b, c) => {
+            Op::CheckedIf(_, _, test, a, b) => {
+                test.for_each_value(&mut f);
+                f(*a);
+                f(*b);
+            }
+            Op::Select(a, b, c) | Op::MemCopy(a, b, c) => {
                 f(*a);
                 f(*b);
                 f(*c);
@@ -188,7 +197,12 @@ impl Op {
             | Op::Load(_, a)
             | Op::Alloc(a)
             | Op::Free(a) => *a = f(*a),
-            Op::MemCopy(a, b, c) => {
+            Op::CheckedIf(_, _, test, a, b) => {
+                test.map_values(&mut f);
+                *a = f(*a);
+                *b = f(*b);
+            }
+            Op::Select(a, b, c) | Op::MemCopy(a, b, c) => {
                 *a = f(*a);
                 *b = f(*b);
                 *c = f(*c);
@@ -206,6 +220,7 @@ impl Op {
         match self {
             Op::Const(..)
             | Op::Cmp(..)
+            | Op::Select(..)
             | Op::Neg(_)
             | Op::Not(_)
             | Op::Cast(..)

@@ -45,6 +45,7 @@ fn sum(xs: [int]) -> int {
   phi, easier to build and to print).
 - **Types are concrete and small**: integers of each width, floats, `bool`, pointers, and aggregates (struct, tagged union,
   fixed array). No generics, no interfaces, no inference variables.
+- **Select and conditional stops.** `select c, a, b` is `a` when `c` is true, else `b` (both are already computed). `add_checked_if (test), a, b` (also `sub`, `mul`, and unsigned) stops on overflow only when the test holds (a comparison, or a bool and the value it must have) and is the wrapping operation otherwise. The pass `ifconv` makes them: a branch whose two sides only compute a few values (no memory, calls or division) and meet again becomes straight-line code with a `select` per differing value, and a checked operation on a side becomes a `checked_if` for that side, so the program stops where it did before and not for values the other side never saw.
 - **Memory** is explicit: `alloc` / `free` / `realloc` for the heap (`realloc` keeps the first bytes and zeroes the rest; a large block moves without copying on Linux), `slot` for stack space, `load` / `store`, `field` / `index` addresses.
 - **Index-based storage** (functions, blocks and instructions in flat vectors, referred to by number), as the arena discussion
   already pointed toward. Cheap to build, cheap to free, friendly to caches.
