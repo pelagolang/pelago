@@ -1,6 +1,6 @@
 //! Dominators (Cooper, Harvey and Kennedy, "A Simple, Fast Dominance Algorithm"). Block `a`
 //! dominates block `b` when every path from the entry to `b` goes through `a`; the immediate
-//! dominator is the closest one. Used by the range analysis.
+//! dominator is the closest one. Used by the range analysis and the loop passes.
 
 use crate::ir::*;
 
@@ -83,6 +83,23 @@ impl Dom {
         match self.idom[b.0 as usize] {
             NONE => None,
             d => Some(BlockId(d)),
+        }
+    }
+
+    /// Does `a` dominate `b`? (A block dominates itself.)
+    pub fn dominates(&self, a: BlockId, b: BlockId) -> bool {
+        if !self.reachable(a) || !self.reachable(b) {
+            return false;
+        }
+        let mut x = b;
+        loop {
+            if x == a {
+                return true;
+            }
+            match self.idom(x) {
+                Some(d) => x = d,
+                None => return false,
+            }
         }
     }
 }
