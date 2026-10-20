@@ -180,6 +180,14 @@ pub fn emit(
         a.syscall();
         a.alu_ri(Alu::Cmp, RAX, -4095, 8);
         a.jcc(Cc::Ae, keep);
+        // Big frames (a 40 MB array in a local) fault in 2 MiB at a time when the kernel agrees.
+        a.push(RAX);
+        a.mov_rr(RDI, RAX, 8);
+        a.mov_ri(RSI, STACK);
+        a.mov_ri(RDX, 14); // MADV_HUGEPAGE
+        a.mov_ri(RAX, 28);
+        a.syscall();
+        a.pop(RAX);
         state(a, RCX, 144);
         a.store(mem(RCX, 0), RAX, 8);
         a.lea(RSP, mem(RAX, STACK as i32));
