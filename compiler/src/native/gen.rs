@@ -31,6 +31,9 @@ pub struct Options {
 /// The registers values can live in: callee-saved, so calls leave them alone.
 const VALUE_REGS: [Reg; 5] = [RBX, R12, R13, R14, R15];
 
+/// Caller-saved registers the templates never touch: for values that are not live across a call.
+const SCRATCH_REGS: [Reg; 2] = [R10, R11];
+
 /// Where a value lives.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Where {
@@ -275,7 +278,7 @@ impl<'m> Gen<'m> {
         self.slot_off.clear();
         let imms = const_values(f);
         let regs = if self.regalloc {
-            super::regs::assign(f, &VALUE_REGS)
+            super::regs::assign(f, &VALUE_REGS, &SCRATCH_REGS)
         } else {
             vec![None; f.values.len()]
         };
