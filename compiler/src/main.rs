@@ -206,6 +206,18 @@ fn print_punct() {
 }
 
 /// `pelago fmt [--check] <file or directory>...`
+/// The `[fmt]` settings that apply to `path`: the closest `pelago.toml` above it. A broken
+/// `pelago.toml` is reported and stops the run.
+fn fmt_config(path: &std::path::Path) -> pelago::config::FmtConfig {
+    match pelago::config::Config::find(path) {
+        Ok(c) => c.fmt,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    }
+}
+
 fn fmt_command(args: &[String]) {
     let check = args.iter().any(|a| a == "--check");
     let paths: Vec<&String> = args.iter().filter(|a| *a != "--check").collect();
@@ -219,7 +231,8 @@ fn fmt_command(args: &[String]) {
             eprintln!("cannot read standard input");
             std::process::exit(2);
         }
-        match pelago::fmt::format(&src) {
+        let config = fmt_config(std::path::Path::new("."));
+        match pelago::fmt::format_with(&src, &config) {
             Ok(out) => print!("{out}"),
             Err(e) => {
                 eprintln!("<stdin>: {e}");
@@ -265,7 +278,8 @@ fn fmt_command(args: &[String]) {
                 continue;
             }
         };
-        match pelago::fmt::format(&src) {
+        let config = fmt_config(f);
+        match pelago::fmt::format_with(&src, &config) {
             Ok(out) if out == src => {}
             Ok(out) => {
                 changed += 1;

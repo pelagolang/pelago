@@ -84,3 +84,15 @@ fn formatting_is_idempotent_and_keeps_the_tree_for_every_example() {
         assert_eq!(tree(&src), tree(&once), "tree changed: {}", p.display());
     }
 }
+
+#[test]
+fn indent_width_comes_from_the_config() {
+    let config = crate::config::FmtConfig {
+        indent: 2,
+        ..Default::default()
+    };
+    let src = "fn main() {\nif true {\nprint(1)\n}\n}\n";
+    let out = super::format_with(src, &config).expect("formats");
+    assert_eq!(out, "fn main() {\n  if true {\n    print(1)\n  }\n}\n");
+    assert_eq!(super::format_with(&out, &config).unwrap(), out);
+}
