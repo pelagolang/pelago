@@ -365,6 +365,26 @@ impl<'m> Gen<'m> {
         }
     }
 
+    /// The register a result is built in: its own when it has one, `rax` otherwise.
+    fn dst(&self, v: Value) -> Reg {
+        match self.loc[v.0 as usize] {
+            Where::Reg(x) => x,
+            _ => RAX,
+        }
+    }
+
+    /// A register holding the operand (widened as asked): its own when it lives in one and needs no
+    /// widening, else `scratch` after loading it there.
+    fn src(&mut self, v: Value, f: &Func, signed: bool, scratch: Reg) -> Reg {
+        if let Where::Reg(x) = self.loc[v.0 as usize] {
+            if !(signed && size(f.ty(v)) < 8) {
+                return x;
+            }
+        }
+        self.ld_ext(scratch, v, f, signed);
+        scratch
+    }
+
     fn ldf(&mut self, x: Xmm, v: Value, f: &Func) {
         let m = self.vmem(v);
         self.a.fload(x, m, f.ty(v) == IrTy::F64);
@@ -484,8 +504,8 @@ impl<'m> Gen<'m> {
                 let cc = match fused {
                     Some((_, op, x, y)) => self.int_cmp(f, op, x, y),
                     None => {
-                        self.ld(RAX, *c);
-                        self.a.test_rr(RAX, RAX, 1);
+                        let rc = self.src(*c, f, false, RAX);
+                        self.a.test_rr(rc, rc, 1);
                         Cc::Ne
                     }
                 };
@@ -817,11 +837,11 @@ impl<'m> Gen<'m> {
         }
         let w = bits(t);
         match op {
-            BinOp::Add | BinOp::Sub | BinOp::And | BinOp::Or | BinOp::Xor
-                if self.imm32(b, f, false).is_some() =>
-            {
-                let n = self.imm32(b, f, false).unwrap();
-                self.ld(RAX, a);
+            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor => {
+                // Built in the result's own register when it has one. The result never shares a
+                // register with an operand (their live ranges meet at this instruction).
+                let d = self.dst(r);
+                self.ld(d, a);
                 let alu = match op {
                     BinOp::Add => Alu::Add,
                     BinOp::Sub => Alu::Sub,
@@ -829,23 +849,19 @@ impl<'m> Gen<'m> {
                     BinOp::Or => Alu::Or,
                     _ => Alu::Xor,
                 };
-                self.a.alu_ri(alu, RAX, n, 8);
-                self.mask(RAX, w);
-                self.st(r, RAX);
-            }
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor => {
-                self.ld(RAX, a);
-                self.ld(RCX, b);
-                match op {
-                    BinOp::Add => self.a.alu_rr(Alu::Add, RAX, RCX, 8),
-                    BinOp::Sub => self.a.alu_rr(Alu::Sub, RAX, RCX, 8),
-                    BinOp::Mul => self.a.imul_rr(RAX, RCX, 8),
-                    BinOp::And => self.a.alu_rr(Alu::And, RAX, RCX, 8),
-                    BinOp::Or => self.a.alu_rr(Alu::Or, RAX, RCX, 8),
-                    _ => self.a.alu_rr(Alu::Xor, RAX, RCX, 8),
+                match self.imm32(b, f, false) {
+                    Some(n) if op != BinOp::Mul => self.a.alu_ri(alu, d, n, 8),
+                    _ => {
+                        let rb = self.src(b, f, false, RCX);
+                        if op == BinOp::Mul {
+                            self.a.imul_rr(d, rb, 8);
+                        } else {
+                            self.a.alu_rr(alu, d, rb, 8);
+                        }
+                    }
                 }
-                self.mask(RAX, w);
-                self.st(r, RAX);
+                self.mask(d, w);
+                self.st(r, d);
             }
             BinOp::Div | BinOp::Rem | BinOp::UDiv | BinOp::URem => {
                 let signed = matches!(op, BinOp::Div | BinOp::Rem);
@@ -918,12 +934,25 @@ impl<'m> Gen<'m> {
     fn checked(&mut self, f: &Func, op: BinOp, signed: bool, a: Value, b: Value, r: Value) {
         let w = bits(f.ty(a));
         let ov = self.stop_overflow;
-        if let (64, BinOp::Add | BinOp::Sub, Some(n)) = (w, op, self.imm32(b, f, signed)) {
-            self.ld(RAX, a);
-            let alu = if op == BinOp::Add { Alu::Add } else { Alu::Sub };
-            self.a.alu_ri(alu, RAX, n, 8);
+        if w == 64 && (matches!(op, BinOp::Add | BinOp::Sub) || (op == BinOp::Mul && signed)) {
+            let d = self.dst(r);
+            self.ld(d, a);
+            match self.imm32(b, f, signed) {
+                Some(n) if op != BinOp::Mul => {
+                    let alu = if op == BinOp::Add { Alu::Add } else { Alu::Sub };
+                    self.a.alu_ri(alu, d, n, 8);
+                }
+                _ => {
+                    let rb = self.src(b, f, false, RCX);
+                    match op {
+                        BinOp::Add => self.a.alu_rr(Alu::Add, d, rb, 8),
+                        BinOp::Sub => self.a.alu_rr(Alu::Sub, d, rb, 8),
+                        _ => self.a.imul_rr(d, rb, 8),
+                    }
+                }
+            }
             self.a.jcc(if signed { Cc::O } else { Cc::B }, ov);
-            self.st(r, RAX);
+            self.st(r, d);
             return;
         }
         self.ld_ext(RAX, a, f, signed);
@@ -1021,12 +1050,12 @@ impl<'m> Gen<'m> {
     fn int_cmp(&mut self, f: &Func, op: CmpOp, a: Value, b: Value) -> Cc {
         let signed = matches!(f.ty(a), IrTy::Int(_))
             && matches!(op, CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge);
-        self.ld_ext(RAX, a, f, signed);
+        let ra = self.src(a, f, signed, RAX);
         match self.imm32(b, f, signed) {
-            Some(n) => self.a.alu_ri(Alu::Cmp, RAX, n, 8),
+            Some(n) => self.a.alu_ri(Alu::Cmp, ra, n, 8),
             None => {
-                self.ld_ext(RCX, b, f, signed);
-                self.a.alu_rr(Alu::Cmp, RAX, RCX, 8);
+                let rb = self.src(b, f, signed, RCX);
+                self.a.alu_rr(Alu::Cmp, ra, rb, 8);
             }
         }
         match op {
