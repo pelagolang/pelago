@@ -406,3 +406,176 @@ fn completion_offers_members_after_a_dot_and_names_elsewhere() {
         assert!(names.contains(&want.to_string()), "{want}: {names:?}");
     }
 }
+
+fn rename_params(uri: &str, line: i64, ch: i64, new: &str) -> Json {
+    let mut p = at(uri, line, ch);
+    if let Json::Obj(f) = &mut p {
+        f.push(("newName".to_string(), text(new)));
+    }
+    p
+}
+
+#[test]
+fn rename_changes_declaration_and_uses() {
+    let mut s = started();
+    open(&mut s, URI, SRC);
+    let r = result(s.handle(&request(
+        2,
+        "textDocument/rename",
+        rename_params(URI, 2, 14, "plus"),
+    )));
+    let edits = r
+        .get("changes")
+        .and_then(|c| c.get(URI))
+        .and_then(Json::arr)
+        .unwrap();
+    assert_eq!(edits.len(), 2, "{r:?}");
+    assert!(edits
+        .iter()
+        .all(|e| e.get("newText").and_then(Json::str) == Some("plus")));
+    // A local, a keyword and a library name are refused.
+    let r = s.handle(&request(
+        3,
+        "textDocument/rename",
+        rename_params(URI, 2, 14, "fn"),
+    ));
+    assert!(r[0].get("error").is_some(), "{r:?}");
+    let r = s.handle(&request(4, "textDocument/prepareRename", at(URI, 3, 4)));
+    assert_eq!(r[0].get("result"), Some(&Json::Null), "print is built in");
+    let p = result(s.handle(&request(5, "textDocument/prepareRename", at(URI, 2, 10))));
+    assert_eq!(p.get("placeholder").and_then(Json::str), Some("x"));
+}
+
+#[test]
+fn rename_reaches_other_files_of_the_package() {
+    let dir = std::env::temp_dir().join(format!("pelago-lsp-rename-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("util.pel"),
+        "pub fn twice(x: int) -> int = x * 2\n",
+    )
+    .unwrap();
+    let main_src = "import { twice } = .util\nfn main() {\n    print(twice(4))\n}\n";
+    std::fs::write(dir.join("main.pel"), main_src).unwrap();
+    let root = path_to_uri(&dir);
+    let mut s = Server::new();
+    s.handle(&request(
+        1,
+        "initialize",
+        obj(vec![("rootUri", text(root.clone()))]),
+    ));
+    let main_uri = format!("{root}/main.pel");
+    open(&mut s, &main_uri, main_src);
+    let r = result(s.handle(&request(
+        2,
+        "textDocument/rename",
+        rename_params(&main_uri, 2, 10, "double"),
+    )));
+    let changes = r.get("changes").unwrap();
+    let util = changes.get(&format!("{root}/util.pel")).and_then(Json::arr);
+    assert_eq!(util.map(|u| u.len()), Some(1), "{r:?}");
+    assert!(changes.get(&main_uri).and_then(Json::arr).unwrap().len() >= 2);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn signature_help_marks_the_parameter_being_written() {
+    let mut s = started();
+    let src = "fn add(a: int, b: int) -> int { a + b }\nfn main() {\n    const x = add(1, )\n}\n";
+    open(&mut s, URI, src);
+    let help = |s: &mut Server, id, ch| {
+        result(s.handle(&request(id, "textDocument/signatureHelp", at(URI, 2, ch))))
+    };
+    // After `add(` and after the comma.
+    let h = help(&mut s, 2, 18);
+    assert_eq!(h.get("activeParameter").and_then(Json::int), Some(0));
+    let sig = &h.get("signatures").and_then(Json::arr).unwrap()[0];
+    assert_eq!(
+        sig.get("label").and_then(Json::str),
+        Some("fn add(a: int, b: int) -> int")
+    );
+    assert_eq!(sig.get("parameters").and_then(Json::arr).unwrap().len(), 2);
+    let h = help(&mut s, 3, 21);
+    assert_eq!(h.get("activeParameter").and_then(Json::int), Some(1));
+    // Outside a call there is nothing.
+    let r = s.handle(&request(4, "textDocument/signatureHelp", at(URI, 2, 8)));
+    assert_eq!(r[0].get("result"), Some(&Json::Null));
+}
+
+fn error_message(r: &[Json]) -> String {
+    r[0].get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(Json::str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[test]
+fn rename_refuses_a_clash_and_allows_a_free_name() {
+    let mut s = started();
+    let src = "fn add(a: int, b: int) -> int { a + b }\nfn plus(a: int) -> int { a }\nfn main() {\n    print(add(1, 2))\n}\n";
+    open(&mut s, URI, src);
+    let r = s.handle(&request(
+        2,
+        "textDocument/rename",
+        rename_params(URI, 3, 10, "plus"),
+    ));
+    assert!(error_message(&r).contains("would cause"), "{r:?}");
+    // Inside a function: a parameter cannot take the name of another one.
+    let r = s.handle(&request(
+        3,
+        "textDocument/rename",
+        rename_params(URI, 0, 7, "b"),
+    ));
+    assert!(error_message(&r).contains("would cause"), "{r:?}");
+    let r = s.handle(&request(
+        4,
+        "textDocument/rename",
+        rename_params(URI, 0, 7, "left"),
+    ));
+    assert!(
+        r[0].get("result").is_some_and(|v| *v != Json::Null),
+        "{r:?}"
+    );
+}
+
+#[test]
+fn rename_follows_fields_methods_and_cases() {
+    let mut s = started();
+    let src = "struct point {\n    x: float\n    y: float\n    fn len(self) -> float = self.x\n}\nenum shape { circle(float), empty }\nfn main() {\n    const p = point { x: 1.0, y: 2.0 }\n    const q = p.x\n    print(q + p.len())\n    switch p {\n        case point { x: 1.0, y: _ }: print(1)\n        default: print(2)\n    }\n}\n";
+    let uri = "file:///work/members.pel";
+    let d = diagnostics(&open(&mut s, uri, src));
+    assert!(d.iter().all(|(_, m)| m.is_empty()), "{d:?}");
+    // `x`: the declaration, `self.x`, the literal, `p.x` and the pattern.
+    let r = result(s.handle(&request(
+        2,
+        "textDocument/rename",
+        rename_params(uri, 1, 4, "px"),
+    )));
+    let edits = r
+        .get("changes")
+        .and_then(|c| c.get(uri))
+        .and_then(Json::arr)
+        .unwrap();
+    assert_eq!(edits.len(), 5, "{r:?}");
+    // The method, from its call.
+    let r = result(s.handle(&request(
+        3,
+        "textDocument/rename",
+        rename_params(uri, 9, 18, "norm"),
+    )));
+    let edits = r
+        .get("changes")
+        .and_then(|c| c.get(uri))
+        .and_then(Json::arr)
+        .unwrap();
+    assert_eq!(edits.len(), 2, "{r:?}");
+    // A field name cannot take another field's name.
+    let r = s.handle(&request(
+        4,
+        "textDocument/rename",
+        rename_params(uri, 1, 4, "y"),
+    ));
+    assert!(error_message(&r).contains("would cause"), "{r:?}");
+}

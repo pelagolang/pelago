@@ -1,6 +1,6 @@
 Id: S-06
 Title: `pelago lsp`: a language server inside the compiler
-Column: Review (L1 to L5 built; L6 left)
+Column: Review (L1 to L5 built; L6: rename and signature help built, formatting and code actions left)
 Order: -
 Depends on: nothing blocking; S-05 is the Zed side of it
 Size: L, in stages
@@ -15,7 +15,9 @@ definition (across files of the package), find references, the document outline,
 method, parameter, property, struct, enum, enumMember, with `declaration`, `defaultLibrary` and `readonly` modifiers) and completion (keywords, declarations, the locals
 of the enclosing item, and the members of the expression's type after a dot; not scope-exact).
 
-**Left:** L6 (rename, formatting, code actions), signature help, doc comments in hover, completion of imports and of members from `impl`s for generic types, an incremental
+**L6, partly built:** `prepareRename`/`rename` (every use and the declaration in the package, across files and import lists; the library, built-ins and modules are refused; the new name must be a plain identifier and not a keyword; a clash is caught by renaming on a copy of the package and refusing when that adds an error; fields, methods and enum cases are found through `Typed::member_uses`, which the type checker fills for `.name`, struct literals and patterns; a shorthand `point { x }` is not a field use, so renaming such a field is refused as a break) and `signatureHelp` (the call around the cursor, the active parameter by counting commas, `self` skipped after a dot).
+
+**Left:** formatting (needs a printer for source, see question 2), code actions, doc comments in hover, completion of imports and of members from `impl`s for generic types, an incremental
 checker (today every change re-checks the whole package), a VS Code client (needs the `vscode-languageclient` npm package: the owner's call), and the Zed hookup (S-05).
 Hover shows `(local) x`, not `const`/`var`, for locals because the resolver does not record which it was.
 

@@ -1,6 +1,7 @@
 //! Inlining: a call to a small function, or to one called from a single place, is replaced by a copy
 //! of its body. Functions are visited callees first, so a body is already tidy when it is copied.
-//! Recursive functions are never inlined. Slots of the callee become slots of the caller, so
+//! Recursive functions are never inlined into other functions; `recursive_once` copies a small one into
+//! itself, one level. Slots of the callee become slots of the caller, so
 //! promotion can then turn them into registers.
 
 use crate::ir::*;
@@ -13,6 +14,12 @@ const COLD_SUFFIX: &str = "_slow";
 
 /// A callee at most this big (instructions plus two per block) is always copied.
 const SMALL: usize = 60;
+
+/// A self-recursive function is copied into itself only up to this cost, and at this many calls.
+const RECURSIVE_LIMIT: usize = 120;
+const RECURSIVE_SITES: usize = 3;
+/// ... and the function may grow by this much (instructions plus two per block).
+const RECURSIVE_GROWTH: usize = 200;
 
 pub fn run(m: &mut Module) -> bool {
     let n = m.funcs.len();
@@ -129,6 +136,51 @@ fn find_site(
         }
     }
     None
+}
+
+/// How many calls to itself the function makes.
+pub fn self_calls(f: &Func, me: FuncId) -> usize {
+    f.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|&&i| matches!(&f.insts[i].op, Op::Call(c, _) if *c == me))
+        .count()
+}
+
+/// A small self-recursive function gets one level of itself inlined at its own calls that do not
+/// end the function (a call whose result is returned straight away is a tail call, or the slow path
+/// of a guard, and stays): half the calls of `fib` disappear, and the copy sees the arguments as
+/// they are, so the optimiser can fold what it knows about them. Returns whether it changed `f`.
+pub fn recursive_once(f: &mut Func, me: FuncId) -> bool {
+    if cost(f) > RECURSIVE_LIMIT {
+        return false;
+    }
+    let body = f.clone();
+    let sites: Vec<usize> = f
+        .blocks
+        .iter()
+        .filter(|b| !matches!(b.term, Some(Term::Return(_))))
+        .flat_map(|b| b.insts.iter().copied())
+        .filter(|&i| matches!(&f.insts[i].op, Op::Call(c, _) if *c == me))
+        .collect();
+    let mut changed = false;
+    let grown = cost(f) + RECURSIVE_GROWTH;
+    for id in sites.into_iter().take(RECURSIVE_SITES) {
+        // Each copy is about the size of the function: stop at the budget.
+        if cost(f) + cost(&body) > grown {
+            break;
+        }
+        let found = f
+            .blocks
+            .iter()
+            .enumerate()
+            .find_map(|(bi, b)| b.insts.iter().position(|&i| i == id).map(|pos| (bi, pos)));
+        if let Some((bi, pos)) = found {
+            inline_at(f, bi, pos, &body);
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// Replaces the call at `pos` in block `bi` with a copy of `callee`.

@@ -24,6 +24,7 @@ mod inline;
 mod layout;
 mod licm;
 mod loops;
+mod peel;
 mod promote;
 mod ranges;
 mod sccp;
@@ -70,8 +71,25 @@ pub fn optimize(m: &mut Module, opts: Options) {
         }
     }
     if opts.level >= 2 {
+        // What a call may skip is read off the functions before the tail-call pass changes their entry.
+        let exits: Vec<Option<peel::Exit>> = m.funcs.iter().map(peel::analyze).collect();
+        // Only a function that calls itself twice or more (a tree of calls) gains from a copy of itself.
+        let tree: Vec<bool> = m
+            .funcs
+            .iter()
+            .enumerate()
+            .map(|(i, f)| inline::self_calls(f, FuncId(i as u32)) >= 2)
+            .collect();
         for i in 0..m.funcs.len() {
-            if tailrec::run(&mut m.funcs[i], FuncId(i as u32)) {
+            let me = FuncId(i as u32);
+            let mut changed = tailrec::run(&mut m.funcs[i], me);
+            if let Some(exit) = &exits[i] {
+                changed |= peel::apply(&mut m.funcs[i], me, exit);
+            }
+            if tree[i] {
+                changed |= inline::recursive_once(&mut m.funcs[i], me);
+            }
+            if changed {
                 optimize_func(&mut m.funcs[i]);
             }
         }

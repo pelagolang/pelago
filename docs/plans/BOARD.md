@@ -16,8 +16,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 
 | Column | Card | Title | Size |
 |---|---|---|---|
-
-Nothing is waiting on this track.
+| Backlog (needs the owner's style answers) | [S-07](cards/S-07-formatter.md) | `pelago fmt` and LSP formatting | L |
 
 ## Shelf (parked on purpose)
 
@@ -54,5 +53,5 @@ Nothing right now.
 
 ## Review
 
-- [S-05](cards/S-05-zed-and-tree-sitter.md): Tree-sitter grammar (`pelagolang/tree-sitter-pelago`) and Zed extension (`pelagolang/zed-pelago`) built; not yet tried in Zed.
+- [S-05](cards/S-05-zed-and-tree-sitter.md): Tree-sitter grammar (`pelagolang/tree-sitter-pelago`) and Zed extension (`pelagolang/zed-pelago`) built, tested in the sandbox and readied for publishing; waits for the owner's try-out in VS Code (checklist in the card), a licence, and the publish.
 - [S-06](cards/S-06-language-server.md): `pelago lsp` built (L1 to L5); the owner reviews.

@@ -266,6 +266,9 @@ impl<'p> Checker<'p> {
                 continue;
             };
             seen.push(fd);
+            if f.pattern.is_some() {
+                self.note_member(f.name.span, fd);
+            }
             let ft = self.field_ty(fd);
             let ft = self.tt.subst(ft, &map);
             match &f.pattern {
