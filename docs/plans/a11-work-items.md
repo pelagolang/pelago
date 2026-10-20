@@ -15,6 +15,8 @@ Done:
 
 - **S1 (PR #7):** `ir/opt/divconst.rs` turns `x / 2^k`, `x % 2^k` (signed and unsigned) into shifts and masks, and `x % 2^k == 0` into one `and`.
 - **S2, first round (PR #8):** `ir/opt/ranges.rs` drops a checked `add`, `sub`, `mul` when both operands have a known small non-negative range (widened bytes, `x & 255`, `x % 10`, `x >> 3`, sums and products of those). Loops are not analysed.
+- **W2 (PR #11):** `ir/opt/ranges.rs` now follows block parameters to a fixed point (with widening) and cuts ranges by the comparison that guards a block, using the new `ir/opt/dom.rs`. `while i < n { i += 1 }` and counting down while `i > 0` lose their checks; signed counters only.
+- **W9 (PR #16), except alignment and strength reduction:** `ir/opt/loops.rs`, `ir/opt/licm.rs` (invariant code motion) and `ir/opt/layout.rs` (loop test at the bottom, `stop` blocks last). Strength reduction was left out on purpose: it fights the addressing modes of W5. Loop-head alignment (`Asm::align` in `gen.rs`) is still open.
 - **S3, first round (PR #8):** `native/gen.rs` keeps integer constants as immediates (`Where::Imm`), fuses a compare with the branch that ends its block, falls through to the next block, uses operands from their own registers and builds results in place, and gives `r10`/`r11` to values not live across a call (`native/regs.rs`).
 
 - **W3 (PR #15):** the allocator in `native/regs.rs` (live ranges with holes, all the caller-saved registers, split around calls, a cost model, hints) and parallel moves in `gen.rs`; see `docs/design/backend.md` section 6.
@@ -43,7 +45,7 @@ Size is S (hours), M (a day), L (several days). "Collides with" means the same f
 - **Collides with:** W3, W5, W8 in `native/gen.rs` (small hunk in `bin`), W8 in `ir/interp.rs`.
 - **Check:** exhaustive-at-the-edges tests for `i8`/`i32`/`i64` signed and unsigned, divisors 3, 5, 7, 10, 100, 641, `MAX`, `MIN+1`; collatz-style bench with `% 3`.
 
-### W2. Induction variables for the overflow checks (A-11 S2 part 2)
+### W2. Induction variables for the overflow checks (A-11 S2 part 2) — done, PR #11
 - **What:** a loop counter that starts at a constant, goes up by a constant each iteration and is bounded by a dominating compare (`i < n`) cannot overflow at its `i + 1`. Needs dominators and ranges for block parameters (a fixed point with widening).
 - **Touches:** `ir/opt/ranges.rs`, new `ir/opt/dom.rs` (dominator tree; W9 reuses it), `ir/opt/mod.rs` (one line), `ir/opt/tests.rs`.
 - **Depends on:** nothing. **Size:** M.
@@ -87,7 +89,7 @@ Size is S (hours), M (a day), L (several days). "Collides with" means the same f
 - **Depends on:** nothing. **Size:** M. It splits into two threads if wanted: (a) runtime and print buffering, (b) float semantics in interpreter and `cast`.
 - **Collides with:** W1 (`interp.rs`), W3/W5 (`gen.rs`, small hunks).
 
-### W9. Loop optimisations
+### W9. Loop optimisations — done in PR #16 except alignment (open) and strength reduction (dropped)
 - **What:** loop-invariant code motion, strength reduction (`i * 8` into an add), alignment of loop heads, and branch layout (likely path falls through).
 - **Touches:** new `ir/opt/licm.rs`, `ir/opt/mod.rs`, `ir/opt/tests.rs`, `native/gen.rs` (alignment only, via a new `Asm::align`).
 - **Depends on:** W2 (dominators). **Size:** M to L. **Collides with:** `gen.rs` only for alignment.
