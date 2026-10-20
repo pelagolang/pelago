@@ -15,6 +15,8 @@ pub enum Val {
     Bool(bool),
     /// An address: a numbered cell of interpreter memory.
     Ptr(usize),
+    /// The two lanes of a `v2i64`.
+    Vec([u64; 2]),
     Unit,
 }
 
@@ -350,6 +352,10 @@ impl Machine<'_> {
             IrTy::F64 => Val::Float(f64::from_le_bytes(b.try_into().unwrap_or([0; 8]))),
             IrTy::Bool => Val::Bool(b[0] != 0),
             IrTy::Ptr => Val::Ptr(u64::from_le_bytes(b.try_into().unwrap_or([0; 8])) as usize),
+            IrTy::V2I64 => Val::Vec([
+                u64::from_le_bytes(b[0..8].try_into().unwrap_or([0; 8])),
+                u64::from_le_bytes(b[8..16].try_into().unwrap_or([0; 8])),
+            ]),
             IrTy::Void => Val::Unit,
         })
     }
@@ -364,6 +370,7 @@ impl Machine<'_> {
             (IrTy::Bool, Val::Bool(b)) => vec![b as u8],
             (IrTy::Ptr, Val::Ptr(p)) => (p as u64).to_le_bytes().to_vec(),
             (IrTy::Ptr, Val::Int(p)) => (p as u64).to_le_bytes().to_vec(),
+            (IrTy::V2I64, Val::Vec(l)) => l.iter().flat_map(|x| x.to_le_bytes()).collect(),
             (IrTy::Void, _) => Vec::new(),
             _ => return Err("stored a value of the wrong kind".to_string()),
         };
@@ -447,6 +454,56 @@ impl Machine<'_> {
                 Val::Int(n) => Val::Int(mask(!n, bits_of(ty(a)))),
                 other => other,
             },
+            Op::VUn(o, a) => {
+                let lanes = |v: Val| match v {
+                    Val::Vec(l) => l,
+                    _ => [0, 0],
+                };
+                let int = |v: Val| match v {
+                    Val::Int(n) => n as u64,
+                    _ => 0,
+                };
+                match o {
+                    VUn::Splat => Val::Vec([int(get(a)); 2]),
+                    VUn::Shl(k) => {
+                        let l = lanes(get(a));
+                        Val::Vec([l[0] << k, l[1] << k])
+                    }
+                    VUn::UShr(k) => {
+                        let l = lanes(get(a));
+                        Val::Vec([l[0] >> k, l[1] >> k])
+                    }
+                    VUn::ReduceAdd => {
+                        let l = lanes(get(a));
+                        Val::Int(l[0].wrapping_add(l[1]) as u128)
+                    }
+                }
+            }
+            Op::VBin(o, a, b) => {
+                let (x, y) = (get(a), get(b));
+                if let VBin::Build = o {
+                    let int = |v: Val| match v {
+                        Val::Int(n) => n as u64,
+                        _ => 0,
+                    };
+                    Val::Vec([int(x), int(y)])
+                } else {
+                    let (Val::Vec(x), Val::Vec(y)) = (x, y) else {
+                        return Err(
+                            "a vector operation read a value that is not a vector".to_string()
+                        );
+                    };
+                    let lane = |f: fn(u64, u64) -> u64| Val::Vec([f(x[0], y[0]), f(x[1], y[1])]);
+                    match o {
+                        VBin::Add => lane(u64::wrapping_add),
+                        VBin::Sub => lane(u64::wrapping_sub),
+                        VBin::And => lane(|a, b| a & b),
+                        VBin::Or => lane(|a, b| a | b),
+                        VBin::Xor => lane(|a, b| a ^ b),
+                        VBin::Build => unreachable!(),
+                    }
+                }
+            }
             Op::Cast(k, a, to) => cast(*k, get(a), bits_of(ty(a)), *to),
             Op::Call(callee, args) => {
                 let argv: Vec<Val> = args.iter().map(get).collect();

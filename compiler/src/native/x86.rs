@@ -140,6 +140,16 @@ impl Cc {
     }
 }
 
+/// The lane-wise integer operations on two 64-bit lanes (opcode byte after `66 0f`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VAlu {
+    Add = 0xD4,
+    Sub = 0xFB,
+    And = 0xDB,
+    Or = 0xEB,
+    Xor = 0xEF,
+}
+
 /// Scalar floating-point arithmetic.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Sse {
@@ -783,6 +793,30 @@ impl Asm {
     /// Moves the raw bits of an SSE register into a general register.
     pub fn movq_from_xmm(&mut self, dst: Reg, src: Xmm, wide: bool) {
         self.sse(Some(0x66), wide, &[0x0F, 0x7E], src.0, Rm::Reg(dst.0));
+    }
+
+    /// Lane-wise 64-bit integer operation on two SSE registers (two lanes of an `i64`).
+    pub fn valu(&mut self, op: VAlu, dst: Xmm, src: Xmm) {
+        self.sse(Some(0x66), false, &[0x0F, op as u8], dst.0, Rm::Reg(src.0));
+    }
+
+    /// Both 64-bit lanes shifted by a constant: left, or logically right.
+    pub fn vshift(&mut self, left: bool, dst: Xmm, count: u8) {
+        let digit = if left { 6 } else { 2 };
+        self.sse(Some(0x66), false, &[0x0F, 0x73], digit, Rm::Reg(dst.0));
+        self.bytes(&[count]);
+    }
+
+    /// The low lane of both registers side by side: with the same register twice, a copy of the low
+    /// lane into the high one.
+    pub fn punpcklqdq(&mut self, dst: Xmm, src: Xmm) {
+        self.sse(Some(0x66), false, &[0x0F, 0x6C], dst.0, Rm::Reg(src.0));
+    }
+
+    /// Shuffles the four 32-bit lanes of `src` by `order`.
+    pub fn pshufd(&mut self, dst: Xmm, src: Xmm, order: u8) {
+        self.sse(Some(0x66), false, &[0x0F, 0x70], dst.0, Rm::Reg(src.0));
+        self.bytes(&[order]);
     }
 
     // ---- x87 (only for the floating-point remainder) ---------------------------------------------------

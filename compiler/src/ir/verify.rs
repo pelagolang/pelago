@@ -218,6 +218,7 @@ fn inputs(op: &Op) -> Vec<Value> {
         Op::Bin(_, a, b)
         | Op::Checked(_, _, a, b)
         | Op::Cmp(_, a, b)
+        | Op::VBin(_, a, b)
         | Op::Store(a, b)
         | Op::PtrAdd(a, b)
         | Op::Realloc(a, b)
@@ -226,6 +227,7 @@ fn inputs(op: &Op) -> Vec<Value> {
         }
         Op::Neg(a)
         | Op::Not(a)
+        | Op::VUn(_, a)
         | Op::Cast(_, a, _)
         | Op::Load(_, a)
         | Op::Alloc(a)
@@ -352,6 +354,39 @@ fn check_inst(f: &Func, m: Option<&Module>, inst: &Inst) -> Vec<String> {
         Op::Not(a) => {
             if !t(*a).is_some_and(|x| x.is_int() || x == IrTy::Bool) {
                 e.push("`not` needs an integer or a bool".to_string());
+            }
+        }
+        Op::VUn(o, a) => {
+            let (from, to) = match o {
+                VUn::Splat => (IrTy::I64, IrTy::V2I64),
+                VUn::Shl(k) | VUn::UShr(k) => {
+                    if *k >= 64 {
+                        e.push("a vector shift count is below 64".to_string());
+                    }
+                    (IrTy::V2I64, IrTy::V2I64)
+                }
+                VUn::ReduceAdd => (IrTy::V2I64, IrTy::I64),
+            };
+            if t(*a) != Some(from) || result_ty != Some(to) {
+                e.push(format!(
+                    "a vector operation takes {} and makes {}",
+                    from.name(),
+                    to.name()
+                ));
+            }
+        }
+        Op::VBin(o, a, b) => {
+            let (from, to) = match o {
+                VBin::Build => (IrTy::I64, IrTy::V2I64),
+                _ => (IrTy::V2I64, IrTy::V2I64),
+            };
+            if t(*a) != Some(from) || t(*b) != Some(from) || result_ty != Some(to) {
+                e.push(format!(
+                    "`{}` takes two {} and makes {}",
+                    o.name(),
+                    from.name(),
+                    to.name()
+                ));
             }
         }
         Op::Cast(kind, a, to) => {

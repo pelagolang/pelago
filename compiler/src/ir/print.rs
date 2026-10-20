@@ -105,6 +105,13 @@ fn inst_text(f: &Func, i: &Inst, m: Option<&Module>) -> String {
         Op::Cmp(op, a, b) => format!("{} {}, {}", op.name(), v(*a), v(*b)),
         Op::Neg(a) => format!("neg {}", v(*a)),
         Op::Not(a) => format!("not {}", v(*a)),
+        Op::VUn(o, a) => match o {
+            VUn::Splat => format!("vsplat {}", v(*a)),
+            VUn::Shl(k) => format!("vshl {}, {k}", v(*a)),
+            VUn::UShr(k) => format!("vushr {}, {k}", v(*a)),
+            VUn::ReduceAdd => format!("vreduce_add {}", v(*a)),
+        },
+        Op::VBin(o, a, b) => format!("{} {}, {}", o.name(), v(*a), v(*b)),
         Op::Cast(k, a, ty) => format!("{} {} to {}", k.name(), v(*a), ty.name()),
         Op::Call(callee, args) => {
             let name = m
