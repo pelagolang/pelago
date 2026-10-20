@@ -328,7 +328,7 @@ fn term_uses(t: &Term, out: &mut Vec<Value>) {
     }
 }
 
-fn successors(t: &Term) -> Vec<usize> {
+pub(super) fn successors(t: &Term) -> Vec<usize> {
     match t {
         Term::Jump(tg) => vec![tg.block.0 as usize],
         Term::Branch(_, a, b) => vec![a.block.0 as usize, b.block.0 as usize],
