@@ -1055,3 +1055,177 @@ fn a_counter_that_wraps_with_a_mask_keeps_a_small_range() {
     f.terminate(done, Term::Return(Some(x)));
     assert_eq!(checks_left(f), 0);
 }
+
+/// `main(x)`: `a = mulhi x, c` in the entry and again, with its own copy of the constant, in the
+/// block after it; the sum of both is returned.
+fn twice_mulhi() -> Func {
+    let mut f = Func::new("main", &[IrTy::I64], IrTy::I64);
+    let e = f.entry();
+    let next = f.new_block(&[]);
+    let x = f.block_params(e)[0];
+    let c1 = f
+        .emit(
+            e,
+            Op::Const(IrTy::I64, Const::Int(0x6666_6666_6666_6667)),
+            Some(IrTy::I64),
+        )
+        .unwrap();
+    let a = f
+        .emit(e, Op::Bin(BinOp::MulHi, x, c1), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(
+        e,
+        Term::Jump(Target {
+            block: next,
+            args: vec![],
+        }),
+    );
+    let c2 = f
+        .emit(
+            next,
+            Op::Const(IrTy::I64, Const::Int(0x6666_6666_6666_6667)),
+            Some(IrTy::I64),
+        )
+        .unwrap();
+    let b = f
+        .emit(next, Op::Bin(BinOp::MulHi, x, c2), Some(IrTy::I64))
+        .unwrap();
+    let s = f
+        .emit(next, Op::Bin(BinOp::Add, a, b), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(next, Term::Return(Some(s)));
+    f
+}
+
+#[test]
+fn an_operation_repeated_under_a_dominating_copy_is_shared() {
+    let f = twice_mulhi();
+    let mut g = f.clone();
+    assert!(cse::run(&mut g));
+    assert!(verify_func(&g).is_empty(), "{}", print_func(&g, None));
+    assert_eq!(count(&g, |o| matches!(o, Op::Bin(BinOp::MulHi, ..))), 1);
+    for x in [
+        -1000i128,
+        -1,
+        0,
+        1,
+        7,
+        12345,
+        i64::MAX as i128,
+        i64::MIN as i128,
+    ] {
+        let (m0, m1) = (module_of(f.clone()), module_of(g.clone()));
+        assert_eq!(
+            run_full(&m0, "main", &[Val::Int(x as u64 as u128)]).result,
+            run_full(&m1, "main", &[Val::Int(x as u64 as u128)]).result
+        );
+    }
+}
+
+#[test]
+fn operations_in_sibling_branches_are_not_shared() {
+    // Neither arm dominates the other, so both keep their own `x - y`.
+    let mut f = Func::new("main", &[IrTy::I64, IrTy::I64], IrTy::I64);
+    let e = f.entry();
+    let (l, r) = (f.new_block(&[]), f.new_block(&[]));
+    let join = f.new_block(&[IrTy::I64]);
+    let (x, y) = (f.block_params(e)[0], f.block_params(e)[1]);
+    let zero = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(0)), Some(IrTy::I64))
+        .unwrap();
+    let c = f
+        .emit(e, Op::Cmp(CmpOp::Lt, x, zero), Some(IrTy::Bool))
+        .unwrap();
+    f.terminate(
+        e,
+        Term::Branch(
+            c,
+            Target {
+                block: l,
+                args: vec![],
+            },
+            Target {
+                block: r,
+                args: vec![],
+            },
+        ),
+    );
+    for b in [l, r] {
+        let d = f
+            .emit(b, Op::Bin(BinOp::Sub, x, y), Some(IrTy::I64))
+            .unwrap();
+        f.terminate(
+            b,
+            Term::Jump(Target {
+                block: join,
+                args: vec![d],
+            }),
+        );
+    }
+    let p = f.block_params(join)[0];
+    f.terminate(join, Term::Return(Some(p)));
+    let mut g = f.clone();
+    assert!(!cse::run(&mut g));
+    assert_eq!(count(&g, |o| matches!(o, Op::Bin(BinOp::Sub, ..))), 2);
+}
+
+#[test]
+fn a_signed_division_of_a_known_non_negative_number_becomes_unsigned() {
+    // `(x & 255) / 10` and `% 10` are unsigned; `x / 10` keeps its sign handling.
+    let mut f = Func::new("main", &[IrTy::I64], IrTy::I64);
+    let e = f.entry();
+    let x = f.block_params(e)[0];
+    let k = |f: &mut Func, n| {
+        f.emit(e, Op::Const(IrTy::I64, Const::Int(n)), Some(IrTy::I64))
+            .unwrap()
+    };
+    let (m, t) = (k(&mut f, 255), k(&mut f, 10));
+    let small = f
+        .emit(e, Op::Bin(BinOp::And, x, m), Some(IrTy::I64))
+        .unwrap();
+    let q = f
+        .emit(e, Op::Bin(BinOp::Div, small, t), Some(IrTy::I64))
+        .unwrap();
+    let r = f
+        .emit(e, Op::Bin(BinOp::Rem, small, t), Some(IrTy::I64))
+        .unwrap();
+    let w = f
+        .emit(e, Op::Bin(BinOp::Div, x, t), Some(IrTy::I64))
+        .unwrap();
+    let a = f
+        .emit(e, Op::Bin(BinOp::Add, q, r), Some(IrTy::I64))
+        .unwrap();
+    let s = f
+        .emit(e, Op::Bin(BinOp::Add, a, w), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(e, Term::Return(Some(s)));
+    let mut g = f.clone();
+    assert!(ranges::run(&mut g));
+    assert_eq!(
+        count(&g, |o| matches!(o, Op::Bin(BinOp::UDiv | BinOp::URem, ..))),
+        2
+    );
+    assert_eq!(count(&g, |o| matches!(o, Op::Bin(BinOp::Div, ..))), 1);
+    let mut full = module_of(f.clone());
+    optimize(&mut full, Options::default());
+    for x in [
+        -1000i128,
+        -11,
+        -1,
+        0,
+        1,
+        9,
+        10,
+        255,
+        256,
+        99999,
+        i64::MAX as i128,
+        i64::MIN as i128,
+    ] {
+        assert_eq!(
+            run_full(&module_of(f.clone()), "main", &[Val::Int(x as u64 as u128)]).result,
+            run_full(&full, "main", &[Val::Int(x as u64 as u128)]).result,
+            "x = {x}"
+        );
+    }
+}

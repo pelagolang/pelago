@@ -488,7 +488,11 @@ fn widen(old: L, new: L, max: u128) -> L {
 }
 
 pub fn run(f: &mut Func) -> bool {
-    if !f.insts.iter().any(|i| matches!(i.op, Op::Checked(..))) {
+    if !f
+        .insts
+        .iter()
+        .any(|i| matches!(i.op, Op::Checked(..) | Op::Bin(BinOp::Div | BinOp::Rem, ..)))
+    {
         return false;
     }
     let mut cx = Ctx::new(f);
@@ -497,7 +501,20 @@ pub fn run(f: &mut Func) -> bool {
     }
     cx.narrow();
     let mut safe = Vec::new();
+    let mut unsigned = Vec::new();
     for ii in 0..f.insts.len() {
+        // A signed division of a non-negative number by a positive constant is the unsigned one,
+        // which needs no fix-up for negative dividends once `divconst` has turned it into a multiply.
+        if let Op::Bin(BinOp::Div | BinOp::Rem, a, b) = f.insts[ii].op.clone() {
+            let blk = cx.block_of[ii];
+            if blk != u32::MAX
+                && cx.konst(b).is_some_and(|c| c > 0)
+                && matches!(cx.range_at(a, BlockId(blk)), L::R(_))
+            {
+                unsigned.push(ii);
+            }
+            continue;
+        }
         let Op::Checked(o, signed, a, b) = f.insts[ii].op.clone() else {
             continue;
         };
@@ -526,7 +543,17 @@ pub fn run(f: &mut Func) -> bool {
             safe.push(ii);
         }
     }
-    let changed = !safe.is_empty();
+    let changed = !safe.is_empty() || !unsigned.is_empty();
+    for ii in unsigned {
+        if let Op::Bin(o, a, b) = f.insts[ii].op.clone() {
+            let o = if o == BinOp::Div {
+                BinOp::UDiv
+            } else {
+                BinOp::URem
+            };
+            f.insts[ii].op = Op::Bin(o, a, b);
+        }
+    }
     for ii in safe {
         if let Op::Checked(o, _, a, b) = f.insts[ii].op.clone() {
             f.insts[ii].op = Op::Bin(o, a, b);
