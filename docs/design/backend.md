@@ -114,22 +114,23 @@ Measured on this container (collatz steps for 1 to 300,000 and `fib(35)`, `compi
 
 **Update (A-11 S1 to S3, first round).** The generator now treats integer constants as immediates, fuses a compare with the branch that uses it, falls through to the next block, works on operands in their own registers and uses `r10`/`r11` for values not live across calls; the optimiser turns division by constants into shifts and high multiplies (`MulHi`/`UMulHi`) and drops overflow checks it can prove cannot fire. Collatz went from 0.30 s to 0.09 s (C `-O0` 0.14 s, `-O2` 0.07 s); `compiler/benches/compare.sh` prints the table.
 
-**The benchmark suite.** `compiler/benches/compare.sh [--json] [--runs N] [name ...]` builds every `compiler/benches/<name>.pel` that has a C twin `compiler/benches/c/<name>.c`, checks that both print the same output, and prints one table (best of N runs, native `--opt` against `gcc -O0` and `-O2`). `--json` adds one JSON line per program for a CI artifact or the weekly routine. A new benchmark is two files with the same name. Baseline on the container after A-11 first round (seconds):
+**The benchmark suite.** `compiler/benches/compare.sh [--json] [--runs N] [name ...]` builds every `compiler/benches/<name>.pel` that has a C twin `compiler/benches/c/<name>.c`, checks that all print the same output, and prints one table (best of N runs, native `--opt` against `gcc -O0` and `-O2`). When `rustc` is installed and a Rust twin `compiler/benches/rs/<name>.rs` exists, it also builds it with `rustc -O -C overflow-checks=off` and adds the Rust column; without `rustc` the table is C only. **The goal is a "vs -O2" ratio of 1.00x or less**: rows that reach it are marked `<= C`, and the last lines give the geometric means. `--json` adds one JSON line per program for a CI artifact or the weekly routine. A new benchmark is a `.pel` and a `.c` file with the same name (and a `.rs` if wanted). Current numbers on the container (seconds, best of 5, 2026-10-20, main with floats in registers):
 
-| program | what it stresses | pelago | C -O0 | C -O2 | vs -O2 |
-|---|---|---|---|---|---|
-| collatz | division by 2, branches | 0.092 | 0.140 | 0.069 | 1.3x |
-| fib38 | calls, recursion | 0.298 | 0.340 | 0.084 | 3.6x |
-| tak | recursion, three arguments | 0.236 | 0.215 | 0.135 | 1.7x |
-| loop_sum | tight loop, overflow checks | 0.768 | 0.793 | 0.311 | 2.5x |
-| sieve | array stores, bounds checks | 0.175 | 0.203 | 0.130 | 1.3x |
-| list_sum | `push!` growth, indexing | 0.121 | 0.048 | 0.031 | 4.0x |
-| floatloop | floats (always in memory) | 0.357 | 0.237 | 0.140 | 2.6x (0.133 s, 0.9x, with SSE registers) |
-| structloop | struct values passed and returned | 0.711 | 0.103 | 0.012 | 60x |
-| strbuild | `string` concatenation, 20,000 rounds | 0.120 | 0.009 | 0.009 | 13x |
-| mapwork | `map` insert and get, 200,000 keys | 0.027 | 0.012 | 0.012 | 2.2x |
+| program | what it stresses | pelago | C -O0 | C -O2 | Rust -O | vs -O2 | vs Rust |
+|---|---|---|---|---|---|---|---|
+| collatz | division by 2, branches | 0.098 | 0.145 | 0.067 | 0.044 | 1.47x | 2.22x |
+| divmod | division by constants 10, 3, 7 | 0.078 | 0.069 | 0.034 | 0.038 | 2.26x | 2.05x |
+| fib38 | calls, recursion | 0.288 | 0.342 | 0.078 | 0.115 | 3.71x | 2.50x |
+| tak | recursion, three arguments | 0.299 | 0.237 | 0.147 | 0.181 | 2.04x | 1.65x |
+| loop_sum | tight loop, overflow checks | 0.334 | 0.807 | 0.323 | 0.306 | 1.03x | 1.09x |
+| sieve | array stores, bounds checks | 0.151 | 0.206 | 0.128 | 0.135 | 1.19x | 1.12x |
+| list_sum | `push!` growth, indexing | 0.091 | 0.048 | 0.028 | 0.031 | 3.20x | 2.93x |
+| floatloop | floats (in SSE registers) | 0.134 | 0.240 | 0.143 | 0.135 | 0.94x | 1.00x |
+| structloop | struct values passed and returned | 0.089 | 0.104 | 0.012 | 0.007 | 7.29x | 13.01x |
+| strbuild | `string` append, 2,000,000 rounds (C and Rust grow a buffer by doubling) | 0.012 | 0.010 | 0.005 | 0.008 | 2.31x | 1.41x |
+| mapwork | `map` insert and get, 200,000 keys | 0.014 | 0.026 | 0.018 | 0.020 | 0.73x | 0.68x |
 
-The two big gaps are the struct-valued calls (every struct is copied through memory) and string concatenation (it is worse than linear: 200,000 rounds take 32 s where 20,000 take 0.12 s). The `strbuild` size is kept small for that reason.
+Geometric mean about 1.4x C `-O2` (about 1.6x Rust; rerun `compare.sh` for exact figures); at or below `-O2` on 2 of 11 programs (`floatloop` with floats in registers, `mapwork`; `strbuild` is runtime-library work, linear now but 2.3x C). The Rust twins are straight ports with overflow checks off to match the build; Rust bounds-checks indexing, as Pelago does. The biggest gaps are struct-valued calls and calls in general (`fib38`).
 
 What was still slow before that round, in order of likely payoff: every checked operation and bounds check is a compare and branch, the calling convention goes through memory for every
 float, small `MemCopy` uses `rep movsb`, and no value is split between a register and memory (a value too rarely used for a register still pays a load and a store per use).

@@ -1,4 +1,5 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-int main(){char*s=malloc(1);s[0]=0;long len=0,t=0;for(long i=0;i<20000;i++){char*n=malloc(len+3);memcpy(n,s,len);n[len]='a';n[len+1]='b';n[len+2]=0;free(s);s=n;len+=2;t+=len&7;}printf("%ld %ld\n",len,t);return 0;}
+/* Amortised growth: capacity doubles, so appending is linear overall. */
+int main(){long cap=16,len=0,t=0;char*s=malloc(cap);for(long i=0;i<2000000;i++){if(len+2>cap){cap*=2;s=realloc(s,cap);}s[len]='a';s[len+1]='b';len+=2;t+=len&7;}printf("%ld %ld\n",len,t);return 0;}
