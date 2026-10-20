@@ -16,6 +16,7 @@
 mod cfg;
 mod dce;
 mod divconst;
+mod dom;
 mod inline;
 mod promote;
 mod ranges;

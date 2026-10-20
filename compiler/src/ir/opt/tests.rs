@@ -547,3 +547,126 @@ fn checks_that_cannot_fire_are_dropped() {
     let main = o.funcs.iter().find(|f| f.name == "main").unwrap();
     assert_eq!(count(main, |o| matches!(o, Op::Checked(..))), 1);
 }
+
+/// `i = start; acc = 0; while i <cmp> limit { acc += i; i = i <op> step }; acc` with block parameters.
+/// The limit is the constant `limit` or, when `None`, the function's parameter `n`.
+fn counter_loop(
+    start: Option<i128>,
+    step: i128,
+    op: BinOp,
+    cmp: CmpOp,
+    limit: Option<i128>,
+) -> Func {
+    let params: &[IrTy] = if limit.is_none() || start.is_none() {
+        &[IrTy::I64]
+    } else {
+        &[]
+    };
+    let mut f = Func::new("main", params, IrTy::I64);
+    let e = f.entry();
+    let head = f.new_block(&[IrTy::I64, IrTy::I64]);
+    let body = f.new_block(&[]);
+    let done = f.new_block(&[]);
+    let n = f.block_params(e).first().copied();
+    let konst = |f: &mut Func, b, v: i128| {
+        f.emit(b, Op::Const(IrTy::I64, Const::Int(v)), Some(IrTy::I64))
+            .unwrap()
+    };
+    let first = match start {
+        Some(s) => konst(&mut f, e, s),
+        None => n.unwrap(),
+    };
+    let zero = konst(&mut f, e, 0);
+    let to = |b, args| Target { block: b, args };
+    f.terminate(e, Term::Jump(to(head, vec![first, zero])));
+    let (i, acc) = (f.block_params(head)[0], f.block_params(head)[1]);
+    let lim = match limit {
+        Some(l) => konst(&mut f, head, l),
+        None => n.unwrap(),
+    };
+    let c = f
+        .emit(head, Op::Cmp(cmp, i, lim), Some(IrTy::Bool))
+        .unwrap();
+    f.terminate(head, Term::Branch(c, to(body, vec![]), to(done, vec![])));
+    let acc2 = f
+        .emit(body, Op::Checked(BinOp::Add, true, acc, i), Some(IrTy::I64))
+        .unwrap();
+    let k = konst(&mut f, body, step);
+    let i2 = f
+        .emit(body, Op::Checked(op, true, i, k), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(body, Term::Jump(to(head, vec![i2, acc2])));
+    f.terminate(done, Term::Return(Some(acc)));
+    f
+}
+
+fn checks_left(mut f: Func) -> usize {
+    ranges::run(&mut f);
+    assert!(verify_func(&f).is_empty(), "{}", print_func(&f, None));
+    count(&f, |o| matches!(o, Op::Checked(..)))
+}
+
+#[test]
+fn a_counter_bounded_by_its_loop_test_cannot_overflow() {
+    // The sum stays checked; the counter's own step goes when the test proves room for it.
+    let up = |step, cmp| counter_loop(Some(0), step, BinOp::Add, cmp, None);
+    assert_eq!(checks_left(up(1, CmpOp::Lt)), 1);
+    // `i <= n` leaves `n = MAX`, so `i + 1` could pass it; a step of 2 could pass MAX with `i < n`.
+    assert_eq!(checks_left(up(1, CmpOp::Le)), 2);
+    assert_eq!(checks_left(up(2, CmpOp::Lt)), 2);
+    // A constant bound leaves room for a bigger step.
+    let c = |step, cmp, limit| counter_loop(Some(0), step, BinOp::Add, cmp, Some(limit));
+    assert_eq!(checks_left(c(3, CmpOp::Lt, 10)), 1);
+    assert_eq!(checks_left(c(1, CmpOp::Le, 10)), 1);
+    // Counting down while positive: the subtraction cannot go below zero.
+    let down = counter_loop(None, 1, BinOp::Sub, CmpOp::Gt, Some(0));
+    assert_eq!(checks_left(down), 1);
+}
+
+#[test]
+fn a_counter_nothing_bounds_stays_checked() {
+    // The test looks at another value, or the counter may start negative.
+    let other = counter_loop(Some(0), 1, BinOp::Add, CmpOp::Lt, None);
+    let mut other = other;
+    // Compare the accumulator (the second block parameter) instead of the counter.
+    let head = BlockId(1);
+    let acc = other.block_params(head)[1];
+    let c = other.blocks[1]
+        .insts
+        .iter()
+        .copied()
+        .find(|i| matches!(other.insts[*i].op, Op::Cmp(..)))
+        .unwrap();
+    if let Op::Cmp(_, a, _) = &mut other.insts[c].op {
+        *a = acc;
+    }
+    assert_eq!(checks_left(other), 2);
+    assert_eq!(
+        checks_left(counter_loop(Some(-5), 1, BinOp::Add, CmpOp::Lt, None)),
+        2
+    );
+}
+
+#[test]
+fn loops_with_dropped_checks_give_the_same_answers() {
+    let cases = [
+        (Some(0), 1, BinOp::Add, CmpOp::Lt, 10),
+        (Some(0), 3, BinOp::Add, CmpOp::Lt, 10),
+        (Some(0), 1, BinOp::Add, CmpOp::Le, 10),
+        (Some(-5), 1, BinOp::Add, CmpOp::Lt, 3),
+        // The step passes MAX: both engines stop.
+        (
+            Some(i64::MAX as i128 - 3),
+            2,
+            BinOp::Add,
+            CmpOp::Lt,
+            i64::MAX as i128,
+        ),
+        // The test is on the unsigned reading.
+        (Some(0), 2, BinOp::Add, CmpOp::ULt, 9),
+    ];
+    for (start, step, op, cmp, limit) in cases {
+        let m = module_of(counter_loop(start, step, op, cmp, Some(limit)));
+        both(&m);
+    }
+}
