@@ -68,3 +68,6 @@ Measured with `compiler/benches/compare.sh` (best of 7, this container):
 **S3, fourth round (done): floats in SSE registers (W11).** `native/regs.rs` allocates floats in `xmm2` to `xmm15` with the same priorities and splitting around calls as the integer registers (no SSE register is callee-saved); `gen.rs` does arithmetic, compares, negation, casts, loads, stores, arguments and results directly on them, and fuses `<`, `<=`, `>`, `>=` with the branch. `floatloop` 0.36 s to 0.13 s (C `-O0` 0.23 s, `-O2` 0.15 s). Details in `docs/design/backend.md` section 6.
 
 PRs: #7 (S1, powers of two), #8 (S2 and S3, first rounds). The open work, with files and dependencies for each item, is in [a11-work-items.md](../a11-work-items.md).
+
+
+**Tail calls.** `ir/opt/tailrec.rs` turns `return f(args)` inside `f` (also through the join block of an `if`) into a jump to a new loop header made from the old entry block, unless the call is handed the address of one of the frame's slots. tak: 0.29 s to 0.21 s (C -O2 0.18 s). Accumulator-style recursion (`fib(n-1) + fib(n-2)`) is not done: it reassociates a checked `+`, which can change which addition stops on overflow when the values have mixed signs; see PR notes.
