@@ -127,10 +127,10 @@ Measured on this container (collatz steps for 1 to 300,000 and `fib(35)`, `compi
 | list_sum | `push!` growth, indexing | 0.091 | 0.048 | 0.028 | 0.031 | 3.20x | 2.93x |
 | floatloop | floats (in SSE registers) | 0.134 | 0.240 | 0.143 | 0.135 | 0.94x | 1.00x |
 | structloop | struct values passed and returned | 0.089 | 0.104 | 0.012 | 0.007 | 7.29x | 13.01x |
-| strbuild | `string` concatenation, 20,000 rounds | 0.000 | 0.010 | 0.009 | 0.002 | 0.05x | 0.22x |
+| strbuild | `string` append, 2,000,000 rounds (C and Rust grow a buffer by doubling) | 0.012 | 0.010 | 0.005 | 0.008 | 2.31x | 1.41x |
 | mapwork | `map` insert and get, 200,000 keys | 0.014 | 0.026 | 0.018 | 0.020 | 0.73x | 0.68x |
 
-Geometric mean 1.33x C `-O2` (1.56x Rust); at or below `-O2` on 3 of 11 programs (`floatloop` with floats in registers; `strbuild` wins because concatenation of a local string is rewritten in place; `strbuild` and `mapwork` are runtime-library workloads). The Rust twins are straight ports with overflow checks off to match the build; Rust bounds-checks indexing, as Pelago does. The biggest gaps are struct-valued calls and calls in general (`fib38`).
+Geometric mean about 1.4x C `-O2` (about 1.6x Rust; rerun `compare.sh` for exact figures); at or below `-O2` on 2 of 11 programs (`floatloop` with floats in registers, `mapwork`; `strbuild` is runtime-library work, linear now but 2.3x C). The Rust twins are straight ports with overflow checks off to match the build; Rust bounds-checks indexing, as Pelago does. The biggest gaps are struct-valued calls and calls in general (`fib38`).
 
 What was still slow before that round, in order of likely payoff: every checked operation and bounds check is a compare and branch, the calling convention goes through memory for every
 float, small `MemCopy` uses `rep movsb`, and no value is split between a register and memory (a value too rarely used for a register still pays a load and a store per use).
