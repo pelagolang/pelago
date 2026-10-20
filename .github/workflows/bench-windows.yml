@@ -1,0 +1,60 @@
+name: bench-windows
+
+# The benchmark suite on Windows: native Pelago against MinGW gcc (-O0, -O2) and rustc -O, so the Windows
+# numbers exist before and after a change to the native runtime or the optimiser. The JSON lines are
+# uploaded as an artifact; the table goes to the job summary.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "compiler/src/native/**"
+      - "compiler/src/ir/**"
+      - "compiler/src/lower/**"
+      - "compiler/core/**"
+      - "compiler/benches/**"
+      - ".github/workflows/bench-windows.yml"
+  pull_request:
+    paths:
+      - "compiler/src/native/**"
+      - "compiler/src/ir/**"
+      - "compiler/src/lower/**"
+      - "compiler/core/**"
+      - "compiler/benches/**"
+      - ".github/workflows/bench-windows.yml"
+
+jobs:
+  bench:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tool versions
+        shell: bash
+        run: |
+          gcc --version | head -1
+          rustc --version
+          python --version
+      - name: Run the suite
+        shell: bash
+        timeout-minutes: 25
+        env:
+          BENCH_TIMEOUT: "60"
+        run: |
+          status=0
+          sh compiler/benches/compare.sh --json --runs 5 > bench-windows.txt 2> bench-windows.log || status=$?
+          cat bench-windows.log
+          cat bench-windows.txt
+          grep -v '^{' bench-windows.txt > bench-windows-table.txt || true
+          grep '^{' bench-windows.txt > bench-windows.jsonl || true
+          { echo '```'; cat bench-windows-table.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-windows
+          path: |
+            bench-windows.txt
+            bench-windows.log
+            bench-windows.jsonl

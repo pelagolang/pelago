@@ -1,6 +1,8 @@
 #!/bin/sh
 # Native Pelago against C (gcc -O0 and -O2) and Rust (rustc -O) on every program in benches/ that has a C twin in benches/c.
 # Usage: compiler/benches/compare.sh [--json] [--runs N] [name ...]   (run from the repository root; needs gcc and python3)
+# On Windows (Git Bash, MinGW gcc) it builds `.exe` files and the C columns are MinGW gcc; the CI job `bench-windows` runs it there.
+# One run of one executable may take BENCH_TIMEOUT seconds (default 120); after that the script names the program and exits with status 2.
 # A Rust twin in benches/rs/<name>.rs adds the Rust columns when `rustc` is installed; without it the table is C only.
 # The goal is a "vs -O2" ratio of 1.00x or less; those rows are marked `<= C`, and the last lines give the geometric means.
 #   --json     also print one JSON line per program (name, pelago, c0, c2, rust seconds, ratios) after the table
@@ -34,31 +36,43 @@ have_rust=0
 command -v rustc >/dev/null 2>&1 && have_rust=1
 out=$(mktemp -d)
 trap 'rm -rf "$out"' EXIT
+# Windows: executables need the `.exe` suffix, and python needs a path it understands.
+exe=""
+if [ "$OS" = "Windows_NT" ]; then
+    exe=".exe"
+    command -v cygpath >/dev/null 2>&1 && out=$(cygpath -m "$out")
+fi
 for name in $names; do
-    target/release/pelago build --opt -o "$out/$name.pel" "compiler/benches/$name.pel" >/dev/null
-    gcc -O0 -o "$out/$name.c0" "compiler/benches/c/$name.c"
-    gcc -O2 -o "$out/$name.c2" "compiler/benches/c/$name.c"
+    echo "building $name" >&2
+    target/release/pelago build --opt -o "$out/$name.pel$exe" "compiler/benches/$name.pel" >/dev/null
+    gcc -O0 -o "$out/$name.c0$exe" "compiler/benches/c/$name.c"
+    gcc -O2 -o "$out/$name.c2$exe" "compiler/benches/c/$name.c"
     if [ "$have_rust" = 1 ] && [ -f "compiler/benches/rs/$name.rs" ]; then
-        rustc -O -C overflow-checks=off -o "$out/$name.rs" "compiler/benches/rs/$name.rs"
+        rustc -O -C overflow-checks=off -o "$out/$name.rs$exe" "compiler/benches/rs/$name.rs"
     fi
     if [ "$checked" = 1 ]; then
-        gcc -O2 -ftrapv -o "$out/$name.ct" "compiler/benches/c/$name.c"
+        gcc -O2 -ftrapv -o "$out/$name.ct$exe" "compiler/benches/c/$name.c"
         if [ "$have_rust" = 1 ] && [ -f "compiler/benches/rs/$name.rs" ]; then
-            rustc -O -C overflow-checks=on -o "$out/$name.rc" "compiler/benches/rs/$name.rs"
+            rustc -O -C overflow-checks=on -o "$out/$name.rc$exe" "compiler/benches/rs/$name.rs"
         fi
     fi
 done
-python3 - "$json" "$runs" "$out" "$checked" $names <<'PY'
+python3 - "$json" "$runs" "$out" "$checked" "$exe" "${BENCH_TIMEOUT:-120}" $names <<'PY'
 import json, subprocess, sys, time
 
-as_json, runs, out, checked, names = sys.argv[1] == "1", int(sys.argv[2]), sys.argv[3], sys.argv[4] == "1", sys.argv[5:]
+as_json, runs, out, checked, exe, limit, names = sys.argv[1] == "1", int(sys.argv[2]), sys.argv[3], sys.argv[4] == "1", sys.argv[5], float(sys.argv[6]), sys.argv[7:]
 
-def best(exe):
-    # Returns (best seconds of `runs`, stdout of the last run).
+def best(path):
+    # Returns (best seconds of `runs`, stdout of the last run). A run that takes longer than `limit` ends the script.
     times, text = [], b""
+    print("running " + path, file=sys.stderr, flush=True)
     for _ in range(runs):
         t = time.perf_counter()
-        text = subprocess.run([exe], stdout=subprocess.PIPE).stdout
+        try:
+            text = subprocess.run([path + exe], stdout=subprocess.PIPE, stdin=subprocess.DEVNULL, timeout=limit).stdout
+        except subprocess.TimeoutExpired:
+            print(f"TIMEOUT: {path} did not finish within {limit:.0f} s", file=sys.stderr, flush=True)
+            sys.exit(2)
         times.append(time.perf_counter() - t)
     return min(times), text
 
@@ -68,7 +82,7 @@ rows, bad = [], []
 for name in names:
     (p, pt), (c0, _), (c2, ct) = (best(f"{out}/{name}.{k}") for k in ("pel", "c0", "c2"))
     rs = None
-    if os.path.exists(f"{out}/{name}.rs"):
+    if os.path.exists(f"{out}/{name}.rs{exe}"):
         rs, rt = best(f"{out}/{name}.rs")
         if rt != ct:
             bad.append(name + " (rust)")
@@ -113,7 +127,7 @@ if checked:
     print(f"{'program':12s} {'pelago':>8s} {'C trapv':>8s} {'Rust chk':>8s} {'vs C':>7s} {'vs Rust':>7s}   (same overflow checking; best of {runs}, seconds)")
     for name, p, c0, c2, rs in rows:
         ct, _ = best(f"{out}/{name}.ct")
-        rc = best(f"{out}/{name}.rc")[0] if os.path.exists(f"{out}/{name}.rc") else None
+        rc = best(f"{out}/{name}.rc")[0] if os.path.exists(f"{out}/{name}.rc{exe}") else None
         line = f"{name:12s} {p:8.3f} {ct:8.3f} " + (f"{rc:8.3f}" if rc is not None else f"{'-':>8s}")
         line += f" {ratio(p, ct)} " + (ratio(p, rc) if rc is not None else "      -")
         print(line)
