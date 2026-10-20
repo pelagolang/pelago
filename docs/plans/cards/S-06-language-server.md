@@ -39,7 +39,7 @@ Hover shows `(local) x`, not `const`/`var`, for locals because the resolver does
 | L3 | **Hover** (the type of an expression, the signature of a function) | typecheck results |
 | L4 | **Go to definition**, find references | resolver |
 | L5 | Document symbols (outline), signature help, completion of names in scope and of methods after a dot | resolver, types |
-| L6 | Rename, formatting (needs a printer for source, not just for the tree), code actions | later |
+| L6 | Rename, formatting (needs a printer for source, not just for the tree), code actions | code actions done: "did you mean" (read from the checker message) and "remove unused import" (a hint, found from tokens); rename and formatting later |
 
 # Tests
 

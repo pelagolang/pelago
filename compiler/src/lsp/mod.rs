@@ -191,6 +191,10 @@ impl Server {
                     ("definitionProvider", Json::Bool(true)),
                     ("referencesProvider", Json::Bool(true)),
                     (
+                        "codeActionProvider",
+                        obj(vec![("codeActionKinds", strs(&["quickfix"]))]),
+                    ),
+                    (
                         "renameProvider",
                         obj(vec![("prepareProvider", Json::Bool(true))]),
                     ),
@@ -379,6 +383,21 @@ impl Server {
                         ])
                     })
                     .collect();
+                // Unused imports are not compile errors, so they only show in the editor.
+                let mut list = list;
+                list.extend(a.unused_imports(*m).iter().map(|f| {
+                    obj(vec![
+                        (
+                            "range",
+                            range_json(&map, f.trigger.start as usize, f.trigger.end as usize),
+                        ),
+                        ("severity", num(4)),
+                        ("tags", Json::Arr(vec![num(1)])),
+                        ("source", text("pelago")),
+                        ("code", text("unused-import")),
+                        ("message", text("unused import")),
+                    ])
+                }));
                 if !list.is_empty() {
                     now.insert(u.clone());
                 }
@@ -569,6 +588,45 @@ impl Server {
                 }
                 Some(Json::Arr(
                     a.symbols(m).iter().map(|s| conv(&map, s)).collect(),
+                ))
+            }
+            "textDocument/codeAction" => {
+                let r = params.get("range")?;
+                let at = |k: &str| {
+                    let p = r.get(k)?;
+                    Some(map.offset(
+                        p.get("line")?.int()? as u32,
+                        p.get("character")?.int()? as u32,
+                    ) as u32)
+                };
+                let (from, to) = (at("start")?, at("end")?);
+                let mut fixes = a.suggestion_fixes(m);
+                fixes.extend(a.unused_imports(m));
+                Some(Json::Arr(
+                    fixes
+                        .into_iter()
+                        .filter(|f| f.trigger.start <= to && from <= f.trigger.end)
+                        .map(|f| {
+                            let edit = obj(vec![
+                                (
+                                    "range",
+                                    range_json(&map, f.edit.start as usize, f.edit.end as usize),
+                                ),
+                                ("newText", text(f.new_text)),
+                            ]);
+                            obj(vec![
+                                ("title", text(f.title)),
+                                ("kind", text("quickfix")),
+                                (
+                                    "edit",
+                                    obj(vec![(
+                                        "changes",
+                                        obj(vec![(uri.as_str(), Json::Arr(vec![edit]))]),
+                                    )]),
+                                ),
+                            ])
+                        })
+                        .collect(),
                 ))
             }
             "textDocument/completion" => {

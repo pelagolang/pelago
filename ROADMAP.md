@@ -95,7 +95,7 @@ No compiler code yet. Everything here is cheap to change.
 - [ ] **Token benchmark.** Run the samples and equivalent Rust and TS programs through real tokenizers. Record the numbers
 - [ ] **First target CPU** for the backend (x86-64 is the usual start) and first OS / object format (ELF on Linux)
 - [ ] Pick the final name, then rename the repo
-- [ ] Choose a license
+- [x] Choose a license: `MIT OR Apache-2.0` (owner, 2026-10-20); files `LICENSE-MIT` and `LICENSE-APACHE` in every Pelago repository
 
 **Milestone:** the samples read well, the paper test passes, and the grammar fits on a couple of pages.
 
