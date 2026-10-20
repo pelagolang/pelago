@@ -1,6 +1,6 @@
 Id: S-07
 Title: `pelago fmt` and LSP formatting
-Column: Doing (stages 1 and 2a built)
+Column: Doing (stages 1, 2a and binary breaking built)
 Order: -
 Depends on: parser comment-keeping (step F1); S-06 for the editor side
 Size: L, in stages
@@ -28,7 +28,9 @@ width = 100
 
 **Stage 2a built** (`fmt/wrap.rs`, `fmt/imports.rs`): a line longer than `width` is broken at the rightmost outermost `( )` or `[ ]` group that has a comma, one element per line with a trailing comma (question 5, 6); lines that are still long are broken again, element by element. Not broken: lines with comments or multi-line tokens, groups with a single element, groups with a top-level `;` or `of` (comprehensions, array types) or unbalanced `<` `>` (generic arguments), and `{ }` blocks. Names in `import { ... }` lists are sorted, `...` last (question 10); a list with a comment is left alone. The result must also parse and print the same tree as the input, and a test formats every example at widths 60, 40 and 20 and checks idempotence.
 
-**Stage 2b (not built):** breaking long binary expressions (question 7), and deriving indentation from the tree so a line indented one level too far is corrected. `compiler/core/core.pel` is not formatted yet (it has a few long calls); CI checks `examples` only.
+**Binary breaking built** (`fmt/wrap.rs`, `break_binary`): when no list can be broken, the line is broken after every top-level operator of the loosest kind it holds (`||`, then `&&`, `??`, binary `+` and `-`), the pieces indented one level (question 7; the parser already continues a line that ends in an operator). Comparisons and other operators are not broken.
+
+**Stage 2b (not built):** deriving indentation from the tree so a line indented one level too far is corrected. `compiler/core/core.pel` is not formatted yet (it has a few long calls); CI checks `examples` only.
 
 # What it needs
 

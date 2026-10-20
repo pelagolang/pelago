@@ -117,11 +117,14 @@ fn break_line(
         .into_iter()
         .filter(|&(o, c)| elements(src, &on_line, o, c).is_some_and(|e| e.len() > 1))
         .collect();
-    let &(o, c) = usable
+    let Some(&(o, c)) = usable
         .iter()
         .rev()
         .find(|&&(o, _)| prefix_fits(o))
-        .or(usable.first())?;
+        .or(usable.first())
+    else {
+        return break_binary(src, &on_line, start, indent, config);
+    };
     let elems = elements(src, &on_line, o, c)?;
     let pad = |n: usize| " ".repeat(n);
     let mut out = String::new();
@@ -134,6 +137,72 @@ fn break_line(
     }
     out.push_str(&pad(indent));
     out.push_str(&src[on_line[c].span.start as usize..]);
+    Some(out)
+}
+
+/// How loosely a binary operator binds, for the operators that are safe to break after: `||`
+/// breaks before `&&`, before `??`, before `+` and `-`. `None` for anything else.
+pub fn break_rank(k: TokenKind) -> Option<u8> {
+    match k {
+        TokenKind::Punct(Punct::OrOr) => Some(0),
+        TokenKind::Punct(Punct::AndAnd) => Some(1),
+        TokenKind::Punct(Punct::QuestionQuestion) => Some(2),
+        TokenKind::Punct(Punct::Plus | Punct::Minus) => Some(3),
+        _ => None,
+    }
+}
+
+/// Whether a token can end an operand, so that a `+` or `-` after it is a binary operator.
+fn ends_operand(k: TokenKind) -> bool {
+    matches!(
+        k,
+        TokenKind::Ident
+            | TokenKind::Int
+            | TokenKind::Float
+            | TokenKind::Str
+            | TokenKind::Char
+            | TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace | Punct::Question)
+    )
+}
+
+/// Breaks the line after every top-level operator of the loosest kind it holds, the pieces
+/// indented one level.
+fn break_binary(
+    src: &str,
+    on_line: &[&Token],
+    start: usize,
+    indent: usize,
+    config: &FmtConfig,
+) -> Option<String> {
+    let mut depth = 0usize;
+    let mut ops: Vec<(usize, u8)> = Vec::new();
+    for (i, t) in on_line.iter().enumerate() {
+        if is_open(t.kind) {
+            depth += 1;
+        } else if is_close(t.kind) {
+            depth = depth.saturating_sub(1);
+        } else if depth == 0 && i > 0 && i + 1 < on_line.len() {
+            let Some(rank) = break_rank(t.kind) else {
+                continue;
+            };
+            if rank == 3 && !ends_operand(on_line[i - 1].kind) {
+                continue;
+            }
+            ops.push((i, rank));
+        }
+    }
+    let loosest = ops.iter().map(|&(_, r)| r).min()?;
+    let mut out = String::from(&src[..start]);
+    let mut from = start;
+    for &(i, _) in ops.iter().filter(|&&(_, r)| r == loosest) {
+        let op_end = on_line[i].span.end as usize;
+        let next = on_line[i + 1].span.start as usize;
+        out.push_str(&src[from..op_end]);
+        out.push('\n');
+        out.push_str(&" ".repeat(indent + config.indent));
+        from = next;
+    }
+    out.push_str(&src[from..]);
     Some(out)
 }
 

@@ -184,7 +184,8 @@ fn rt_sort(base: ptr, n: int, size: int, cmp: ptr) {
             var j = mid
             var k = start
             while k < end {
-                if i < mid && (j >= end || rt_call_int2(cmp, rt_offset(from, i * size), rt_offset(from, j * size)) <= 0) {
+                if i < mid &&
+                    (j >= end || rt_call_int2(cmp, rt_offset(from, i * size), rt_offset(from, j * size)) <= 0) {
                     rt_copy(rt_offset(to, k * size), rt_offset(from, i * size), size)
                     i += 1
                 } else {
@@ -1587,7 +1588,9 @@ impl int {
     fn checked_mul(self, other: int) -> int? {
         if self == 0 || other == 0 { return 0 }
         const product = self *% other
-        if product / other != self || (self == -1 && other == -9223372036854775808) || (other == -1 && self == -9223372036854775808) { return none }
+        if product / other != self ||
+            (self == -1 && other == -9223372036854775808) ||
+            (other == -1 && self == -9223372036854775808) { return none }
         return product
     }
 

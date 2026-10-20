@@ -19,8 +19,8 @@
 //! `import { ... }` are sorted, `...` last (see [`imports`]). Because both change more than
 //! spacing, the output is also parsed and must print the same tree as the input.
 //!
-//! Not done yet: breaking long binary expressions, and fixing a line indented one level too far,
-//! which needs the tree; see `docs/plans/cards/S-07-formatter.md`.
+//! When no list can be broken, a long line is broken after its loosest top-level `||`, `&&`, `??`,
+//! `+` or `-`. Not done yet: fixing a line indented one level too far, which needs the tree; see `docs/plans/cards/S-07-formatter.md`.
 
 use crate::ast_print::print_file;
 use crate::config::FmtConfig;
@@ -89,8 +89,8 @@ pub fn format_with(src: &str, config: &FmtConfig) -> Result<String, String> {
 }
 
 /// The tokens that must survive: kind and text, with every newline run reduced to one newline.
-/// Newlines inside brackets and a comma right before a closing bracket do not count: breaking a
-/// long list adds them.
+/// Newlines inside brackets or after a breakable binary operator, and a comma right before a
+/// closing bracket, do not count: breaking a long line adds them.
 fn signature(src: &str, tokens: &[Token]) -> Vec<(TokenKind, String)> {
     let mut depth = 0usize;
     let mut kept: Vec<&Token> = Vec::new();
@@ -105,7 +105,12 @@ fn signature(src: &str, tokens: &[Token]) -> Vec<(TokenKind, String)> {
             {
                 kept.pop();
             }
-        } else if t.kind == TokenKind::Newline && depth > 0 {
+        } else if t.kind == TokenKind::Newline
+            && (depth > 0
+                || kept
+                    .last()
+                    .is_some_and(|p| wrap::break_rank(p.kind).is_some()))
+        {
             continue;
         }
         kept.push(t);
