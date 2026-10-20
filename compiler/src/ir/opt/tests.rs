@@ -1584,7 +1584,6 @@ enum Keep {
 }
 
 fn slot_through_call(how: Keep) -> Module {
-    let keep = how != Keep::No;
     let mut m = Module::default();
     let mut inner = Func::new("inner", &[IrTy::Ptr], IrTy::Void);
     let ie = inner.entry();
