@@ -202,6 +202,8 @@ keywords! {
     Unsafe => "unsafe", Hard;
     /// Marks a type whose values must be consumed exactly once. Reserved.
     Linear => "linear", Soft;
+    /// The type of a closure that can be called only once: `once fn() -> int`.
+    Once => "once", Soft;
     Async => "async", Hard;
     Await => "await", Hard;
     /// A test block that only compiles in test mode.
