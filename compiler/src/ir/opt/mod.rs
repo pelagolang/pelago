@@ -126,6 +126,10 @@ fn passes(f: &mut Func, divs: bool) {
     if divs && step(f, "unroll", unroll::run) {
         rounds(f, divs);
     }
+    // After the unrolling, which needs the counter the loop test reads.
+    if divs && step(f, "ivtest", ivtest::run) {
+        rounds(f, divs);
+    }
     // Last, because every pass above is free to renumber and reorder blocks.
     step(f, "layout", layout::run);
 }
@@ -146,7 +150,6 @@ fn rounds(f: &mut Func, divs: bool) {
         changed |= step(f, "cse", cse::run);
         changed |= step(f, "licm", licm::run);
         changed |= step(f, "ivopt", ivopt::run);
-        changed |= step(f, "ivtest", ivtest::run);
         if divs {
             changed |= step(f, "ifconv", ifconv::run);
         }
