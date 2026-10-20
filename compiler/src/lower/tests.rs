@@ -1939,4 +1939,30 @@ fn float_to_int_saturates() {
         output_of(src),
         "9223372036854775807 -9223372036854775807 0 2 -3 9223372036854775807 -9223372036854775807\n"
     );
+
+/// Runaway recursion natively: a stop with exit status 1 on both systems, after the output so far.
+#[test]
+fn native_runaway_recursion_stops_cleanly() {
+    use crate::native::{exec, gen, Os};
+    // Not optimised, so the recursion stays a recursion.
+    let l = lowered(
+        "fn d(n: int) -> int { d(n + 1) * n }\nfn main() { print(\"before\")\n print(d(1)) }",
+    );
+    for os in [Os::Linux, Os::Windows] {
+        if !exec::can_run(os) {
+            continue;
+        }
+        let opts = gen::Options {
+            leak_check: false,
+            target: os,
+            regalloc: true,
+        };
+        let image = gen::compile(&l.module, "main", &opts).unwrap();
+        let r = exec::run_image(os, &image).unwrap();
+        assert_eq!(
+            (r.out.trim_end(), r.err.trim_end(), r.code),
+            ("before", "stopped: stack overflow", 1),
+            "{os:?}"
+        );
+    }
 }

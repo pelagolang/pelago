@@ -139,6 +139,57 @@ mod native_run {
     }
 
     #[test]
+    fn a_bad_address_is_a_stop_not_a_crash() {
+        let img = program(false, |a, ro, rt| {
+            say(a, ro, rt, "before\n");
+            a.mov_ri(RAX, 8);
+            a.load(RCX, mem(RAX, 0), 8);
+            say(a, ro, rt, "not reached\n");
+        });
+        let r = run(&img);
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("before\n", "stopped: invalid memory access\n", 1)
+        );
+    }
+
+    #[test]
+    fn running_out_of_stack_is_a_stop() {
+        let img = program(false, |a, ro, rt| {
+            // Every call pushes a return address (and 8 more bytes); nothing ever returns.
+            let f = a.new_label();
+            a.bind(f);
+            a.push(RAX);
+            a.call(f);
+            say(a, ro, rt, "not reached\n");
+        });
+        let r = run(&img);
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("", "stopped: stack overflow\n", 1)
+        );
+    }
+
+    #[test]
+    fn buffered_output_comes_out_before_the_stop_message() {
+        let img = program(false, |a, ro, rt| {
+            let m = ro.add(b"printed\n", 1);
+            a.lea_sect(RSI, Sect::Rodata, m);
+            a.mov_ri(RDX, 8);
+            a.call(rt.print);
+            let m = ro.add(b"boom", 1);
+            a.lea_sect(RDI, Sect::Rodata, m);
+            a.mov_ri(RSI, 4);
+            a.call(rt.stop);
+        });
+        let r = run(&img);
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("printed\n", "stopped: boom\n", 1)
+        );
+    }
+
+    #[test]
     fn the_allocator_reuses_clears_and_counts() {
         let img = program(true, |a, ro, rt| {
             a.push(RBX);
