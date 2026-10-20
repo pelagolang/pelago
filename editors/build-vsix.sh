@@ -19,7 +19,7 @@ cat > "$tmp/extension.vsixmanifest" <<XML
     <Identity Language="en-US" Id="pelago" Version="$ver" Publisher="pelagolang"/>
     <DisplayName>Pelago</DisplayName>
     <Description xml:space="preserve">Syntax highlighting and snippets for the Pelago programming language (.pel)</Description>
-    <Categories>Programming Languages,Snippets,Themes</Categories>
+    <Categories>Programming Languages,Snippets</Categories>
   </Metadata>
   <Installation><InstallationTarget Id="Microsoft.VisualStudio.Code"/></Installation>
   <Dependencies/>

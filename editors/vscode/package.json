@@ -2,15 +2,14 @@
   "name": "pelago",
   "displayName": "Pelago",
   "description": "Syntax highlighting and snippets for the Pelago programming language (.pel)",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "pelagolang",
   "engines": {
-    "vscode": "^1.60.0"
+    "vscode": "^1.74.0"
   },
   "categories": [
     "Programming Languages",
-    "Snippets",
-    "Themes"
+    "Snippets"
   ],
   "contributes": {
     "languages": [
@@ -39,17 +38,170 @@
         "path": "./snippets/pelago.json"
       }
     ],
-    "themes": [
-      {
-        "label": "Pelago Dark",
-        "uiTheme": "vs-dark",
-        "path": "./themes/pelago-dark.json"
-      },
-      {
-        "label": "Pelago Light",
-        "uiTheme": "vs",
-        "path": "./themes/pelago-light.json"
+    "configurationDefaults": {
+      "editor.tokenColorCustomizations": {
+        "textMateRules": [
+          {
+            "scope": [
+              "source.pelago keyword.control.pelago",
+              "source.pelago keyword.other.pelago"
+            ],
+            "settings": {
+              "foreground": "#d9611c"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago storage.type.pelago",
+              "source.pelago storage.type.function.pelago",
+              "source.pelago keyword.declaration.pelago"
+            ],
+            "settings": {
+              "foreground": "#0f93ab"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago storage.modifier.binding.pelago"
+            ],
+            "settings": {
+              "foreground": "#0f93ab",
+              "fontStyle": "bold"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago storage.modifier.access.pelago",
+              "source.pelago entity.name.function.attribute.pelago"
+            ],
+            "settings": {
+              "foreground": "#b07a10",
+              "fontStyle": "bold"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago constant.language.pelago"
+            ],
+            "settings": {
+              "foreground": "#8e63e6"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago variable.language.pelago"
+            ],
+            "settings": {
+              "foreground": "#0f93ab",
+              "fontStyle": "italic"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago keyword.other.soft.pelago"
+            ],
+            "settings": {
+              "foreground": "#0f93ab"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago support.type.pelago",
+              "source.pelago entity.name.type.pelago"
+            ],
+            "settings": {
+              "foreground": "#1f9a6e"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago entity.name.function.pelago",
+              "source.pelago entity.name.function.call.pelago",
+              "source.pelago support.function.builtin.pelago"
+            ],
+            "settings": {
+              "foreground": "#4f7be0"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago constant.numeric"
+            ],
+            "settings": {
+              "foreground": "#b07a10"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago string.quoted"
+            ],
+            "settings": {
+              "foreground": "#3f9a2a"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago constant.character.escape.pelago"
+            ],
+            "settings": {
+              "foreground": "#6a9a1f"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago meta.interpolation.pelago"
+            ],
+            "settings": {
+              "foreground": "#0f93ab",
+              "fontStyle": "bold"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago variable.other.interpolation.pelago"
+            ],
+            "settings": {
+              "foreground": "#0f93ab"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago comment"
+            ],
+            "settings": {
+              "foreground": "#6a7f93",
+              "fontStyle": "italic"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago keyword.operator.mark.pelago",
+              "source.pelago keyword.operator.arrow.pelago"
+            ],
+            "settings": {
+              "foreground": "#e0465f",
+              "fontStyle": "bold"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago keyword.operator.optional.pelago"
+            ],
+            "settings": {
+              "foreground": "#9a7ad6"
+            }
+          },
+          {
+            "scope": [
+              "source.pelago keyword.operator.pelago",
+              "source.pelago keyword.operator.range.pelago"
+            ],
+            "settings": {
+              "foreground": "#7a8aa0"
+            }
+          }
+        ]
       }
-    ]
+    }
   }
 }

@@ -168,6 +168,10 @@ struct Gen<'m> {
     /// The function uses no frame (no spills, slots or saved registers), calls nothing and takes all its
     /// parameters in registers: it runs without `rbp`.
     frameless: bool,
+    /// The frame holds nothing but the callee-saved registers (no spills, slots or waiting values): they
+    /// are pushed and popped, there is no `rbp`, and `pad` keeps the stack 16-byte aligned for calls.
+    light: bool,
+    pad: bool,
     /// The block and the position in it of the instruction being generated.
     at: (usize, usize),
     /// Frame offsets already written in the current block (a value is stored once per block).
@@ -313,6 +317,8 @@ impl<'m> Gen<'m> {
             across: HashMap::new(),
             fscratch: 0,
             frameless: false,
+            light: false,
+            pad: false,
             at: (0, 0),
             stored: HashSet::new(),
             stubs: Vec::new(),
@@ -394,6 +400,7 @@ impl<'m> Gen<'m> {
                 }
             });
         }
+        let values_in_memory = at > 0;
         // Room to keep the callee-saved registers this function uses.
         self.saves.clear();
         for r in VALUE_REGS {
@@ -443,6 +450,16 @@ impl<'m> Gen<'m> {
             }
         }
         self.frame = (at + 15) / 16 * 16;
+        // Without memory values, float scratch and slots, the saved registers are pushed and the values
+        // waiting across a call are pushed around it: no `rbp` and no frame.
+        self.light = self.regalloc
+            && !values_in_memory
+            && !has_frem
+            && !f
+                .blocks
+                .iter()
+                .flat_map(|b| &b.insts)
+                .any(|&i| matches!(f.insts[i].op, Op::Slot(..)));
         // Frame objects and what is added to them are plain frame offsets.
         for (v, fold) in folds.iter().enumerate() {
             if let Fold::Addr {
@@ -616,17 +633,34 @@ impl<'m> Gen<'m> {
             && self.saves.is_empty()
             && !calls
             && !classify(&tys).iter().any(|l| matches!(l, Loc::Stack(_)));
-        if !self.frameless {
+        let stack_params = classify(&tys).iter().any(|l| matches!(l, Loc::Stack(_)));
+        let light = self.light && !self.frameless && !stack_params;
+        self.pad = false;
+        if light {
+            // Entry has the stack 8 off a 16-byte boundary; each push moves it by 8.
+            for (r, _) in self.saves.clone() {
+                self.a.push(r);
+            }
+            if calls && self.saves.len().is_multiple_of(2) {
+                self.a.alu_ri(Alu::Sub, RSP, 8, 8);
+                self.pad = true;
+            }
+        } else if !self.frameless {
             self.a.push(RBP);
             self.a.mov_rr(RBP, RSP, 8);
             if self.frame > 0 {
+                // A big frame must not step over the guard: touch each page, top down, first.
+                for k in 1..=(self.frame / 4096) {
+                    self.a.alu_mi(Alu::Or, mem(RSP, -4096 * k), 0, 8);
+                }
                 self.a.alu_ri(Alu::Sub, RSP, self.frame, 8);
             }
+            // Keep the callee-saved registers this function uses.
+            for (r, off) in self.saves.clone() {
+                self.a.store(mem(RBP, off), r, 8);
+            }
         }
-        // Keep the callee-saved registers this function uses.
-        for (r, off) in self.saves.clone() {
-            self.a.store(mem(RBP, off), r, 8);
-        }
+        self.light = light;
         let mut copies = Vec::new();
         for (p, loc) in params.iter().zip(classify(&tys)) {
             match loc {
@@ -688,6 +722,16 @@ impl<'m> Gen<'m> {
     }
 
     fn epilogue(&mut self) {
+        if self.light {
+            if self.pad {
+                self.a.alu_ri(Alu::Add, RSP, 8, 8);
+            }
+            for (r, _) in self.saves.clone().into_iter().rev() {
+                self.a.pop(r);
+            }
+            self.a.ret();
+            return;
+        }
         for (r, off) in self.saves.clone() {
             self.a.load(r, mem(RBP, off), 8);
         }
@@ -888,8 +932,40 @@ impl<'m> Gen<'m> {
     // ---- Instructions --------------------------------------------------------------------------------
 
     fn inst(&mut self, f: &Func, id: usize, inst: &Inst) -> Result<(), String> {
-        // Values waiting in caller-saved registers go to their frame slot for the length of a call.
+        // Values waiting in caller-saved registers go to their frame slot for the length of a call (or
+        // are pushed, in a function without a frame).
         let keep = self.across.get(&id).cloned().unwrap_or_default();
+        if self.light && !keep.is_empty() {
+            for &(w, _) in &keep {
+                match w {
+                    Where::Reg(r) => self.a.push(r),
+                    Where::Xmm(x) => {
+                        self.a.alu_ri(Alu::Sub, RSP, 8, 8);
+                        self.a.fstore(mem(RSP, 0), x, true);
+                    }
+                    w => unreachable!("{w:?} waits across a call"),
+                }
+            }
+            let odd = keep.len() % 2 == 1;
+            if odd {
+                self.a.alu_ri(Alu::Sub, RSP, 8, 8);
+            }
+            self.inst_body(f, id, inst)?;
+            if odd {
+                self.a.alu_ri(Alu::Add, RSP, 8, 8);
+            }
+            for &(w, _) in keep.iter().rev() {
+                match w {
+                    Where::Reg(r) => self.a.pop(r),
+                    Where::Xmm(x) => {
+                        self.a.fload(x, mem(RSP, 0), true);
+                        self.a.alu_ri(Alu::Add, RSP, 8, 8);
+                    }
+                    w => unreachable!("{w:?} waits across a call"),
+                }
+            }
+            return Ok(());
+        }
         for &(w, off) in &keep {
             if self.stored.insert(off) {
                 match w {
