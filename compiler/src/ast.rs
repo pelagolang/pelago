@@ -136,8 +136,9 @@ pub enum TypeKind {
     Option(Box<Type>),
     /// `T ! E`
     Result(Box<Type>, Box<Type>),
-    /// `fn(int) -> int`
+    /// `fn(int) -> int`, or `once fn(int) -> int` (callable once, consumed by the call)
     Fn {
+        once: bool,
         params: Vec<FnTypeParam>,
         ret: Option<Box<Type>>,
     },

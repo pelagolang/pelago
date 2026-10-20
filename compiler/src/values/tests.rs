@@ -358,7 +358,7 @@ fn linear_type_parameters() {
 #[test]
 fn linear_values_and_closures() {
     clean(&format!(
-        "{TXN}fn t() {{ const a = begin()\n const f = [sink a] ~> a.commit!!()\n f() }}"
+        "{TXN}fn t() {{ const a = begin()\n const f = [sink a] ~> a.commit!!()\n f!!() }}"
     ));
     flagged(
         &format!("{TXN}fn t() {{ const a = begin()\n const f = [sink a] ~> print(1)\n f() }}"),
@@ -367,6 +367,20 @@ fn linear_values_and_closures() {
     flagged(
         &format!("{TXN}fn t() {{ const a = begin()\n const f = ~> a.commit!!()\n f() }}"),
         "capture it with `[sink a]`",
+    );
+}
+
+#[test]
+fn a_once_fn_is_used_up_by_its_call() {
+    let defs = "fn eat(sink s: string) -> int = s.len()\n";
+    flagged(
+        &format!("{defs}fn t() {{ const s = \"hi\"\n const g = [sink s] () ~> eat(sink s)\n print(g!!())\n print(g!!()) }}"),
+        "was moved",
+    );
+    // a move the checker does not spot by shape is still refused
+    flagged(
+        &format!("{defs}fn t() {{ const s = \"hi\"\n const g = [sink s] () ~> {{ const u = s\n u.len() }}\n print(g()) }}"),
+        "can be called only once",
     );
 }
 

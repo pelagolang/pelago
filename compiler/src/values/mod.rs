@@ -1278,7 +1278,7 @@ impl<'a> Walker<'a> {
             .tys
             .get(&(self.file, e.span.start, e.span.end))
             .map(|t| match self.typed.types.kind_of(*t) {
-                TyKind::Fn(ps, _) => ps.iter().map(|p| p.mode).collect(),
+                TyKind::Fn(ps, ..) => ps.iter().map(|p| p.mode).collect(),
                 _ => Vec::new(),
             })
             .unwrap_or_default();
@@ -1290,6 +1290,27 @@ impl<'a> Walker<'a> {
             self.bind_pattern(&p.pattern, default);
         }
         self.expr(&c.body, Ctx::Consume);
+        let once = self
+            .typed
+            .tys
+            .get(&(self.file, e.span.start, e.span.end))
+            .is_some_and(|t| matches!(self.typed.types.kind_of(*t), TyKind::Fn(_, _, true)));
+        if !once {
+            let eaten = self.closures.last().and_then(|f| {
+                f.caps
+                    .iter()
+                    .find(|(d, m)| *m == Some(Mode::Sink) && self.state.moved.contains_key(d))
+                    .map(|(d, _)| *d)
+            });
+            if let Some(d) = eaten {
+                let n = self.name_of(d);
+                self.report(
+                    e.span,
+                    "once",
+                    format!("this closure consumes `{n}`, so it can be called only once; use it where a `once fn` is expected, or consume `{n}` with `sink {n}`"),
+                );
+            }
+        }
         let owned: Vec<DefId> = self
             .closures
             .last()
@@ -1500,6 +1521,8 @@ impl<'a> Walker<'a> {
                     self.access(base, false, &mut accesses);
                 }
             },
+            // `f!!()` on a `once fn` value: the call uses `f` up.
+            None if mark == CallMark::Consumes => self.expr(callee, Ctx::Consume),
             None => self.expr(callee, Ctx::Read),
         }
         for a in args {

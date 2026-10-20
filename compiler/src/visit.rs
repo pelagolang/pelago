@@ -221,7 +221,7 @@ pub fn walk_type<V: Visitor>(v: &mut V, t: &Type) {
             v.visit_type(a);
             v.visit_type(b);
         }
-        TypeKind::Fn { params, ret } => {
+        TypeKind::Fn { params, ret, .. } => {
             for p in params {
                 v.visit_type(&p.ty);
             }

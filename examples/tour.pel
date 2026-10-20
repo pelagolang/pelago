@@ -251,6 +251,10 @@ fn parallel_total(xs: [int]) -> int {
     left + right
 }
 
+/// A closure that consumes what it captured can be called only once: its type is `once fn`,
+/// and calling it is marked `!!` like any other call that consumes.
+fn run_once(sink f: once fn() -> int) -> int = f!!()
+
 fn pipeline() {
     const task = spawn([sink data] ~> crunch(data))
     const total = task.join!!()

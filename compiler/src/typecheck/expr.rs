@@ -27,6 +27,11 @@ impl<'p> Checker<'p> {
             (TyKind::String, TyKind::Str) => true,
             (_, TyKind::Any(i)) => self.provides(f, i),
             (TyKind::Adt(d1, a1), TyKind::Adt(d2, a2)) => self.is_subtype(d1, &a1, d2, &a2),
+            // a many-call function may stand where a one-call function is wanted
+            (TyKind::Fn(ps, r, false), TyKind::Fn(_, _, true)) => {
+                let once = self.tt.mk(TyKind::Fn(ps, r, true));
+                self.tt.unify(once, e)
+            }
             _ => false,
         }
     }
@@ -507,7 +512,7 @@ impl<'p> Checker<'p> {
             })
             .collect();
         let ret = self.tt.subst(sig.ret, &map);
-        Some(self.tt.mk(TyKind::Fn(params, ret)))
+        Some(self.tt.mk(TyKind::Fn(params, ret, false)))
     }
 
     pub(crate) fn fresh_map(&mut self, generics: &[DefId], span: Span) -> HashMap<DefId, Ty> {
@@ -540,7 +545,7 @@ impl<'p> Checker<'p> {
                 ty: self.tt.subst(*t, &map),
             })
             .collect();
-        self.tt.mk(TyKind::Fn(params, enum_ty))
+        self.tt.mk(TyKind::Fn(params, enum_ty, false))
     }
 
     /// `.circle` where the enum comes from the expected type.
@@ -1280,11 +1285,11 @@ impl<'p> Checker<'p> {
         let lt = self.check_expr(lhs, Exp::Any);
         let ft = self.check_expr(rhs, Exp::Any);
         match self.kind_of(ft) {
-            TyKind::Fn(params, ret) if params.len() == 1 => {
+            TyKind::Fn(params, ret, _) if params.len() == 1 => {
                 self.coerce_at(lt, params[0].ty, lhs.span, "the piped value");
                 ret
             }
-            TyKind::Fn(params, _) => {
+            TyKind::Fn(params, ..) => {
                 self.err(
                     e.span,
                     format!(

@@ -51,6 +51,12 @@ impl Parser<'_> {
     fn parse_type_atom(&mut self) -> Type {
         let t = self.tok();
         match t.kind {
+            TokenKind::Ident
+                if self.text(t) == "once"
+                    && self.peek_sig(1).kind == TokenKind::Keyword(Keyword::Fn) =>
+            {
+                self.parse_fn_type(true)
+            }
             TokenKind::Ident => {
                 if self.text(t) == "any" && self.is_type_start_token(self.peek_sig(1).kind) {
                     self.bump();
@@ -81,7 +87,7 @@ impl Parser<'_> {
                     span: t.span,
                 }
             }
-            TokenKind::Keyword(Keyword::Fn) => self.parse_fn_type(),
+            TokenKind::Keyword(Keyword::Fn) => self.parse_fn_type(false),
             TokenKind::Punct(Punct::LBracket) => {
                 self.bump();
                 self.enter_brackets();
@@ -154,8 +160,12 @@ impl Parser<'_> {
         )
     }
 
-    fn parse_fn_type(&mut self) -> Type {
-        let start = self.bump().span; // `fn`
+    fn parse_fn_type(&mut self, once: bool) -> Type {
+        let start = self.tok().span;
+        if once {
+            self.bump(); // `once`
+        }
+        self.bump(); // `fn`
         let mut params = Vec::new();
         if self.eat(Punct::LParen) {
             self.enter_brackets();
@@ -185,7 +195,7 @@ impl Parser<'_> {
             None
         };
         Type {
-            kind: TypeKind::Fn { params, ret },
+            kind: TypeKind::Fn { once, params, ret },
             span: Span::new(start.start, end.max(start.end)),
         }
     }
