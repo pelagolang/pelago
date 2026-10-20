@@ -1,6 +1,6 @@
 Id: A-09
 Title: Native backend: x86-64 machine code and ELF straight from the IR
-Column: Doing (N1 to N5 and the Windows target done; N6 speed work and `--emit asm` left)
+Column: Done (N1 to N6 and the Windows target; the leftovers are in: buffered `print`, `float32` rounding, saturating float to int, stack and bad-address guard. `--emit asm` and N7 are separate cards)
 Order: 1 (track A)
 Depends on: nothing open (the IR, the interpreter and the optimiser exist)
 Size: XL, in seven stages (N1 to N7), each testable on its own

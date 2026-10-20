@@ -1046,12 +1046,8 @@ impl<'m> Gen<'m> {
             }
             Op::Print(p, n) => {
                 let (wp, wn) = (self.loc[p.0 as usize], self.loc[n.0 as usize]);
-                self.moves(&[
-                    (Where::Reg(RDI), Where::Imm(1)),
-                    (Where::Reg(RSI), wp),
-                    (Where::Reg(RDX), wn),
-                ]);
-                let w = self.rt().write_fd;
+                self.moves(&[(Where::Reg(RSI), wp), (Where::Reg(RDX), wn)]);
+                let w = self.rt().print;
                 self.a.call(w);
             }
             Op::Load(t, p) => {

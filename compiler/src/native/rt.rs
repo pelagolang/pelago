@@ -12,30 +12,50 @@
 //! | 96, 104 | next free byte and end of the current chunk |
 //! | 112 | live blocks (for the leak check) |
 //! | 120 | the one freed large block kept for reuse (0 when none) |
+//! | 128 | the output buffer ([`PRINT_BUF`] bytes, mapped at start; 0 when the mapping failed) |
+//! | 136 | bytes waiting in the output buffer |
+//! | 144 | the base (lowest address) of our own stack, 0 if the system stack is used |
+//! | 152 | scratch for `VirtualProtect` (Windows) |
 
 use super::elf::Blob;
 use super::x86::*;
 use super::Os;
 
-pub const STATE_SIZE: usize = 128;
+pub const STATE_SIZE: usize = 160;
+/// Size of the buffer that `print` fills; it is written out when full, at exit and at a stop.
+const PRINT_BUF: i64 = 64 * 1024;
 const CHUNK: i64 = 1 << 20;
 const STACK: i64 = 1 << 30;
 /// The stack on Windows is committed up front, so it is smaller.
 const STACK_WIN: i64 = 1 << 28;
 
 /// The kernel32 functions the Windows image imports, in the order of its import table.
-pub const IMPORTS: [&str; 5] = [
+pub const IMPORTS: [&str; 7] = [
     "GetStdHandle",
     "WriteFile",
     "ExitProcess",
     "VirtualAlloc",
     "VirtualFree",
+    "AddVectoredExceptionHandler",
+    "VirtualProtect",
 ];
 const IMP_GET_STD_HANDLE: usize = 0;
 const IMP_WRITE_FILE: usize = 1;
 const IMP_EXIT_PROCESS: usize = 2;
 const IMP_VIRTUAL_ALLOC: usize = 3;
 const IMP_VIRTUAL_FREE: usize = 4;
+const IMP_ADD_VEH: usize = 5;
+const IMP_VIRTUAL_PROTECT: usize = 6;
+
+/// Linux: the lowest 1 MiB of our stack is mapped inaccessible, so running into it is a fault.
+const GUARD_LINUX: i64 = 1 << 20;
+/// Windows: the stack is committed; a `PAGE_GUARD` page 64 KiB above its base raises an exception while
+/// there is still room below to run the handler.
+const GUARD_WIN: i64 = 64 * 1024;
+/// Faults this far below the base count as stack overflow too (a frame can step over a guard).
+const SLACK: i32 = 1 << 20;
+/// Size of the stack the Linux signal handler runs on.
+const ALT_STACK: i64 = 32 * 1024;
 
 /// Calls an imported Windows function with the arguments already in `rcx rdx r8 r9`: aligns the
 /// stack, makes the shadow space, lets `setup` store further arguments (the fifth is at `[rsp + 32]`),
@@ -58,6 +78,8 @@ const LARGE_CLASS: i32 = 255;
 pub struct Runtime {
     /// `rt_write(fd = rdi, ptr = rsi, len = rdx)`: writes everything or gives up on an error.
     pub write_fd: Label,
+    /// `rt_print(ptr = rsi, len = rdx)`: appends to the output buffer; clobbers the argument registers.
+    pub print: Label,
     /// `rt_stop(ptr = rdi, len = rsi)`: prints `stopped: <message>` to standard error and exits with status 1.
     pub stop: Label,
     /// `rt_alloc(size = rdi) -> rax`: zeroed memory, 16-byte aligned; never fails (stops when out of memory).
@@ -93,6 +115,7 @@ pub fn emit(
     assert_eq!(state_at, 0, "the runtime state must come first in .data");
     let rt = Runtime {
         write_fd: a.new_label(),
+        print: a.new_label(),
         stop: a.new_label(),
         alloc: a.new_label(),
         free: a.new_label(),
@@ -100,7 +123,11 @@ pub fn emit(
         exit: a.new_label(),
         write_u64: a.new_label(),
     };
+    let flush = a.new_label();
+    let fault = a.new_label();
     let msg_stopped = ro.add(b"stopped: ", 1);
+    let msg_overflow = ro.add(b"stack overflow", 1);
+    let msg_invalid = ro.add(b"invalid memory access", 1);
     let msg_nl = ro.add(b"\n", 1);
     let msg_oom = ro.add(b"out of memory", 1);
     let msg_leak1 = ro.add(b"leaked ", 1);
@@ -119,6 +146,8 @@ pub fn emit(
         win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
         a.test_rr(RAX, RAX, 8);
         a.jcc(Cc::E, keep);
+        state(a, RCX, 144);
+        a.store(mem(RCX, 0), RAX, 8);
         a.lea(RSP, mem(RAX, STACK_WIN as i32));
     } else {
         a.mov_ri(RAX, 9);
@@ -131,10 +160,100 @@ pub fn emit(
         a.syscall();
         a.alu_ri(Alu::Cmp, RAX, -4095, 8);
         a.jcc(Cc::Ae, keep);
+        state(a, RCX, 144);
+        a.store(mem(RCX, 0), RAX, 8);
         a.lea(RSP, mem(RAX, STACK as i32));
     }
     a.bind(keep);
     a.alu_ri(Alu::And, RSP, -16, 8);
+    // The output buffer; without one, `print` writes straight through.
+    if win {
+        a.alu_rr(Alu::Xor, RCX, RCX, 4);
+        a.mov_ri(RDX, PRINT_BUF);
+        a.mov_ri(R8, 0x3000);
+        a.mov_ri(R9, 4);
+        win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+    } else {
+        a.mov_ri(RAX, 9);
+        a.alu_rr(Alu::Xor, RDI, RDI, 4);
+        a.mov_ri(RSI, PRINT_BUF);
+        a.mov_ri(RDX, 3);
+        a.mov_ri(R10, 0x22); // private, anonymous
+        a.mov_ri(R8, -1);
+        a.alu_rr(Alu::Xor, R9, R9, 4);
+        a.syscall();
+        let ok = a.new_label();
+        a.alu_ri(Alu::Cmp, RAX, -4095, 8);
+        a.jcc(Cc::Be, ok);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.bind(ok);
+    }
+    state(a, RSI, 128);
+    a.store(mem(RSI, 0), RAX, 8);
+    // Guard against running off the stack, and report stray addresses as stops.
+    let noguard = a.new_label();
+    if win {
+        state(a, RAX, 144);
+        a.load(RCX, mem(RAX, 0), 8);
+        a.test_rr(RCX, RCX, 8);
+        a.jcc(Cc::E, noguard);
+        a.alu_ri(Alu::Add, RCX, GUARD_WIN as i32, 8);
+        a.mov_ri(RDX, 4096);
+        a.mov_ri(R8, 0x104); // read and write, guard page
+        state(a, R9, 152);
+        win_call(a, IMP_VIRTUAL_PROTECT, |_| {});
+        a.bind(noguard);
+        a.mov_ri(RCX, 1);
+        a.lea_label(RDX, fault);
+        win_call(a, IMP_ADD_VEH, |_| {});
+    } else {
+        state(a, RSI, 144);
+        a.load(RDI, mem(RSI, 0), 8);
+        a.test_rr(RDI, RDI, 8);
+        a.jcc(Cc::E, noguard);
+        a.mov_ri(RSI, GUARD_LINUX);
+        a.alu_rr(Alu::Xor, RDX, RDX, 4);
+        a.mov_ri(RAX, 10); // mprotect(base, guard, PROT_NONE)
+        a.syscall();
+        a.bind(noguard);
+        // A stack of its own for the handler: the faulting one may be the one that ran out.
+        let nosig = a.new_label();
+        a.mov_ri(RAX, 9);
+        a.alu_rr(Alu::Xor, RDI, RDI, 4);
+        a.mov_ri(RSI, ALT_STACK);
+        a.mov_ri(RDX, 3);
+        a.mov_ri(R10, 0x22);
+        a.mov_ri(R8, -1);
+        a.alu_rr(Alu::Xor, R9, R9, 4);
+        a.syscall();
+        a.alu_ri(Alu::Cmp, RAX, -4095, 8);
+        a.jcc(Cc::Ae, nosig);
+        a.alu_ri(Alu::Sub, RSP, 64, 8);
+        a.store(mem(RSP, 0), RAX, 8); // stack_t { sp, flags, size }
+        a.store_imm(mem(RSP, 8), 0, 8);
+        a.store_imm(mem(RSP, 16), ALT_STACK as i32, 8);
+        a.mov_ri(RAX, 131); // sigaltstack
+        a.mov_rr(RDI, RSP, 8);
+        a.alu_rr(Alu::Xor, RSI, RSI, 4);
+        a.syscall();
+        // struct sigaction { handler, flags, restorer, mask }: on the alternate stack, with siginfo.
+        a.lea_label(RAX, fault);
+        a.store(mem(RSP, 32), RAX, 8);
+        // The kernel insists on a restorer; the handler never returns, so any address will do.
+        a.store_imm(mem(RSP, 40), 0x0C00_0004, 8);
+        a.store(mem(RSP, 48), RAX, 8);
+        a.store_imm(mem(RSP, 56), 0, 8);
+        for sig in [11, 7] {
+            a.mov_ri(RAX, 13); // rt_sigaction(sig, &act, 0, 8)
+            a.mov_ri(RDI, sig);
+            a.lea(RSI, mem(RSP, 32));
+            a.alu_rr(Alu::Xor, RDX, RDX, 4);
+            a.mov_ri(R10, 8);
+            a.syscall();
+        }
+        a.alu_ri(Alu::Add, RSP, 64, 8);
+        a.bind(nosig);
+    }
     a.call(main);
     let clean = a.new_label();
     if leak_check {
@@ -163,6 +282,9 @@ pub fn emit(
 
     // ---- rt_exit -----------------------------------------------------------------------------------
     a.bind(rt.exit);
+    a.push(RDI);
+    a.call(flush);
+    a.pop(RDI);
     if win {
         a.mov_rr(RCX, RDI, 4);
         win_call(a, IMP_EXIT_PROCESS, |_| {});
@@ -171,6 +293,76 @@ pub fn emit(
         a.syscall();
     }
     a.ud2();
+
+    // ---- rt_flush ----------------------------------------------------------------------------------
+    // Writes what the output buffer holds. Falls through nowhere: it ends in `rt_write` or a `ret`.
+    a.bind(flush);
+    {
+        let none = a.new_label();
+        state(a, R8, 128);
+        a.load(RSI, mem(R8, 0), 8);
+        a.load(RDX, mem(R8, 8), 8);
+        a.test_rr(RSI, RSI, 8);
+        a.jcc(Cc::E, none);
+        a.test_rr(RDX, RDX, 8);
+        a.jcc(Cc::E, none);
+        a.store_imm(mem(R8, 8), 0, 8);
+        a.mov_ri(RDI, 1);
+        a.jmp(rt.write_fd);
+        a.bind(none);
+        a.ret();
+    }
+
+    // ---- rt_print ----------------------------------------------------------------------------------
+    // Buffered standard output: copy into the buffer; when it does not fit, write the buffer out
+    // first; text that is bigger than the whole buffer is written directly.
+    a.bind(rt.print);
+    {
+        let (direct, copy, big) = (a.new_label(), a.new_label(), a.new_label());
+        state(a, R8, 128);
+        a.load(RAX, mem(R8, 0), 8);
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::E, direct);
+        a.load(RCX, mem(R8, 8), 8);
+        a.mov_ri(R9, PRINT_BUF);
+        a.alu_rr(Alu::Sub, R9, RCX, 8);
+        a.alu_rr(Alu::Cmp, RDX, R9, 8);
+        a.jcc(Cc::Be, copy);
+        // Full: write out what is there, then start again.
+        a.push(RSI);
+        a.push(RDX);
+        a.mov_ri(RDI, 1);
+        a.mov_rr(RSI, RAX, 8);
+        a.mov_rr(RDX, RCX, 8);
+        a.call(rt.write_fd);
+        a.pop(RDX);
+        a.pop(RSI);
+        state(a, R8, 128);
+        a.store_imm(mem(R8, 8), 0, 8);
+        a.load(RAX, mem(R8, 0), 8);
+        a.alu_rr(Alu::Xor, RCX, RCX, 4);
+        a.mov_ri(R9, PRINT_BUF);
+        a.alu_rr(Alu::Cmp, RDX, R9, 8);
+        a.jcc(Cc::A, big);
+        a.bind(copy);
+        a.lea(
+            RDI,
+            Mem {
+                base: RAX,
+                index: Some((RCX, 1)),
+                disp: 0,
+            },
+        );
+        a.alu_rr(Alu::Add, RCX, RDX, 8);
+        a.store(mem(R8, 8), RCX, 8);
+        a.mov_rr(RCX, RDX, 8);
+        a.rep_movsb();
+        a.ret();
+        a.bind(direct);
+        a.bind(big);
+        a.mov_ri(RDI, 1);
+        a.jmp(rt.write_fd);
+    }
 
     // ---- rt_write ----------------------------------------------------------------------------------
     a.bind(rt.write_fd);
@@ -264,6 +456,7 @@ pub fn emit(
     a.bind(rt.stop);
     a.mov_rr(R12, RDI, 8);
     a.mov_rr(R13, RSI, 8);
+    a.call(flush); // what the program printed comes first
     a.mov_ri(RDI, 2);
     a.lea_sect(RSI, Sect::Rodata, msg_stopped);
     a.mov_ri(RDX, 9);
@@ -278,6 +471,51 @@ pub fn emit(
     a.call(rt.write_fd);
     a.mov_ri(RDI, 1);
     a.call(rt.exit);
+
+    // ---- the fault handler -------------------------------------------------------------------------
+    // Linux: `rdi` signal, `rsi` siginfo (the address at +16). Windows: `rcx` the exception pointers;
+    // anything but a guard page hit, a stack overflow or an access violation is passed on.
+    {
+        let (check, overflow, invalid) = (a.new_label(), a.new_label(), a.new_label());
+        a.bind(fault);
+        if win {
+            let pass = a.new_label();
+            a.load(RAX, mem(RCX, 0), 8);
+            a.load(RDX, mem(RAX, 0), 4);
+            a.alu_ri(Alu::Cmp, RDX, 0x8000_0001u32 as i32, 4); // guard page violation
+            a.jcc(Cc::E, overflow);
+            a.alu_ri(Alu::Cmp, RDX, 0xC000_00FDu32 as i32, 4); // stack overflow
+            a.jcc(Cc::E, overflow);
+            a.alu_ri(Alu::Cmp, RDX, 0xC000_0005u32 as i32, 4); // access violation
+            a.jcc(Cc::E, check);
+            a.bind(pass);
+            a.alu_rr(Alu::Xor, RAX, RAX, 4);
+            a.ret();
+            a.bind(check);
+            a.load(RAX, mem(RAX, 0x28), 8);
+        } else {
+            a.load(RAX, mem(RSI, 16), 8);
+            a.bind(check);
+        }
+        state(a, R8, 144);
+        a.load(RCX, mem(R8, 0), 8);
+        a.test_rr(RCX, RCX, 8);
+        a.jcc(Cc::E, invalid);
+        a.alu_rr(Alu::Sub, RAX, RCX, 8);
+        a.alu_ri(Alu::Add, RAX, SLACK, 8);
+        let end = if win { GUARD_WIN + 4096 } else { GUARD_LINUX };
+        a.mov_ri(RDX, SLACK as i64 + end);
+        a.alu_rr(Alu::Cmp, RAX, RDX, 8);
+        a.jcc(Cc::B, overflow);
+        a.bind(invalid);
+        a.lea_sect(RDI, Sect::Rodata, msg_invalid);
+        a.mov_ri(RSI, 21);
+        a.call(rt.stop);
+        a.bind(overflow);
+        a.lea_sect(RDI, Sect::Rodata, msg_overflow);
+        a.mov_ri(RSI, 14);
+        a.call(rt.stop);
+    }
 
     // ---- out of memory -----------------------------------------------------------------------------
     let oom = a.new_label();

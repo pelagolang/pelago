@@ -1513,6 +1513,10 @@ fn native_agrees_on_the_edge_cases() {
         "fn f(a: int, b: int, c: int, d: int, e: int, g: int, h: int, i: int, j: int) -> int = a + 2*b + 3*c + 4*d + 5*e + 6*g + 7*h + 8*i + 9*j\nfn main() { print(f(1, 2, 3, 4, 5, 6, 7, 8, 9)) }",
         "fn f(a: float, b: float, c: float, d: float, e: float, g: float, h: float, i: float, j: float, k: float) -> float = a + b*2.0 + c*3.0 + d*4.0 + e*5.0 + g*6.0 + h*7.0 + i*8.0 + j*9.0 + k*10.0\nfn main() { print(f(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0)) }",
         "fn f(a: int, x: float, b: int, y: float) -> float = (a to float) * x + (b to float) * y\nfn main() { print(f(2, 1.5, 3, 0.5)) }",
+        // Buffered output: many small prints, one bigger than the buffer, and prints before a stop.
+        "fn main() { for i of 0..30000 { print(i, \"line of text\") } }",
+        "fn main() { var s = \"0123456789\"\n for i of 0..13 { s = s + s }\n print(s.len())\n print(s)\n print(\"after\") }",
+        "fn main() { for i of 0..20000 { print(i) }\n const z = 0\n print(10 / z) }",
         // Deep recursion.
         "fn d(n: int) -> int { if n == 0 { 0 } else { 1 + d(n - 1) } }\nfn main() { print(d(100000)) }",
         "fn fib(n: int) -> int = n < 2 ? n : fib(n - 1) + fib(n - 2)\nfn main() { print(fib(25)) }",
@@ -1946,4 +1950,31 @@ fn float_to_int_saturates() {
         output_of(src),
         "9223372036854775807 -9223372036854775807 0 2 -3 9223372036854775807 -9223372036854775807\n"
     );
+}
+
+/// Runaway recursion natively: a stop with exit status 1 on both systems, after the output so far.
+#[test]
+fn native_runaway_recursion_stops_cleanly() {
+    use crate::native::{exec, gen, Os};
+    // Not optimised, so the recursion stays a recursion.
+    let l = lowered(
+        "fn d(n: int) -> int { d(n + 1) * n }\nfn main() { print(\"before\")\n print(d(1)) }",
+    );
+    for os in [Os::Linux, Os::Windows] {
+        if !exec::can_run(os) {
+            continue;
+        }
+        let opts = gen::Options {
+            leak_check: false,
+            target: os,
+            regalloc: true,
+        };
+        let image = gen::compile(&l.module, "main", &opts).unwrap();
+        let r = exec::run_image(os, &image).unwrap();
+        assert_eq!(
+            (r.out.trim_end(), r.err.trim_end(), r.code),
+            ("before", "stopped: stack overflow", 1),
+            "{os:?}"
+        );
+    }
 }

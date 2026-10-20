@@ -31,7 +31,7 @@ The interpreter (`ir/interp.rs`) is the specification. Every row is a test (card
 | `Trunc`, `ZExt`, `SExt` | as the names say | `mov`, `movzx`, `movsx`/`movsxd` |
 | `Load`, `Store` | little-endian, any alignment | plain `mov` |
 | `MemCopy` | non-overlapping copy of n bytes | `rep movsb` (small constant sizes inline later) |
-| `Print` | bytes to standard output | a loop of `write(1, ...)` calls until all bytes are written |
+| `Print` | bytes to standard output | appended to a 64 KiB buffer (mapped at start); written out when full, at exit and at a stop; text bigger than the buffer goes straight through; no buffer (mapping failed) means a `write` per call |
 | `Stop(msg)` | print `stopped: msg` to standard error, exit status 1 | jump to the shared runtime routine with the message |
 | `Alloc`, `Free` | zero-length allocations are fine; a freed block may be reused | the runtime allocator (section 3) |
 | leaks | counted at the end of a test build | the allocator counts live blocks (test builds only) |
@@ -72,6 +72,9 @@ functions: `GetStdHandle`, `WriteFile`, `ExitProcess`, `VirtualAlloc`, `VirtualF
 | write | `write` loop | `GetStdHandle` then a `WriteFile` loop |
 | memory | `mmap` / `munmap` | `VirtualAlloc` (commit and reserve) / `VirtualFree` (release); a failure is a null result |
 | start-up stack | 1 GiB `mmap`, lazily taken | 256 MiB `VirtualAlloc`, committed up front |
+| guard | the lowest 1 MiB of the stack is `PROT_NONE`; `SIGSEGV` and `SIGBUS` run a handler on a `sigaltstack` | a `PAGE_GUARD` page 64 KiB above the stack base; a vectored exception handler |
+
+**Stack overflow and bad addresses.** Native code is not memory-checked, so the runtime turns a fault into a stop: a fault inside the guard zone (or the guard page, or `STATUS_STACK_OVERFLOW`) prints `stopped: stack overflow`, any other access violation prints `stopped: invalid memory access`; both flush the output buffer, write to standard error and exit with status 1. The interpreter reports its own, more precise memory errors and has a call depth limit, so the messages differ; that is documented, not tested for equality. A single frame bigger than the guard zone can step over it (then the fault is reported as an invalid access or, worse, corrupts memory); the lowering has no such frames today.
 
 Calls into kernel32 use Microsoft's convention (`rcx rdx r8 r9`, 32 bytes of shadow space, 16-byte alignment): `win_call` in `rt.rs` aligns the stack by itself with `rbp`, so
 the runtime does not depend on the alignment of its caller. Our own functions keep the System V-shaped convention of section 1.
