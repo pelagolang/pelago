@@ -73,6 +73,9 @@ fn win_call(a: &mut Asm, import: usize, setup: impl FnOnce(&mut Asm)) {
 /// The largest block served from the free lists: header plus payload.
 const SMALL_MAX: i32 = 64 * 1024;
 const LARGE_CLASS: i32 = 255;
+/// Windows: a large block of at least this many bytes reserves eight times its size up front and
+/// commits pages as it grows, so `rt_realloc` extends it in place (there is no `mremap`).
+const RESERVE_MIN: i32 = 1 << 20;
 
 /// The entry points of the runtime.
 pub struct Runtime {
@@ -620,6 +623,37 @@ pub fn emit(
     a.mov_rr(RDX, RBX, 8);
     a.jmp(out);
     a.bind(mapnew);
+    if win {
+        // Reserve eight times the length, commit the length; the header word 0 keeps the reserved
+        // bytes above the class byte, word 1 the committed length.
+        let plain = a.new_label();
+        a.alu_ri(Alu::Cmp, R12, RESERVE_MIN, 8);
+        a.jcc(Cc::B, plain);
+        a.alu_rr(Alu::Xor, RCX, RCX, 4);
+        a.mov_rr(RDX, R12, 8);
+        a.shift_imm(Shift::Shl, RDX, 3, 8);
+        a.mov_ri(R8, 0x2000); // reserve
+        a.mov_ri(R9, 4);
+        win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::E, plain); // no room to reserve: an ordinary mapping
+        a.mov_rr(RBX, RAX, 8);
+        a.mov_rr(RCX, RBX, 8);
+        a.mov_rr(RDX, R12, 8);
+        a.mov_ri(R8, 0x1000); // commit
+        a.mov_ri(R9, 4);
+        win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::E, oom);
+        a.mov_rr(RDX, RBX, 8);
+        a.mov_rr(RAX, R12, 8);
+        a.shift_imm(Shift::Shl, RAX, 11, 8);
+        a.alu_ri(Alu::Or, RAX, LARGE_CLASS, 8);
+        a.store(mem(RDX, 0), RAX, 8);
+        a.store(mem(RDX, 8), R12, 8);
+        a.jmp(out);
+        a.bind(plain);
+    }
     a.mov_rr(RSI, R12, 8);
     emit_mmap_reg(a, RSI, win);
     a.mov_rr(RDX, RAX, 8);
@@ -641,6 +675,9 @@ pub fn emit(
     a.jcc(Cc::E, fdone);
     a.lea(RDX, mem(RDI, -16));
     a.load(RAX, mem(RDX, 0), 8);
+    if win {
+        a.extend_rr(RAX, RAX, 1, false, false); // the class byte
+    }
     state(a, RSI, 112);
     a.alu_mi(Alu::Sub, mem(RSI, 0), 1, 8);
     a.alu_ri(Alu::Cmp, RAX, LARGE_CLASS, 8);
@@ -679,7 +716,8 @@ pub fn emit(
     // ---- rt_realloc --------------------------------------------------------------------------------
     // A large block moves with `mremap` (Linux): the kernel moves the pages, nothing is copied and the
     // new tail is zero. Anything else gets a new block, the smaller of the two sizes copied, and the
-    // old block freed.
+    // old block freed. Windows has no remap: a large block reserves eight times its size and commits
+    // pages as it grows, which is the same in-place growth.
     a.bind(rt.realloc);
     let (generic, rdone) = (a.new_label(), a.new_label());
     a.push(RBX);
@@ -691,9 +729,36 @@ pub fn emit(
     a.jcc(Cc::E, generic);
     a.lea(RDX, mem(RBX, -16));
     a.load(RAX, mem(RDX, 0), 8);
+    if win {
+        a.extend_rr(RAX, RAX, 1, false, false);
+    }
     a.alu_ri(Alu::Cmp, RAX, LARGE_CLASS, 8);
     a.jcc(Cc::Ne, generic);
-    if !win {
+    if win {
+        // Grow in place inside the reservation: commit the new pages, which arrive zeroed.
+        a.lea(RCX, mem(R12, 16 + 4095));
+        a.alu_ri(Alu::And, RCX, -4096, 8);
+        a.load(RSI, mem(RDX, 8), 8); // committed length
+        a.alu_rr(Alu::Cmp, RCX, RSI, 8);
+        a.jcc(Cc::E, rdone);
+        a.jcc(Cc::B, generic); // shrinking copies
+        a.load(RAX, mem(RDX, 0), 8);
+        a.shift_imm(Shift::Shr, RAX, 8, 8); // reserved bytes, 0 for an ordinary mapping
+        a.alu_rr(Alu::Cmp, RCX, RAX, 8);
+        a.jcc(Cc::A, generic);
+        a.mov_rr(R13, RCX, 8);
+        a.lea(RCX, mem(RBX, -16));
+        a.alu_rr(Alu::Add, RCX, RSI, 8);
+        a.mov_rr(RDX, R13, 8);
+        a.alu_rr(Alu::Sub, RDX, RSI, 8);
+        a.mov_ri(R8, 0x1000); // commit
+        a.mov_ri(R9, 4);
+        win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::E, oom);
+        a.store(mem(RBX, -8), R13, 8);
+        a.jmp(rdone);
+    } else {
         // New mapping length: header plus payload, whole pages.
         a.lea(RCX, mem(R12, 16 + 4095));
         a.alu_ri(Alu::And, RCX, -4096, 8);
@@ -722,6 +787,9 @@ pub fn emit(
     a.jcc(Cc::E, rfree);
     // Bytes the old block can give: the rest of its class, or its mapping.
     a.load(RAX, mem(RBX, -16), 8);
+    if win {
+        a.extend_rr(RAX, RAX, 1, false, false);
+    }
     let (rclass, rcopy) = (a.new_label(), a.new_label());
     a.alu_ri(Alu::Cmp, RAX, LARGE_CLASS, 8);
     a.jcc(Cc::Ne, rclass);

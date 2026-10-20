@@ -71,6 +71,8 @@ Measured with `compiler/benches/compare.sh` (best of 7, this container):
 
 **Common subexpressions and cheaper division (divmod).** New pass `ir/opt/cse.rs`: an arithmetic, compare, negate or cast operation computed again on the same operands under a dominating copy reuses the earlier result (equal constants count as one operand; `ptradd` and the `mul`/`shl` that scale an index are left to the generator's addressing modes). `n % 10` and `n / 10` now share their high multiply. `ranges.rs` turns a signed `/` or `%` by a positive constant into the unsigned form when the dividend is known non-negative, and `divconst` runs after inlining (a callee's `n / 10` is only known non-negative once it sits in the caller's loop), so the sign fix-up disappears. In `gen.rs`, shifts by a constant are built in the result's register, and a multiply by a constant is `imul d, a, imm`. divmod: 0.074 s to 0.033 s (C -O2 0.032 s, Rust 0.038 s).
 
+Windows growth in place: a large block of 1 MiB or more reserves eight times its size with `VirtualAlloc(MEM_RESERVE)` and commits the pages it uses; `rt_realloc` commits the extra pages at the same base (they arrive zeroed), so nothing is copied or moved until the reservation is used up, when it falls back to allocate, copy and free. The reserved length sits above the class byte in header word 0; word 1 stays the committed length. Only the Windows CI job runs this path.
+
 PRs: #7 (S1, powers of two), #8 (S2 and S3, first rounds). The open work, with files and dependencies for each item, is in [a11-work-items.md](../a11-work-items.md).
 
 
