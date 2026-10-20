@@ -1,0 +1,15 @@
+fn steps(start: int) -> int {
+    var n = start
+    var s = 0
+    while n != 1 {
+        if n % 2 == 0 { n = n / 2 } else { n = 3 * n + 1 }
+        s += 1
+    }
+    s
+}
+
+fn main() {
+    var total = 0
+    for i in 1..300001 { total += steps(i) }
+    print(total)
+}
