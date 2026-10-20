@@ -1494,3 +1494,37 @@ fn every_mix_of_signs_stops_or_not_as_before() {
         }
     }
 }
+
+#[test]
+fn a_loop_test_is_followed_by_its_exit_and_guards_go_last() {
+    let (o, ..) = both(&fib_module(10, false));
+    let fib = o.funcs.iter().find(|f| f.name == "fib").unwrap();
+    // Every conditional branch has one side right after it, so the generator needs no extra jump.
+    for (i, b) in fib.blocks.iter().enumerate() {
+        if let Some(Term::Branch(_, t, e)) = &b.term {
+            let next = BlockId(i as u32 + 1);
+            assert!(
+                t.block == next || e.block == next,
+                "{}",
+                print_func(fib, None)
+            );
+        }
+    }
+    // The slow path of the guard (the block that returns after a call) is not in the middle.
+    let slow = fib
+        .blocks
+        .iter()
+        .position(|b| {
+            matches!(b.term, Some(Term::Return(_)))
+                && b.insts
+                    .iter()
+                    .any(|&k| matches!(fib.insts[k].op, Op::Call(..)))
+        })
+        .unwrap();
+    let last_loop_jump = fib
+        .blocks
+        .iter()
+        .rposition(|b| matches!(&b.term, Some(Term::Branch(..))))
+        .unwrap();
+    assert!(slow >= last_loop_jump, "{}", print_func(fib, None));
+}

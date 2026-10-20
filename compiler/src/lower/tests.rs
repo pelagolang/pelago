@@ -1520,6 +1520,11 @@ fn native_agrees_on_the_edge_cases() {
         // Deep recursion.
         "fn d(n: int) -> int { if n == 0 { 0 } else { 1 + d(n - 1) } }\nfn main() { print(d(100000)) }",
         "fn fib(n: int) -> int = n < 2 ? n : fib(n - 1) + fib(n - 2)\nfn main() { print(fib(25)) }",
+        // Recursion with values waiting across the calls, and sums of mixed signs.
+        "fn g(n: int, a: int, b: int) -> int { if n == 0 { a + b } else { const x = g(n - 1, b, a + 1)\n const y = g(n - 1, a, b + 1)\n x + y + a * b } }\nfn main() { print(g(9, 1, 2)) }",
+        "fn fib(n: int) -> int = n < 2 ? n : fib(n - 1) + fib(n - 2)\nfn main() { print(fib(0 - 5), fib(1), fib(20)) }",
+        "fn m(n: int, a: int) -> int { if n == 0 { 0 } else { a + m(n - 1, 1 - a) } }\nfn main() { print(m(5, 4611686018427387904), m(6, 0 - 7)) }",
+        "fn m(n: int, a: int) -> int { if n == 0 { 0 } else { a + m(n - 1, a) } }\nfn main() { print(m(3, 4611686018427387904)) }",
     ];
     for p in programs {
         agree(p);
