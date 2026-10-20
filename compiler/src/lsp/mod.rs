@@ -159,6 +159,12 @@ impl Server {
             (m, Some(id)) if m.starts_with("textDocument/") => {
                 let r = self.request(m, &params);
                 out.push(match r {
+                    // The client shows the message of the error to the user.
+                    Some(v) if v.get("renameRefused").is_some() => failure(
+                        id,
+                        -32803,
+                        v.get("renameRefused").and_then(Json::str).unwrap_or(""),
+                    ),
                     Some(v) => reply(id, v),
                     None => reply(id, Json::Null),
                 });
@@ -234,6 +240,18 @@ impl Server {
 
     /// The checked package that holds `uri`.
     fn analysis_for(&mut self, uri: &str) -> Option<Rc<Analysis>> {
+        let (key, name, files) = self.package_of(uri)?;
+        if let Some(a) = self.cache.get(&key) {
+            return Some(a.clone());
+        }
+        let a = Rc::new(analyze(&name, &files));
+        self.cache.insert(key, a.clone());
+        Some(a)
+    }
+
+    /// The cache key, the name and the files (open documents over what is on disk) of the package
+    /// that holds `uri`.
+    fn package_of(&self, uri: &str) -> Option<(String, String, Vec<SourceFile>)> {
         let path = uri_to_path(uri)?;
         let (key, name, files) = match &self.root {
             Some(root) if path.starts_with(root) => {
@@ -290,12 +308,49 @@ impl Server {
                 (norm(uri), stem, files)
             }
         };
-        if let Some(a) = self.cache.get(&key) {
-            return Some(a.clone());
+        Some((key, name, files))
+    }
+
+    /// Would the package still check after the edits? `Err` names the first new error.
+    fn rename_breaks(
+        &self,
+        uri: &str,
+        before: &Analysis,
+        edits: &[(String, Vec<(usize, usize)>)],
+        new: &str,
+    ) -> Result<(), String> {
+        let Some((_, name, mut files)) = self.package_of(uri) else {
+            return Ok(());
+        };
+        for (file_uri, spans) in edits {
+            let Some(f) = files.iter_mut().find(|f| norm(&f.uri) == norm(file_uri)) else {
+                continue;
+            };
+            // Back to front, so the earlier offsets stay valid.
+            let mut spans = spans.clone();
+            spans.sort_by_key(|s| std::cmp::Reverse(s.0));
+            for (s, e) in spans {
+                if e <= f.text.len() && f.text.is_char_boundary(s) && f.text.is_char_boundary(e) {
+                    f.text.replace_range(s..e, new);
+                }
+            }
         }
-        let a = Rc::new(analyze(&name, &files));
-        self.cache.insert(key, a.clone());
-        Some(a)
+        let after = analyze(&name, &files);
+        let mut old: Vec<&str> = before
+            .diags
+            .iter()
+            .filter(|d| !d.warning)
+            .map(|d| d.message.as_str())
+            .collect();
+        for d in after.diags.iter().filter(|d| !d.warning) {
+            match old.iter().position(|m| *m == d.message) {
+                Some(i) => {
+                    old.swap_remove(i);
+                }
+                None => return Err(format!("renaming to `{new}` would cause: {}", d.message)),
+            }
+        }
+        Ok(())
     }
 
     // ---- Diagnostics -------------------------------------------------------------------------------
@@ -423,7 +478,28 @@ impl Server {
             }
             "textDocument/rename" => {
                 let new = params.get("newName").and_then(Json::str)?;
-                let edits = a.rename(m, off()?, new).ok()?;
+                let edits = match a.rename(m, off()?, new) {
+                    Ok(e) => e,
+                    Err(msg) => return Some(rename_refused(&msg)),
+                };
+                // Rename on a copy of the package first: a clash with another name, or a
+                // shorthand that would stop matching, shows up as a new error.
+                let by_uri: Vec<(String, Vec<(usize, usize)>)> = {
+                    let mut v: Vec<(String, Vec<(usize, usize)>)> = Vec::new();
+                    for (f, s) in &edits {
+                        let Some((u, _)) = a.modules.iter().find(|(_, x)| x == f) else {
+                            continue;
+                        };
+                        match v.iter_mut().find(|(k, _)| k == u) {
+                            Some((_, l)) => l.push((s.start as usize, s.end as usize)),
+                            None => v.push((u.clone(), vec![(s.start as usize, s.end as usize)])),
+                        }
+                    }
+                    v
+                };
+                if let Err(msg) = self.rename_breaks(&uri, &a, &by_uri, new) {
+                    return Some(rename_refused(&msg));
+                }
                 // One list of edits per file.
                 let mut by_file: Vec<(String, Vec<Json>)> = Vec::new();
                 for (f, s) in edits {
@@ -511,6 +587,11 @@ impl Server {
             _ => None,
         }
     }
+}
+
+/// A refused rename: a sentinel the dispatcher turns into a JSON-RPC error.
+fn rename_refused(msg: &str) -> Json {
+    obj(vec![("renameRefused", text(msg))])
 }
 
 fn text_json(s: &str) -> Json {

@@ -568,7 +568,10 @@ impl<'p> Checker<'p> {
         };
         let n = self.text(name);
         match self.res.member(def, n) {
-            Some(v) if self.def(v).kind == DefKind::Variant => self.variant_value(v, Exp::Is(want)),
+            Some(v) if self.def(v).kind == DefKind::Variant => {
+                self.note_member(name.span, v);
+                self.variant_value(v, Exp::Is(want))
+            }
             _ => {
                 let tn = self.def(def).name.clone();
                 self.err(name.span, format!("`{tn}` has no case `{n}`"));
