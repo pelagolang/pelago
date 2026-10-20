@@ -68,7 +68,10 @@ pub fn optimize(m: &mut Module, opts: Options) {
     }
     if opts.level >= 2 {
         for i in 0..m.funcs.len() {
-            if tailrec::run(&mut m.funcs[i], FuncId(i as u32)) {
+            let me = FuncId(i as u32);
+            let mut changed = tailrec::run(&mut m.funcs[i], me);
+            changed |= inline::recursive_once(&mut m.funcs[i], me);
+            if changed {
                 optimize_func(&mut m.funcs[i]);
             }
         }
