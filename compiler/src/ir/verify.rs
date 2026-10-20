@@ -220,6 +220,7 @@ fn inputs(op: &Op) -> Vec<Value> {
         | Op::Cmp(_, a, b)
         | Op::Store(a, b)
         | Op::PtrAdd(a, b)
+        | Op::Realloc(a, b)
         | Op::Print(a, b) => {
             vec![*a, *b]
         }
@@ -446,6 +447,14 @@ fn check_inst(f: &Func, m: Option<&Module>, inst: &Inst) -> Vec<String> {
         Op::Free(p) => {
             if t(*p) != Some(IrTy::Ptr) {
                 e.push("`free` needs a ptr".to_string());
+            }
+        }
+        Op::Realloc(p, n) => {
+            if t(*p) != Some(IrTy::Ptr) || t(*n) != Some(IrTy::I64) {
+                e.push("`realloc` needs a ptr and an i64 size".to_string());
+            }
+            if result_ty != Some(IrTy::Ptr) {
+                e.push("`realloc` makes a ptr".to_string());
             }
         }
     }

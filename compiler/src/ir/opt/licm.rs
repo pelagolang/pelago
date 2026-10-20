@@ -70,6 +70,7 @@ fn candidates(f: &Func, dom: &Dom, lp: &Loop) -> Vec<usize> {
                         | Op::CallPtr(..)
                         | Op::MemCopy(..)
                         | Op::Alloc(_)
+                        | Op::Realloc(..)
                         | Op::Free(_)
                 );
             }

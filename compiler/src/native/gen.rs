@@ -603,7 +603,12 @@ impl<'m> Gen<'m> {
         let calls = f.blocks.iter().flat_map(|b| &b.insts).any(|&i| {
             matches!(
                 f.insts[i].op,
-                Op::Call(..) | Op::CallPtr(..) | Op::Alloc(_) | Op::Free(_) | Op::Print(..)
+                Op::Call(..)
+                    | Op::CallPtr(..)
+                    | Op::Alloc(_)
+                    | Op::Free(_)
+                    | Op::Realloc(..)
+                    | Op::Print(..)
             )
         });
         self.frameless = self.regalloc
@@ -1084,6 +1089,13 @@ impl<'m> Gen<'m> {
                 self.ld(RDI, *p);
                 let fr = self.rt().free;
                 self.a.call(fr);
+            }
+            Op::Realloc(p, n) => {
+                let (wp, wn) = (self.loc[p.0 as usize], self.loc[n.0 as usize]);
+                self.moves(&[(Where::Reg(RDI), wp), (Where::Reg(RSI), wn)]);
+                let re = self.rt().realloc;
+                self.a.call(re);
+                self.st(res.unwrap(), RAX);
             }
         }
         Ok(())

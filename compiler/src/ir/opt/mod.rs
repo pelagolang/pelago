@@ -142,6 +142,7 @@ impl Op {
             | Op::Cmp(_, a, b)
             | Op::PtrAdd(a, b)
             | Op::Print(a, b)
+            | Op::Realloc(a, b)
             | Op::Store(a, b) => {
                 f(*a);
                 f(*b);
@@ -174,6 +175,7 @@ impl Op {
             | Op::Cmp(_, a, b)
             | Op::PtrAdd(a, b)
             | Op::Print(a, b)
+            | Op::Realloc(a, b)
             | Op::Store(a, b) => {
                 *a = f(*a);
                 *b = f(*b);

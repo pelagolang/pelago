@@ -191,6 +191,75 @@ mod native_run {
     }
 
     #[test]
+    fn realloc_keeps_the_contents_and_zeroes_the_rest() {
+        let img = program(true, |a, ro, rt| {
+            a.push(RBX);
+            let bad = a.new_label();
+            let end = a.new_label();
+            // Null allocates (a small block).
+            a.alu_rr(Alu::Xor, RDI, RDI, 4);
+            a.mov_ri(RSI, 100);
+            a.call(rt.realloc);
+            a.mov_rr(RBX, RAX, 8);
+            a.store_imm(mem(RBX, 99), 7, 1);
+            // Small to large: the old byte comes along, the new tail is zero.
+            a.mov_rr(RDI, RBX, 8);
+            a.mov_ri(RSI, 300_000);
+            a.call(rt.realloc);
+            a.mov_rr(RBX, RAX, 8);
+            a.load_ext(RCX, mem(RBX, 99), 1, false, false);
+            a.alu_ri(Alu::Cmp, RCX, 7, 4);
+            a.jcc(Cc::Ne, bad);
+            a.load_ext(RCX, mem(RBX, 299_999), 1, false, false);
+            a.test_rr(RCX, RCX, 4);
+            a.jcc(Cc::Ne, bad);
+            a.store_imm(mem(RBX, 299_999), 9, 1);
+            // Large to larger: remapped, nothing lost, the tail is zero.
+            a.mov_rr(RDI, RBX, 8);
+            a.mov_ri(RSI, 3_000_000);
+            a.call(rt.realloc);
+            a.mov_rr(RBX, RAX, 8);
+            a.load_ext(RCX, mem(RBX, 99), 1, false, false);
+            a.alu_ri(Alu::Cmp, RCX, 7, 4);
+            a.jcc(Cc::Ne, bad);
+            a.load_ext(RCX, mem(RBX, 299_999), 1, false, false);
+            a.alu_ri(Alu::Cmp, RCX, 9, 4);
+            a.jcc(Cc::Ne, bad);
+            a.load_ext(RCX, mem(RBX, 2_999_999), 1, false, false);
+            a.test_rr(RCX, RCX, 4);
+            a.jcc(Cc::Ne, bad);
+            // Large to small: the first bytes stay.
+            a.mov_rr(RDI, RBX, 8);
+            a.mov_ri(RSI, 150);
+            a.call(rt.realloc);
+            a.mov_rr(RBX, RAX, 8);
+            a.load_ext(RCX, mem(RBX, 99), 1, false, false);
+            a.alu_ri(Alu::Cmp, RCX, 7, 4);
+            a.jcc(Cc::Ne, bad);
+            // Small to small of another class.
+            a.mov_rr(RDI, RBX, 8);
+            a.mov_ri(RSI, 5_000);
+            a.call(rt.realloc);
+            a.mov_rr(RBX, RAX, 8);
+            a.load_ext(RCX, mem(RBX, 99), 1, false, false);
+            a.alu_ri(Alu::Cmp, RCX, 7, 4);
+            a.jcc(Cc::Ne, bad);
+            a.mov_rr(RDI, RBX, 8);
+            a.call(rt.free);
+            say(a, ro, rt, "ok\n");
+            a.jmp(end);
+            a.bind(bad);
+            say(a, ro, rt, "bad\n");
+            a.bind(end);
+            a.pop(RBX);
+            a.ret();
+        });
+        // The leak check runs too: every block was freed or replaced.
+        let r = run(&img);
+        assert_eq!((r.out.as_str(), r.err.as_str(), r.code), ("ok\n", "", 0));
+    }
+
+    #[test]
     fn many_small_blocks_cross_chunks() {
         let img = program(true, |a, ro, rt| {
             a.push(RBX);

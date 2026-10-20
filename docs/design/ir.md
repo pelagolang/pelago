@@ -45,7 +45,7 @@ fn sum(xs: [int]) -> int {
   phi, easier to build and to print).
 - **Types are concrete and small**: integers of each width, floats, `bool`, pointers, and aggregates (struct, tagged union,
   fixed array). No generics, no interfaces, no inference variables.
-- **Memory** is explicit: `alloc` / `free` for the heap, `slot` for stack space, `load` / `store`, `field` / `index` addresses.
+- **Memory** is explicit: `alloc` / `free` / `realloc` for the heap (`realloc` keeps the first bytes and zeroes the rest; a large block moves without copying on Linux), `slot` for stack space, `load` / `store`, `field` / `index` addresses.
 - **Index-based storage** (functions, blocks and instructions in flat vectors, referred to by number), as the arena discussion
   already pointed toward. Cheap to build, cheap to free, friendly to caches.
 - **A printer** (`pelago ir <file>`) and a **verifier** come first, before any lowering, so each step is testable.

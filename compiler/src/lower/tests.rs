@@ -1910,6 +1910,17 @@ fn main() {
     }
 }
 
+#[test]
+fn big_buffers_keep_their_contents_while_they_grow() {
+    // Past 64 KiB a buffer is a mapping of its own that the system moves when it grows; the
+    // elements, a string and a list of strings must all survive the moves. `out` shrinks nothing but
+    // is released and rebuilt, so blocks of every size are freed too.
+    let src = "fn main() {\n var xs: [int] = []\n for i in 0..70000 { xs.push!(i) }\n var ok = true\n var t = 0\n for i in 0..xs.len() { if xs[i] != i { ok = false }\n t += xs[i] }\n var s = \"\"\n for i in 0..40000 { s = s + \"xy\" }\n var words: [string] = []\n for i in 0..3000 { words.push!(\"w#i\") }\n var out: [int] = []\n for round in 0..3 { out = []\n for i in 0..(9000 * (round + 1)) { out.push!(i * 2) } }\n print(ok, t, xs.len(), s.len(), s[79998..80000], words[2999], words.len(), out.len(), out[26999]) }\n";
+    let want = "true 2449965000 70000 80000 xy w2999 3000 27000 53998\n";
+    assert_eq!(output_of(src), want);
+    agree(src);
+}
+
 // ---- Float semantics: single precision rounding and saturating float to int -------------------------------
 
 #[test]

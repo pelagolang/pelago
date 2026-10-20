@@ -101,6 +101,13 @@ impl<'a> Lowerer<'a> {
                 };
                 self.wrap(Op::Alloc(n), ptr, sp)
             }
+            "rt_realloc" => {
+                let (Some(p), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
+                else {
+                    return Res::Never;
+                };
+                self.wrap(Op::Realloc(p, n), ptr, sp)
+            }
             "rt_free" => {
                 let Some(p) = self.arg_scalar(args, 0) else {
                     return Res::Never;

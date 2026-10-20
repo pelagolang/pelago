@@ -77,6 +77,8 @@ pub ext fn unreachable() -> never
 pub ext fn rt_null() -> ptr
 pub ext fn rt_alloc(size: int) -> ptr
 pub ext fn rt_free(p: ptr)
+/// A block of `size` bytes holding the first bytes of `p` (null allocates), the rest zero; `p` is dead afterwards.
+pub ext fn rt_realloc(p: ptr, size: int) -> ptr
 pub ext fn rt_offset(p: ptr, bytes: int) -> ptr
 pub ext fn rt_copy(dst: ptr, src: ptr, bytes: int)
 pub ext fn rt_is_null(p: ptr) -> bool
@@ -131,18 +133,27 @@ fn rt_hdr_cap(h: ptr) -> int = rt_load_int(rt_offset(h, 16))
 fn rt_hdr_set_len(h: ptr, n: int) { rt_store_int(rt_offset(h, 8), n) }
 
 /// Makes room for `needed` elements of `size` bytes. A capacity of 0 means the buffer is not owned.
+/// Small on purpose, so the optimiser inlines the check into every push loop; only a full buffer calls `rt_grow_slow`.
 fn rt_grow(h: ptr, size: int, needed: int) {
+    if rt_hdr_cap(h) >= needed { return }
+    rt_grow_slow(h, size, needed)
+}
+
+fn rt_grow_slow(h: ptr, size: int, needed: int) {
     const cap = rt_hdr_cap(h)
-    if cap >= needed { return }
     var ncap = cap * 2
     if ncap < 4 { ncap = 4 }
     if ncap < needed { ncap = needed }
-    const data = rt_alloc(ncap * size)
     const old = rt_hdr_data(h)
-    const len = rt_hdr_len(h)
-    if len > 0 { rt_copy(data, old, len * size) }
-    if cap > 0 { rt_free(old) }
-    rt_store_ptr(h, data)
+    if cap > 0 {
+        // An owned buffer: a big one is remapped by the system instead of copied.
+        rt_store_ptr(h, rt_realloc(old, ncap * size))
+    } else {
+        const data = rt_alloc(ncap * size)
+        const len = rt_hdr_len(h)
+        if len > 0 { rt_copy(data, old, len * size) }
+        rt_store_ptr(h, data)
+    }
     rt_store_int(rt_offset(h, 16), ncap)
 }
 
