@@ -1,6 +1,7 @@
 Id: A-11
 Title: Native speed: from 4.5 times slower than C at -O2 towards 1.5 to 2 times
 Column: Doing
+Work items: [a11-work-items.md](../a11-work-items.md) (the open work, split for parallel threads)
 Order: after A-09 N6 (track A)
 Depends on: A-09; A-04 (the IR optimiser)
 Size: XL, in stages (S1 to S6), each measured
@@ -51,3 +52,5 @@ Measured with `compiler/benches/compare.sh` (best of 7, this container):
 |---|---|---|---|---|
 | collatz, 1 to 300,000 | 0.23 s | 0.09 s | 0.14 s | 0.07 s |
 | fib(38) | 0.36 s | 0.30 s | 0.34 s | 0.08 s |
+
+PRs: #7 (S1, powers of two), #8 (S2 and S3, first rounds). The open work, with files and dependencies for each item, is in [a11-work-items.md](../a11-work-items.md).
