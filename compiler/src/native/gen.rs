@@ -36,6 +36,8 @@ const VALUE_REGS: [Reg; 5] = [RBX, R12, R13, R14, R15];
 enum Where {
     Mem(i32),
     Reg(Reg),
+    /// A constant integer, boolean or pointer: no storage, loaded or used as an immediate where it is read.
+    Imm(i64),
 }
 
 /// Compiles the module to an executable whose entry runs the function named `entry`.
@@ -96,6 +98,63 @@ struct Gen<'m> {
     frame: i32,
     block_labels: Vec<Label>,
     ret_ty: IrTy,
+}
+
+/// The integer or boolean constants of a function, by value: they get no register and no frame slot.
+fn const_values(f: &Func) -> Vec<Option<i64>> {
+    let mut out = vec![None; f.values.len()];
+    for b in &f.blocks {
+        for &i in &b.insts {
+            if let (Op::Const(t, c), Some(r)) = (&f.insts[i].op, f.insts[i].result) {
+                out[r.0 as usize] = match (c, t) {
+                    (Const::Int(n), t) => {
+                        let w = bits(*t);
+                        Some(if w >= 64 {
+                            *n as i64
+                        } else {
+                            (*n as u128 & ((1u128 << w) - 1)) as i64
+                        })
+                    }
+                    (Const::Bool(b), _) => Some(i64::from(*b)),
+                    _ => None,
+                };
+            }
+        }
+    }
+    out
+}
+
+/// A canonical (zero-extended) constant of type `t` widened to 64 bits with its sign or with zeros.
+fn widen(n: i64, t: IrTy, signed: bool) -> i64 {
+    let w = bits(t);
+    if signed && w < 64 && matches!(t, IrTy::Int(_)) {
+        let sh = 64 - w;
+        (n << sh) >> sh
+    } else {
+        n
+    }
+}
+
+/// The opposite condition (x86 pairs them in the lowest bit of the code).
+fn invert(cc: Cc) -> Cc {
+    match cc {
+        Cc::O => Cc::No,
+        Cc::No => Cc::O,
+        Cc::B => Cc::Ae,
+        Cc::Ae => Cc::B,
+        Cc::E => Cc::Ne,
+        Cc::Ne => Cc::E,
+        Cc::Be => Cc::A,
+        Cc::A => Cc::Be,
+        Cc::S => Cc::Ns,
+        Cc::Ns => Cc::S,
+        Cc::P => Cc::Np,
+        Cc::Np => Cc::P,
+        Cc::L => Cc::Ge,
+        Cc::Ge => Cc::L,
+        Cc::Le => Cc::G,
+        Cc::G => Cc::Le,
+    }
 }
 
 fn bits(t: IrTy) -> u32 {
@@ -208,12 +267,13 @@ impl<'m> Gen<'m> {
     fn vmem(&self, v: Value) -> Mem {
         match self.loc[v.0 as usize] {
             Where::Mem(off) => mem(RBP, off),
-            Where::Reg(r) => panic!("value {} is in {r:?}, not in memory", v.0),
+            w => panic!("value {} is in {w:?}, not in memory", v.0),
         }
     }
 
     fn layout(&mut self, f: &Func) {
         self.slot_off.clear();
+        let imms = const_values(f);
         let regs = if self.regalloc {
             super::regs::assign(f, &VALUE_REGS)
         } else {
@@ -221,10 +281,11 @@ impl<'m> Gen<'m> {
         };
         let mut at = 0i32;
         self.loc.clear();
-        for r in &regs {
-            self.loc.push(match r {
-                Some(r) => Where::Reg(*r),
-                None => {
+        for (v, r) in regs.iter().enumerate() {
+            self.loc.push(match (imms[v], r) {
+                (Some(n), _) => Where::Imm(n),
+                (None, Some(r)) => Where::Reg(*r),
+                (None, None) => {
                     at += 8;
                     Where::Mem(-at)
                 }
@@ -260,7 +321,16 @@ impl<'m> Gen<'m> {
                 }
             }
             Where::Mem(off) => self.a.load(r, mem(RBP, off), 8),
+            Where::Imm(n) => self.a.mov_ri(r, n),
         }
+    }
+
+    /// The constant a value is, if it is one that fits an immediate operand once widened (signed or not).
+    fn imm32(&self, v: Value, f: &Func, signed: bool) -> Option<i32> {
+        let Where::Imm(n) = self.loc[v.0 as usize] else {
+            return None;
+        };
+        i32::try_from(widen(n, f.ty(v), signed)).ok()
     }
 
     /// The value widened to 64 bits with its sign or with zeros.
@@ -276,6 +346,7 @@ impl<'m> Gen<'m> {
                 }
             }
             Where::Mem(off) => self.a.load_ext(r, mem(RBP, off), size(t), signed, true),
+            Where::Imm(n) => self.a.mov_ri(r, widen(n, t, signed)),
         }
     }
 
@@ -287,6 +358,7 @@ impl<'m> Gen<'m> {
                 }
             }
             Where::Mem(off) => self.a.store(mem(RBP, off), r, 8),
+            Where::Imm(_) => panic!("a constant is never written"),
         }
     }
 
@@ -344,14 +416,32 @@ impl<'m> Gen<'m> {
                 }
             }
         }
+        let uses = f.use_counts();
         for (bi, b) in f.blocks.iter().enumerate() {
             let lb = self.block_labels[bi];
             self.a.bind(lb);
+            // A comparison that only feeds the branch ending its block is not stored: the branch
+            // tests the flags directly.
+            let mut fused = None;
+            if let (Some(&last), Some(Term::Branch(c, ..))) = (b.insts.last(), &b.term) {
+                if let Op::Cmp(op, x, y) = &f.insts[last].op {
+                    if f.insts[last].result == Some(*c)
+                        && uses[c.0 as usize] == 1
+                        && !is_float(f.ty(*x))
+                    {
+                        fused = Some((last, *op, *x, *y));
+                    }
+                }
+            }
             for &i in &b.insts {
+                if fused.is_some_and(|(l, ..)| l == i) {
+                    continue;
+                }
                 self.inst(f, i, &f.insts[i])?;
             }
+            let next = (bi + 1 < f.blocks.len()).then_some(bi + 1);
             match &b.term {
-                Some(t) => self.term(f, t)?,
+                Some(t) => self.term(f, t, fused, next)?,
                 None => return Err(format!("`{}`: a block has no terminator", f.name)),
             }
         }
@@ -369,7 +459,13 @@ impl<'m> Gen<'m> {
 
     // ---- Terminators ---------------------------------------------------------------------------------
 
-    fn term(&mut self, f: &Func, t: &Term) -> Result<(), String> {
+    fn term(
+        &mut self,
+        f: &Func,
+        t: &Term,
+        fused: Option<(usize, CmpOp, Value, Value)>,
+        next: Option<usize>,
+    ) -> Result<(), String> {
         match t {
             Term::Return(None) => self.epilogue(),
             Term::Return(Some(v)) => {
@@ -380,15 +476,37 @@ impl<'m> Gen<'m> {
                 }
                 self.epilogue();
             }
-            Term::Jump(tg) => self.edge(f, tg),
+            Term::Jump(tg) => self.edge(f, tg, next),
             Term::Branch(c, t, e) => {
-                let then_l = self.a.new_label();
-                self.ld(RAX, *c);
-                self.a.test_rr(RAX, RAX, 1);
-                self.a.jcc(Cc::Ne, then_l);
-                self.edge(f, e);
-                self.a.bind(then_l);
-                self.edge(f, t);
+                let cc = match fused {
+                    Some((_, op, x, y)) => self.int_cmp(f, op, x, y),
+                    None => {
+                        self.ld(RAX, *c);
+                        self.a.test_rr(RAX, RAX, 1);
+                        Cc::Ne
+                    }
+                };
+                let plain = t.args.is_empty() && e.args.is_empty();
+                let (tb, eb) = (t.block.0 as usize, e.block.0 as usize);
+                if plain && Some(tb) == next {
+                    // Fall into the true side; jump away on the opposite condition.
+                    let l = self.block_labels[eb];
+                    self.a.jcc(invert(cc), l);
+                } else if plain {
+                    let l = self.block_labels[tb];
+                    self.a.jcc(cc, l);
+                    if Some(eb) != next {
+                        let l = self.block_labels[eb];
+                        self.a.jmp(l);
+                    }
+                } else {
+                    let then_l = self.a.new_label();
+                    self.a.jcc(cc, then_l);
+                    // The true side's copies follow, so this edge must jump.
+                    self.edge(f, e, None);
+                    self.a.bind(then_l);
+                    self.edge(f, t, next);
+                }
             }
             Term::Stop(msg) => {
                 let off = self.ro.add(msg.as_bytes(), 1);
@@ -407,7 +525,7 @@ impl<'m> Gen<'m> {
 
     /// Hands the arguments to the target's parameters and jumps. When an argument is itself a
     /// parameter of the target (a swap), everything goes through the stack first.
-    fn edge(&mut self, f: &Func, tg: &Target) {
+    fn edge(&mut self, f: &Func, tg: &Target, next: Option<usize>) {
         let params = f.block_params(tg.block).to_vec();
         // A copy would clobber a source that a later copy still needs.
         let conflict = (0..params.len()).any(|i| {
@@ -428,7 +546,7 @@ impl<'m> Gen<'m> {
                 if self.loc[p.0 as usize] != self.loc[a.0 as usize] {
                     match self.loc[p.0 as usize] {
                         Where::Reg(r) => self.ld(r, *a),
-                        Where::Mem(_) => {
+                        Where::Mem(_) | Where::Imm(_) => {
                             self.ld(RAX, *a);
                             self.st(*p, RAX);
                         }
@@ -436,8 +554,10 @@ impl<'m> Gen<'m> {
                 }
             }
         }
-        let l = self.block_labels[tg.block.0 as usize];
-        self.a.jmp(l);
+        if Some(tg.block.0 as usize) != next {
+            let l = self.block_labels[tg.block.0 as usize];
+            self.a.jmp(l);
+        }
     }
 
     // ---- Instructions --------------------------------------------------------------------------------
@@ -445,6 +565,7 @@ impl<'m> Gen<'m> {
     fn inst(&mut self, f: &Func, id: usize, inst: &Inst) -> Result<(), String> {
         let res = inst.result;
         match &inst.op {
+            Op::Const(..) if matches!(self.loc[res.unwrap().0 as usize], Where::Imm(_)) => {}
             Op::Const(t, c) => {
                 let bits_v: i64 = match (c, t) {
                     (Const::Int(n), t) => {
@@ -693,6 +814,22 @@ impl<'m> Gen<'m> {
         }
         let w = bits(t);
         match op {
+            BinOp::Add | BinOp::Sub | BinOp::And | BinOp::Or | BinOp::Xor
+                if self.imm32(b, f, false).is_some() =>
+            {
+                let n = self.imm32(b, f, false).unwrap();
+                self.ld(RAX, a);
+                let alu = match op {
+                    BinOp::Add => Alu::Add,
+                    BinOp::Sub => Alu::Sub,
+                    BinOp::And => Alu::And,
+                    BinOp::Or => Alu::Or,
+                    _ => Alu::Xor,
+                };
+                self.a.alu_ri(alu, RAX, n, 8);
+                self.mask(RAX, w);
+                self.st(r, RAX);
+            }
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor => {
                 self.ld(RAX, a);
                 self.ld(RCX, b);
@@ -740,6 +877,22 @@ impl<'m> Gen<'m> {
                 self.mask(out, w);
                 self.st(r, out);
             }
+            BinOp::Shl | BinOp::Shr | BinOp::UShr if matches!(self.loc[b.0 as usize], Where::Imm(n) if (0..w as i64).contains(&n)) =>
+            {
+                // A constant amount below the width: no check, an immediate shift.
+                let Where::Imm(n) = self.loc[b.0 as usize] else {
+                    unreachable!()
+                };
+                self.ld_ext(RAX, a, f, op == BinOp::Shr);
+                let sh = match op {
+                    BinOp::Shl => Shift::Shl,
+                    BinOp::Shr => Shift::Sar,
+                    _ => Shift::Shr,
+                };
+                self.a.shift_imm(sh, RAX, n as u8, 8);
+                self.mask(RAX, w);
+                self.st(r, RAX);
+            }
             BinOp::Shl | BinOp::Shr | BinOp::UShr => {
                 self.ld(RCX, b);
                 self.a.alu_ri(Alu::Cmp, RCX, w as i32, 8);
@@ -762,6 +915,14 @@ impl<'m> Gen<'m> {
     fn checked(&mut self, f: &Func, op: BinOp, signed: bool, a: Value, b: Value, r: Value) {
         let w = bits(f.ty(a));
         let ov = self.stop_overflow;
+        if let (64, BinOp::Add | BinOp::Sub, Some(n)) = (w, op, self.imm32(b, f, signed)) {
+            self.ld(RAX, a);
+            let alu = if op == BinOp::Add { Alu::Add } else { Alu::Sub };
+            self.a.alu_ri(alu, RAX, n, 8);
+            self.a.jcc(if signed { Cc::O } else { Cc::B }, ov);
+            self.st(r, RAX);
+            return;
+        }
         self.ld_ext(RAX, a, f, signed);
         self.ld_ext(RCX, b, f, signed);
         if w == 64 {
@@ -846,27 +1007,37 @@ impl<'m> Gen<'m> {
                 }
             }
         } else {
-            let signed = matches!(t, IrTy::Int(_))
-                && matches!(op, CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge);
-            self.ld_ext(RAX, a, f, signed);
-            self.ld_ext(RCX, b, f, signed);
-            self.a.alu_rr(Alu::Cmp, RAX, RCX, 8);
-            let cc = match op {
-                CmpOp::Eq => Cc::E,
-                CmpOp::Ne => Cc::Ne,
-                CmpOp::Lt if signed => Cc::L,
-                CmpOp::Le if signed => Cc::Le,
-                CmpOp::Gt if signed => Cc::G,
-                CmpOp::Ge if signed => Cc::Ge,
-                CmpOp::Lt | CmpOp::ULt => Cc::B,
-                CmpOp::Le | CmpOp::ULe => Cc::Be,
-                CmpOp::Gt | CmpOp::UGt => Cc::A,
-                _ => Cc::Ae,
-            };
+            let cc = self.int_cmp(f, op, a, b);
             self.a.setcc(cc, RAX);
         }
         self.a.extend_rr(RAX, RAX, 1, false, false);
         self.st(r, RAX);
+    }
+
+    /// Compares two integer, boolean or pointer values; gives the condition that holds when `op` is true.
+    fn int_cmp(&mut self, f: &Func, op: CmpOp, a: Value, b: Value) -> Cc {
+        let signed = matches!(f.ty(a), IrTy::Int(_))
+            && matches!(op, CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge);
+        self.ld_ext(RAX, a, f, signed);
+        match self.imm32(b, f, signed) {
+            Some(n) => self.a.alu_ri(Alu::Cmp, RAX, n, 8),
+            None => {
+                self.ld_ext(RCX, b, f, signed);
+                self.a.alu_rr(Alu::Cmp, RAX, RCX, 8);
+            }
+        }
+        match op {
+            CmpOp::Eq => Cc::E,
+            CmpOp::Ne => Cc::Ne,
+            CmpOp::Lt if signed => Cc::L,
+            CmpOp::Le if signed => Cc::Le,
+            CmpOp::Gt if signed => Cc::G,
+            CmpOp::Ge if signed => Cc::Ge,
+            CmpOp::Lt | CmpOp::ULt => Cc::B,
+            CmpOp::Le | CmpOp::ULe => Cc::Be,
+            CmpOp::Gt | CmpOp::UGt => Cc::A,
+            _ => Cc::Ae,
+        }
     }
 
     fn cast(&mut self, f: &Func, k: CastKind, a: Value, to: IrTy, r: Value) {

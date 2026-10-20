@@ -225,8 +225,19 @@ pub fn assign(f: &Func, regs: &[crate::native::x86::Reg]) -> Vec<Option<crate::n
     }
 
     // Greedy assignment, heaviest first.
+    // Constants are used as immediates and take no register (the generator knows them by value).
+    let mut is_const = vec![false; nv];
+    for b in &f.blocks {
+        for &i in &b.insts {
+            if let (Op::Const(..), Some(r)) = (&f.insts[i].op, f.insts[i].result) {
+                is_const[r.0 as usize] = true;
+            }
+        }
+    }
     let eligible = |v: usize| {
-        matches!(f.values[v], IrTy::Int(_) | IrTy::Bool | IrTy::Ptr) && start[v] != u32::MAX
+        matches!(f.values[v], IrTy::Int(_) | IrTy::Bool | IrTy::Ptr)
+            && start[v] != u32::MAX
+            && !is_const[v]
     };
     let mut cands: Vec<usize> = (0..nv).filter(|v| eligible(*v) && weight[*v] > 0).collect();
     cands.sort_by_key(|v| (std::cmp::Reverse(weight[*v]), *v));
