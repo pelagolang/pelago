@@ -12,12 +12,16 @@
 //! | 96, 104 | next free byte and end of the current chunk |
 //! | 112 | live blocks (for the leak check) |
 //! | 120 | the one freed large block kept for reuse (0 when none) |
+//! | 128 | the output buffer ([`PRINT_BUF`] bytes, mapped at start; 0 when the mapping failed) |
+//! | 136 | bytes waiting in the output buffer |
 
 use super::elf::Blob;
 use super::x86::*;
 use super::Os;
 
-pub const STATE_SIZE: usize = 128;
+pub const STATE_SIZE: usize = 144;
+/// Size of the buffer that `print` fills; it is written out when full, at exit and at a stop.
+const PRINT_BUF: i64 = 64 * 1024;
 const CHUNK: i64 = 1 << 20;
 const STACK: i64 = 1 << 30;
 /// The stack on Windows is committed up front, so it is smaller.
@@ -58,6 +62,8 @@ const LARGE_CLASS: i32 = 255;
 pub struct Runtime {
     /// `rt_write(fd = rdi, ptr = rsi, len = rdx)`: writes everything or gives up on an error.
     pub write_fd: Label,
+    /// `rt_print(ptr = rsi, len = rdx)`: appends to the output buffer; clobbers the argument registers.
+    pub print: Label,
     /// `rt_stop(ptr = rdi, len = rsi)`: prints `stopped: <message>` to standard error and exits with status 1.
     pub stop: Label,
     /// `rt_alloc(size = rdi) -> rax`: zeroed memory, 16-byte aligned; never fails (stops when out of memory).
@@ -90,12 +96,14 @@ pub fn emit(
     assert_eq!(state_at, 0, "the runtime state must come first in .data");
     let rt = Runtime {
         write_fd: a.new_label(),
+        print: a.new_label(),
         stop: a.new_label(),
         alloc: a.new_label(),
         free: a.new_label(),
         exit: a.new_label(),
         write_u64: a.new_label(),
     };
+    let flush = a.new_label();
     let msg_stopped = ro.add(b"stopped: ", 1);
     let msg_nl = ro.add(b"\n", 1);
     let msg_oom = ro.add(b"out of memory", 1);
@@ -131,6 +139,30 @@ pub fn emit(
     }
     a.bind(keep);
     a.alu_ri(Alu::And, RSP, -16, 8);
+    // The output buffer; without one, `print` writes straight through.
+    if win {
+        a.alu_rr(Alu::Xor, RCX, RCX, 4);
+        a.mov_ri(RDX, PRINT_BUF);
+        a.mov_ri(R8, 0x3000);
+        a.mov_ri(R9, 4);
+        win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+    } else {
+        a.mov_ri(RAX, 9);
+        a.alu_rr(Alu::Xor, RDI, RDI, 4);
+        a.mov_ri(RSI, PRINT_BUF);
+        a.mov_ri(RDX, 3);
+        a.mov_ri(R10, 0x22); // private, anonymous
+        a.mov_ri(R8, -1);
+        a.alu_rr(Alu::Xor, R9, R9, 4);
+        a.syscall();
+        let ok = a.new_label();
+        a.alu_ri(Alu::Cmp, RAX, -4095, 8);
+        a.jcc(Cc::Be, ok);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.bind(ok);
+    }
+    state(a, RSI, 128);
+    a.store(mem(RSI, 0), RAX, 8);
     a.call(main);
     let clean = a.new_label();
     if leak_check {
@@ -159,6 +191,9 @@ pub fn emit(
 
     // ---- rt_exit -----------------------------------------------------------------------------------
     a.bind(rt.exit);
+    a.push(RDI);
+    a.call(flush);
+    a.pop(RDI);
     if win {
         a.mov_rr(RCX, RDI, 4);
         win_call(a, IMP_EXIT_PROCESS, |_| {});
@@ -167,6 +202,76 @@ pub fn emit(
         a.syscall();
     }
     a.ud2();
+
+    // ---- rt_flush ----------------------------------------------------------------------------------
+    // Writes what the output buffer holds. Falls through nowhere: it ends in `rt_write` or a `ret`.
+    a.bind(flush);
+    {
+        let none = a.new_label();
+        state(a, R8, 128);
+        a.load(RSI, mem(R8, 0), 8);
+        a.load(RDX, mem(R8, 8), 8);
+        a.test_rr(RSI, RSI, 8);
+        a.jcc(Cc::E, none);
+        a.test_rr(RDX, RDX, 8);
+        a.jcc(Cc::E, none);
+        a.store_imm(mem(R8, 8), 0, 8);
+        a.mov_ri(RDI, 1);
+        a.jmp(rt.write_fd);
+        a.bind(none);
+        a.ret();
+    }
+
+    // ---- rt_print ----------------------------------------------------------------------------------
+    // Buffered standard output: copy into the buffer; when it does not fit, write the buffer out
+    // first; text that is bigger than the whole buffer is written directly.
+    a.bind(rt.print);
+    {
+        let (direct, copy, big) = (a.new_label(), a.new_label(), a.new_label());
+        state(a, R8, 128);
+        a.load(RAX, mem(R8, 0), 8);
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::E, direct);
+        a.load(RCX, mem(R8, 8), 8);
+        a.mov_ri(R9, PRINT_BUF);
+        a.alu_rr(Alu::Sub, R9, RCX, 8);
+        a.alu_rr(Alu::Cmp, RDX, R9, 8);
+        a.jcc(Cc::Be, copy);
+        // Full: write out what is there, then start again.
+        a.push(RSI);
+        a.push(RDX);
+        a.mov_ri(RDI, 1);
+        a.mov_rr(RSI, RAX, 8);
+        a.mov_rr(RDX, RCX, 8);
+        a.call(rt.write_fd);
+        a.pop(RDX);
+        a.pop(RSI);
+        state(a, R8, 128);
+        a.store_imm(mem(R8, 8), 0, 8);
+        a.load(RAX, mem(R8, 0), 8);
+        a.alu_rr(Alu::Xor, RCX, RCX, 4);
+        a.mov_ri(R9, PRINT_BUF);
+        a.alu_rr(Alu::Cmp, RDX, R9, 8);
+        a.jcc(Cc::A, big);
+        a.bind(copy);
+        a.lea(
+            RDI,
+            Mem {
+                base: RAX,
+                index: Some((RCX, 1)),
+                disp: 0,
+            },
+        );
+        a.alu_rr(Alu::Add, RCX, RDX, 8);
+        a.store(mem(R8, 8), RCX, 8);
+        a.mov_rr(RCX, RDX, 8);
+        a.rep_movsb();
+        a.ret();
+        a.bind(direct);
+        a.bind(big);
+        a.mov_ri(RDI, 1);
+        a.jmp(rt.write_fd);
+    }
 
     // ---- rt_write ----------------------------------------------------------------------------------
     a.bind(rt.write_fd);
