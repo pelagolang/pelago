@@ -82,8 +82,10 @@ const SCRATCH_REGS: [Reg; 6] = [R10, R11, R8, R9, RSI, RDI];
 enum Where {
     Mem(i32),
     Reg(Reg),
-    /// A float in an SSE register.
+    /// A float or a vector in an SSE register.
     Xmm(Xmm),
+    /// A vector in memory (16 bytes at this offset from `rbp`).
+    VMem(i32),
     /// A constant integer, boolean or pointer: no storage, loaded or used as an immediate where it is read.
     Imm(i64),
     /// A value nothing reads (or a compare fused into its branch): writes to it are dropped.
@@ -428,6 +430,10 @@ impl<'m> Gen<'m> {
                 _ if fused[v] || (uses[v] == 0 && !is_float(f.values[v])) => Where::Dead,
                 (None, Some(Place::Gpr(r))) => Where::Reg(*r),
                 (None, Some(Place::Xmm(x))) => Where::Xmm(*x),
+                (None, None) if f.values[v] == IrTy::V2I64 => {
+                    at += 16;
+                    Where::VMem(-at)
+                }
                 (None, None) => {
                     at += 8;
                     Where::Mem(-at)
@@ -612,12 +618,37 @@ impl<'m> Gen<'m> {
         }
     }
 
-    /// The SSE register a vector lives in. A vector has no memory home, so one the allocator left
-    /// without a register (it lives across a call, or the registers ran out) cannot be compiled.
-    fn vreg(&self, v: Value) -> Result<Xmm, String> {
+    /// An SSE register holding the vector: its own, else `scratch` after loading it there.
+    fn vsrc(&mut self, v: Value, scratch: Xmm) -> Xmm {
         match self.loc[v.0 as usize] {
-            Where::Xmm(x) => Ok(x),
-            w => Err(format!("a vector value has no register ({w:?})")),
+            Where::Xmm(x) => x,
+            Where::VMem(off) => {
+                self.a.movups_load(scratch, mem(RBP, off));
+                scratch
+            }
+            w => panic!("vector {} is read from {w:?}", v.0),
+        }
+    }
+
+    /// The SSE register a vector result is built in: its own when it has one, `xmm0` otherwise.
+    fn vdst(&self, v: Value) -> Xmm {
+        match self.loc[v.0 as usize] {
+            Where::Xmm(x) => x,
+            _ => Xmm(0),
+        }
+    }
+
+    /// Puts the vector built in `x` where the value lives.
+    fn vst(&mut self, v: Value, x: Xmm) {
+        match self.loc[v.0 as usize] {
+            Where::Xmm(y) => {
+                if x != y {
+                    self.a.fmov_rr(y, x);
+                }
+            }
+            Where::VMem(off) => self.a.movups_store(mem(RBP, off), x),
+            Where::Dead => {}
+            w => panic!("vector {} is written to {w:?}", v.0),
         }
     }
 
@@ -1009,6 +1040,11 @@ impl<'m> Gen<'m> {
                             self.a.alu_ri(Alu::Sub, RSP, 16, 8);
                             self.a.movups_store(mem(RSP, 0), x);
                         }
+                        Where::VMem(off) => {
+                            self.a.movups_load(Xmm(0), mem(RBP, off));
+                            self.a.alu_ri(Alu::Sub, RSP, 16, 8);
+                            self.a.movups_store(mem(RSP, 0), Xmm(0));
+                        }
                         w => unreachable!("{w:?} cannot be in a cycle"),
                     }
                     for m in pend.iter_mut().filter(|m| m.1 == d0) {
@@ -1033,6 +1069,17 @@ impl<'m> Gen<'m> {
             (Where::Xmm(x), Where::Stack) => {
                 self.a.movups_load(x, mem(RSP, 0));
                 self.a.lea(RSP, mem(RSP, 16));
+            }
+            (Where::VMem(off), Where::Stack) => {
+                self.a.movups_load(Xmm(0), mem(RSP, 0));
+                self.a.lea(RSP, mem(RSP, 16));
+                self.a.movups_store(mem(RBP, off), Xmm(0));
+            }
+            (Where::Xmm(x), Where::VMem(off)) => self.a.movups_load(x, mem(RBP, off)),
+            (Where::VMem(off), Where::Xmm(y)) => self.a.movups_store(mem(RBP, off), y),
+            (Where::VMem(off), Where::VMem(from)) => {
+                self.a.movups_load(Xmm(0), mem(RBP, from));
+                self.a.movups_store(mem(RBP, off), Xmm(0));
             }
             (Where::Mem(off), Where::Reg(x)) => self.a.store(mem(RBP, off), x, 8),
             (Where::Mem(off), Where::Imm(n)) if i32::try_from(n).is_ok() => {
@@ -1263,14 +1310,14 @@ impl<'m> Gen<'m> {
             Op::VUn(o, a) => {
                 let r = res.unwrap();
                 if *o == VUn::ReduceAdd {
-                    let x = self.vreg(*a)?;
+                    let x = self.vsrc(*a, Xmm(1));
                     self.a.pshufd(Xmm(0), x, 0xEE);
                     self.a.valu(VAlu::Add, Xmm(0), x);
                     self.a.movq_from_xmm(RAX, Xmm(0), true);
                     self.st(r, RAX);
                     return Ok(());
                 }
-                let d = self.vreg(r)?;
+                let d = self.vdst(r);
                 match o {
                     VUn::Splat => {
                         self.ld(RAX, *a);
@@ -1278,7 +1325,7 @@ impl<'m> Gen<'m> {
                         self.a.pshufd(d, d, 0x44);
                     }
                     VUn::Shl(k) | VUn::UShr(k) => {
-                        let x = self.vreg(*a)?;
+                        let x = self.vsrc(*a, Xmm(0));
                         if x != d {
                             self.a.fmov_rr(d, x);
                         }
@@ -1286,15 +1333,18 @@ impl<'m> Gen<'m> {
                     }
                     VUn::ReduceAdd => unreachable!(),
                 }
+                self.vst(r, d);
             }
             Op::VBin(o, a, b) => {
-                let d = self.vreg(res.unwrap())?;
+                let r = res.unwrap();
+                let d = self.vdst(r);
                 if *o == VBin::Build {
                     self.ld(RAX, *a);
                     self.ld(RCX, *b);
                     self.a.movq_to_xmm(d, RAX, true);
-                    self.a.movq_to_xmm(Xmm(0), RCX, true);
-                    self.a.punpcklqdq(d, Xmm(0));
+                    self.a.movq_to_xmm(Xmm(1), RCX, true);
+                    self.a.punpcklqdq(d, Xmm(1));
+                    self.vst(r, d);
                     return Ok(());
                 }
                 let alu = match o {
@@ -1304,11 +1354,13 @@ impl<'m> Gen<'m> {
                     VBin::Or => VAlu::Or,
                     _ => VAlu::Xor,
                 };
-                let (x, y) = (self.vreg(*a)?, self.vreg(*b)?);
+                let (x, y) = (self.vsrc(*a, Xmm(0)), self.vsrc(*b, Xmm(1)));
                 if d == y && d != x {
                     if *o == VBin::Sub {
-                        // `d = x - d` cannot be done in place: go through the scratch register.
-                        self.a.fmov_rr(Xmm(0), x);
+                        // `d = x - d` cannot be done in place: go through `xmm0`.
+                        if x != Xmm(0) {
+                            self.a.fmov_rr(Xmm(0), x);
+                        }
                         self.a.valu(alu, Xmm(0), y);
                         self.a.fmov_rr(d, Xmm(0));
                     } else {
@@ -1320,15 +1372,18 @@ impl<'m> Gen<'m> {
                     }
                     self.a.valu(alu, d, y);
                 }
+                self.vst(r, d);
             }
             Op::Load(IrTy::V2I64, p) => {
                 let m = self.mem_of(f, *p, RCX, RDX);
-                let d = self.vreg(res.unwrap())?;
+                let r = res.unwrap();
+                let d = self.vdst(r);
                 self.a.movups_load(d, m);
+                self.vst(r, d);
             }
             Op::Store(p, x) if f.ty(*x) == IrTy::V2I64 => {
                 let m = self.mem_of(f, *p, RCX, RDX);
-                let rx = self.vreg(*x)?;
+                let rx = self.vsrc(*x, Xmm(0));
                 self.a.movups_store(m, rx);
             }
             Op::Load(t, p) => {

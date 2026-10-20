@@ -359,6 +359,9 @@ pub struct Block {
     pub params: Vec<Value>,
     pub insts: Vec<usize>,
     pub term: Option<Term>,
+    /// The header of a loop that finishes what a vectorised loop left over (or is the vector loop):
+    /// the unroller and the vectoriser leave it alone.
+    pub tail: bool,
 }
 
 #[derive(Clone, Debug)]

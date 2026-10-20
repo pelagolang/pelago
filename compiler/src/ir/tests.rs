@@ -695,11 +695,11 @@ fn vectors_agree_with_integers_in_the_interpreter() {
 fn vectors_agree_with_integers_natively() {
     use crate::native::{exec, gen, Os};
     let m = vector_loop();
-    let mut ran = 0;
-    // All the registers, and few: every spill, split and cycle path.
+    // All the registers, none and few: every memory home, split and cycle path.
     for (regalloc, limit) in [
         (false, usize::MAX),
         (true, usize::MAX),
+        (true, 1),
         (true, 2),
         (true, 4),
     ] {
@@ -713,13 +713,9 @@ fn vectors_agree_with_integers_natively() {
         gen::REG_LIMIT.with(|l| l.set(usize::MAX));
         let image = match image {
             Ok(i) => i,
-            // Without registers, or with too few, a vector has no home: that is reported, not mis-compiled.
-            Err(e) if (!regalloc || limit < usize::MAX) && e.contains("vector") => continue,
             Err(e) => panic!("the native build ({regalloc}, {limit}) failed: {e}"),
         };
         let r = exec::run_image(Os::Linux, &image).unwrap();
         assert_eq!((r.err.as_str(), r.code), ("", 0), "({regalloc}, {limit})");
-        ran += 1;
     }
-    assert!(ran >= 1, "the build with all registers must work");
 }
