@@ -3,6 +3,8 @@
 Worked examples for `.github/pull_request_template.md`. Copy the one closest to your change, then replace the details.
 Every example keeps the same order: **Summary** (before and after), **Why**, **How**, **Evidence**, **Risks**.
 
+All numbers, test names and cards below are made up to show the shape. Use your real output.
+
 Common rules:
 
 - Branch: `<author>/<type>/<short-name>`, type is one of `feat`, `fix`, `bug`, `perf`, `refactor`, `docs`, `chore`.
