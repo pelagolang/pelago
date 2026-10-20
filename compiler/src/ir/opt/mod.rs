@@ -38,6 +38,7 @@ mod stats;
 mod tailrec;
 #[cfg(test)]
 mod tests;
+mod unroll;
 
 pub use fill::{fill_loops, filled_slots, FillLoop};
 pub use inline::prune;
@@ -114,6 +115,16 @@ pub fn optimize_func(f: &mut Func) {
 }
 
 fn passes(f: &mut Func, divs: bool) {
+    rounds(f, divs);
+    // After inlining, once: the copies it makes must not be unrolled again.
+    if divs && step(f, "unroll", unroll::run) {
+        rounds(f, divs);
+    }
+    // Last, because every pass above is free to renumber and reorder blocks.
+    step(f, "layout", layout::run);
+}
+
+fn rounds(f: &mut Func, divs: bool) {
     for _ in 0..6 {
         let mut changed = false;
         changed |= step(f, "simplify", cfg::run);
@@ -138,8 +149,6 @@ fn passes(f: &mut Func, divs: bool) {
             break;
         }
     }
-    // Last, because every pass above is free to renumber and reorder blocks.
-    step(f, "layout", layout::run);
 }
 
 fn step(f: &mut Func, name: &str, pass: fn(&mut Func) -> bool) -> bool {
