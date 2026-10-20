@@ -19,6 +19,7 @@ mod constdata;
 mod cse;
 mod dce;
 mod demand;
+mod devirt;
 mod divconst;
 mod dom;
 mod fill;
@@ -78,6 +79,13 @@ pub fn optimize(m: &mut Module, opts: Options) {
         cache::run(m);
         for i in 0..m.funcs.len() {
             passes(&mut m.funcs[i], true);
+        }
+        // Pointers to functions that the inlining made visible: call them directly and inline those.
+        if devirt::run(m) {
+            inline::run(m);
+            for i in 0..m.funcs.len() {
+                passes(&mut m.funcs[i], true);
+            }
         }
         if constdata::run(m) {
             for i in 0..m.funcs.len() {

@@ -612,14 +612,14 @@ impl list<string> {
 /// table has `rt_tab_size(cap)` slots; see `rt_map_tag` for what a slot holds.
 
 //~ A capacity is always 4, 8, 16, ...: twice that is the power of two the table needs.
-fn rt_tab_size(cap: int) -> int = cap * 2
+fn rt_tab_size(cap: int) -> int = cap << 1
 
-fn rt_vals_off(cap: int, ksize: int) -> int = (cap * ksize + 7) / 8 * 8
+fn rt_vals_off(cap: int, ksize: int) -> int = (cap *% ksize +% 7) & -8
 fn rt_map_index(h: ptr) -> ptr = rt_load_ptr(rt_offset(h, 24))
-fn rt_map_key_at(h: ptr, i: int, ksize: int) -> ptr = rt_offset(rt_hdr_data(h), i * ksize)
+fn rt_map_key_at(h: ptr, i: int, ksize: int) -> ptr = rt_offset(rt_hdr_data(h), i *% ksize)
 
 fn rt_map_val_at(h: ptr, i: int, ksize: int, vsize: int) -> ptr {
-    rt_offset(rt_hdr_data(h), rt_vals_off(rt_hdr_cap(h), ksize) + i * vsize)
+    rt_offset(rt_hdr_data(h), rt_vals_off(rt_hdr_cap(h), ksize) +% i *% vsize)
 }
 
 //~ The 32-bit tag of a key: its hash with the high bits folded in. An index slot holds the tag in
@@ -637,10 +637,10 @@ fn rt_slot_pos(v: int) -> int = v & 4294967295
 fn rt_slot_tag(v: int) -> int = (v >> 32) & 4294967295
 
 fn rt_map_zeroed(size: int) -> ptr {
-    const tab = rt_alloc(size * 8)
+    const tab = rt_alloc(size << 3)
     var i = 0
     while i < size {
-        rt_store_int(rt_offset(tab, i * 8), 0)
+        rt_store_int(rt_offset(tab, i << 3), 0)
         i += 1
     }
     tab
@@ -648,14 +648,14 @@ fn rt_map_zeroed(size: int) -> ptr {
 
 //~ Puts an entry in the first free slot of its probe sequence.
 fn rt_map_place(tab: ptr, size: int, tag: int, e: int) {
-    const mask = size - 1
+    const mask = size -% 1
     var s = tag & mask
     var perturb = tag
-    while rt_load_int(rt_offset(tab, s * 8)) != 0 {
+    while rt_load_int(rt_offset(tab, s << 3)) != 0 {
         perturb = perturb >> 5
-        s = (s * 5 + perturb + 1) & mask
+        s = (s *% 5 +% perturb +% 1) & mask
     }
-    rt_store_int(rt_offset(tab, s * 8), (tag << 32) | (e + 1))
+    rt_store_int(rt_offset(tab, s << 3), (tag << 32) | (e +% 1))
 }
 
 //~ Rebuilds the index table from the entries.
@@ -683,25 +683,43 @@ fn rt_map_find(h: ptr, key: ptr, ksize: int, eq: ptr, hash: ptr) -> int {
     return rt_map_find_tag(h, key, ksize, eq, rt_map_tag(hash, key))
 }
 
-//~ The position of the entry whose key (tag `tag`) equals the one at `key`, or -1.
+//~ The position of the entry whose key (tag `tag`) equals the one at `key`, or -1. The first slot is
+//~ tried here, so that this stays small enough to be copied into its callers (where `eq` is known);
+//~ a collision goes on in `rt_map_probe_slow`.
 fn rt_map_find_tag(h: ptr, key: ptr, ksize: int, eq: ptr, tag: int) -> int {
     if rt_hdr_len(h) == 0 { return -1 }
+    const mask = rt_tab_size(rt_hdr_cap(h)) -% 1
+    const s = tag & mask
+    const v = rt_load_int(rt_offset(rt_map_index(h), s << 3))
+    if v == 0 { return -1 }
+    if rt_slot_tag(v) == tag && rt_call_bool2(
+        eq,
+        rt_map_key_at(h, rt_slot_pos(v) -% 1, ksize),
+        key,
+    ) {
+        return rt_slot_pos(v) -% 1
+    }
+    return rt_map_probe_slow(h, key, ksize, eq, tag, s)
+}
+
+//~ The rest of the probe sequence of `rt_map_find_tag`, after the first slot `s` held another key.
+fn rt_map_probe_slow(h: ptr, key: ptr, ksize: int, eq: ptr, tag: int, first: int) -> int {
     const tab = rt_map_index(h)
-    const mask = rt_tab_size(rt_hdr_cap(h)) - 1
-    var s = tag & mask
+    const mask = rt_tab_size(rt_hdr_cap(h)) -% 1
+    var s = first
     var perturb = tag
-    var v = rt_load_int(rt_offset(tab, s * 8))
+    var v = rt_load_int(rt_offset(tab, s << 3))
     while v != 0 {
-        if rt_slot_tag(v) == tag && rt_call_bool2(
+        if s != first && rt_slot_tag(v) == tag && rt_call_bool2(
             eq,
-            rt_map_key_at(h, rt_slot_pos(v) - 1, ksize),
+            rt_map_key_at(h, rt_slot_pos(v) -% 1, ksize),
             key,
         ) {
-            return rt_slot_pos(v) - 1
+            return rt_slot_pos(v) -% 1
         }
         perturb = perturb >> 5
-        s = (s * 5 + perturb + 1) & mask
-        v = rt_load_int(rt_offset(tab, s * 8))
+        s = (s *% 5 +% perturb +% 1) & mask
+        v = rt_load_int(rt_offset(tab, s << 3))
     }
     -1
 }
@@ -731,8 +749,8 @@ fn rt_map_grow(h: ptr, ksize: int, vsize: int, hash: ptr) {
     const tab = rt_map_zeroed(size)
     var j = 0
     while j < osize {
-        const v = rt_load_int(rt_offset(oldtab, j * 8))
-        if v != 0 { rt_map_place(tab, size, rt_slot_tag(v), rt_slot_pos(v) - 1) }
+        const v = rt_load_int(rt_offset(oldtab, j << 3))
+        if v != 0 { rt_map_place(tab, size, rt_slot_tag(v), rt_slot_pos(v) -% 1) }
         j += 1
     }
     rt_free(oldtab)
