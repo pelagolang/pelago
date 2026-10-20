@@ -358,6 +358,16 @@ fn output_of(src: &str) -> String {
     o.output
 }
 
+/// The native configurations every program runs in: without registers, with all of them, and with
+/// only the first one, two or four of each kind.
+const REG_SETS: [(bool, usize); 5] = [
+    (false, usize::MAX),
+    (true, usize::MAX),
+    (true, 1),
+    (true, 2),
+    (true, 4),
+];
+
 /// The third column of the differential test: the native build prints the same, leaks nothing and
 /// exits with status 0. It runs on Linux x86-64 for Linux, and for Windows through Wine (or directly
 /// on Windows) where that is available; the Windows program is built from the plain IR only.
@@ -367,11 +377,13 @@ fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
         if !exec::can_run(os) || (os == Os::Windows && what != "plain") {
             continue;
         }
-        // The frame-only generator and the one with registers must both be right.
-        for regalloc in [false, true] {
-            if os == Os::Windows && !regalloc {
+        // The frame-only generator and the one with registers must both be right, also with few
+        // registers (every spill and split path).
+        for (regalloc, limit) in REG_SETS {
+            if os == Os::Windows && (!regalloc || limit != usize::MAX) {
                 continue;
             }
+            gen::REG_LIMIT.with(|l| l.set(limit));
             let opts = gen::Options {
                 leak_check: true,
                 target: os,
@@ -381,8 +393,9 @@ fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
                 Ok(i) => i,
                 Err(e) => panic!("the native build ({what}, {os:?}) failed: {e}\n{src}"),
             };
+            gen::REG_LIMIT.with(|l| l.set(usize::MAX));
             let r = exec::run_image(os, &image).unwrap();
-            let how = format!("{what}, {os:?}, regalloc {regalloc}");
+            let how = format!("{what}, {os:?}, regalloc {regalloc}, {limit} registers");
             assert_eq!(r.out, want, "native output ({how}) differs in {src}");
             assert_eq!(
                 (r.err.as_str(), r.code),
@@ -1272,12 +1285,17 @@ fn agree(src: &str) {
         crate::ir::opt::prune(&mut m, &["main"]);
         m
     };
-    for (what, os, m, regalloc) in [
-        ("plain", Os::Linux, &l.module, false),
-        ("plain", Os::Linux, &l.module, true),
-        ("optimised", Os::Linux, &optimised, true),
-        ("plain", Os::Windows, &l.module, true),
-    ] {
+    let mut sets = vec![
+        ("plain", Os::Linux, &l.module, false, usize::MAX),
+        ("plain", Os::Linux, &l.module, true, usize::MAX),
+        ("optimised", Os::Linux, &optimised, true, usize::MAX),
+        ("plain", Os::Windows, &l.module, true, usize::MAX),
+    ];
+    for limit in [1, 2, 4] {
+        sets.push(("plain", Os::Linux, &l.module, true, limit));
+        sets.push(("optimised", Os::Linux, &optimised, true, limit));
+    }
+    for (what, os, m, regalloc, limit) in sets {
         if !exec::can_run(os) {
             continue;
         }
@@ -1286,9 +1304,14 @@ fn agree(src: &str) {
             target: os,
             regalloc,
         };
+        gen::REG_LIMIT.with(|l| l.set(limit));
         let image = gen::compile(m, "main", &opts).unwrap();
+        gen::REG_LIMIT.with(|l| l.set(usize::MAX));
         let r = exec::run_image(os, &image).unwrap();
-        assert_eq!(r.out, o.output, "{what} {os:?}: output differs in {src}");
+        assert_eq!(
+            r.out, o.output,
+            "{what} {os:?} with {limit} registers: output differs in {src}"
+        );
         match &o.result {
             Ok(_) => assert_eq!((r.err.as_str(), r.code), ("", 0), "{what} {os:?}: {src}"),
             Err(msg) => assert_eq!(
@@ -1370,5 +1393,136 @@ fn native_agrees_on_the_edge_cases() {
     ];
     for p in programs {
         agree(p);
+    }
+}
+
+// ---- Register allocation: programs that force moves between registers and splits around calls -------------
+
+/// Each program runs in the interpreter, in the optimiser's output and natively with all the registers
+/// and with one, two and four of each kind (`REG_SETS`), and all must print the same.
+#[test]
+fn register_allocation_stress() {
+    let programs: [(&str, &str); 5] = [
+        // arguments that arrive in each other's registers (a rotation, through a function value too).
+        (
+            r#"fn mix(a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int) -> int {
+    a * 1 + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h * 8
+}
+fn rot(m: fn(int, int, int, int, int, int, int, int) -> int, a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int) -> int {
+    mix(b, c, d, e, f, g, h, a) + m(h, a, b, c, d, e, f, g) + mix(c, b, a, h, g, f, e, d)
+}
+fn main() {
+    var total = 0
+    var i = 1
+    while i < 4 {
+        total += rot(mix, i, i + 1, i + 2, i + 3, i + 4, i + 5, i + 6, i + 7)
+        i += 1
+    }
+    print(total)
+}
+"#,
+            "1920\n",
+        ),
+        // block parameters that swap in a cycle.
+        (
+            r#"fn main() {
+    var a = 1
+    var b = 2
+    var c = 3
+    var i = 0
+    while i < 10 {
+        const t = a
+        a = b
+        b = c
+        c = t + b
+        i += 1
+    }
+    print(a, b, c)
+}
+"#,
+            "60 88 129\n",
+        ),
+        // eight values that live across calls in a loop.
+        (
+            r#"fn id(x: int) -> int { x }
+fn main() {
+    var a = id(1)
+    var b = id(2)
+    var c = id(3)
+    var d = id(4)
+    var e = id(5)
+    var f = id(6)
+    var g = id(7)
+    var h = id(8)
+    var s = 0
+    var i = 0
+    while i < 6 {
+        s += id(a) * 2 + id(b) + id(c) * 3 + id(d) + id(e) * 5 + id(f) + id(g) * 7 + id(h)
+        const t = a
+        a = b
+        b = c
+        c = d
+        d = e
+        e = f
+        f = g
+        g = h
+        h = t + s % 7
+        i += 1
+    }
+    print(s, a, b, c, d, e, f, g, h)
+}
+"#,
+            "741 7 8 1 8 7 10 9 12\n",
+        ),
+        // calls whose arguments are calls, with division, shifts and stack arguments around them.
+        (
+            r#"fn id(x: int) -> int { x }
+fn mix(a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int) -> int {
+    a * 1 + b * 2 + c * 3 + d * 4 + e * 5 + f * 6 + g * 7 + h * 8
+}
+fn main() {
+    var a = id(3)
+    var b = id(5)
+    var c = id(7)
+    var n = 0
+    var acc = 0
+    while n < 5 {
+        acc += mix(id(a), id(b), id(c), id(a + b), id(b + c), id(c + a), id(n), id(acc % 11))
+        acc += a / b + c % b + (a << 2) + (c >> 1)
+        a += 1
+        b += 2
+        c += 3
+        n += 1
+    }
+    print(acc, a, b, c)
+}
+"#,
+            "2029 8 15 22\n",
+        ),
+        // a frame slot too big for the inline zeroing, with values in registers around it.
+        (
+            r#"struct big { a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int, i: int, j: int }
+fn make(x: int) -> big {
+    big { a: x, b: x + 1, c: x + 2, d: x + 3, e: x + 4, f: x + 5, g: x + 6, h: x + 7, i: x + 8, j: x + 9 }
+}
+fn total(v: big) -> int { v.a + v.b + v.c + v.d + v.e + v.f + v.g + v.h + v.i + v.j }
+fn main() {
+    var s = 0
+    var k = 0
+    var m = 1
+    while k < 6 {
+        const v = make(k * m)
+        s += total(v) * (k + 1)
+        m += 2
+        k += 1
+    }
+    print(s, k, m)
+}
+"#,
+            "7245 6 13\n",
+        ),
+    ];
+    for (src, want) in programs {
+        assert_eq!(output_of(src), want, "{src}");
     }
 }

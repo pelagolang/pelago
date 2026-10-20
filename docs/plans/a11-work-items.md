@@ -1,6 +1,6 @@
 # A-11 work items (for parallel work)
 
-Status after PRs #7 and #8 (card [A-11](cards/A-11-native-speed.md) has the longer story). Each item below can be a thread of its own: it says what to do, which files it touches, what it needs first, and which other items it will collide with in git. Branch names follow `claude/<type>/<name>`.
+Status after PRs #7 to #12 and the register allocator (W3) (card [A-11](cards/A-11-native-speed.md) has the longer story). Each item below can be a thread of its own: it says what to do, which files it touches, what it needs first, and which other items it will collide with in git. Branch names follow `claude/<type>/<name>`.
 
 ## Where we are
 
@@ -17,14 +17,16 @@ Done:
 - **S2, first round (PR #8):** `ir/opt/ranges.rs` drops a checked `add`, `sub`, `mul` when both operands have a known small non-negative range (widened bytes, `x & 255`, `x % 10`, `x >> 3`, sums and products of those). Loops are not analysed.
 - **S3, first round (PR #8):** `native/gen.rs` keeps integer constants as immediates (`Where::Imm`), fuses a compare with the branch that ends its block, falls through to the next block, uses operands from their own registers and builds results in place, and gives `r10`/`r11` to values not live across a call (`native/regs.rs`).
 
-Still true: the generator is template based (`rax`, `rcx`, `rdx` scratch), every value without a register costs a load and a store per use, floats always live in memory, and `Slot` zeroes its memory each time it runs.
+- **W3 (this PR):** the allocator in `native/regs.rs` (live ranges with holes, all the caller-saved registers, split around calls, a cost model, hints) and parallel moves in `gen.rs`; see `docs/design/backend.md` section 6.
+
+Still true: the generator is template based (`rax`, `rcx`, `rdx` scratch), a value that gets no register costs a load and a store per use, floats always live in memory, structs travel through memory, and `Slot` zeroes its memory each time it runs.
 
 ## Rules the generator now relies on (read before touching `gen.rs` or `regs.rs`)
 
-1. **A result never shares a register with an operand of the same instruction.** The allocator treats live ranges as closed intervals, so a value that starts where another ends overlaps it. `dst()`/`src()` in `gen.rs` depend on this. A smarter allocator that lets a result reuse an operand's register must also stop `gen.rs` from writing the result before reading the second operand.
-2. **Constants have no storage.** `const_values()` marks them `Where::Imm`; `ld`/`ld_ext`/`imm32` read them, `st` panics on them. `regs.rs` skips them. Float constants are not immediates.
-3. **`r10` and `r11` are only for values whose live range holds no call-like op** (`Call`, `CallPtr`, `Alloc`, `Free`, `Print`, `MemCopy`). The templates never touch them; the runtime stubs do. Argument registers (`rdi rsi rdx rcx r8 r9`) must not be handed to the allocator without a parallel-move scheme for call arguments and entry parameters.
-4. **Edges:** `edge()` jumps unless the target is the next block; the branch with copies on both sides must make the else-edge jump (a bug fixed in PR #8: it fell into the then-copies).
+1. **A result may share a register with an operand that dies in the same instruction.** The allocator's ranges are half open and an instruction writes its result just after it reads its operands. Any template that writes the result's register before it has read every operand is wrong: `bin` and `checked` handle it (the result in `b`'s register swaps a commutative operation and builds `sub` in `rax`); the other templates build in `rax` and store last. Keep it that way.
+2. **Constants have no storage.** `const_values()` marks them `Where::Imm`; `ld`/`ld_ext`/`imm32` read them, `st` panics on them. `regs.rs` skips them. Float constants are not immediates. A value nothing reads is `Where::Dead` (writes are dropped, reads panic).
+3. **Registers.** `rax rcx rdx` are the templates' scratch (and the go-between of `Gen::moves`); `r10 r11 r8 r9 rsi rdi` hold values that are not live across a call-like op (`Call`, `CallPtr`, `Alloc`, `Free`, `Print`, `MemCopy`), or are split around it (stored before, loaded after, `Alloc::across`); `rbx r12 to r15` survive calls and are saved in the prologue. Anything that needs particular registers (call arguments, entry parameters, `memcopy`, `print`) must go through `Gen::moves`, never a sequence of `ld`s. A template that uses `rdi`, `rsi`, `r8` to `r11` itself (the large `Slot` clears with `rep stosb`) must save it.
+4. **Edges:** `edge_copies()` lists what a jump must copy (nothing for a parameter that is dead or already in place), `moves()` makes the copies at once, `edge()` jumps unless the target is the next block. A branch with copies puts the side it does not fall into out of line (`stub()`).
 5. **Canonical form:** integers and booleans in registers or slots are zero-extended to 64 bits; signed uses widen with `ld_ext`.
 6. **Differential tests are the safety net:** `lower/tests.rs` (interpreter against native, plain and optimised, Linux; Windows through the CI job) and `ir/opt/tests.rs` (before and after each pass). New passes and new instruction forms need cases in both.
 
@@ -46,7 +48,7 @@ Size is S (hours), M (a day), L (several days). "Collides with" means the same f
 - **Collides with:** nothing in the backend; W9 wants the same dominator code (do W2 first or share `dom.rs`).
 - **Check:** `for i in 0..n` with `s += i` style sums keep or lose exactly the checks the proof allows; the unprovable ones (`s += 1` with no bound) stay; tests on hand-written IR with a loop, plus differential runs.
 
-### W3. Real register allocation (A-11 S3 part 2)
+### W3. Real register allocation (A-11 S3 part 2) — done
 - **What:** replace the one-interval greedy scheme with linear scan: live ranges with holes, spilling one range at a time (split instead of whole-value memory), the caller-saved registers `rsi rdi r8 r9` when no call is live, and callee-saved ones otherwise. Handle the entry parameters and call arguments with a parallel move.
 - **Touches:** `native/regs.rs` (rewrite), `native/gen.rs` (`layout`, `ld`/`st` paths, `edge`, `call`, prologue), `native/tests.rs`.
 - **Depends on:** nothing, but read the rules above. **Size:** L.

@@ -14,10 +14,28 @@ use super::{pe, Os};
 use crate::ir::{
     BinOp, CastKind, CmpOp, Const, Func, FuncId, Inst, IrTy, Module, Op, Target, Term, Value,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const INT_REGS: [Reg; 6] = [RDI, RSI, RDX, RCX, R8, R9];
 const MAX_FLOAT_REGS: usize = 8;
+
+// Tests can shrink the register set (the number of registers of each kind the allocator may use) to
+// push the allocator through its spilling and splitting paths with ordinary programs.
+#[cfg(test)]
+thread_local! {
+    pub static REG_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
+}
+
+fn reg_limit() -> usize {
+    #[cfg(test)]
+    {
+        REG_LIMIT.with(|l| l.get())
+    }
+    #[cfg(not(test))]
+    {
+        usize::MAX
+    }
+}
 
 /// What to build.
 pub struct Options {
@@ -31,8 +49,11 @@ pub struct Options {
 /// The registers values can live in: callee-saved, so calls leave them alone.
 const VALUE_REGS: [Reg; 5] = [RBX, R12, R13, R14, R15];
 
-/// Caller-saved registers the templates never touch: for values that are not live across a call.
-const SCRATCH_REGS: [Reg; 2] = [R10, R11];
+/// Caller-saved registers the templates leave alone (`rax rcx rdx` are their scratch registers), in the
+/// order the allocator tries them. A value that lives across a call in one of them is stored before
+/// the call and loaded after it. The argument registers `rsi rdi r8 r9` are written by a parallel
+/// move whenever a call, a parameter list or a jump needs them.
+const SCRATCH_REGS: [Reg; 6] = [R10, R11, R8, R9, RSI, RDI];
 
 /// Where a value lives.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -41,6 +62,10 @@ enum Where {
     Reg(Reg),
     /// A constant integer, boolean or pointer: no storage, loaded or used as an immediate where it is read.
     Imm(i64),
+    /// A value nothing reads (or a compare fused into its branch): writes to it are dropped.
+    Dead,
+    /// Only inside [`Gen::moves`]: the value pushed on the stack to break a cycle of copies.
+    Stack,
 }
 
 /// Compiles the module to an executable whose entry runs the function named `entry`.
@@ -80,6 +105,14 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
     }
 }
 
+/// Out-of-line copies for one edge of a branch: where they start, the copies `(to, from)` and the block
+/// to jump to afterwards.
+struct Stub {
+    label: Label,
+    copies: Vec<(Where, Where)>,
+    to: usize,
+}
+
 struct Gen<'m> {
     m: &'m Module,
     a: Asm,
@@ -97,6 +130,13 @@ struct Gen<'m> {
     /// callee-saved registers in use are kept.
     loc: Vec<Where>,
     saves: Vec<(Reg, i32)>,
+    /// Per call-like instruction: the values in caller-saved registers that live across it, as the
+    /// register and the frame offset where the value waits during the operation.
+    across: HashMap<usize, Vec<(Reg, i32)>>,
+    /// Frame offsets already written in the current block (a value is stored once per block).
+    stored: HashSet<i32>,
+    /// Copies of block parameters kept out of line: label, the copies, and the block to jump to.
+    stubs: Vec<Stub>,
     slot_off: HashMap<usize, i32>,
     frame: i32,
     block_labels: Vec<Label>,
@@ -227,6 +267,9 @@ impl<'m> Gen<'m> {
             regalloc: true,
             loc: Vec::new(),
             saves: Vec::new(),
+            across: HashMap::new(),
+            stored: HashSet::new(),
+            stubs: Vec::new(),
             slot_off: HashMap::new(),
             frame: 0,
             block_labels: Vec::new(),
@@ -277,16 +320,31 @@ impl<'m> Gen<'m> {
     fn layout(&mut self, f: &Func) {
         self.slot_off.clear();
         let imms = const_values(f);
-        let regs = if self.regalloc {
-            super::regs::assign(f, &VALUE_REGS, &SCRATCH_REGS)
+        let uses = f.use_counts();
+        let alloc = if self.regalloc {
+            let n = reg_limit();
+            let saved: Vec<Reg> = VALUE_REGS.iter().copied().take(n).collect();
+            let scratch: Vec<Reg> = SCRATCH_REGS.iter().copied().take(n).collect();
+            super::regs::assign(f, &saved, &scratch, &INT_REGS)
         } else {
-            vec![None; f.values.len()]
+            super::regs::Alloc {
+                reg: vec![None; f.values.len()],
+                across: HashMap::new(),
+            }
         };
+        // Compares that only feed their branch are never stored.
+        let mut fused = vec![false; f.values.len()];
+        for bi in 0..f.blocks.len() {
+            if let Some(i) = super::regs::fused_cmp(f, bi, &uses) {
+                fused[f.insts[i].result.unwrap().0 as usize] = true;
+            }
+        }
         let mut at = 0i32;
         self.loc.clear();
-        for (v, r) in regs.iter().enumerate() {
+        for (v, r) in alloc.reg.iter().enumerate() {
             self.loc.push(match (imms[v], r) {
                 (Some(n), _) => Where::Imm(n),
+                _ if fused[v] || (uses[v] == 0 && !is_float(f.values[v])) => Where::Dead,
                 (None, Some(r)) => Where::Reg(*r),
                 (None, None) => {
                     at += 8;
@@ -297,10 +355,27 @@ impl<'m> Gen<'m> {
         // Room to keep the callee-saved registers this function uses.
         self.saves.clear();
         for r in VALUE_REGS {
-            if regs.contains(&Some(r)) {
+            if alloc.reg.contains(&Some(r)) {
                 at += 8;
                 self.saves.push((r, -at));
             }
+        }
+        // Where the values in caller-saved registers wait while a call runs.
+        self.across.clear();
+        let mut home: HashMap<Value, i32> = HashMap::new();
+        let mut ids: Vec<_> = alloc.across.keys().copied().collect();
+        ids.sort_unstable();
+        for id in ids {
+            let mut list = Vec::new();
+            for v in &alloc.across[&id] {
+                let off = *home.entry(*v).or_insert_with(|| {
+                    at += 8;
+                    -at
+                });
+                let reg = alloc.reg[v.0 as usize].expect("a split value has a register");
+                list.push((reg, off));
+            }
+            self.across.insert(id, list);
         }
         for b in &f.blocks {
             for &i in &b.insts {
@@ -325,6 +400,7 @@ impl<'m> Gen<'m> {
             }
             Where::Mem(off) => self.a.load(r, mem(RBP, off), 8),
             Where::Imm(n) => self.a.mov_ri(r, n),
+            w => panic!("value {} is read from {w:?}", v.0),
         }
     }
 
@@ -350,6 +426,7 @@ impl<'m> Gen<'m> {
             }
             Where::Mem(off) => self.a.load_ext(r, mem(RBP, off), size(t), signed, true),
             Where::Imm(n) => self.a.mov_ri(r, widen(n, t, signed)),
+            w => panic!("value {} is read from {w:?}", v.0),
         }
     }
 
@@ -362,6 +439,8 @@ impl<'m> Gen<'m> {
             }
             Where::Mem(off) => self.a.store(mem(RBP, off), r, 8),
             Where::Imm(_) => panic!("a constant is never written"),
+            Where::Dead => {}
+            Where::Stack => unreachable!(),
         }
     }
 
@@ -426,34 +505,31 @@ impl<'m> Gen<'m> {
         for (r, off) in self.saves.clone() {
             self.a.store(mem(RBP, off), r, 8);
         }
+        let mut copies = Vec::new();
         for (p, loc) in params.iter().zip(classify(&tys)) {
             match loc {
-                Loc::Int(i) => self.st(*p, INT_REGS[i]),
+                Loc::Int(i) => copies.push((self.loc[p.0 as usize], Where::Reg(INT_REGS[i]))),
                 Loc::Float(i) => {
                     let m = self.vmem(*p);
                     self.a.fstore(m, Xmm(i as u8), true);
                 }
                 Loc::Stack(k) => {
-                    self.a.load(RAX, mem(RBP, 16 + 8 * k as i32), 8);
-                    self.st(*p, RAX);
+                    copies.push((self.loc[p.0 as usize], Where::Mem(16 + 8 * k as i32)))
                 }
             }
         }
+        self.moves(&copies);
         let uses = f.use_counts();
         for (bi, b) in f.blocks.iter().enumerate() {
             let lb = self.block_labels[bi];
             self.a.bind(lb);
+            self.stored.clear();
             // A comparison that only feeds the branch ending its block is not stored: the branch
             // tests the flags directly.
             let mut fused = None;
-            if let (Some(&last), Some(Term::Branch(c, ..))) = (b.insts.last(), &b.term) {
+            if let Some(last) = super::regs::fused_cmp(f, bi, &uses) {
                 if let Op::Cmp(op, x, y) = &f.insts[last].op {
-                    if f.insts[last].result == Some(*c)
-                        && uses[c.0 as usize] == 1
-                        && !is_float(f.ty(*x))
-                    {
-                        fused = Some((last, *op, *x, *y));
-                    }
+                    fused = Some((last, *op, *x, *y));
                 }
             }
             for &i in &b.insts {
@@ -467,6 +543,13 @@ impl<'m> Gen<'m> {
                 Some(t) => self.term(f, t, fused, next)?,
                 None => return Err(format!("`{}`: a block has no terminator", f.name)),
             }
+        }
+        // The out-of-line copies of the branches.
+        for Stub { label, copies, to } in std::mem::take(&mut self.stubs) {
+            self.a.bind(label);
+            self.moves(&copies);
+            let l = self.block_labels[to];
+            self.a.jmp(l);
         }
         Ok(())
     }
@@ -509,26 +592,33 @@ impl<'m> Gen<'m> {
                         Cc::Ne
                     }
                 };
-                let plain = t.args.is_empty() && e.args.is_empty();
+                let (mt, me) = (self.edge_copies(f, t), self.edge_copies(f, e));
                 let (tb, eb) = (t.block.0 as usize, e.block.0 as usize);
-                if plain && Some(tb) == next {
-                    // Fall into the true side; jump away on the opposite condition.
-                    let l = self.block_labels[eb];
-                    self.a.jcc(invert(cc), l);
-                } else if plain {
-                    let l = self.block_labels[tb];
-                    self.a.jcc(cc, l);
-                    if Some(eb) != next {
-                        let l = self.block_labels[eb];
-                        self.a.jmp(l);
+                let (tl, el) = (self.block_labels[tb], self.block_labels[eb]);
+                if mt.is_empty() && me.is_empty() {
+                    if Some(tb) == next {
+                        // Fall into the true side; jump away on the opposite condition.
+                        self.a.jcc(invert(cc), el);
+                    } else {
+                        self.a.jcc(cc, tl);
+                        if Some(eb) != next {
+                            self.a.jmp(el);
+                        }
                     }
+                } else if Some(eb) == next {
+                    // The false side's copies run in line; the true side's wait out of line.
+                    let to = self.stub(mt, tb, tl);
+                    self.a.jcc(cc, to);
+                    self.moves(&me);
+                } else if Some(tb) == next {
+                    let to = self.stub(me, eb, el);
+                    self.a.jcc(invert(cc), to);
+                    self.moves(&mt);
                 } else {
-                    let then_l = self.a.new_label();
-                    self.a.jcc(cc, then_l);
-                    // The true side's copies follow, so this edge must jump.
-                    self.edge(f, e, None);
-                    self.a.bind(then_l);
-                    self.edge(f, t, next);
+                    let to = self.stub(mt, tb, tl);
+                    self.a.jcc(cc, to);
+                    self.moves(&me);
+                    self.a.jmp(el);
                 }
             }
             Term::Stop(msg) => {
@@ -546,46 +636,121 @@ impl<'m> Gen<'m> {
         Ok(())
     }
 
-    /// Hands the arguments to the target's parameters and jumps. When an argument is itself a
-    /// parameter of the target (a swap), everything goes through the stack first.
-    fn edge(&mut self, f: &Func, tg: &Target, next: Option<usize>) {
-        let params = f.block_params(tg.block).to_vec();
-        // A copy would clobber a source that a later copy still needs.
-        let conflict = (0..params.len()).any(|i| {
-            (i + 1..tg.args.len())
-                .any(|k| self.loc[params[i].0 as usize] == self.loc[tg.args[k].0 as usize])
-        });
-        if conflict {
-            for a in &tg.args {
-                self.ld(RAX, *a);
-                self.a.push(RAX);
-            }
-            for p in params.iter().rev() {
-                self.a.pop(RAX);
-                self.st(*p, RAX);
-            }
-        } else {
-            for (p, a) in params.iter().zip(&tg.args) {
-                if self.loc[p.0 as usize] != self.loc[a.0 as usize] {
-                    match self.loc[p.0 as usize] {
-                        Where::Reg(r) => self.ld(r, *a),
-                        Where::Mem(_) | Where::Imm(_) => {
-                            self.ld(RAX, *a);
-                            self.st(*p, RAX);
-                        }
-                    }
-                }
-            }
+    /// The copies an edge makes: the target's parameters from the arguments (those nothing reads, and
+    /// those already in place, need none).
+    fn edge_copies(&self, f: &Func, tg: &Target) -> Vec<(Where, Where)> {
+        f.block_params(tg.block)
+            .iter()
+            .zip(&tg.args)
+            .map(|(p, a)| (self.loc[p.0 as usize], self.loc[a.0 as usize]))
+            .filter(|(d, s)| d != s && *d != Where::Dead)
+            .collect()
+    }
+
+    /// The label to jump to for an edge: the block itself when it needs no copies, else a stub placed
+    /// after the function that makes them and jumps on.
+    fn stub(&mut self, copies: Vec<(Where, Where)>, to: usize, direct: Label) -> Label {
+        if copies.is_empty() {
+            return direct;
         }
+        let l = self.a.new_label();
+        self.stubs.push(Stub {
+            label: l,
+            copies,
+            to,
+        });
+        l
+    }
+
+    /// Hands the arguments to the target's parameters and jumps.
+    fn edge(&mut self, f: &Func, tg: &Target, next: Option<usize>) {
+        let copies = self.edge_copies(f, tg);
+        self.moves(&copies);
         if Some(tg.block.0 as usize) != next {
             let l = self.block_labels[tg.block.0 as usize];
             self.a.jmp(l);
         }
     }
 
+    /// Makes all the copies `(to, from)` as if at once, so a place that is both written and read is
+    /// read first. A cycle (a swap) goes through the stack. `rax` is the go-between for memory to
+    /// memory; sources can be registers, frame slots and constants, targets registers and slots.
+    fn moves(&mut self, copies: &[(Where, Where)]) {
+        let mut pend: Vec<(Where, Where)> =
+            copies.iter().copied().filter(|(d, s)| d != s).collect();
+        while !pend.is_empty() {
+            let ready = (0..pend.len()).find(|&i| {
+                !pend
+                    .iter()
+                    .enumerate()
+                    .any(|(j, m)| j != i && m.1 == pend[i].0)
+            });
+            match ready {
+                Some(i) => {
+                    let (d, s) = pend.remove(i);
+                    self.copy(d, s);
+                }
+                None => {
+                    // Every target is still wanted by another copy: park one on the stack.
+                    let d0 = pend[0].0;
+                    match d0 {
+                        Where::Reg(r) => self.a.push(r),
+                        Where::Mem(off) => {
+                            self.a.load(RAX, mem(RBP, off), 8);
+                            self.a.push(RAX);
+                        }
+                        w => unreachable!("{w:?} cannot be in a cycle"),
+                    }
+                    for m in pend.iter_mut().filter(|m| m.1 == d0) {
+                        m.1 = Where::Stack;
+                    }
+                }
+            }
+        }
+    }
+
+    fn copy(&mut self, d: Where, s: Where) {
+        match (d, s) {
+            (Where::Dead, _) => {}
+            (Where::Reg(r), Where::Reg(x)) => self.a.mov_rr(r, x, 8),
+            (Where::Reg(r), Where::Mem(off)) => self.a.load(r, mem(RBP, off), 8),
+            (Where::Reg(r), Where::Imm(n)) => self.a.mov_ri(r, n),
+            (Where::Reg(r), Where::Stack) => self.a.pop(r),
+            (Where::Mem(off), Where::Reg(x)) => self.a.store(mem(RBP, off), x, 8),
+            (Where::Mem(off), Where::Imm(n)) if i32::try_from(n).is_ok() => {
+                self.a.store_imm(mem(RBP, off), n as i32, 8)
+            }
+            (Where::Mem(off), s) => {
+                match s {
+                    Where::Mem(from) => self.a.load(RAX, mem(RBP, from), 8),
+                    Where::Imm(n) => self.a.mov_ri(RAX, n),
+                    Where::Stack => self.a.pop(RAX),
+                    w => unreachable!("copy from {w:?}"),
+                }
+                self.a.store(mem(RBP, off), RAX, 8);
+            }
+            (d, s) => unreachable!("copy {s:?} to {d:?}"),
+        }
+    }
+
     // ---- Instructions --------------------------------------------------------------------------------
 
     fn inst(&mut self, f: &Func, id: usize, inst: &Inst) -> Result<(), String> {
+        // Values waiting in caller-saved registers go to their frame slot for the length of a call.
+        let keep = self.across.get(&id).cloned().unwrap_or_default();
+        for &(r, off) in &keep {
+            if self.stored.insert(off) {
+                self.a.store(mem(RBP, off), r, 8);
+            }
+        }
+        self.inst_body(f, id, inst)?;
+        for &(r, off) in &keep {
+            self.a.load(r, mem(RBP, off), 8);
+        }
+        Ok(())
+    }
+
+    fn inst_body(&mut self, f: &Func, id: usize, inst: &Inst) -> Result<(), String> {
         let res = inst.result;
         match &inst.op {
             Op::Const(..) if matches!(self.loc[res.unwrap().0 as usize], Where::Imm(_)) => {}
@@ -668,10 +833,13 @@ impl<'m> Gen<'m> {
                         }
                     }
                 } else {
+                    // `rdi` may hold a value: the string instruction needs it.
+                    self.a.push(RDI);
                     self.a.lea(RDI, mem(RBP, off));
                     self.a.alu_rr(Alu::Xor, RAX, RAX, 4);
                     self.a.mov_ri(RCX, *sz as i64);
                     self.a.rep_stosb();
+                    self.a.pop(RDI);
                 }
                 self.a.lea(RAX, mem(RBP, off));
                 self.st(res.unwrap(), RAX);
@@ -683,9 +851,16 @@ impl<'m> Gen<'m> {
                 self.st(res.unwrap(), RAX);
             }
             Op::MemCopy(d, s, n) => {
-                self.ld(RDI, *d);
-                self.ld(RSI, *s);
-                self.ld(RCX, *n);
+                let (wd, ws, wn) = (
+                    self.loc[d.0 as usize],
+                    self.loc[s.0 as usize],
+                    self.loc[n.0 as usize],
+                );
+                self.moves(&[
+                    (Where::Reg(RDI), wd),
+                    (Where::Reg(RSI), ws),
+                    (Where::Reg(RCX), wn),
+                ]);
                 self.a.rep_movsb();
             }
             Op::DataAddr(i) => {
@@ -699,9 +874,12 @@ impl<'m> Gen<'m> {
                 self.st(res.unwrap(), RAX);
             }
             Op::Print(p, n) => {
-                self.a.mov_ri(RDI, 1);
-                self.ld(RSI, *p);
-                self.ld(RDX, *n);
+                let (wp, wn) = (self.loc[p.0 as usize], self.loc[n.0 as usize]);
+                self.moves(&[
+                    (Where::Reg(RDI), Where::Imm(1)),
+                    (Where::Reg(RSI), wp),
+                    (Where::Reg(RDX), wn),
+                ]);
                 let w = self.rt().write_fd;
                 self.a.call(w);
             }
@@ -771,9 +949,12 @@ impl<'m> Gen<'m> {
             self.ld(RAX, args[i]);
             self.a.push(RAX);
         }
+        // The register arguments (and the function address) in one parallel move: an argument may
+        // sit in another argument's register.
+        let mut copies = Vec::new();
         for (arg, loc) in args.iter().zip(&locs) {
             match loc {
-                Loc::Int(i) => self.ld(INT_REGS[*i], *arg),
+                Loc::Int(i) => copies.push((Where::Reg(INT_REGS[*i]), self.loc[arg.0 as usize])),
                 Loc::Float(i) => {
                     let m = self.vmem(*arg);
                     self.a.fload(Xmm(*i as u8), m, f.ty(*arg) == IrTy::F64);
@@ -782,8 +963,9 @@ impl<'m> Gen<'m> {
             }
         }
         if let Some(p) = fptr {
-            self.ld(R11, p);
+            copies.push((Where::Reg(R11), self.loc[p.0 as usize]));
         }
+        self.moves(&copies);
         emit(self);
         let cleanup = 8 * (stack.len() + usize::from(pad)) as i32;
         if cleanup > 0 {
@@ -838,9 +1020,18 @@ impl<'m> Gen<'m> {
         let w = bits(t);
         match op {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor => {
-                // Built in the result's own register when it has one. The result never shares a
-                // register with an operand (their live ranges meet at this instruction).
-                let d = self.dst(r);
+                // Built in the result's own register when it has one. That may be the register of
+                // `a` (nothing to load) or of `b`: then a commutative operation swaps the operands
+                // and the others are built in `rax`.
+                let (mut a, mut b) = (a, b);
+                let mut d = self.dst(r);
+                if a != b && self.loc[b.0 as usize] == Where::Reg(d) {
+                    if matches!(op, BinOp::Sub) {
+                        d = RAX;
+                    } else {
+                        std::mem::swap(&mut a, &mut b);
+                    }
+                }
                 self.ld(d, a);
                 let alu = match op {
                     BinOp::Add => Alu::Add,
@@ -935,7 +1126,15 @@ impl<'m> Gen<'m> {
         let w = bits(f.ty(a));
         let ov = self.stop_overflow;
         if w == 64 && (matches!(op, BinOp::Add | BinOp::Sub) || (op == BinOp::Mul && signed)) {
-            let d = self.dst(r);
+            let (mut a, mut b) = (a, b);
+            let mut d = self.dst(r);
+            if a != b && self.loc[b.0 as usize] == Where::Reg(d) {
+                if op == BinOp::Sub {
+                    d = RAX;
+                } else {
+                    std::mem::swap(&mut a, &mut b);
+                }
+            }
             self.ld(d, a);
             match self.imm32(b, f, signed) {
                 Some(n) if op != BinOp::Mul => {

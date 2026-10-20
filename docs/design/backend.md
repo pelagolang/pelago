@@ -83,11 +83,21 @@ compiler's own tests, with real Windows executables built and run on a Windows r
 
 ## 6. Registers (N5) and first measurements
 
-`native/regs.rs` keeps the most used integer, boolean and pointer values in the callee-saved registers `rbx r12 r13 r14 r15` for their whole life; every other value (and every
-float) stays in its frame slot. Liveness is the usual backward dataflow over the blocks (a block's parameters are defined at its start, a jump's arguments are used by the jump);
-each value gets one interval, and two values share a register only when their intervals are disjoint. The values are taken heaviest first, weighted by `10^loop depth`.
-Callee-saved registers survive calls, so nothing is saved around a call; the function saves the ones it uses in its prologue and restores them before every return. Copies for
-block parameters compare locations (a copy that would clobber a source needed by a later copy goes through the stack). `--no-regalloc` turns it off; the tests run both ways.
+`native/regs.rs` gives integer, boolean and pointer values a register for their whole life; every other value (and every float) stays in its frame slot. Liveness is the usual
+backward dataflow over the blocks (a block's parameters are defined at its start, a jump's arguments are used by the jump). Each value gets a **list of live ranges** (half open,
+with holes), and two values share a register when none of their ranges meet. An instruction reads its operands at an even position and writes its result just after it, so a result
+may take the register of an operand that dies there (`gen.rs` builds results so that is safe, see `bin`). The values are taken heaviest first, weighted by `10^loop depth`, and each
+gets the cheapest register: memory costs one load or store per use or definition; a callee-saved register (`rbx r12 to r15`) costs a save and a restore per call of the function and
+nothing for a second value in the same register; a caller-saved one (`r10 r11 r8 r9 rsi rdi`) is free when no call-like operation lies in the value's ranges and otherwise **splits the
+value around each such operation**: it is stored in a frame slot before the call and loaded after it (`Alloc::across`; the store is made once per block). A register is used when it
+is no dearer than memory. Preferences only: the register of a related value (first operand of a two-address operation, the other end of a block-parameter copy), then the argument
+register the value travels in.
+
+Everything that moves values at once goes through one **parallel move** (`Gen::moves`): the register arguments of a call (and the function address in `r11`), the entry parameters, the
+operands of `memcopy` and `print`, and the arguments of a jump. A copy whose target another copy still reads waits; a cycle (a swap, a rotation of arguments) parks one value on the
+stack. A branch whose sides need copies makes the one it falls through to in line and puts the other in a stub after the function, so the hot path has no extra jump. Values nothing
+reads, and compares fused into their branch, have no location at all (`Where::Dead`). `--no-regalloc` turns the allocator off; the tests run both ways, and also with only 1, 2 or 4
+registers of each kind (`gen::REG_LIMIT`, used by `native_must_agree` and `agree`), which pushes every spill and split path through ordinary programs.
 
 Measured on this container (collatz steps for 1 to 300,000 and `fib(35)`, `compiler/benches`-style program):
 
