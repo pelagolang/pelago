@@ -892,6 +892,8 @@ impl<'p> Resolver<'p> {
                     let want = self.text(file, &n.name);
                     match exports.iter().find(|(name, _)| name == want) {
                         Some((_, def)) => {
+                            // The name in the import list is a use (hover, rename and references).
+                            self.uses.insert((file, n.name.span.start), *def);
                             let local = n.alias.as_ref().map_or(want, |a| self.text(file, a));
                             changed |= self.add_name(scope, local, *def, Origin::Import, vis);
                         }
