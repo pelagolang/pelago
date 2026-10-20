@@ -416,7 +416,7 @@ impl Machine<'_> {
         Ok(match op {
             Op::Const(t, c) => match c {
                 Const::Int(n) => Val::Int(mask(*n as u128, bits_of(*t))),
-                Const::Float(x) => Val::Float(*x),
+                Const::Float(x) => Val::Float(round_to(*t, *x)),
                 Const::Bool(b) => Val::Bool(*b),
             },
             Op::Bin(o, a, b) => bin(*o, get(a), get(b), ty(a))?,
@@ -626,14 +626,17 @@ fn bin(o: BinOp, a: Val, b: Val, t: IrTy) -> Result<Val, String> {
             };
             Ok(Val::Int(mask(r, bits)))
         }
-        (Val::Float(x), Val::Float(y)) => Ok(Val::Float(match o {
-            BinOp::Add => x + y,
-            BinOp::Sub => x - y,
-            BinOp::Mul => x * y,
-            BinOp::Div => x / y,
-            BinOp::Rem => x % y,
-            _ => return Err("not a float operation".to_string()),
-        })),
+        (Val::Float(x), Val::Float(y)) => Ok(Val::Float(round_to(
+            t,
+            match o {
+                BinOp::Add => x + y,
+                BinOp::Sub => x - y,
+                BinOp::Mul => x * y,
+                BinOp::Div => x / y,
+                BinOp::Rem => x % y,
+                _ => return Err("not a float operation".to_string()),
+            },
+        ))),
         _ => Err("operands do not match".to_string()),
     }
 }
@@ -679,14 +682,36 @@ fn cmp(o: CmpOp, a: Val, b: Val, bits: u32) -> bool {
     }
 }
 
+/// A `float32` value is held as an `f64` and rounded to single precision after every operation.
+fn round_to(t: IrTy, x: f64) -> f64 {
+    if t == IrTy::F32 {
+        x as f32 as f64
+    } else {
+        x
+    }
+}
+
+/// Float to integer like Rust's `as i64`: truncates, saturates, NaN becomes 0. A narrower target
+/// then keeps the low bits of that result (the lowering only converts to 64 bits).
+fn float_to_int(x: f64, bits: u32) -> u128 {
+    mask(x as i64 as i128 as u128, bits)
+}
+
 fn cast(k: CastKind, v: Val, from_bits: u32, to: IrTy) -> Val {
     let tb = bits_of(to);
     match (k, v) {
         (CastKind::ZExt, Val::Int(n)) | (CastKind::Trunc, Val::Int(n)) => Val::Int(mask(n, tb)),
         (CastKind::SExt, Val::Int(n)) => Val::Int(mask(sign_extend(n, from_bits) as u128, tb)),
-        (CastKind::IntToFloat, Val::Int(n)) => Val::Float(sign_extend(n, from_bits) as f64),
-        (CastKind::FloatToInt, Val::Float(x)) => Val::Int(mask(x as i128 as u128, tb)),
-        (CastKind::FloatResize, Val::Float(x)) => Val::Float(x),
+        (CastKind::IntToFloat, Val::Int(n)) => {
+            let i = sign_extend(n, from_bits);
+            Val::Float(match to {
+                // One rounding straight from the integer, not through `f64`.
+                IrTy::F32 => i as f32 as f64,
+                _ => i as f64,
+            })
+        }
+        (CastKind::FloatToInt, Val::Float(x)) => Val::Int(float_to_int(x, tb)),
+        (CastKind::FloatResize, Val::Float(x)) => Val::Float(round_to(to, x)),
         (CastKind::PtrToInt, Val::Ptr(i)) => Val::Int(i as u128),
         (CastKind::IntToPtr, Val::Int(n)) => Val::Ptr(n as usize),
         (_, other) => other,

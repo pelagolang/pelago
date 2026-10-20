@@ -1392,6 +1392,15 @@ impl<'m> Gen<'m> {
         }
         let w = bits(t);
         match op {
+            BinOp::Mul if self.imm32(b, f, false).is_some() => {
+                // `imul d, a, imm`: no register for the constant.
+                let n = self.imm32(b, f, false).unwrap();
+                let d = self.dst(r);
+                let ra = self.src(a, f, false, RCX);
+                self.a.imul_rri(d, ra, n, 8);
+                self.mask(d, w);
+                self.st(r, d);
+            }
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor => {
                 // Built in the result's own register when it has one. That may be the register of
                 // `a` (nothing to load) or of `b`: then a commutative operation swaps the operands
@@ -1487,15 +1496,17 @@ impl<'m> Gen<'m> {
                 let Where::Imm(n) = self.loc[b.0 as usize] else {
                     unreachable!()
                 };
-                self.ld_ext(RAX, a, f, op == BinOp::Shr);
+                // Built in the result's own register (no round trip through `rax`).
+                let d = self.dst(r);
+                self.ld_ext(d, a, f, op == BinOp::Shr);
                 let sh = match op {
                     BinOp::Shl => Shift::Shl,
                     BinOp::Shr => Shift::Sar,
                     _ => Shift::Shr,
                 };
-                self.a.shift_imm(sh, RAX, n as u8, 8);
-                self.mask(RAX, w);
-                self.st(r, RAX);
+                self.a.shift_imm(sh, d, n as u8, 8);
+                self.mask(d, w);
+                self.st(r, d);
             }
             BinOp::Shl | BinOp::Shr | BinOp::UShr => {
                 self.ld(RCX, b);
@@ -1700,7 +1711,27 @@ impl<'m> Gen<'m> {
             }
             CastKind::FloatToInt => {
                 let x = self.fsrc(a, f, Xmm(0));
-                self.a.cvt_float_to_int(RAX, x, true, from == IrTy::F64);
+                let double = from == IrTy::F64;
+                self.a.cvt_float_to_int(RAX, x, true, double);
+                // `cvttsd2si` answers `i64::MIN` for NaN and anything out of range. Saturate like
+                // Rust's `as`: NaN gives 0, a positive overflow gives `i64::MAX`.
+                let done = self.a.new_label();
+                self.a.mov_ri(RCX, i64::MIN);
+                self.a.alu_rr(Alu::Cmp, RAX, RCX, 8);
+                self.a.jcc(Cc::Ne, done);
+                self.a.fxor(Xmm(1), Xmm(1));
+                self.a.fcmp(x, Xmm(1), double);
+                let nan = self.a.new_label();
+                let big = self.a.new_label();
+                self.a.jcc(Cc::P, nan);
+                self.a.jcc(Cc::A, big);
+                self.a.jmp(done);
+                self.a.bind(nan);
+                self.a.alu_rr(Alu::Xor, RAX, RAX, 4);
+                self.a.jmp(done);
+                self.a.bind(big);
+                self.a.mov_ri(RAX, i64::MAX);
+                self.a.bind(done);
                 self.mask(RAX, bits(to));
                 self.st(r, RAX);
             }

@@ -14,6 +14,7 @@
 #![allow(clippy::needless_range_loop)]
 
 mod cfg;
+mod cse;
 mod dce;
 mod divconst;
 mod dom;
@@ -53,12 +54,16 @@ pub fn optimize(m: &mut Module, opts: Options) {
     if opts.level == 0 {
         return;
     }
+    // Divisions by constants become multiplications only after inlining: a callee's `n / 10` may
+    // turn out to have a dividend known to be non-negative, which makes a cheaper sequence.
+    let inlining = opts.level >= 2;
     for i in 0..m.funcs.len() {
-        optimize_func(&mut m.funcs[i]);
+        passes(&mut m.funcs[i], !inlining);
     }
-    if opts.level >= 2 && inline::run(m) {
+    if inlining {
+        inline::run(m);
         for i in 0..m.funcs.len() {
-            optimize_func(&mut m.funcs[i]);
+            passes(&mut m.funcs[i], true);
         }
     }
     if opts.level >= 2 {
@@ -73,6 +78,10 @@ pub fn optimize(m: &mut Module, opts: Options) {
 
 /// The passes that work inside one function, repeated until nothing changes (at most a few rounds).
 pub fn optimize_func(f: &mut Func) {
+    passes(f, true);
+}
+
+fn passes(f: &mut Func, divs: bool) {
     for _ in 0..6 {
         let mut changed = false;
         changed |= step(f, "simplify", cfg::run);
@@ -80,8 +89,11 @@ pub fn optimize_func(f: &mut Func) {
         changed |= step(f, "promote", promote::run);
         changed |= step(f, "split", split::run);
         changed |= step(f, "sccp", sccp::run);
-        changed |= step(f, "divconst", divconst::run);
         changed |= step(f, "ranges", ranges::run);
+        if divs {
+            changed |= step(f, "divconst", divconst::run);
+        }
+        changed |= step(f, "cse", cse::run);
         changed |= step(f, "licm", licm::run);
         changed |= step(f, "simplify", cfg::run);
         changed |= step(f, "dce", dce::run);
