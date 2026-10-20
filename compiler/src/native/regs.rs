@@ -25,7 +25,7 @@
 //! * Constants and the results of fused compare-and-branch pairs take no register (the generator
 //!   knows them).
 
-use crate::ir::{Func, IrTy, Op, Term, Value};
+use crate::ir::{BinOp, Func, IrTy, Op, Term, Value};
 use crate::native::x86::Reg;
 use std::collections::HashMap;
 
@@ -38,18 +38,221 @@ pub struct Alloc {
     pub across: HashMap<usize, Vec<Value>>,
 }
 
+/// The most bytes a `memcopy` of a constant size copies with plain moves instead of `rep movsb`.
+pub const SMALL_COPY: i64 = 64;
+
+/// A `memcopy` of a known small size.
+pub fn small_copy(len: Option<i64>) -> bool {
+    matches!(len, Some(n) if (0..=SMALL_COPY).contains(&n))
+}
+
 /// The instructions that end in a call to a function or a runtime routine: every caller-saved
-/// register may change.
-pub fn is_call_like(op: &Op) -> bool {
-    matches!(
-        op,
-        Op::Call(..)
-            | Op::CallPtr(..)
-            | Op::Alloc(_)
-            | Op::Free(_)
-            | Op::Print(..)
-            | Op::MemCopy(..)
-    )
+/// register may change. (`consts` are the constant values of the function, see `gen::const_values`.)
+pub fn is_call_like(op: &Op, consts: &[Option<i64>]) -> bool {
+    match op {
+        Op::MemCopy(_, _, n) => !small_copy(consts[n.0 as usize]),
+        _ => matches!(
+            op,
+            Op::Call(..) | Op::CallPtr(..) | Op::Alloc(_) | Op::Free(_) | Op::Print(..)
+        ),
+    }
+}
+
+/// What an address is made of when no register holds it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Base {
+    Value(Value),
+    /// The frame object made by the `Slot` instruction with this number.
+    Slot(usize),
+}
+
+/// A pointer value the generator never computes into a register: the instructions that read or write
+/// through it name the address in their memory operand (`[base + index * scale + disp]`), and
+/// anything else that needs the pointer itself gets it with one `lea`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Fold {
+    No,
+    /// The result of a `Slot`, of a `PtrAdd` of a constant or an index to such an address.
+    Addr {
+        base: Base,
+        index: Option<(Value, u8)>,
+        disp: i32,
+    },
+    /// `idx * scale` (a `mul` or `shl` by a constant), only as the index of an `Addr`.
+    Scaled {
+        idx: Value,
+        scale: u8,
+    },
+}
+
+impl Fold {
+    /// A frame object plus a constant: an address that needs no register at all, wherever it is used.
+    pub fn is_frame(&self) -> bool {
+        matches!(
+            self,
+            Fold::Addr {
+                base: Base::Slot(_),
+                index: None,
+                ..
+            }
+        )
+    }
+}
+
+/// Finds the pointers that can stay unnamed. A `Slot` always can. A `PtrAdd` (and a `mul` or `shl`
+/// that scales its index) can when every use of its result is the address of a load or store, the
+/// address of a small `memcopy`, or the base of another such `PtrAdd`; the registers it would have
+/// read are then read where those uses are, so they must be live there (`assign` does that).
+pub fn folds(f: &Func, uses: &[u32], consts: &[Option<i64>]) -> Vec<Fold> {
+    let nv = f.values.len();
+    let is64 = |v: Value| f.ty(v) == IrTy::Int(64);
+    // Which values are candidates, until a use rules them out.
+    let mut on = vec![false; nv];
+    let mut scaled = vec![None; nv];
+    for b in &f.blocks {
+        for &i in &b.insts {
+            let Some(r) = f.insts[i].result else { continue };
+            match &f.insts[i].op {
+                Op::PtrAdd(..) => on[r.0 as usize] = true,
+                Op::Bin(op @ (BinOp::Mul | BinOp::Shl), x, y)
+                    if is64(r) && uses[r.0 as usize] == 1 =>
+                {
+                    let k = |c: Value| consts[c.0 as usize];
+                    let (idx, scale) = match (op, k(*x), k(*y)) {
+                        (BinOp::Mul, None, Some(c)) => (*x, c),
+                        (BinOp::Mul, Some(c), None) => (*y, c),
+                        (BinOp::Shl, None, Some(c)) if (0..=3).contains(&c) => (*x, 1 << c),
+                        _ => continue,
+                    };
+                    if matches!(scale, 1 | 2 | 4 | 8) {
+                        scaled[r.0 as usize] = Some((idx, scale as u8));
+                        on[r.0 as usize] = true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    loop {
+        let mut fold = vec![Fold::No; nv];
+        let mut changed = false;
+        for b in &f.blocks {
+            for &i in &b.insts {
+                let Some(r) = f.insts[i].result else { continue };
+                let ri = r.0 as usize;
+                match &f.insts[i].op {
+                    Op::Slot(..) => {
+                        fold[ri] = Fold::Addr {
+                            base: Base::Slot(i),
+                            index: None,
+                            disp: 0,
+                        }
+                    }
+                    Op::PtrAdd(a, c) if on[ri] => {
+                        let (base, index, disp) = match fold[a.0 as usize] {
+                            Fold::Addr { base, index, disp } => (base, index, disp),
+                            _ => (Base::Value(*a), None, 0),
+                        };
+                        let made = match (consts[c.0 as usize], fold[c.0 as usize]) {
+                            (Some(k), _) => i32::try_from(disp as i64 + k)
+                                .ok()
+                                .map(|disp| Fold::Addr { base, index, disp }),
+                            (None, Fold::Scaled { idx, scale }) if index.is_none() => {
+                                Some(Fold::Addr {
+                                    base,
+                                    index: Some((idx, scale)),
+                                    disp,
+                                })
+                            }
+                            (None, Fold::No) if index.is_none() && is64(*c) => Some(Fold::Addr {
+                                base,
+                                index: Some((*c, 1)),
+                                disp,
+                            }),
+                            _ => None,
+                        };
+                        match made {
+                            Some(m) => fold[ri] = m,
+                            None => {
+                                on[ri] = false;
+                                changed = true;
+                            }
+                        }
+                    }
+                    Op::Bin(..) if on[ri] => {
+                        if let Some((idx, scale)) = scaled[ri] {
+                            fold[ri] = Fold::Scaled { idx, scale };
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // A folded value with a use that needs a register cannot stay folded.
+        let mut bad = vec![false; nv];
+        let mut needs = |v: Value| bad[v.0 as usize] = true;
+        for b in &f.blocks {
+            for &i in &b.insts {
+                let inst = &f.insts[i];
+                let r_folded = inst.result.is_some_and(|r| fold[r.0 as usize] != Fold::No);
+                match &inst.op {
+                    Op::Load(..) => {}
+                    Op::Store(_, x) => needs(*x),
+                    Op::MemCopy(d, s, n) => {
+                        needs(*n);
+                        if !small_copy(consts[n.0 as usize]) {
+                            needs(*d);
+                            needs(*s);
+                        }
+                    }
+                    Op::PtrAdd(a, c) if !r_folded => {
+                        needs(*a);
+                        needs(*c);
+                    }
+                    // Read where the folded result is used.
+                    Op::PtrAdd(..) => {}
+                    Op::Bin(..) if r_folded => {}
+                    op => {
+                        let mut v = Vec::new();
+                        inst_uses(op, &mut v);
+                        v.into_iter().for_each(&mut needs);
+                    }
+                }
+            }
+            if let Some(t) = &b.term {
+                let mut v = Vec::new();
+                term_uses(t, &mut v);
+                v.into_iter().for_each(&mut needs);
+            }
+        }
+        for v in 0..nv {
+            if bad[v] && on[v] && fold[v] != Fold::No && !fold[v].is_frame() {
+                on[v] = false;
+                changed = true;
+            }
+        }
+        if !changed {
+            return fold;
+        }
+    }
+}
+
+/// The values an instruction really reads at its position: a folded pointer is read through the
+/// registers its address is made of.
+fn resolved(v: Value, folds: &[Fold], out: &mut Vec<Value>) {
+    match folds[v.0 as usize] {
+        Fold::No => out.push(v),
+        Fold::Addr { base, index, .. } => {
+            if let Base::Value(b) = base {
+                out.push(b);
+            }
+            if let Some((i, _)) = index {
+                out.push(i);
+            }
+        }
+        // Read as part of the `Addr` that uses it.
+        Fold::Scaled { .. } => {}
+    }
 }
 
 /// The compare that ends a block and only feeds the block's branch: the branch tests the flags
@@ -68,7 +271,7 @@ pub fn fused_cmp(f: &Func, bi: usize, uses: &[u32]) -> Option<usize> {
     .then_some(last)
 }
 
-fn inst_uses(op: &Op, out: &mut Vec<Value>) {
+pub(super) fn inst_uses(op: &Op, out: &mut Vec<Value>) {
     match op {
         Op::Const(..) | Op::Slot(..) | Op::DataAddr(_) | Op::FuncAddr(_) => {}
         Op::Neg(a)
@@ -188,10 +391,40 @@ fn overlaps(a: &[(u32, u32)], taken: &[(u32, u32)]) -> bool {
     })
 }
 
+/// The values instruction `i` reads, folded pointers resolved; nothing for an instruction whose result is folded.
+fn inst_reads(f: &Func, i: usize, folds: &[Fold], out: &mut Vec<Value>) {
+    if f.insts[i]
+        .result
+        .is_some_and(|r| folds[r.0 as usize] != Fold::No)
+    {
+        return;
+    }
+    let mut raw = Vec::new();
+    inst_uses(&f.insts[i].op, &mut raw);
+    for v in raw {
+        resolved(v, folds, out);
+    }
+}
+
+fn term_reads(t: &Term, folds: &[Fold], out: &mut Vec<Value>) {
+    let mut raw = Vec::new();
+    term_uses(t, &mut raw);
+    for v in raw {
+        resolved(v, folds, out);
+    }
+}
+
 /// Assigns registers. `saved` are callee-saved registers, `scratch` caller-saved ones in the order
 /// to try them, and `args` the registers that carry the integer parameters and arguments (in order,
 /// used only as a preference).
-pub fn assign(f: &Func, saved: &[Reg], scratch: &[Reg], args: &[Reg]) -> Alloc {
+pub fn assign(
+    f: &Func,
+    saved: &[Reg],
+    scratch: &[Reg],
+    args: &[Reg],
+    folds: &[Fold],
+    consts: &[Option<i64>],
+) -> Alloc {
     let nv = f.values.len();
     let nb = f.blocks.len();
     let o = order(f);
@@ -207,7 +440,7 @@ pub fn assign(f: &Func, saved: &[Reg], scratch: &[Reg], args: &[Reg]) -> Alloc {
         }
         for &i in &b.insts {
             tmp.clear();
-            inst_uses(&f.insts[i].op, &mut tmp);
+            inst_reads(f, i, folds, &mut tmp);
             for v in &tmp {
                 if !def_b[bi].has(v.0 as usize) {
                     use_b[bi].set(v.0 as usize);
@@ -219,7 +452,7 @@ pub fn assign(f: &Func, saved: &[Reg], scratch: &[Reg], args: &[Reg]) -> Alloc {
         }
         tmp.clear();
         if let Some(t) = &b.term {
-            term_uses(t, &mut tmp);
+            term_reads(t, folds, &mut tmp);
         }
         for v in &tmp {
             if !def_b[bi].has(v.0 as usize) {
@@ -293,7 +526,7 @@ pub fn assign(f: &Func, saved: &[Reg], scratch: &[Reg], args: &[Reg]) -> Alloc {
         }
         tmp.clear();
         if let Some(t) = &b.term {
-            term_uses(t, &mut tmp);
+            term_reads(t, folds, &mut tmp);
         }
         for v in &tmp {
             add_range(&mut ranges[v.0 as usize], from, o.term_pos[bi] + 1);
@@ -302,11 +535,13 @@ pub fn assign(f: &Func, saved: &[Reg], scratch: &[Reg], args: &[Reg]) -> Alloc {
         for &i in b.insts.iter().rev() {
             let pos = o.inst_pos[i];
             if let Some(r) = f.insts[i].result {
-                set_from(&mut ranges[r.0 as usize], pos + 1);
-                weight[r.0 as usize] += w;
+                if folds[r.0 as usize] == Fold::No {
+                    set_from(&mut ranges[r.0 as usize], pos + 1);
+                    weight[r.0 as usize] += w;
+                }
             }
             tmp.clear();
-            inst_uses(&f.insts[i].op, &mut tmp);
+            inst_reads(f, i, folds, &mut tmp);
             for v in &tmp {
                 add_range(&mut ranges[v.0 as usize], from, pos + 1);
                 weight[v.0 as usize] += w;
@@ -325,18 +560,8 @@ pub fn assign(f: &Func, saved: &[Reg], scratch: &[Reg], args: &[Reg]) -> Alloc {
     let mut calls: Vec<(u32, usize, u64)> = Vec::new();
     for (bi, b) in f.blocks.iter().enumerate() {
         for &i in &b.insts {
-            if is_call_like(&f.insts[i].op) {
+            if is_call_like(&f.insts[i].op, consts) {
                 calls.push((o.inst_pos[i], i, block_weight(bi)));
-            }
-        }
-    }
-
-    // Constants have no register: the generator uses them as immediates.
-    let mut is_const = vec![false; nv];
-    for b in &f.blocks {
-        for &i in &b.insts {
-            if let (Op::Const(..), Some(r)) = (&f.insts[i].op, f.insts[i].result) {
-                is_const[r.0 as usize] = true;
             }
         }
     }
@@ -361,6 +586,9 @@ pub fn assign(f: &Func, saved: &[Reg], scratch: &[Reg], args: &[Reg]) -> Alloc {
     for b in &f.blocks {
         for &i in &b.insts {
             let inst = &f.insts[i];
+            if inst.result.is_some_and(|r| folds[r.0 as usize] != Fold::No) {
+                continue;
+            }
             match (&inst.op, inst.result) {
                 (Op::Bin(_, a, c) | Op::Checked(_, _, a, c), Some(r)) => {
                     link(r, *a, &mut partners);
@@ -401,7 +629,8 @@ pub fn assign(f: &Func, saved: &[Reg], scratch: &[Reg], args: &[Reg]) -> Alloc {
     let eligible = |v: usize| {
         matches!(f.values[v], IrTy::Int(_) | IrTy::Bool | IrTy::Ptr)
             && !ranges[v].is_empty()
-            && !is_const[v]
+            && consts[v].is_none()
+            && folds[v] == Fold::No
             && !fused_res[v]
             && uses[v] > 0
     };

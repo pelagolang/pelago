@@ -1637,3 +1637,94 @@ fn main() {
         assert_eq!(output_of(src), want, "{src}");
     }
 }
+
+/// Memory operations (A-11 W5): addresses folded into the load or store, copies as plain moves.
+#[test]
+fn memory_operations_stress() {
+    let programs: [(&str, &str); 2] = [
+        // structs of 1 to 72 bytes copied, changed and nested (small copies, frame offsets, a copy that still uses `rep movsb`).
+        (
+            r#"struct s1 { a: int8 }
+struct s3 { a: int, b: int, c: int }
+struct s5 { a: int, b: int, c: int, d: int, e: int }
+struct s9 { a: int, b: int, c: int, d: int, e: int, f: int, g: int, h: int, i: int }
+struct mix { a: int8, b: int, c: int16, d: int32, e: bool, f: int8 }
+struct wrap { m: mix, k: s3 }
+
+fn mk3(x: int) -> s3 { s3 { a: x, b: x + 1, c: x + 2 } }
+fn mk9(x: int) -> s9 { s9 { a: x, b: x + 1, c: x + 2, d: x + 3, e: x + 4, f: x + 5, g: x + 6, h: x + 7, i: x + 8 } }
+fn sum9(v: s9) -> int { v.a + v.b + v.c + v.d + v.e + v.f + v.g + v.h + v.i }
+
+fn main() {
+    var t = 0
+    for i in 0..5 {
+        const x = mk3(i)
+        var y = x
+        y.b = y.b * 10
+        t += x.a + x.b + x.c + y.a + y.b + y.c
+        const p = s5 { a: i, b: 2, c: 3, d: 4, e: i * i }
+        var q = p
+        q.e += 1
+        t += p.e + q.e + q.a + q.d
+        const big = mk9(i)
+        var big2 = big
+        big2.i = 100
+        t += sum9(big) + sum9(big2)
+        const m = mix { a: -3, b: i * 1000, c: -300, d: 70000, e: i > 2, f: 7 }
+        var w = wrap { m: m, k: x }
+        w.m.a = w.m.a - 1
+        const w2 = w
+        t += (w2.m.a to int) + w2.m.b + (w2.m.c to int) + (w2.m.d to int) + w2.k.c + (w2.m.f to int)
+        if w2.m.e { t += 1 }
+        const one = s1 { a: -5 }
+        var two = one
+        two.a = two.a * 2
+        t += (one.a to int) + (two.a to int)
+    }
+    print(t)
+}
+"#,
+            "359772\n",
+        ),
+        // arrays of every element width and two dimensions (index scales 1, 2, 4 and 8 in the address).
+        (
+            r#"fn main() {
+    var a8: [int8; 40] = [0; 40]
+    var a16: [int16; 40] = [0; 40]
+    var a32: [int32; 40] = [0; 40]
+    var a64 = [0; 40]
+    var v8: int8 = -60
+    var v16: int16 = -6000
+    var v32: int32 = -2000000
+    for i in 0..40 {
+        a8[i] = v8
+        a16[i] = v16
+        a32[i] = v32
+        a64[i] = i * 1000000007 - 20000000000
+        v8 += 3
+        v16 += 300
+        v32 += 100000
+    }
+    var t = 0
+    for i in 0..40 {
+        t += (a8[i] to int) + (a16[i] to int) + (a32[i] to int) + a64[i]
+        t += a8[39 - i] to int
+    }
+    var grid = [[0; 7]; 5]
+    for r in 0..5 {
+        for c in 0..7 { grid[r][c] = r * 10 + c }
+    }
+    var g = 0
+    for r in 0..5 {
+        for c in 0..7 { g += grid[r][c] * (c + 1) + grid[4 - r][6 - c] }
+    }
+    print(t, g)
+}
+"#,
+            "-20002000660 4165\n",
+        ),
+    ];
+    for (src, want) in programs {
+        assert_eq!(output_of(src), want, "{src}");
+    }
+}

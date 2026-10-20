@@ -99,6 +99,8 @@ stack. A branch whose sides need copies makes the one it falls through to in lin
 reads, and compares fused into their branch, have no location at all (`Where::Dead`). `--no-regalloc` turns the allocator off; the tests run both ways, and also with only 1, 2 or 4
 registers of each kind (`gen::REG_LIMIT`, used by `native_must_agree` and `agree`), which pushes every spill and split path through ordinary programs.
 
+**Memory operations (A-11 W5).** `regs::folds` finds the pointers that never need a register. A `Slot` is a frame offset (`Where::Frame`: `lea` where its address itself is needed, `[rbp+off]` where it is dereferenced), and so is a `ptradd` of a constant to it. A `ptradd` of a constant, of an index, or of an index scaled by 1, 2, 4 or 8 (`mul` or `shl` by a constant) is folded into the memory operand `[base + index*scale + disp]` of the loads, stores and small copies that use it, when those are all its uses; the registers it was made of stay live up to them (`assign` resolves the uses). A `memcopy` of a constant size up to 64 bytes is a run of 8-, 4-, 2- and 1-byte moves through `rax` (8 bytes at a time on purpose: a 16-byte load right after two 8-byte field stores does not forward and stalls, which made `structloop` twice as slow), and no longer counts as a call. A `Slot` is cleared only when the code after it in its block does not write every byte before anything else touches it (`Gen::overwritten_first`); clearing uses 16-byte stores up to 128 bytes and `rep stosb` beyond. The encoder has `[base + index*scale + disp]` operands and `movups`, checked against `as` like the rest.
+
 Measured on this container (collatz steps for 1 to 300,000 and `fib(35)`, `compiler/benches`-style program):
 
 | Build | Time |
