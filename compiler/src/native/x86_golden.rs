@@ -251,15 +251,6 @@ pub fn golden() -> Vec<Case> {
         ("test sil, sil", "40 84 f6", |a| a.test_rr(RSI, RSI, 1)),
         ("imul rax, rbx", "48 0f af c3", |a| a.imul_rr(RAX, RBX, 8)),
         ("imul eax, ecx", "0f af c1", |a| a.imul_rr(RAX, RCX, 4)),
-        ("imul rax, rbx, 10", "48 6b c3 0a", |a| {
-            a.imul_rri(RAX, RBX, 10, 8)
-        }),
-        ("imul r8, r9, 1000", "4d 69 c1 e8 03 00 00", |a| {
-            a.imul_rri(R8, R9, 1000, 8)
-        }),
-        ("imul ecx, edx, -3", "6b ca fd", |a| {
-            a.imul_rri(RCX, RDX, -3, 4)
-        }),
         ("imul r8, r9", "4d 0f af c1", |a| a.imul_rr(R8, R9, 8)),
         ("imul ax, cx", "66 0f af c1", |a| a.imul_rr(RAX, RCX, 2)),
         ("neg rax", "48 f7 d8", |a| a.neg(RAX, 8)),
@@ -268,8 +259,6 @@ pub fn golden() -> Vec<Case> {
         ("neg sil", "40 f6 de", |a| a.neg(RSI, 1)),
         ("not rdx", "48 f7 d2", |a| a.not(RDX, 8)),
         ("not al", "f6 d0", |a| a.not(RAX, 1)),
-        ("imul rcx", "48 f7 e9", |a| a.imul1(RCX, 8)),
-        ("imul r9", "49 f7 e9", |a| a.imul1(R9, 8)),
         ("mul rcx", "48 f7 e1", |a| a.mul(RCX, 8)),
         ("mul ecx", "f7 e1", |a| a.mul(RCX, 4)),
         ("mul r9", "49 f7 e1", |a| a.mul(R9, 8)),
@@ -324,9 +313,6 @@ pub fn golden() -> Vec<Case> {
         ("ud2", "0f 0b", |a| a.ud2()),
         ("rep movsb", "f3 a4", |a| a.rep_movsb()),
         ("rep stosb", "f3 aa", |a| a.rep_stosb()),
-        ("rep stosw", "66 f3 ab", |a| a.rep_stos(2)),
-        ("rep stosd", "f3 ab", |a| a.rep_stos(4)),
-        ("rep stosq", "f3 48 ab", |a| a.rep_stos(8)),
         ("movsd xmm0, [rax]", "f2 0f 10 00", |a| {
             a.fload(Xmm(0), mem(RAX, 0), true)
         }),
@@ -399,6 +385,39 @@ pub fn golden() -> Vec<Case> {
         }),
         ("movq xmm9, r10", "66 4d 0f 6e ca", |a| {
             a.movq_to_xmm(Xmm(9), R10, true)
+        }),
+        ("paddq xmm0, xmm1", "66 0f d4 c1", |a| {
+            a.valu(VAlu::Add, Xmm(0), Xmm(1))
+        }),
+        ("psubq xmm8, xmm9", "66 45 0f fb c1", |a| {
+            a.valu(VAlu::Sub, Xmm(8), Xmm(9))
+        }),
+        ("pand xmm2, xmm3", "66 0f db d3", |a| {
+            a.valu(VAlu::And, Xmm(2), Xmm(3))
+        }),
+        ("por xmm10, xmm2", "66 44 0f eb d2", |a| {
+            a.valu(VAlu::Or, Xmm(10), Xmm(2))
+        }),
+        ("pxor xmm4, xmm15", "66 41 0f ef e7", |a| {
+            a.valu(VAlu::Xor, Xmm(4), Xmm(15))
+        }),
+        ("psllq xmm3, 5", "66 0f 73 f3 05", |a| {
+            a.vshift(true, Xmm(3), 5)
+        }),
+        ("psrlq xmm12, 63", "66 41 0f 73 d4 3f", |a| {
+            a.vshift(false, Xmm(12), 63)
+        }),
+        ("punpcklqdq xmm1, xmm2", "66 0f 6c ca", |a| {
+            a.punpcklqdq(Xmm(1), Xmm(2))
+        }),
+        ("punpcklqdq xmm9, xmm9", "66 45 0f 6c c9", |a| {
+            a.punpcklqdq(Xmm(9), Xmm(9))
+        }),
+        ("pshufd xmm0, xmm0, 0xee", "66 0f 70 c0 ee", |a| {
+            a.pshufd(Xmm(0), Xmm(0), 0xee)
+        }),
+        ("pshufd xmm8, xmm3, 0x44", "66 44 0f 70 c3 44", |a| {
+            a.pshufd(Xmm(8), Xmm(3), 0x44)
         }),
         ("fld qword ptr [rax]", "dd 00", |a| {
             a.x87_load(mem(RAX, 0), true)

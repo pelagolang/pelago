@@ -301,6 +301,7 @@ pub(super) fn inst_uses(op: &Op, out: &mut Vec<Value>) {
         Op::Const(..) | Op::Slot(..) | Op::DataAddr(_) | Op::FuncAddr(_) => {}
         Op::Neg(a)
         | Op::Not(a)
+        | Op::VUn(_, a)
         | Op::Cast(_, a, _)
         | Op::Load(_, a)
         | Op::Alloc(a)
@@ -308,6 +309,7 @@ pub(super) fn inst_uses(op: &Op, out: &mut Vec<Value>) {
         Op::Bin(_, a, b)
         | Op::Checked(_, _, a, b)
         | Op::Cmp(_, a, b)
+        | Op::VBin(_, a, b)
         | Op::PtrAdd(a, b)
         | Op::Store(a, b)
         | Op::Realloc(a, b)
@@ -678,7 +680,7 @@ pub fn assign(
     let eligible = |v: usize| {
         matches!(
             f.values[v],
-            IrTy::Int(_) | IrTy::Bool | IrTy::Ptr | IrTy::F32 | IrTy::F64
+            IrTy::Int(_) | IrTy::Bool | IrTy::Ptr | IrTy::F32 | IrTy::F64 | IrTy::V2I64
         ) && !ranges[v].is_empty()
             && consts[v].is_none()
             && folds[v] == Fold::No
@@ -700,7 +702,8 @@ pub fn assign(
     let mut out: Vec<Option<Place>> = vec![None; nv];
     let mut across: HashMap<usize, Vec<Value>> = HashMap::new();
     for v in cands {
-        let float = matches!(f.values[v], IrTy::F32 | IrTy::F64);
+        let vector = f.values[v] == IrTy::V2I64;
+        let float = vector || matches!(f.values[v], IrTy::F32 | IrTy::F64);
         // The call-like operations inside the lifetime, and what a split around each would cost.
         // (A block copy with `rep movsb` leaves the SSE registers alone.)
         let mut crossed: Vec<usize> = Vec::new();
@@ -714,6 +717,10 @@ pub fn assign(
                 }
                 k += 1;
             }
+        }
+        // A vector has no memory home: it is never split around a call, so it must not live across one.
+        if vector && !crossed.is_empty() {
+            continue;
         }
         let mem_cost = weight[v];
         let partner_regs: Vec<Place> = partners[v]

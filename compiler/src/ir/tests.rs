@@ -542,3 +542,184 @@ fn realloc_moves_the_contents_and_kills_the_old_address() {
         Err("used memory after it was freed".to_string())
     );
 }
+
+/// Vectors in a loop: the carried vectors swap places and rotate, so the register moves at the back
+/// edge form cycles, and one goes through memory. `main` stops (overflow) unless the lanes add up to
+/// what the same loop computes on plain integers.
+fn vector_loop() -> Module {
+    const N: i128 = 9;
+    let v2 = IrTy::V2I64;
+    let mut f = Func::new("main", &[], IrTy::I64);
+    let e = f.entry();
+    // The scratch memory is made first and freed last: a vector cannot live across a call.
+    let k16 = c_in(&mut f, e, 16);
+    let mem = f.emit(e, Op::Alloc(k16), Some(IrTy::Ptr)).unwrap();
+    let (c3, c5, c7) = (c(&mut f, e, 3), c(&mut f, e, 5), c(&mut f, e, 7));
+    let (c11, c22, c4) = (c(&mut f, e, 11), c(&mut f, e, 22), c(&mut f, e, 4));
+    let mask = c(&mut f, e, 0xFFFF_FFFF_FFFF);
+    let zero = c(&mut f, e, 0);
+    let a0 = f.emit(e, Op::VBin(VBin::Build, c3, c5), Some(v2)).unwrap();
+    let b0 = f.emit(e, Op::VUn(VUn::Splat, c7), Some(v2)).unwrap();
+    let p0 = f
+        .emit(e, Op::VBin(VBin::Build, c11, c22), Some(v2))
+        .unwrap();
+    let q0 = f.emit(e, Op::VUn(VUn::Splat, c4), Some(v2)).unwrap();
+    let km = f.emit(e, Op::VUn(VUn::Splat, mask), Some(v2)).unwrap();
+    let head = f.new_block(&[IrTy::I64, v2, v2, v2, v2]);
+    let body = f.new_block(&[]);
+    let done = f.new_block(&[v2, v2, v2, v2]);
+    f.terminate(
+        e,
+        Term::Jump(Target {
+            block: head,
+            args: vec![zero, a0, b0, p0, q0],
+        }),
+    );
+    let ps = f.block_params(head).to_vec();
+    let (i, a, b, p, q) = (ps[0], ps[1], ps[2], ps[3], ps[4]);
+    let n = c_in(&mut f, head, N);
+    let more = f
+        .emit(head, Op::Cmp(CmpOp::Lt, i, n), Some(IrTy::Bool))
+        .unwrap();
+    f.terminate(
+        head,
+        Term::Branch(
+            more,
+            Target {
+                block: body,
+                args: vec![],
+            },
+            Target {
+                block: done,
+                args: vec![a, b, p, q],
+            },
+        ),
+    );
+    let op = |f: &mut Func, o: Op| f.emit(body, o, Some(v2)).unwrap();
+    let t = op(&mut f, Op::VBin(VBin::Add, a, b));
+    let u = op(&mut f, Op::VUn(VUn::Shl(1), t));
+    let r = op(&mut f, Op::VUn(VUn::UShr(2), a));
+    let w = op(&mut f, Op::VBin(VBin::Xor, u, r));
+    let w = op(&mut f, Op::VBin(VBin::And, w, km));
+    let w = op(&mut f, Op::VBin(VBin::Or, w, b));
+    let nw = op(&mut f, Op::VBin(VBin::Sub, w, b));
+    let one = c_in(&mut f, body, 1);
+    let i2 = f
+        .emit(body, Op::Bin(BinOp::Add, i, one), Some(IrTy::I64))
+        .unwrap();
+    // a takes the new value, b takes a, p and q swap.
+    f.terminate(
+        body,
+        Term::Jump(Target {
+            block: head,
+            args: vec![i2, nw, a, q, p],
+        }),
+    );
+    let ds = f.block_params(done).to_vec();
+    let (a, b, p, q) = (ds[0], ds[1], ds[2], ds[3]);
+    f.emit(done, Op::Store(mem, a), None);
+    let a = f.emit(done, Op::Load(v2, mem), Some(v2)).unwrap();
+    let s1 = f.emit(done, Op::VBin(VBin::Add, a, b), Some(v2)).unwrap();
+    let d = f.emit(done, Op::VBin(VBin::Sub, p, q), Some(v2)).unwrap();
+    let s2 = f.emit(done, Op::VBin(VBin::Add, s1, d), Some(v2)).unwrap();
+    let got = f
+        .emit(done, Op::VUn(VUn::ReduceAdd, s2), Some(IrTy::I64))
+        .unwrap();
+    f.emit(done, Op::Free(mem), None);
+    // The same loop on plain integers, lane by lane.
+    let lane = |a: u64, b: u64| {
+        (((a.wrapping_add(b) << 1) ^ (a >> 2)) & 0xFFFF_FFFF_FFFF | b).wrapping_sub(b)
+    };
+    let (mut a, mut b) = ([3u64, 5], [7u64; 2]);
+    let (mut p, mut q) = ([11u64, 22], [4u64; 2]);
+    for _ in 0..N {
+        let n = [lane(a[0], b[0]), lane(a[1], b[1])];
+        (a, b) = (n, a);
+        (p, q) = (q, p);
+    }
+    let want = (0..2).fold(0u64, |s, l| {
+        s.wrapping_add(a[l])
+            .wrapping_add(b[l])
+            .wrapping_add(p[l])
+            .wrapping_sub(q[l])
+    });
+    let want = c_in(&mut f, done, want as i64 as i128);
+    let same = f
+        .emit(done, Op::Cmp(CmpOp::Eq, got, want), Some(IrTy::Bool))
+        .unwrap();
+    let good = f.new_block(&[]);
+    let bad = f.new_block(&[]);
+    let (ok, no) = (
+        Target {
+            block: good,
+            args: vec![],
+        },
+        Target {
+            block: bad,
+            args: vec![],
+        },
+    );
+    f.terminate(done, Term::Branch(same, ok, no));
+    let z = c_in(&mut f, good, 0);
+    f.terminate(good, Term::Return(Some(z)));
+    // Stops: the largest integer plus one.
+    let (max, one) = (c_in(&mut f, bad, i64::MAX as i128), c_in(&mut f, bad, 1));
+    let boom = f
+        .emit(
+            bad,
+            Op::Checked(BinOp::Add, true, max, one),
+            Some(IrTy::I64),
+        )
+        .unwrap();
+    f.terminate(bad, Term::Return(Some(boom)));
+    let mut m = Module::default();
+    m.add(f);
+    m
+}
+
+fn c_in(f: &mut Func, b: BlockId, n: i128) -> Value {
+    f.emit(b, Op::Const(IrTy::I64, Const::Int(n)), Some(IrTy::I64))
+        .unwrap()
+}
+
+#[test]
+fn vectors_agree_with_integers_in_the_interpreter() {
+    let m = vector_loop();
+    assert_eq!(verify_module(&m), Vec::<String>::new());
+    let r = run_full(&m, "main", &[]);
+    assert_eq!((r.result, r.leaked), (Ok(Val::int(0)), 0));
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn vectors_agree_with_integers_natively() {
+    use crate::native::{exec, gen, Os};
+    let m = vector_loop();
+    let mut ran = 0;
+    // All the registers, and few: every spill, split and cycle path.
+    for (regalloc, limit) in [
+        (false, usize::MAX),
+        (true, usize::MAX),
+        (true, 2),
+        (true, 4),
+    ] {
+        gen::REG_LIMIT.with(|l| l.set(limit));
+        let opts = gen::Options {
+            leak_check: true,
+            target: Os::Linux,
+            regalloc,
+        };
+        let image = gen::compile(&m, "main", &opts);
+        gen::REG_LIMIT.with(|l| l.set(usize::MAX));
+        let image = match image {
+            Ok(i) => i,
+            // Without registers, or with too few, a vector has no home: that is reported, not mis-compiled.
+            Err(e) if (!regalloc || limit < usize::MAX) && e.contains("vector") => continue,
+            Err(e) => panic!("the native build ({regalloc}, {limit}) failed: {e}"),
+        };
+        let r = exec::run_image(Os::Linux, &image).unwrap();
+        assert_eq!((r.err.as_str(), r.code), ("", 0), "({regalloc}, {limit})");
+        ran += 1;
+    }
+    assert!(ran >= 1, "the build with all registers must work");
+}

@@ -40,6 +40,9 @@ pub enum IrTy {
     Bool,
     Ptr,
     Void,
+    /// Two 64-bit integer lanes (an SSE2 register). Made by [`Op::VUn`] and [`Op::VBin`], read by a store or
+    /// a reduction; never in memory layouts of the language.
+    V2I64,
 }
 
 impl IrTy {
@@ -57,6 +60,7 @@ impl IrTy {
             IrTy::Int(b) => b as u32 / 8,
             IrTy::F32 => 4,
             IrTy::F64 | IrTy::Ptr => 8,
+            IrTy::V2I64 => 16,
             IrTy::Bool => 1,
             IrTy::Void => 0,
         }
@@ -74,6 +78,7 @@ impl IrTy {
             IrTy::Bool => "bool".into(),
             IrTy::Ptr => "ptr".into(),
             IrTy::Void => "void".into(),
+            IrTy::V2I64 => "v2i64".into(),
         }
     }
 }
@@ -244,6 +249,43 @@ impl Test {
     }
 }
 
+/// One-operand vector operations. Shift counts are below 64.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VUn {
+    /// An `i64` copied to both lanes.
+    Splat,
+    /// Each lane shifted left or logically right by a constant.
+    Shl(u8),
+    UShr(u8),
+    /// The wrapping sum of the lanes, an `i64`.
+    ReduceAdd,
+}
+
+/// Two-operand vector operations, all lane by lane and wrapping.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum VBin {
+    /// Two `i64`s, the first in lane 0 and the second in lane 1.
+    Build,
+    Add,
+    Sub,
+    And,
+    Or,
+    Xor,
+}
+
+impl VBin {
+    pub fn name(self) -> &'static str {
+        match self {
+            VBin::Build => "vbuild",
+            VBin::Add => "vadd",
+            VBin::Sub => "vsub",
+            VBin::And => "vand",
+            VBin::Or => "vor",
+            VBin::Xor => "vxor",
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Op {
     Const(IrTy, Const),
@@ -258,6 +300,8 @@ pub enum Op {
     Select(Value, Value, Value),
     Neg(Value),
     Not(Value),
+    VUn(VUn, Value),
+    VBin(VBin, Value, Value),
     Cast(CastKind, Value, IrTy),
     Call(FuncId, Vec<Value>),
     /// Reserve stack space of this size and alignment (in bytes); gives its address.

@@ -12,10 +12,10 @@ use super::regs::{Base, Fold, Place};
 use super::rt::{self, Runtime};
 use super::x86::*;
 use super::{pe, Os};
-use crate::ir::Test;
 use crate::ir::{
     BinOp, CastKind, CmpOp, Const, Func, FuncId, Inst, IrTy, Module, Op, Target, Term, Value,
 };
+use crate::ir::{Test, VBin, VUn};
 use std::collections::{HashMap, HashSet};
 
 const INT_REGS: [Reg; 6] = [RDI, RSI, RDX, RCX, R8, R9];
@@ -612,6 +612,15 @@ impl<'m> Gen<'m> {
         }
     }
 
+    /// The SSE register a vector lives in. A vector has no memory home, so one the allocator left
+    /// without a register (it lives across a call, or the registers ran out) cannot be compiled.
+    fn vreg(&self, v: Value) -> Result<Xmm, String> {
+        match self.loc[v.0 as usize] {
+            Where::Xmm(x) => Ok(x),
+            w => Err(format!("a vector value has no register ({w:?})")),
+        }
+    }
+
     /// The SSE register a float result is built in: its own when it has one, `xmm0` otherwise.
     fn fdst(&self, v: Value) -> Xmm {
         match self.loc[v.0 as usize] {
@@ -995,9 +1004,10 @@ impl<'m> Gen<'m> {
                             self.a.load(RAX, mem(RBP, off), 8);
                             self.a.push(RAX);
                         }
+                        // A whole register: it may hold a vector.
                         Where::Xmm(x) => {
-                            self.a.alu_ri(Alu::Sub, RSP, 8, 8);
-                            self.a.fstore(mem(RSP, 0), x, true);
+                            self.a.alu_ri(Alu::Sub, RSP, 16, 8);
+                            self.a.movups_store(mem(RSP, 0), x);
                         }
                         w => unreachable!("{w:?} cannot be in a cycle"),
                     }
@@ -1021,8 +1031,8 @@ impl<'m> Gen<'m> {
             (Where::Xmm(x), Where::Mem(off)) => self.a.fload(x, mem(RBP, off), true),
             (Where::Mem(off), Where::Xmm(y)) => self.a.fstore(mem(RBP, off), y, true),
             (Where::Xmm(x), Where::Stack) => {
-                self.a.fload(x, mem(RSP, 0), true);
-                self.a.lea(RSP, mem(RSP, 8));
+                self.a.movups_load(x, mem(RSP, 0));
+                self.a.lea(RSP, mem(RSP, 16));
             }
             (Where::Mem(off), Where::Reg(x)) => self.a.store(mem(RBP, off), x, 8),
             (Where::Mem(off), Where::Imm(n)) if i32::try_from(n).is_ok() => {
@@ -1249,6 +1259,77 @@ impl<'m> Gen<'m> {
                 self.moves(&[(Where::Reg(RSI), wp), (Where::Reg(RDX), wn)]);
                 let w = self.rt().print;
                 self.a.call(w);
+            }
+            Op::VUn(o, a) => {
+                let r = res.unwrap();
+                if *o == VUn::ReduceAdd {
+                    let x = self.vreg(*a)?;
+                    self.a.pshufd(Xmm(0), x, 0xEE);
+                    self.a.valu(VAlu::Add, Xmm(0), x);
+                    self.a.movq_from_xmm(RAX, Xmm(0), true);
+                    self.st(r, RAX);
+                    return Ok(());
+                }
+                let d = self.vreg(r)?;
+                match o {
+                    VUn::Splat => {
+                        self.ld(RAX, *a);
+                        self.a.movq_to_xmm(d, RAX, true);
+                        self.a.pshufd(d, d, 0x44);
+                    }
+                    VUn::Shl(k) | VUn::UShr(k) => {
+                        let x = self.vreg(*a)?;
+                        if x != d {
+                            self.a.fmov_rr(d, x);
+                        }
+                        self.a.vshift(matches!(o, VUn::Shl(_)), d, *k);
+                    }
+                    VUn::ReduceAdd => unreachable!(),
+                }
+            }
+            Op::VBin(o, a, b) => {
+                let d = self.vreg(res.unwrap())?;
+                if *o == VBin::Build {
+                    self.ld(RAX, *a);
+                    self.ld(RCX, *b);
+                    self.a.movq_to_xmm(d, RAX, true);
+                    self.a.movq_to_xmm(Xmm(0), RCX, true);
+                    self.a.punpcklqdq(d, Xmm(0));
+                    return Ok(());
+                }
+                let alu = match o {
+                    VBin::Add => VAlu::Add,
+                    VBin::Sub => VAlu::Sub,
+                    VBin::And => VAlu::And,
+                    VBin::Or => VAlu::Or,
+                    _ => VAlu::Xor,
+                };
+                let (x, y) = (self.vreg(*a)?, self.vreg(*b)?);
+                if d == y && d != x {
+                    if *o == VBin::Sub {
+                        // `d = x - d` cannot be done in place: go through the scratch register.
+                        self.a.fmov_rr(Xmm(0), x);
+                        self.a.valu(alu, Xmm(0), y);
+                        self.a.fmov_rr(d, Xmm(0));
+                    } else {
+                        self.a.valu(alu, d, x);
+                    }
+                } else {
+                    if d != x {
+                        self.a.fmov_rr(d, x);
+                    }
+                    self.a.valu(alu, d, y);
+                }
+            }
+            Op::Load(IrTy::V2I64, p) => {
+                let m = self.mem_of(f, *p, RCX, RDX);
+                let d = self.vreg(res.unwrap())?;
+                self.a.movups_load(d, m);
+            }
+            Op::Store(p, x) if f.ty(*x) == IrTy::V2I64 => {
+                let m = self.mem_of(f, *p, RCX, RDX);
+                let rx = self.vreg(*x)?;
+                self.a.movups_store(m, rx);
             }
             Op::Load(t, p) => {
                 let m = self.mem_of(f, *p, RCX, RDX);
