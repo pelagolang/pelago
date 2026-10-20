@@ -50,6 +50,8 @@ S1 alone should remove a big share of the collatz time. S1 to S3 together should
 
 **Loops (W9, done in part): `ir/opt/licm.rs`, `ir/opt/layout.rs`, `ir/opt/loops.rs`.** Loop-invariant code motion moves arithmetic, compares, casts and address arithmetic that cannot stop in front of the loop (a load too when the loop writes no memory and the load is in the header or reads a slot of the function; division never, since the loop may run zero times). Layout puts a loop's body first and its header last, so an iteration ends in one conditional jump back instead of a conditional jump out plus a jump back, and moves blocks that only `stop` to the end. Measured with `compare.sh` (best of 7): loop_sum 0.68 s to 0.39 s, sieve 0.26 s to 0.19 s, mapwork 0.053 s to 0.043 s, the rest within noise. Not done: strength reduction (`i * 8` into an add) because it fights the addressing modes planned in W5, which absorb the scale; aligning loop heads needs `Asm::align` in the generator (collatz moves between 0.12 s and 0.14 s when unrelated code shifts it, so this is worth doing).
 
+**Structs in registers (SROA).** `ir/opt/split.rs` now splits two slots that are copied whole into each other (`p = p.add(d)` copies a temporary into `p`): both get the same pieces and the copy becomes a load and a store per piece, which `promote` then turns into block parameters. `ir/opt/ranges.rs` narrows after widening, so `x = (x + 3) & 65535` in a loop keeps a small range instead of `MAX`. structloop: 0.49 s to 0.019 s (C -O2 0.011 s).
+
 Measured with `compiler/benches/compare.sh` (best of 7, this container):
 
 | Program | before (S1) | now | C -O0 | C -O2 |

@@ -59,6 +59,8 @@ pub fn run(f: &mut Func) -> bool {
             }
         }
     }
+    // Whole-slot copies between two slots: (the instruction, destination, source, length).
+    let mut slot_copies: Vec<(usize, Value, Value, u32)> = Vec::new();
     // Every use of those addresses.
     for b in &f.blocks {
         for &i in &b.insts {
@@ -89,6 +91,20 @@ pub fn run(f: &mut Func) -> bool {
                         .copied()
                         .filter(|n| *n >= 0 && *n <= u32::MAX as i128);
                     let (bd, bs) = (base.get(d).copied(), base.get(s).copied());
+                    // Two different slots copied whole: both are split with the same pieces, and the
+                    // copy becomes a load and a store per piece.
+                    if let (Some((sd, 0)), Some((ss, 0)), Some(n)) = (bd, bs, len_c) {
+                        if sd != ss && *d == sd && *s == ss {
+                            slot_copies.push((i, sd, ss, n as u32));
+                            if let Some(inf) = info.get_mut(&sd) {
+                                inf.copies.push((i, true, *s, n as u32));
+                            }
+                            if let Some(inf) = info.get_mut(&ss) {
+                                inf.copies.push((i, false, *d, n as u32));
+                            }
+                            continue;
+                        }
+                    }
                     match (bd, bs, len_c) {
                         (Some((sd, 0)), Some((ss, 0)), _) if sd == ss => mark_bad(&mut info, sd),
                         (Some((sd, 0)), Some((ss, _)), _) if *d == sd => {
@@ -142,6 +158,29 @@ pub fn run(f: &mut Func) -> bool {
                     mark_bad(&mut info, s);
                 }
             });
+        }
+    }
+    // The two sides of a slot-to-slot copy get each other's pieces.
+    loop {
+        let mut changed = false;
+        for &(_, d, s, n) in &slot_copies {
+            for (from, to) in [(d, s), (s, d)] {
+                let pieces: Vec<(u32, IrTy)> = info[&from]
+                    .pieces
+                    .iter()
+                    .filter(|(o, _)| **o < n)
+                    .map(|(o, t)| (*o, *t))
+                    .collect();
+                for (off, ty) in pieces {
+                    if !info[&to].pieces.contains_key(&off) {
+                        changed = true;
+                    }
+                    touch(&mut info, to, off, ty);
+                }
+            }
+        }
+        if !changed {
+            break;
         }
     }
     // Which slots can be split.
@@ -295,7 +334,23 @@ pub fn run(f: &mut Func) -> bool {
                                 out.push(f.insts.len() - 1);
                             }
                         }
-                        (Some(_), Some(_)) => out.push(i),
+                        (Some(ds), Some(ss)) => {
+                            for (off, ty) in info[&ds].pieces.iter().filter(|(o, _)| **o < n) {
+                                let v = f.new_value(*ty);
+                                f.insts.push(Inst {
+                                    result: Some(v),
+                                    op: Op::Load(*ty, piece_slot[&(ss, *off)]),
+                                    span: sp,
+                                });
+                                out.push(f.insts.len() - 1);
+                                f.insts.push(Inst {
+                                    result: None,
+                                    op: Op::Store(piece_slot[&(ds, *off)], v),
+                                    span: sp,
+                                });
+                                out.push(f.insts.len() - 1);
+                            }
+                        }
                     }
                 }
                 _ => out.push(i),

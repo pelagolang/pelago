@@ -1056,3 +1056,90 @@ fn a_tail_call_that_gets_a_slot_address_stays_a_call() {
     let sum = o.funcs.iter().find(|f| f.name == "sum").unwrap();
     assert_eq!(count(sum, |o| matches!(o, Op::Call(..))), 1);
 }
+
+#[test]
+fn a_value_copied_between_two_slots_is_split_into_pieces() {
+    // a = {x, y}; b = a (whole copy); x + y read back from b
+    let mut f = Func::new("main", &[IrTy::I64, IrTy::I64], IrTy::I64);
+    let e = f.entry();
+    let (x, y) = (f.block_params(e)[0], f.block_params(e)[1]);
+    let a = f.emit(e, Op::Slot(16, 8), Some(IrTy::Ptr)).unwrap();
+    let b = f.emit(e, Op::Slot(16, 8), Some(IrTy::Ptr)).unwrap();
+    let eight = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(8)), Some(IrTy::I64))
+        .unwrap();
+    let sixteen = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(16)), Some(IrTy::I64))
+        .unwrap();
+    let a8 = f.emit(e, Op::PtrAdd(a, eight), Some(IrTy::Ptr)).unwrap();
+    f.emit(e, Op::Store(a, x), None);
+    f.emit(e, Op::Store(a8, y), None);
+    f.emit(e, Op::MemCopy(b, a, sixteen), None);
+    let b8 = f.emit(e, Op::PtrAdd(b, eight), Some(IrTy::Ptr)).unwrap();
+    let bx = f.emit(e, Op::Load(IrTy::I64, b), Some(IrTy::I64)).unwrap();
+    let by = f.emit(e, Op::Load(IrTy::I64, b8), Some(IrTy::I64)).unwrap();
+    let s = f
+        .emit(e, Op::Bin(BinOp::Sub, bx, by), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(e, Term::Return(Some(s)));
+    let mut g = f.clone();
+    assert!(split::run(&mut g));
+    assert_eq!(count(&g, |o| matches!(o, Op::MemCopy(..))), 0);
+    optimize_func(&mut g);
+    assert_eq!(
+        count(&g, |o| matches!(o, Op::Slot(..))),
+        0,
+        "{}",
+        print_func(&g, None)
+    );
+    let (m, n) = (module_of(f), module_of(g));
+    for (p, q) in [(5u128, 3u128), (0, 9)] {
+        let a = [Val::Int(p), Val::Int(q)];
+        assert_eq!(
+            run_full(&m, "main", &a).result,
+            run_full(&n, "main", &a).result
+        );
+    }
+}
+
+#[test]
+fn a_counter_that_wraps_with_a_mask_keeps_a_small_range() {
+    // x = 1; while i < 10 { x = (x + 3) & 65535 }: widening alone would send x to MAX.
+    let mut f = Func::new("main", &[], IrTy::I64);
+    let e = f.entry();
+    let head = f.new_block(&[IrTy::I64, IrTy::I64]);
+    let body = f.new_block(&[]);
+    let done = f.new_block(&[]);
+    let konst = |f: &mut Func, b, v: i128| {
+        f.emit(b, Op::Const(IrTy::I64, Const::Int(v)), Some(IrTy::I64))
+            .unwrap()
+    };
+    let to = |block, args| Target { block, args };
+    let (zero, one) = (konst(&mut f, e, 0), konst(&mut f, e, 1));
+    f.terminate(e, Term::Jump(to(head, vec![zero, one])));
+    let (i, x) = (f.block_params(head)[0], f.block_params(head)[1]);
+    let ten = konst(&mut f, head, 10);
+    let c = f
+        .emit(head, Op::Cmp(CmpOp::Lt, i, ten), Some(IrTy::Bool))
+        .unwrap();
+    f.terminate(head, Term::Branch(c, to(body, vec![]), to(done, vec![])));
+    let three = konst(&mut f, body, 3);
+    let x2 = f
+        .emit(
+            body,
+            Op::Checked(BinOp::Add, true, x, three),
+            Some(IrTy::I64),
+        )
+        .unwrap();
+    let mask = konst(&mut f, body, 65535);
+    let x3 = f
+        .emit(body, Op::Bin(BinOp::And, x2, mask), Some(IrTy::I64))
+        .unwrap();
+    let k = konst(&mut f, body, 1);
+    let i2 = f
+        .emit(body, Op::Bin(BinOp::Add, i, k), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(body, Term::Jump(to(head, vec![i2, x3])));
+    f.terminate(done, Term::Return(Some(x)));
+    assert_eq!(checks_left(f), 0);
+}
