@@ -2203,3 +2203,24 @@ fn literals_are_stored_as_constants() {
         }",
     );
 }
+
+/// A length that grows by a checked add is read back as the new length minus the step in the address
+/// and in the call that grows the buffer; the loop's exit still sees the length itself.
+#[test]
+fn a_growing_length_is_added_in_place() {
+    agree(
+        "fn main() {
+            var s = \"\"
+            var t = 0
+            for i in 0..3000 {
+                s = s + \"ab\"
+                t += s.len() & 7
+            }
+            var xs: [int] = []
+            for i in 0..3000 { xs.push!(i * 3) }
+            var u = 0
+            for i in 0..xs.len() { u += xs[i] }
+            print(s.len(), t, xs.len(), u, xs[2999])
+        }",
+    );
+}
