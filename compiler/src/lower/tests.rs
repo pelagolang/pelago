@@ -2292,3 +2292,26 @@ fn accumulators_of_counted_loops_keep_their_traps() {
         }",
     );
 }
+
+/// The loop test moves onto a counter that moves with the loop's own (`len` grows by 2 per trip);
+/// the loop must run as often as before, also with an offset start and a step above one.
+#[test]
+fn the_loop_test_may_read_another_counter() {
+    agree(
+        "fn main() {
+            var n = 5
+            var m = 0
+            for i in 0..1000 {
+                n += 2
+                m += n & 3
+            }
+            var k = 100
+            var c = 0
+            for i in 3..1000 {
+                k += 7
+                c += 1
+            }
+            print(n, m, k, c)
+        }",
+    );
+}

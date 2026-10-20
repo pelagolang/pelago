@@ -25,6 +25,7 @@ mod fill;
 mod ifconv;
 mod inline;
 mod ivopt;
+mod ivtest;
 pub use inline::COLD_SUFFIX;
 mod layout;
 mod licm;
@@ -145,6 +146,7 @@ fn rounds(f: &mut Func, divs: bool) {
         changed |= step(f, "cse", cse::run);
         changed |= step(f, "licm", licm::run);
         changed |= step(f, "ivopt", ivopt::run);
+        changed |= step(f, "ivtest", ivtest::run);
         if divs {
             changed |= step(f, "ifconv", ifconv::run);
         }
