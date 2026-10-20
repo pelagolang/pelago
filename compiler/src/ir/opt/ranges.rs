@@ -413,6 +413,61 @@ impl Ctx<'_> {
     }
 }
 
+impl Ctx<'_> {
+    /// Widening overshoots (a counter that wraps around `& 65535` was sent to `MAX`). From the fixed
+    /// point, recompute the block parameters from their edges a few times without keeping the old
+    /// value; every step may only shrink a range. The result is kept only if it is still a fixed
+    /// point, otherwise the widened one stays.
+    fn narrow(&mut self) {
+        let saved = self.val.clone();
+        let rpo = self.dom.rpo.clone();
+        for _ in 0..3 {
+            for &b in &rpo {
+                let bi = b.0 as usize;
+                if bi != 0 {
+                    for (k, &p) in self.f.blocks[bi].params.iter().enumerate() {
+                        let new = self.incoming(bi, k);
+                        let old = self.val[p.0 as usize];
+                        if self.f.ty(p).is_int() && new != L::Bot && join(old, new) == old {
+                            self.val[p.0 as usize] = new;
+                        }
+                    }
+                }
+                for &ii in &self.f.blocks[bi].insts {
+                    if let Some(r) = self.f.insts[ii].result {
+                        self.val[r.0 as usize] = self.of_op(r, &self.f.insts[ii].op, b);
+                    }
+                }
+            }
+        }
+        if !self.is_fixed_point() {
+            self.val = saved;
+        }
+    }
+
+    fn is_fixed_point(&self) -> bool {
+        for &b in &self.dom.rpo {
+            let bi = b.0 as usize;
+            if bi != 0 {
+                for (k, &p) in self.f.blocks[bi].params.iter().enumerate() {
+                    let old = self.val[p.0 as usize];
+                    if self.f.ty(p).is_int() && join(old, self.incoming(bi, k)) != old {
+                        return false;
+                    }
+                }
+            }
+            for &ii in &self.f.blocks[bi].insts {
+                if let Some(r) = self.f.insts[ii].result {
+                    if self.of_op(r, &self.f.insts[ii].op, b) != self.val[r.0 as usize] {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+}
+
 fn join(a: L, b: L) -> L {
     match (a, b) {
         (L::Bot, x) | (x, L::Bot) => x,
@@ -440,6 +495,7 @@ pub fn run(f: &mut Func) -> bool {
     if !cx.solve() {
         return false;
     }
+    cx.narrow();
     let mut safe = Vec::new();
     for ii in 0..f.insts.len() {
         let Op::Checked(o, signed, a, b) = f.insts[ii].op.clone() else {
