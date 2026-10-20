@@ -235,7 +235,12 @@ impl<'a> Lowerer<'a> {
             _ => self.expr(rhs),
         };
         let reached = match r {
-            Res::Never => false,
+            // The default diverges (`?? return ...`): its scope still has to come off the stack, or
+            // the locals declared after this `??` would register in it and never be dropped.
+            Res::Never => {
+                self.f.scopes.pop();
+                false
+            }
             Res::Val(v) if matches!(repr, Repr::Scalar(_)) => {
                 self.pop_scope_carrying(&r);
                 self.jump(join, vec![v]);
