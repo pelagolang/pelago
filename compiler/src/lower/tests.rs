@@ -2298,3 +2298,11 @@ fn accumulators_of_counted_loops_keep_their_traps() {
         }",
     );
 }
+
+#[test]
+fn default_that_returns_does_not_leak_later_locals() {
+    // `?? return` leaves the default's scope open unless it is popped; the locals after it
+    // then registered in that dead scope and leaked on the way out.
+    let src = "fn pair(n: int) -> int ! string {\n var s: [string] = [\"x#(1)\", \"yy\"]\n const b = s.pop!() ?? return err(\"b\")\n const a = s.pop!() ?? return err(\"a\")\n ok(a.len() + b.len() + n)\n}\nfn main() {\n switch pair(0) { case ok(n): print(n)\n case err(e): print(e) }\n}\n";
+    assert_eq!(output_of(src), "4\n");
+}
