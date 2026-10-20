@@ -123,6 +123,55 @@ pub fn golden() -> Vec<Case> {
         ("movzx r8d, r9b", "45 0f b6 c1", |a| {
             a.extend_rr(R8, R9, 1, false, false)
         }),
+        ("mov rax, [rbx+rcx*8]", "48 8b 04 cb", |a| {
+            a.load(RAX, mem_idx(RBX, RCX, 8, 0), 8)
+        }),
+        ("mov rax, [rbp+rsi*8-16]", "48 8b 44 f5 f0", |a| {
+            a.load(RAX, mem_idx(RBP, RSI, 8, -16), 8)
+        }),
+        ("mov r8, [r12+r13*4+100]", "4f 8b 44 ac 64", |a| {
+            a.load(R8, mem_idx(R12, R13, 4, 100), 8)
+        }),
+        ("mov [r13+r9*2], al", "43 88 44 4d 00", |a| {
+            a.store(mem_idx(R13, R9, 2, 0), RAX, 1)
+        }),
+        ("mov rax, [rbp+r12*8]", "4a 8b 44 e5 00", |a| {
+            a.load(RAX, mem_idx(RBP, R12, 8, 0), 8)
+        }),
+        ("mov eax, [r13+rax*4]", "41 8b 44 85 00", |a| {
+            a.load(RAX, mem_idx(R13, RAX, 4, 0), 4)
+        }),
+        (
+            "mov dword ptr [rsp+rdx*1+8], 5",
+            "c7 44 14 08 05 00 00 00",
+            |a| a.store_imm(mem_idx(RSP, RDX, 1, 8), 5, 4),
+        ),
+        ("movzx eax, byte ptr [rdi+rsi*1]", "0f b6 04 37", |a| {
+            a.load_ext(RAX, mem_idx(RDI, RSI, 1, 0), 1, false, false)
+        }),
+        (
+            "movsx rax, word ptr [r10+r11*2+0x1000]",
+            "4b 0f bf 84 5a 00 10 00 00",
+            |a| a.load_ext(RAX, mem_idx(R10, R11, 2, 0x1000), 2, true, true),
+        ),
+        ("lea rax, [rdi+rsi*1]", "48 8d 04 37", |a| {
+            a.lea(RAX, mem_idx(RDI, RSI, 1, 0))
+        }),
+        ("lea r9, [rbp+rcx*8-24]", "4c 8d 4c cd e8", |a| {
+            a.lea(R9, mem_idx(RBP, RCX, 8, -24))
+        }),
+        ("movups xmm0, [rax]", "0f 10 00", |a| {
+            a.movups_load(Xmm(0), mem(RAX, 0))
+        }),
+        ("movups [rbp-16], xmm0", "0f 11 45 f0", |a| {
+            a.movups_store(mem(RBP, -16), Xmm(0))
+        }),
+        ("movups xmm1, [rcx+rdx*1+16]", "0f 10 4c 11 10", |a| {
+            a.movups_load(Xmm(1), mem_idx(RCX, RDX, 1, 16))
+        }),
+        ("movups [r12+8], xmm9", "45 0f 11 4c 24 08", |a| {
+            a.movups_store(mem(R12, 8), Xmm(9))
+        }),
         ("lea rax, [rbp-16]", "48 8d 45 f0", |a| {
             a.lea(RAX, mem(RBP, -16))
         }),

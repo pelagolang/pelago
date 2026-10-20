@@ -8,6 +8,7 @@
 //! width. The rules for division, shifts, overflow and NaN are in `docs/design/backend.md`.
 
 use super::elf::{self, Blob, Symbol};
+use super::regs::{Base, Fold};
 use super::rt::{self, Runtime};
 use super::x86::*;
 use super::{pe, Os};
@@ -66,6 +67,11 @@ enum Where {
     Dead,
     /// Only inside [`Gen::moves`]: the value pushed on the stack to break a cycle of copies.
     Stack,
+    /// The address of a frame object (plus a constant): no storage, `lea` where it is needed.
+    Frame(i32),
+    /// A pointer that is never computed: its users name its address in their memory operand
+    /// (`Gen::mem_of`, `Fold`).
+    Folded,
 }
 
 /// Compiles the module to an executable whose entry runs the function named `entry`.
@@ -129,10 +135,13 @@ struct Gen<'m> {
     /// Per function: where each value lives, the frame offset of each `Slot`, and where the
     /// callee-saved registers in use are kept.
     loc: Vec<Where>,
+    fold: Vec<Fold>,
     saves: Vec<(Reg, i32)>,
     /// Per call-like instruction: the values in caller-saved registers that live across it, as the
     /// register and the frame offset where the value waits during the operation.
     across: HashMap<usize, Vec<(Reg, i32)>>,
+    /// The block and the position in it of the instruction being generated.
+    at: (usize, usize),
     /// Frame offsets already written in the current block (a value is stored once per block).
     stored: HashSet<i32>,
     /// Copies of block parameters kept out of line: label, the copies, and the block to jump to.
@@ -208,6 +217,10 @@ fn bits(t: IrTy) -> u32 {
     }
 }
 
+fn size_of_ty(t: IrTy) -> i32 {
+    size(t) as i32
+}
+
 fn size(t: IrTy) -> u8 {
     match t {
         IrTy::Int(b) => (b / 8).max(1),
@@ -266,8 +279,10 @@ impl<'m> Gen<'m> {
             stop_unreachable: u,
             regalloc: true,
             loc: Vec::new(),
+            fold: Vec::new(),
             saves: Vec::new(),
             across: HashMap::new(),
+            at: (0, 0),
             stored: HashSet::new(),
             stubs: Vec::new(),
             slot_off: HashMap::new(),
@@ -321,11 +336,12 @@ impl<'m> Gen<'m> {
         self.slot_off.clear();
         let imms = const_values(f);
         let uses = f.use_counts();
+        let folds = super::regs::folds(f, &uses, &imms);
         let alloc = if self.regalloc {
             let n = reg_limit();
             let saved: Vec<Reg> = VALUE_REGS.iter().copied().take(n).collect();
             let scratch: Vec<Reg> = SCRATCH_REGS.iter().copied().take(n).collect();
-            super::regs::assign(f, &saved, &scratch, &INT_REGS)
+            super::regs::assign(f, &saved, &scratch, &INT_REGS, &folds, &imms)
         } else {
             super::regs::Alloc {
                 reg: vec![None; f.values.len()],
@@ -344,6 +360,7 @@ impl<'m> Gen<'m> {
         for (v, r) in alloc.reg.iter().enumerate() {
             self.loc.push(match (imms[v], r) {
                 (Some(n), _) => Where::Imm(n),
+                _ if folds[v] != Fold::No => Where::Folded,
                 _ if fused[v] || (uses[v] == 0 && !is_float(f.values[v])) => Where::Dead,
                 (None, Some(r)) => Where::Reg(*r),
                 (None, None) => {
@@ -387,6 +404,18 @@ impl<'m> Gen<'m> {
             }
         }
         self.frame = (at + 15) / 16 * 16;
+        // Frame objects and what is added to them are plain frame offsets.
+        for (v, fold) in folds.iter().enumerate() {
+            if let Fold::Addr {
+                base: Base::Slot(i),
+                index: None,
+                disp,
+            } = fold
+            {
+                self.loc[v] = Where::Frame(self.slot_off[i] + disp);
+            }
+        }
+        self.fold = folds;
     }
 
     // ---- Loads and stores of values -------------------------------------------------------------------
@@ -400,6 +429,7 @@ impl<'m> Gen<'m> {
             }
             Where::Mem(off) => self.a.load(r, mem(RBP, off), 8),
             Where::Imm(n) => self.a.mov_ri(r, n),
+            Where::Frame(off) => self.a.lea(r, mem(RBP, off)),
             w => panic!("value {} is read from {w:?}", v.0),
         }
     }
@@ -426,6 +456,7 @@ impl<'m> Gen<'m> {
             }
             Where::Mem(off) => self.a.load_ext(r, mem(RBP, off), size(t), signed, true),
             Where::Imm(n) => self.a.mov_ri(r, widen(n, t, signed)),
+            Where::Frame(off) => self.a.lea(r, mem(RBP, off)),
             w => panic!("value {} is read from {w:?}", v.0),
         }
     }
@@ -440,7 +471,7 @@ impl<'m> Gen<'m> {
             Where::Mem(off) => self.a.store(mem(RBP, off), r, 8),
             Where::Imm(_) => panic!("a constant is never written"),
             Where::Dead => {}
-            Where::Stack => unreachable!(),
+            w => unreachable!("a write to {w:?}"),
         }
     }
 
@@ -532,10 +563,11 @@ impl<'m> Gen<'m> {
                     fused = Some((last, *op, *x, *y));
                 }
             }
-            for &i in &b.insts {
+            for (k, &i) in b.insts.iter().enumerate() {
                 if fused.is_some_and(|(l, ..)| l == i) {
                     continue;
                 }
+                self.at = (bi, k);
                 self.inst(f, i, &f.insts[i])?;
             }
             let next = (bi + 1 < f.blocks.len()).then_some(bi + 1);
@@ -715,6 +747,7 @@ impl<'m> Gen<'m> {
             (Where::Reg(r), Where::Reg(x)) => self.a.mov_rr(r, x, 8),
             (Where::Reg(r), Where::Mem(off)) => self.a.load(r, mem(RBP, off), 8),
             (Where::Reg(r), Where::Imm(n)) => self.a.mov_ri(r, n),
+            (Where::Reg(r), Where::Frame(off)) => self.a.lea(r, mem(RBP, off)),
             (Where::Reg(r), Where::Stack) => self.a.pop(r),
             (Where::Mem(off), Where::Reg(x)) => self.a.store(mem(RBP, off), x, 8),
             (Where::Mem(off), Where::Imm(n)) if i32::try_from(n).is_ok() => {
@@ -724,6 +757,7 @@ impl<'m> Gen<'m> {
                 match s {
                     Where::Mem(from) => self.a.load(RAX, mem(RBP, from), 8),
                     Where::Imm(n) => self.a.mov_ri(RAX, n),
+                    Where::Frame(from) => self.a.lea(RAX, mem(RBP, from)),
                     Where::Stack => self.a.pop(RAX),
                     w => unreachable!("copy from {w:?}"),
                 }
@@ -752,6 +786,12 @@ impl<'m> Gen<'m> {
 
     fn inst_body(&mut self, f: &Func, id: usize, inst: &Inst) -> Result<(), String> {
         let res = inst.result;
+        // A folded pointer or index is never computed (a `Slot` still clears its memory).
+        if let (Some(r), false) = (res, matches!(inst.op, Op::Slot(..))) {
+            if matches!(self.loc[r.0 as usize], Where::Frame(_) | Where::Folded) {
+                return Ok(());
+            }
+        }
         match &inst.op {
             Op::Const(..) if matches!(self.loc[res.unwrap().0 as usize], Where::Imm(_)) => {}
             Op::Const(t, c) => {
@@ -820,37 +860,26 @@ impl<'m> Gen<'m> {
                 self.call(f, args, Some(fp), &mut |g| g.a.call_reg(R11), res, *ret);
             }
             Op::Slot(sz, _) => {
+                // Memory is zero when a slot comes into use, as in the interpreter, unless the code
+                // right after overwrites every byte before anything else touches it.
                 let off = self.slot_off[&id];
-                // Memory is zero when a slot comes into use, as in the interpreter.
-                let mut at = 0i32;
-                let mut left = *sz as i32;
-                if left <= 64 {
-                    for (n, w) in [(8, 8u8), (4, 4), (2, 2), (1, 1)] {
-                        while left >= n {
-                            self.a.store_imm(mem(RBP, off + at), 0, w);
-                            at += n;
-                            left -= n;
-                        }
-                    }
-                } else {
-                    // `rdi` may hold a value: the string instruction needs it.
-                    self.a.push(RDI);
-                    self.a.lea(RDI, mem(RBP, off));
-                    self.a.alu_rr(Alu::Xor, RAX, RAX, 4);
-                    self.a.mov_ri(RCX, *sz as i64);
-                    self.a.rep_stosb();
-                    self.a.pop(RDI);
+                if !self.overwritten_first(f, id, off, *sz as i32) {
+                    self.zero_frame(off, *sz as i32);
                 }
-                self.a.lea(RAX, mem(RBP, off));
-                self.st(res.unwrap(), RAX);
             }
-            Op::PtrAdd(p, n) => {
-                self.ld(RAX, *p);
-                self.ld(RCX, *n);
-                self.a.alu_rr(Alu::Add, RAX, RCX, 8);
-                self.st(res.unwrap(), RAX);
-            }
+            Op::PtrAdd(p, n) => self.bin(f, BinOp::Add, *p, *n, res.unwrap())?,
             Op::MemCopy(d, s, n) => {
+                if let Where::Imm(len) = self.loc[n.0 as usize] {
+                    if super::regs::small_copy(Some(len)) {
+                        // Plain moves; an address that needs registers is built in `rcx` and `rdx`.
+                        let md = self.mem_of(f, *d, RCX, RAX);
+                        let md = self.settle(md, RCX);
+                        let ms = self.mem_of(f, *s, RDX, RAX);
+                        let ms = self.settle(ms, RDX);
+                        self.copy_bytes(md, ms, len as i32);
+                        return Ok(());
+                    }
+                }
                 let (wd, ws, wn) = (
                     self.loc[d.0 as usize],
                     self.loc[s.0 as usize],
@@ -884,28 +913,31 @@ impl<'m> Gen<'m> {
                 self.a.call(w);
             }
             Op::Load(t, p) => {
-                self.ld(RCX, *p);
+                let m = self.mem_of(f, *p, RCX, RDX);
                 let r = res.unwrap();
                 match t {
                     IrTy::F32 | IrTy::F64 => {
-                        self.a.fload(Xmm(0), mem(RCX, 0), *t == IrTy::F64);
+                        self.a.fload(Xmm(0), m, *t == IrTy::F64);
                         self.stf(r, Xmm(0), f);
                     }
                     _ => {
-                        self.a.load_ext(RAX, mem(RCX, 0), size(*t), false, true);
-                        self.st(r, RAX);
+                        let d = self.dst(r);
+                        self.a.load_ext(d, m, size(*t), false, true);
+                        self.st(r, d);
                     }
                 }
             }
             Op::Store(p, x) => {
                 let t = f.ty(*x);
-                self.ld(RCX, *p);
+                let m = self.mem_of(f, *p, RCX, RDX);
                 if is_float(t) {
                     self.ldf(Xmm(0), *x, f);
-                    self.a.fstore(mem(RCX, 0), Xmm(0), t == IrTy::F64);
+                    self.a.fstore(m, Xmm(0), t == IrTy::F64);
+                } else if let Some(n) = self.imm32(*x, f, false) {
+                    self.a.store_imm(m, n, size(t));
                 } else {
-                    self.ld(RAX, *x);
-                    self.a.store(mem(RCX, 0), RAX, size(t));
+                    let rx = self.src(*x, f, false, RAX);
+                    self.a.store(m, rx, size(t));
                 }
             }
             Op::Alloc(n) => {
@@ -921,6 +953,169 @@ impl<'m> Gen<'m> {
             }
         }
         Ok(())
+    }
+
+    // ---- Memory --------------------------------------------------------------------------------------
+
+    /// The memory operand for the address a value holds: a frame offset, `[base + index * scale + disp]`
+    /// for a folded pointer, or the register the pointer is in. Registers the operand needs that
+    /// the value does not already have are loaded into `s1` (base) and `s2` (index).
+    fn mem_of(&mut self, f: &Func, p: Value, s1: Reg, s2: Reg) -> Mem {
+        match self.loc[p.0 as usize] {
+            Where::Frame(off) => mem(RBP, off),
+            Where::Folded => {
+                let Fold::Addr { base, index, disp } = self.fold[p.0 as usize] else {
+                    unreachable!("a folded index is read through its address")
+                };
+                let (b, extra) = match base {
+                    Base::Slot(i) => (RBP, self.slot_off[&i]),
+                    Base::Value(v) => (self.src(v, f, false, s1), 0),
+                };
+                let index = index.map(|(iv, scale)| (self.src(iv, f, false, s2), scale));
+                Mem {
+                    base: b,
+                    index,
+                    disp: disp + extra,
+                }
+            }
+            _ => {
+                let rb = self.src(p, f, false, s1);
+                mem(rb, 0)
+            }
+        }
+    }
+
+    /// An operand with an index becomes a plain register address in `scratch` (`lea`), so that the
+    /// registers it was built from can be reused.
+    fn settle(&mut self, m: Mem, scratch: Reg) -> Mem {
+        if m.index.is_some() {
+            self.a.lea(scratch, m);
+            mem(scratch, 0)
+        } else {
+            m
+        }
+    }
+
+    /// Copies `len` bytes (at most `SMALL_COPY`) between two memory operands without a loop.
+    fn copy_bytes(&mut self, to: Mem, from: Mem, len: i32) {
+        let at = |m: Mem, k: i32| Mem {
+            disp: m.disp + k,
+            ..m
+        };
+        let mut k = 0;
+        for w in [8, 4, 2, 1] {
+            while len - k >= w {
+                self.a.load(RAX, at(from, k), w as u8);
+                self.a.store(at(to, k), RAX, w as u8);
+                k += w;
+            }
+        }
+    }
+
+    /// Fills `size` bytes of the frame with zeros.
+    fn zero_frame(&mut self, off: i32, size: i32) {
+        if size <= 128 {
+            let mut k = 0;
+            if size >= 16 {
+                self.a.fxor(Xmm(0), Xmm(0));
+                while size - k >= 16 {
+                    self.a.movups_store(mem(RBP, off + k), Xmm(0));
+                    k += 16;
+                }
+            }
+            for w in [8, 4, 2, 1] {
+                while size - k >= w {
+                    self.a.store_imm(mem(RBP, off + k), 0, w as u8);
+                    k += w;
+                }
+            }
+        } else {
+            // `rdi` may hold a value: the string instruction needs it.
+            self.a.push(RDI);
+            self.a.lea(RDI, mem(RBP, off));
+            self.a.alu_rr(Alu::Xor, RAX, RAX, 4);
+            self.a.mov_ri(RCX, size as i64);
+            self.a.rep_stosb();
+            self.a.pop(RDI);
+        }
+    }
+
+    /// Does the code after the `Slot` instruction `id` (frame offset `off`, `size` bytes) write every
+    /// byte of it, in its own block, before anything reads or passes on its address? Then the
+    /// clearing can be left out.
+    fn overwritten_first(&self, f: &Func, id: usize, off: i32, size: i32) -> bool {
+        if size > 4096 {
+            return false;
+        }
+        let (bi, k) = self.at;
+        let b = &f.blocks[bi];
+        let in_slot = |v: Value| -> Option<i32> {
+            match self.loc[v.0 as usize] {
+                Where::Frame(o) if (off..off + size).contains(&o) => Some(o - off),
+                _ => None,
+            }
+        };
+        // An address built on this slot that is not a plain frame offset.
+        let touches = |v: Value| -> bool {
+            in_slot(v).is_some()
+                || matches!(
+                    self.fold[v.0 as usize],
+                    Fold::Addr {
+                        base: Base::Slot(s),
+                        ..
+                    } if s == id
+                )
+        };
+        let mut written = vec![false; size as usize];
+        let mut left = size as usize;
+        let mut mark = |from: i32, len: i32, written: &mut Vec<bool>| {
+            for x in from.max(0)..(from + len).min(size) {
+                if !written[x as usize] {
+                    written[x as usize] = true;
+                    left -= 1;
+                }
+            }
+            left == 0
+        };
+        for &j in &b.insts[k + 1..] {
+            match &f.insts[j].op {
+                Op::Store(p, x) => {
+                    if touches(*x) {
+                        return false;
+                    }
+                    if let Some(at) = in_slot(*p) {
+                        if mark(at, size_of_ty(f.ty(*x)), &mut written) {
+                            return true;
+                        }
+                    } else if touches(*p) {
+                        return false;
+                    }
+                }
+                Op::MemCopy(d, s, n) => {
+                    if touches(*s) || touches(*n) {
+                        return false;
+                    }
+                    if touches(*d) {
+                        match (in_slot(*d), self.loc[n.0 as usize]) {
+                            (Some(at), Where::Imm(len)) => {
+                                if mark(at, len as i32, &mut written) {
+                                    return true;
+                                }
+                            }
+                            _ => return false,
+                        }
+                    }
+                }
+                op => {
+                    let mut vs = Vec::new();
+                    super::regs::inst_uses(op, &mut vs);
+                    if vs.into_iter().any(touches) {
+                        return false;
+                    }
+                }
+            }
+        }
+        false
     }
 
     /// A call: stack arguments, register arguments, the call, the result.

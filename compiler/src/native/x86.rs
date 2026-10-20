@@ -30,15 +30,29 @@ pub const R15: Reg = Reg(15);
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Xmm(pub u8);
 
-/// A memory operand: `[base + disp]`.
+/// A memory operand: `[base + index * scale + disp]`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Mem {
     pub base: Reg,
+    /// A register and its scale (1, 2, 4 or 8); never `rsp`.
+    pub index: Option<(Reg, u8)>,
     pub disp: i32,
 }
 
 pub const fn mem(base: Reg, disp: i32) -> Mem {
-    Mem { base, disp }
+    Mem {
+        base,
+        index: None,
+        disp,
+    }
+}
+
+pub const fn mem_idx(base: Reg, index: Reg, scale: u8, disp: i32) -> Mem {
+    Mem {
+        base,
+        index: Some((index, scale)),
+        disp,
+    }
 }
 
 /// A place in the code, bound once.
@@ -208,7 +222,14 @@ impl Asm {
             Rm::Mem(m) => m.base.0 >> 3,
             _ => 0,
         };
-        let rex = 0x40 | (u8::from(w) << 3) | ((reg >> 3) << 2) | b;
+        let x = match &rm {
+            Rm::Mem(Mem {
+                index: Some((i, _)),
+                ..
+            }) => i.0 >> 3,
+            _ => 0,
+        };
+        let rex = 0x40 | (u8::from(w) << 3) | ((reg >> 3) << 2) | (x << 1) | b;
         if rex != 0x40 || force_rex {
             self.byte(rex);
         }
@@ -225,7 +246,17 @@ impl Asm {
                 } else {
                     (0x80, 4)
                 };
-                if base == 4 {
+                if let Some((i, scale)) = m.index {
+                    assert!(i != RSP, "rsp cannot be an index");
+                    let ss = match scale {
+                        1 => 0,
+                        2 => 1,
+                        4 => 2,
+                        _ => 3,
+                    };
+                    self.byte(md | r | 4);
+                    self.byte(ss << 6 | (i.0 & 7) << 3 | base);
+                } else if base == 4 {
                     self.byte(md | r | 4);
                     self.byte(0x24);
                 } else {
@@ -577,6 +608,15 @@ impl Asm {
     pub fn fload(&mut self, dst: Xmm, m: Mem, double: bool) {
         let p = if double { 0xF2 } else { 0xF3 };
         self.sse(Some(p), false, &[0x0F, 0x10], dst.0, Rm::Mem(m));
+    }
+
+    /// 16 bytes, any alignment: for copying and clearing.
+    pub fn movups_load(&mut self, dst: Xmm, m: Mem) {
+        self.sse(None, false, &[0x0F, 0x10], dst.0, Rm::Mem(m));
+    }
+
+    pub fn movups_store(&mut self, m: Mem, src: Xmm) {
+        self.sse(None, false, &[0x0F, 0x11], src.0, Rm::Mem(m));
     }
 
     pub fn fstore(&mut self, m: Mem, src: Xmm, double: bool) {
