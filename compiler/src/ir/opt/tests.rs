@@ -968,3 +968,91 @@ fn blocks_that_stop_go_last() {
     let m = module_of(f);
     assert_eq!(run_full(&m, "main", &[Val::Int(7)]).result, Ok(Val::Int(7)));
 }
+
+/// `fn sum(n, acc) { if n == 0 { acc } else { sum(n - 1, acc + n) } }` and `main` calling it. With
+/// `leak`, the call also gets the address of a slot as a third argument.
+fn tail_sum(n: i128, leak: bool) -> Module {
+    let mut m = Module::default();
+    let mut tys = vec![IrTy::I64, IrTy::I64];
+    if leak {
+        tys.push(IrTy::Ptr);
+    }
+    let mut s = Func::new("sum", &tys, IrTy::I64);
+    let e = s.entry();
+    let (nv, acc) = (s.block_params(e)[0], s.block_params(e)[1]);
+    let done = s.new_block(&[]);
+    let rec = s.new_block(&[]);
+    let to = |block| Target {
+        block,
+        args: vec![],
+    };
+    let zero = s
+        .emit(e, Op::Const(IrTy::I64, Const::Int(0)), Some(IrTy::I64))
+        .unwrap();
+    let c = s
+        .emit(e, Op::Cmp(CmpOp::Eq, nv, zero), Some(IrTy::Bool))
+        .unwrap();
+    s.terminate(e, Term::Branch(c, to(done), to(rec)));
+    s.terminate(done, Term::Return(Some(acc)));
+    let one = s
+        .emit(rec, Op::Const(IrTy::I64, Const::Int(1)), Some(IrTy::I64))
+        .unwrap();
+    let n1 = s
+        .emit(rec, Op::Bin(BinOp::Sub, nv, one), Some(IrTy::I64))
+        .unwrap();
+    let a1 = s
+        .emit(rec, Op::Bin(BinOp::Add, acc, nv), Some(IrTy::I64))
+        .unwrap();
+    let mut args = vec![n1, a1];
+    if leak {
+        let slot = s.emit(rec, Op::Slot(8, 8), Some(IrTy::Ptr)).unwrap();
+        args.push(slot);
+    }
+    let r = s
+        .emit(rec, Op::Call(FuncId(0), args), Some(IrTy::I64))
+        .unwrap();
+    s.terminate(rec, Term::Return(Some(r)));
+    m.add(s);
+    let mut f = Func::new("main", &[], IrTy::I64);
+    let e = f.entry();
+    let k = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(n)), Some(IrTy::I64))
+        .unwrap();
+    let z = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(0)), Some(IrTy::I64))
+        .unwrap();
+    let mut args = vec![k, z];
+    if leak {
+        let slot = f.emit(e, Op::Slot(8, 8), Some(IrTy::Ptr)).unwrap();
+        args.push(slot);
+    }
+    let r = f
+        .emit(e, Op::Call(FuncId(0), args), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(e, Term::Return(Some(r)));
+    m.add(f);
+    m
+}
+
+#[test]
+fn a_tail_call_to_itself_becomes_a_loop() {
+    let (o, before, after) = both(&tail_sum(1000, false));
+    assert_eq!(before, after);
+    assert_eq!(before, Val::Int(500500));
+    let sum = o.funcs.iter().find(|f| f.name == "sum").unwrap();
+    assert_eq!(
+        count(sum, |o| matches!(o, Op::Call(..))),
+        0,
+        "{}",
+        print_func(sum, None)
+    );
+}
+
+#[test]
+fn a_tail_call_that_gets_a_slot_address_stays_a_call() {
+    let m = tail_sum(10, true);
+    let mut o = m.clone();
+    optimize(&mut o, Options::default());
+    let sum = o.funcs.iter().find(|f| f.name == "sum").unwrap();
+    assert_eq!(count(sum, |o| matches!(o, Op::Call(..))), 1);
+}
