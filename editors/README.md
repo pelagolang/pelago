@@ -7,7 +7,7 @@ Three layers, all generated from or checked against the compiler's own tables:
 | `pelago highlight` | the compiler | Colours a file in the terminal (`--ansi`), as HTML (`--html`, `--html-page`) or not at all (`--plain`). Exact: it uses the real lexer. `--theme dark|light`. `NO_COLOR` is respected. |
 | TextMate grammar | `textmate/` | The grammar editors read. `template.tmLanguage.json` is written by hand; `pelago.tmLanguage.json` is **generated** from it and from `keyword.rs` / `token.rs`. |
 | `pelago lsp` | the compiler | Language server: diagnostics, hover, go to definition, references, outline, completion, semantic tokens. |
-| VS Code extension | [`pelagolang/vscode-pelago`](https://github.com/pelagolang/vscode-pelago) | Its own repository: wraps a copy of the grammar, adds language settings, snippets and Pelago-only colour rules (no theme). After a grammar change, copy `textmate/pelago.tmLanguage.json` to `syntaxes/` there and bump its version. |
+| VS Code extension | [`pelagolang/vscode-pelago`](https://github.com/pelagolang/vscode-pelago) | Its own repository: wraps a copy of the grammar, adds language settings, snippets and Pelago-only colour rules (no theme). A workflow here (`sync-vscode-grammar`) opens a PR there whenever `textmate/pelago.tmLanguage.json` changes on `main`; it needs the secret `VSCODE_PELAGO_TOKEN`. |
 
 ## Keeping the grammar in step
 
