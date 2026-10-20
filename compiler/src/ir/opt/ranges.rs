@@ -375,8 +375,9 @@ impl Ctx<'_> {
     }
 
     /// Upper bounds for the accumulators of loops that run a known number of times. A loop whose
-    /// header is `branch (lt c, N)` with `N` a constant, whose counter `c` starts at 0 and grows by
-    /// one on the only way back, runs its body at most `N` times. A parameter `p` that starts at
+    /// header is `branch (c < N)` with `N` a constant, whose counter `c` starts at a constant and
+    /// steps up (or down, against `>`) by a constant on the only way back, runs its body a
+    /// number of times it can count. A parameter `p` that starts at
     /// most at `b` and gains at most `d` on the way back (`p + d`, `d` known to be below `dmax`) is
     /// then at most `b + N * dmax` at the header, whatever the body does in between: the sum of a
     /// loop that appends two bytes 2 000 000 times cannot overflow, which no comparison says.
@@ -404,8 +405,7 @@ impl Ctx<'_> {
             {
                 continue;
             }
-            let Some(Op::Cmp(CmpOp::Lt | CmpOp::ULt, c, n)) =
-                self.defs[cond.0 as usize].map(|d| &self.f.insts[d].op)
+            let Some(Op::Cmp(cmp, c, n)) = self.defs[cond.0 as usize].map(|d| &self.f.insts[d].op)
             else {
                 continue;
             };
@@ -413,7 +413,7 @@ impl Ctx<'_> {
             let Some(kc) = params.iter().position(|p| p == c) else {
                 continue;
             };
-            let Some(count) = self.konst(*n) else {
+            let (Some(limit), Some(start)) = (self.konst(*n), self.konst(entry.1[kc])) else {
                 continue;
             };
             let sum = |v: Value| match self.defs[v.0 as usize].map(|d| &self.f.insts[d].op) {
@@ -422,13 +422,53 @@ impl Ctx<'_> {
                 }
                 _ => None,
             };
-            let counts = self.konst(entry.1[kc]) == Some(0)
-                && sum(latch.1[kc]).is_some_and(|(a, b)| {
-                    (a == *c && self.konst(b) == Some(1)) || (b == *c && self.konst(a) == Some(1))
-                });
-            if !counts {
+            let diff = |v: Value| match self.defs[v.0 as usize].map(|d| &self.f.insts[d].op) {
+                Some(Op::Bin(BinOp::Sub, a, b) | Op::Checked(BinOp::Sub, _, a, b)) => {
+                    Some((*a, *b))
+                }
+                _ => None,
+            };
+            // The step, up (`c + s`) or down (`c - s`), a constant above zero.
+            let up = sum(latch.1[kc]).and_then(|(a, b)| {
+                if a == *c {
+                    self.konst(b)
+                } else if b == *c {
+                    self.konst(a)
+                } else {
+                    None
+                }
+            });
+            let down = diff(latch.1[kc])
+                .filter(|(a, _)| a == c)
+                .and_then(|(_, b)| self.konst(b));
+            // How many times the body can run: while `c < limit` (or `<=`) going up, `c > limit`
+            // (or `>=`) going down.
+            let trips = match (cmp, up, down) {
+                (CmpOp::Lt | CmpOp::ULt, Some(s), _) if s > 0 => Some(if limit > start {
+                    (limit - start).div_ceil(s)
+                } else {
+                    0
+                }),
+                (CmpOp::Le, Some(s), _) if s > 0 => Some(if limit >= start {
+                    (limit - start) / s + 1
+                } else {
+                    0
+                }),
+                (CmpOp::Gt, _, Some(s)) if s > 0 => Some(if start > limit {
+                    (start - limit).div_ceil(s)
+                } else {
+                    0
+                }),
+                (CmpOp::Ge, _, Some(s)) if s > 0 => Some(if start >= limit {
+                    (start - limit) / s + 1
+                } else {
+                    0
+                }),
+                _ => None,
+            };
+            let Some(count) = trips else {
                 continue;
-            }
+            };
             for (kp, &p) in params.iter().enumerate() {
                 let t = self.f.ty(p);
                 if kp == kc || !t.is_int() {

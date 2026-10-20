@@ -715,10 +715,11 @@ fn a_counter_bounded_by_its_loop_test_cannot_overflow() {
     // `i <= n` leaves `n = MAX`, so `i + 1` could pass it; a step of 2 could pass MAX with `i < n`.
     assert_eq!(checks_left(up(1, CmpOp::Le)), 2);
     assert_eq!(checks_left(up(2, CmpOp::Lt)), 2);
-    // A constant bound leaves room for a bigger step.
+    // A constant bound leaves room for a bigger step, and counts the trips: the sum is at most
+    // 4 * 9 or 11 * 10, so it needs no check either.
     let c = |step, cmp, limit| counter_loop(Some(0), step, BinOp::Add, cmp, Some(limit));
-    assert_eq!(checks_left(c(3, CmpOp::Lt, 10)), 1);
-    assert_eq!(checks_left(c(1, CmpOp::Le, 10)), 1);
+    assert_eq!(checks_left(c(3, CmpOp::Lt, 10)), 0);
+    assert_eq!(checks_left(c(1, CmpOp::Le, 10)), 0);
     // Counting down while positive: the subtraction cannot go below zero.
     let down = counter_loop(None, 1, BinOp::Sub, CmpOp::Gt, Some(0));
     assert_eq!(checks_left(down), 1);
@@ -731,9 +732,24 @@ fn a_sum_in_a_counted_loop_is_bounded_by_the_trip_count() {
     assert_eq!(checks_left(c(1000)), 0);
     // A trip count times a gain that passes `MAX` leaves the sum checked.
     assert_eq!(checks_left(c(1 << 62)), 1);
-    // Another step than one is not a count of the trips.
-    let by_two = counter_loop(Some(0), 2, BinOp::Add, CmpOp::Lt, Some(1000));
-    assert_eq!(checks_left(by_two), 1);
+    // A step above one counts the trips too, and so does a counter going down.
+    assert_eq!(
+        checks_left(counter_loop(Some(0), 3, BinOp::Add, CmpOp::Lt, Some(1000))),
+        0
+    );
+    assert_eq!(
+        checks_left(counter_loop(Some(0), 2, BinOp::Add, CmpOp::Le, Some(1000))),
+        0
+    );
+    assert_eq!(
+        checks_left(counter_loop(Some(1000), 1, BinOp::Sub, CmpOp::Gt, Some(0))),
+        0
+    );
+    // A count that is not known (the limit is a parameter) leaves the sum checked.
+    assert_eq!(
+        checks_left(counter_loop(Some(0), 3, BinOp::Add, CmpOp::Lt, None)),
+        2
+    );
 }
 
 #[test]
@@ -1851,4 +1867,46 @@ fn a_slot_a_loop_fills_to_the_end_needs_no_clearing() {
     assert_eq!(set(999, 8000, false), 0);
     assert_eq!(set(1000, 8000, true), 0);
     assert_eq!(set(10, 80, false), 0);
+}
+
+#[test]
+fn a_loop_test_moves_onto_a_counter_that_moves_with_it() {
+    // i in 0..1000 with q += 2: the test reads q and i goes.
+    let mut f = Func::new("main", &[], IrTy::I64);
+    let e = f.entry();
+    let head = f.new_block(&[IrTy::I64, IrTy::I64]);
+    let body = f.new_block(&[]);
+    let done = f.new_block(&[]);
+    let konst = |f: &mut Func, b, v: i128| {
+        f.emit(b, Op::Const(IrTy::I64, Const::Int(v)), Some(IrTy::I64))
+            .unwrap()
+    };
+    let to = |b, args| Target { block: b, args };
+    let (z0, z1) = (konst(&mut f, e, 0), konst(&mut f, e, 5));
+    f.terminate(e, Term::Jump(to(head, vec![z0, z1])));
+    let (i, q) = (f.block_params(head)[0], f.block_params(head)[1]);
+    let n = konst(&mut f, head, 1000);
+    let c = f
+        .emit(head, Op::Cmp(CmpOp::Lt, i, n), Some(IrTy::Bool))
+        .unwrap();
+    f.terminate(head, Term::Branch(c, to(body, vec![]), to(done, vec![])));
+    let (one, two) = (konst(&mut f, body, 1), konst(&mut f, body, 2));
+    let i2 = f
+        .emit(body, Op::Bin(BinOp::Add, i, one), Some(IrTy::I64))
+        .unwrap();
+    let q2 = f
+        .emit(body, Op::Bin(BinOp::Add, q, two), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(body, Term::Jump(to(head, vec![i2, q2])));
+    f.terminate(done, Term::Return(Some(q)));
+    assert!(ivtest::run(&mut f));
+    dce::run(&mut f);
+    assert!(verify_func(&f).is_empty(), "{}", print_func(&f, None));
+    // One counter is left, and the limit is 5 + 2 * 1000.
+    assert_eq!(f.block_params(head).len(), 1, "{}", print_func(&f, None));
+    let limit = f
+        .insts
+        .iter()
+        .any(|i| matches!(i.op, Op::Const(_, Const::Int(2005))));
+    assert!(limit, "{}", print_func(&f, None));
 }
