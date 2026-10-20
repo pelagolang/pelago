@@ -13,6 +13,7 @@
 
 #![allow(clippy::needless_range_loop)]
 
+mod cache;
 mod cfg;
 mod cse;
 mod dce;
@@ -62,6 +63,7 @@ pub fn optimize(m: &mut Module, opts: Options) {
     }
     if inlining {
         inline::run(m);
+        cache::run(m);
         for i in 0..m.funcs.len() {
             passes(&mut m.funcs[i], true);
         }

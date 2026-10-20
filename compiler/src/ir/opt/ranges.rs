@@ -488,11 +488,14 @@ fn widen(old: L, new: L, max: u128) -> L {
 }
 
 pub fn run(f: &mut Func) -> bool {
-    if !f
-        .insts
-        .iter()
-        .any(|i| matches!(i.op, Op::Checked(..) | Op::Bin(BinOp::Div | BinOp::Rem, ..)))
-    {
+    if !f.insts.iter().any(|i| {
+        matches!(
+            i.op,
+            Op::Checked(..)
+                | Op::Bin(BinOp::Div | BinOp::Rem, ..)
+                | Op::Cmp(CmpOp::ULt | CmpOp::UGe, ..)
+        )
+    }) {
         return false;
     }
     let mut cx = Ctx::new(f);
@@ -502,7 +505,23 @@ pub fn run(f: &mut Func) -> bool {
     cx.narrow();
     let mut safe = Vec::new();
     let mut unsigned = Vec::new();
+    let mut decided: Vec<(usize, bool)> = Vec::new();
     for ii in 0..f.insts.len() {
+        // `i <u n` right after the guard `i < n` (signed) holds when `i` is not negative: this is the
+        // bounds check of `for i in 0..xs.len() { xs[i] }`.
+        if let Op::Cmp(o @ (CmpOp::ULt | CmpOp::UGe), a, b) = f.insts[ii].op.clone() {
+            let blk = cx.block_of[ii];
+            if blk != u32::MAX
+                && matches!(cx.range_at(a, BlockId(blk)), L::R(_))
+                && cx.facts[blk as usize].iter().any(|r| {
+                    (r.kind == Kind::Lt && r.a == a && r.b == b)
+                        || (r.kind == Kind::Gt && r.a == b && r.b == a)
+                })
+            {
+                decided.push((ii, o == CmpOp::ULt));
+            }
+            continue;
+        }
         // A signed division of a non-negative number by a positive constant is the unsigned one,
         // which needs no fix-up for negative dividends once `divconst` has turned it into a multiply.
         if let Op::Bin(BinOp::Div | BinOp::Rem, a, b) = f.insts[ii].op.clone() {
@@ -543,7 +562,10 @@ pub fn run(f: &mut Func) -> bool {
             safe.push(ii);
         }
     }
-    let changed = !safe.is_empty() || !unsigned.is_empty();
+    let changed = !safe.is_empty() || !unsigned.is_empty() || !decided.is_empty();
+    for (ii, v) in decided {
+        f.insts[ii].op = Op::Const(IrTy::Bool, Const::Bool(v));
+    }
     for ii in unsigned {
         if let Op::Bin(o, a, b) = f.insts[ii].op.clone() {
             let o = if o == BinOp::Div {

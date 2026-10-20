@@ -1390,3 +1390,147 @@ fn the_last_call_of_a_sum_becomes_a_loop() {
         }
     }
 }
+
+/// `main(n)`: `i = 0; if i < n { if i >=u n { return 1 } else { return 2 } } else { return 3 }`.
+fn bounds_guard() -> Func {
+    let mut f = Func::new("main", &[IrTy::I64], IrTy::I64);
+    let e = f.entry();
+    let (inside, out, bad, good) = (
+        f.new_block(&[]),
+        f.new_block(&[]),
+        f.new_block(&[]),
+        f.new_block(&[]),
+    );
+    let n = f.block_params(e)[0];
+    let i = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(0)), Some(IrTy::I64))
+        .unwrap();
+    let c = f
+        .emit(e, Op::Cmp(CmpOp::Lt, i, n), Some(IrTy::Bool))
+        .unwrap();
+    f.terminate(
+        e,
+        Term::Branch(
+            c,
+            Target {
+                block: inside,
+                args: vec![],
+            },
+            Target {
+                block: out,
+                args: vec![],
+            },
+        ),
+    );
+    let d = f
+        .emit(inside, Op::Cmp(CmpOp::UGe, i, n), Some(IrTy::Bool))
+        .unwrap();
+    f.terminate(
+        inside,
+        Term::Branch(
+            d,
+            Target {
+                block: bad,
+                args: vec![],
+            },
+            Target {
+                block: good,
+                args: vec![],
+            },
+        ),
+    );
+    for (b, k) in [(bad, 1), (good, 2), (out, 3)] {
+        let v = f
+            .emit(b, Op::Const(IrTy::I64, Const::Int(k)), Some(IrTy::I64))
+            .unwrap();
+        f.terminate(b, Term::Return(Some(v)));
+    }
+    f
+}
+
+#[test]
+fn an_unsigned_bounds_check_after_the_signed_guard_is_decided() {
+    let f = bounds_guard();
+    let mut g = f.clone();
+    assert!(ranges::run(&mut g));
+    assert_eq!(count(&g, |o| matches!(o, Op::Cmp(CmpOp::UGe, ..))), 0);
+    for n in [-5i128, 0, 1, 7] {
+        let (a, b) = (module_of(f.clone()), module_of(g.clone()));
+        let arg = [Val::Int(n as u64 as u128)];
+        assert_eq!(
+            run_full(&a, "main", &arg).result,
+            run_full(&b, "main", &arg).result
+        );
+    }
+}
+
+/// `main()`: a 24-byte slot `s`; `bump(s)` adds 1 to its second word and the program stores 5 in it,
+/// calls `bump`, and returns the word. With `keep`, the callee also stores the address in `s + 16`.
+fn slot_through_call(keep: bool) -> Module {
+    let mut m = Module::default();
+    let mut bump = Func::new("bump", &[IrTy::Ptr], IrTy::Void);
+    let be = bump.entry();
+    let p = bump.block_params(be)[0];
+    let eight = bump
+        .emit(be, Op::Const(IrTy::I64, Const::Int(8)), Some(IrTy::I64))
+        .unwrap();
+    let q = bump
+        .emit(be, Op::PtrAdd(p, eight), Some(IrTy::Ptr))
+        .unwrap();
+    let w = bump
+        .emit(be, Op::Load(IrTy::I64, q), Some(IrTy::I64))
+        .unwrap();
+    let one = bump
+        .emit(be, Op::Const(IrTy::I64, Const::Int(1)), Some(IrTy::I64))
+        .unwrap();
+    let w1 = bump
+        .emit(be, Op::Bin(BinOp::Add, w, one), Some(IrTy::I64))
+        .unwrap();
+    bump.emit(be, Op::Store(q, w1), None);
+    if keep {
+        let sixteen = bump
+            .emit(be, Op::Const(IrTy::I64, Const::Int(16)), Some(IrTy::I64))
+            .unwrap();
+        let r = bump
+            .emit(be, Op::PtrAdd(p, sixteen), Some(IrTy::Ptr))
+            .unwrap();
+        bump.emit(be, Op::Store(r, p), None);
+    }
+    bump.terminate(be, Term::Return(None));
+    let bump = m.add(bump);
+    let mut f = Func::new("main", &[], IrTy::I64);
+    let e = f.entry();
+    let s = f.emit(e, Op::Slot(24, 8), Some(IrTy::Ptr)).unwrap();
+    let eight = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(8)), Some(IrTy::I64))
+        .unwrap();
+    let q = f.emit(e, Op::PtrAdd(s, eight), Some(IrTy::Ptr)).unwrap();
+    let five = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(5)), Some(IrTy::I64))
+        .unwrap();
+    f.emit(e, Op::Store(q, five), None);
+    f.emit(e, Op::Call(bump, vec![s]), None);
+    let r = f.emit(e, Op::Load(IrTy::I64, q), Some(IrTy::I64)).unwrap();
+    f.terminate(e, Term::Return(Some(r)));
+    m.add(f);
+    m
+}
+
+#[test]
+fn a_slot_given_to_calls_is_cached_unless_a_callee_keeps_its_address() {
+    for keep in [false, true] {
+        let m = slot_through_call(keep);
+        let mut o = m.clone();
+        cache::run(&mut o);
+        assert!(verify_module(&o).is_empty(), "{}", print_module(&o));
+        let main = |m: &Module| m.funcs.iter().find(|f| f.name == "main").unwrap().clone();
+        let slots = count(&main(&o), |op| matches!(op, Op::Slot(..)));
+        // Cached: the function has its own copy besides the real slot. Kept address: left alone.
+        assert_eq!(slots, if keep { 1 } else { 2 }, "keep = {keep}");
+        assert_eq!(run_full(&m, "main", &[]).result, Ok(Val::Int(6)));
+        assert_eq!(run_full(&o, "main", &[]).result, Ok(Val::Int(6)));
+        let mut full = m.clone();
+        optimize(&mut full, Options::default());
+        assert_eq!(run_full(&full, "main", &[]).result, Ok(Val::Int(6)));
+    }
+}
