@@ -528,15 +528,25 @@ pub fn run(f: &mut Func) -> bool {
     cx.narrow();
     let mut safe = Vec::new();
     let mut unsigned = Vec::new();
-    let mut decided = Vec::new();
+    let mut decided: Vec<(usize, bool)> = Vec::new();
     for ii in 0..f.insts.len() {
-        // An index test `i <u len` with both sides known: the answer is the same every time.
-        if let Op::Cmp(c, a, b) = f.insts[ii].op {
+        if let Op::Cmp(o, a, b) = f.insts[ii].op {
             let blk = cx.block_of[ii];
             if is_bounds_test(&f.insts[ii].op) && blk != u32::MAX {
                 let blk = BlockId(blk);
-                if let (L::R(x), L::R(y)) = (cx.range_at(a, blk), cx.range_at(b, blk)) {
-                    if let Some(answer) = decide(c, x, y) {
+                // `i <u n` right after the guard `i < n` (signed) holds when `i` is not negative: this
+                // is the bounds check of `for i in 0..xs.len() { xs[i] }`.
+                let guarded = matches!(o, CmpOp::ULt | CmpOp::UGe)
+                    && matches!(cx.range_at(a, blk), L::R(_))
+                    && cx.facts[blk.0 as usize].iter().any(|r| {
+                        (r.kind == Kind::Lt && r.a == a && r.b == b)
+                            || (r.kind == Kind::Gt && r.a == b && r.b == a)
+                    });
+                if guarded {
+                    decided.push((ii, o == CmpOp::ULt));
+                } else if let (L::R(x), L::R(y)) = (cx.range_at(a, blk), cx.range_at(b, blk)) {
+                    // Or both sides have known ranges, and the answer is the same for all of them.
+                    if let Some(answer) = decide(o, x, y) {
                         decided.push((ii, answer));
                     }
                 }
@@ -584,8 +594,8 @@ pub fn run(f: &mut Func) -> bool {
         }
     }
     let changed = !safe.is_empty() || !unsigned.is_empty() || !decided.is_empty();
-    for (ii, answer) in decided {
-        f.insts[ii].op = Op::Const(IrTy::Bool, Const::Bool(answer));
+    for (ii, v) in decided {
+        f.insts[ii].op = Op::Const(IrTy::Bool, Const::Bool(v));
     }
     for ii in unsigned {
         if let Op::Bin(o, a, b) = f.insts[ii].op.clone() {

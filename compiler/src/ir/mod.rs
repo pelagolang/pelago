@@ -152,6 +152,22 @@ pub enum CmpOp {
 }
 
 impl CmpOp {
+    /// The comparison that is true exactly when this one is false (for integers).
+    pub fn inverse(self) -> CmpOp {
+        match self {
+            CmpOp::Eq => CmpOp::Ne,
+            CmpOp::Ne => CmpOp::Eq,
+            CmpOp::Lt => CmpOp::Ge,
+            CmpOp::Ge => CmpOp::Lt,
+            CmpOp::Le => CmpOp::Gt,
+            CmpOp::Gt => CmpOp::Le,
+            CmpOp::ULt => CmpOp::UGe,
+            CmpOp::UGe => CmpOp::ULt,
+            CmpOp::ULe => CmpOp::UGt,
+            CmpOp::UGt => CmpOp::ULe,
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             CmpOp::Eq => "eq",
@@ -197,13 +213,49 @@ impl CastKind {
     }
 }
 
+/// When a `CheckedIf` may stop.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Test {
+    /// A bool and the value it must have.
+    Bool(Value, bool),
+    /// A comparison that holds; made again where it is needed, so no bool is kept.
+    Cmp(CmpOp, Value, Value),
+}
+
+impl Test {
+    pub fn for_each_value(&self, mut f: impl FnMut(Value)) {
+        match self {
+            Test::Bool(c, _) => f(*c),
+            Test::Cmp(_, a, b) => {
+                f(*a);
+                f(*b);
+            }
+        }
+    }
+
+    pub fn map_values(&mut self, mut f: impl FnMut(Value) -> Value) {
+        match self {
+            Test::Bool(c, _) => *c = f(*c),
+            Test::Cmp(_, a, b) => {
+                *a = f(*a);
+                *b = f(*b);
+            }
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Op {
     Const(IrTy, Const),
     Bin(BinOp, Value, Value),
     /// Like `Bin` for `Add`, `Sub`, `Mul`, but stops the program on overflow (signed: `true`).
     Checked(BinOp, bool, Value, Value),
+    /// `Checked` that only stops when the test holds: the other way it is the wrapping operation. Made when
+    /// a branch's side runs ahead of the branch.
+    CheckedIf(BinOp, bool, Test, Value, Value),
     Cmp(CmpOp, Value, Value),
+    /// The second value when the bool is true, else the third (both are already computed).
+    Select(Value, Value, Value),
     Neg(Value),
     Not(Value),
     Cast(CastKind, Value, IrTy),

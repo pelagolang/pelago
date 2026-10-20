@@ -7,7 +7,8 @@
 //! never joined. Joining a checked operation is exact: the earlier copy dominates, so if the later
 //! one would stop the program the earlier one already did. Equal constants count as the same
 //! operand, so `mulhi x, 0x6666..` written twice with two constants is one operation. Also
-//! `or x, x` and `and x, x` are `x`.
+//! `or x, x` and `and x, x` are `x`; so are `x + 0`, `x - 0`, `x * 1`, `x / 1`, `x | 0`, `x ^ 0` and `x << 0`
+//! (checked or not), which the constants of inlined code and struct fields leave behind.
 
 use super::dom::Dom;
 use crate::ir::*;
@@ -64,6 +65,13 @@ pub fn run(f: &mut Func) -> bool {
             }
         }
     }
+    // The value of each integer constant.
+    let mut cval: Vec<Option<i128>> = vec![None; f.values.len()];
+    for (v, d) in defs.iter().enumerate() {
+        if let Some(Op::Const(IrTy::Int(_), Const::Int(n))) = d.map(|d| &f.insts[d].op) {
+            cval[v] = Some(*n);
+        }
+    }
     let mut rep: HashMap<Value, Value> = HashMap::new();
     let mut gone: Vec<usize> = Vec::new();
     let mut seen: HashMap<Key, Vec<(Value, BlockId)>> = HashMap::new();
@@ -77,6 +85,32 @@ pub fn run(f: &mut Func) -> bool {
                 let v = *rep.get(&v).unwrap_or(&v);
                 (v, name[v.0 as usize])
             };
+            if let Op::Bin(o, a, c) | Op::Checked(o, _, a, c) = &f.insts[ii].op {
+                let (a, c) = (get(*a, &rep).0, get(*c, &rep).0);
+                let (ka, kc) = (cval[a.0 as usize], cval[c.0 as usize]);
+                let same = match o {
+                    BinOp::Add | BinOp::Or | BinOp::Xor if ka == Some(0) => Some(c),
+                    BinOp::Add
+                    | BinOp::Sub
+                    | BinOp::Or
+                    | BinOp::Xor
+                    | BinOp::Shl
+                    | BinOp::Shr
+                    | BinOp::UShr
+                        if kc == Some(0) =>
+                    {
+                        Some(a)
+                    }
+                    BinOp::Mul if ka == Some(1) => Some(c),
+                    BinOp::Mul | BinOp::Div | BinOp::UDiv if kc == Some(1) => Some(a),
+                    _ => None,
+                };
+                if let Some(w) = same {
+                    rep.insert(r, w);
+                    gone.push(ii);
+                    continue;
+                }
+            }
             let key = match &f.insts[ii].op {
                 Op::Bin(o, a, c) => {
                     let ((a, na), (c, nc)) = (get(*a, &rep), get(*c, &rep));

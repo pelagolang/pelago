@@ -116,6 +116,30 @@ pub enum Cc {
     G = 15,
 }
 
+impl Cc {
+    /// The condition that holds exactly when this one does not (they differ in the lowest bit).
+    pub fn invert(self) -> Cc {
+        match self {
+            Cc::O => Cc::No,
+            Cc::No => Cc::O,
+            Cc::B => Cc::Ae,
+            Cc::Ae => Cc::B,
+            Cc::E => Cc::Ne,
+            Cc::Ne => Cc::E,
+            Cc::Be => Cc::A,
+            Cc::A => Cc::Be,
+            Cc::S => Cc::Ns,
+            Cc::Ns => Cc::S,
+            Cc::P => Cc::Np,
+            Cc::Np => Cc::P,
+            Cc::L => Cc::Ge,
+            Cc::Ge => Cc::L,
+            Cc::Le => Cc::G,
+            Cc::G => Cc::Le,
+        }
+    }
+}
+
 /// Scalar floating-point arithmetic.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Sse {

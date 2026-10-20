@@ -12,6 +12,7 @@ use super::regs::{Base, Fold, Place};
 use super::rt::{self, Runtime};
 use super::x86::*;
 use super::{pe, Os};
+use crate::ir::Test;
 use crate::ir::{
     BinOp, CastKind, CmpOp, Const, Func, FuncId, Inst, IrTy, Module, Op, Target, Term, Value,
 };
@@ -142,6 +143,13 @@ struct Stub {
     to: usize,
 }
 
+/// After the overflow jump of a `CheckedIf`: stop if the test holds, else go back to `resume`.
+struct CondStub {
+    label: Label,
+    resume: Label,
+    test: Test,
+}
+
 struct Gen<'m> {
     m: &'m Module,
     a: Asm,
@@ -154,6 +162,12 @@ struct Gen<'m> {
     stop_shift: Label,
     stop_overflow: Label,
     stop_unreachable: Label,
+    /// The flags still hold the integer comparison that made this bool (`select` can use them).
+    flags: Option<(Value, Cc)>,
+    /// Set while a `CheckedIf` is emitted: where its out-of-line test comes back to.
+    resume: Option<Label>,
+    /// The out-of-line tests of the `CheckedIf`s of this function.
+    cond_stubs: Vec<CondStub>,
     regalloc: bool,
     /// Per function: where each value lives, the frame offset of each `Slot`, and where the
     /// callee-saved registers in use are kept.
@@ -312,6 +326,9 @@ impl<'m> Gen<'m> {
             stop_shift: s,
             stop_overflow: o,
             stop_unreachable: u,
+            flags: None,
+            resume: None,
+            cond_stubs: Vec::new(),
             regalloc: true,
             loc: Vec::new(),
             fold: Vec::new(),
@@ -375,7 +392,13 @@ impl<'m> Gen<'m> {
             let saved: Vec<Reg> = VALUE_REGS.iter().copied().take(n).collect();
             let scratch: Vec<Reg> = SCRATCH_REGS.iter().copied().take(n).collect();
             let xmm: Vec<Xmm> = XMM_REGS.iter().copied().take(n).collect();
-            super::regs::assign(f, &saved, &scratch, &xmm, &INT_REGS, &folds, &imms)
+            let cold: Vec<bool> = self
+                .m
+                .funcs
+                .iter()
+                .map(|g| g.name.ends_with(crate::ir::opt::COLD_SUFFIX))
+                .collect();
+            super::regs::assign(f, &saved, &scratch, &xmm, &INT_REGS, &folds, &imms, &cold)
         } else {
             super::regs::Alloc {
                 reg: vec![None; f.values.len()],
@@ -720,6 +743,23 @@ impl<'m> Gen<'m> {
                     continue;
                 }
                 self.at = (bi, k);
+                if !matches!(f.insts[i].op, Op::Select(..)) {
+                    self.flags = None;
+                }
+                // A comparison read only by the selects right after it is not made into a bool: they
+                // move on its flags.
+                if let (Op::Cmp(op, x, y), Some(r)) = (&f.insts[i].op, f.insts[i].result) {
+                    let selects = b.insts[k + 1..]
+                        .iter()
+                        .take_while(|&&j| matches!(&f.insts[j].op, Op::Select(c, ..) if *c == r))
+                        .count();
+                    if selects > 0 && selects == uses[r.0 as usize] as usize && !is_float(f.ty(*x))
+                    {
+                        let cc = self.int_cmp(f, *op, *x, *y);
+                        self.flags = Some((r, cc));
+                        continue;
+                    }
+                }
                 self.inst(f, i, &f.insts[i])?;
             }
             let next = (bi + 1 < f.blocks.len()).then_some(bi + 1);
@@ -734,6 +774,36 @@ impl<'m> Gen<'m> {
             self.moves(&copies);
             let l = self.block_labels[to];
             self.a.jmp(l);
+        }
+        // The tests of the `CheckedIf`s. They keep every register as it was.
+        for CondStub {
+            label,
+            resume,
+            test,
+        } in std::mem::take(&mut self.cond_stubs)
+        {
+            self.a.bind(label);
+            let stop = self.stop_overflow;
+            match test {
+                Test::Bool(cond, when) => {
+                    match self.loc[cond.0 as usize] {
+                        Where::Reg(r) => self.a.test_rr(r, r, 4),
+                        Where::Mem(off) => self.a.alu_mi(Alu::Cmp, mem(RBP, off), 0, 8),
+                        w => return Err(format!("a condition in {w:?}")),
+                    }
+                    self.a.jcc(if when { Cc::E } else { Cc::Ne }, resume);
+                }
+                Test::Cmp(op, x, y) => {
+                    // The comparison borrows `rax` and `rcx`; `pop` leaves the flags alone.
+                    self.a.push(RAX);
+                    self.a.push(RCX);
+                    let cc = self.int_cmp(f, op, x, y);
+                    self.a.pop(RCX);
+                    self.a.pop(RAX);
+                    self.a.jcc(cc.invert(), resume);
+                }
+            }
+            self.a.jmp(stop);
         }
         Ok(())
     }
@@ -1041,6 +1111,17 @@ impl<'m> Gen<'m> {
             }
             Op::Bin(op, a, b) => self.bin(f, *op, *a, *b, res.unwrap())?,
             Op::Checked(op, signed, a, b) => self.checked(f, *op, *signed, *a, *b, res.unwrap()),
+            Op::CheckedIf(op, signed, test, a, b) => {
+                let (label, resume) = (self.a.new_label(), self.a.new_label());
+                self.resume = Some(resume);
+                self.checked_to(f, *op, *signed, *a, *b, res.unwrap(), label);
+                self.cond_stubs.push(CondStub {
+                    label,
+                    resume,
+                    test: *test,
+                });
+            }
+            Op::Select(c, a, b) => self.select(f, *c, *a, *b, res.unwrap()),
             Op::Cmp(op, a, b) => self.cmp(f, *op, *a, *b, res.unwrap()),
             Op::Neg(a) => {
                 let t = f.ty(*a);
@@ -1481,13 +1562,25 @@ impl<'m> Gen<'m> {
         }
         let w = bits(t);
         match op {
-            BinOp::Mul if self.imm32(b, f, false).is_some() => {
-                // `imul d, a, imm`: no register for the constant.
+            BinOp::Mul
+                if self.imm32(b, f, false).is_some() || self.imm32(a, f, false).is_some() =>
+            {
+                // `imul d, a, imm` (no register for the constant), or `lea` for 3, 5 and 9, which is
+                // faster. The constant may be on either side.
+                let (a, b) = if self.imm32(b, f, false).is_some() {
+                    (a, b)
+                } else {
+                    (b, a)
+                };
                 let n = self.imm32(b, f, false).unwrap();
                 let d = self.dst(r);
                 let ra = self.src(a, f, false, RCX);
-                self.a.imul_rri(d, ra, n, 8);
-                self.mask(d, w);
+                if let (3 | 5 | 9, 64) = (n, w) {
+                    self.a.lea(d, mem_idx(ra, ra, (n - 1) as u8, 0));
+                } else {
+                    self.a.imul_rri(d, ra, n, 8);
+                    self.mask(d, w);
+                }
                 self.st(r, d);
             }
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor => {
@@ -1617,8 +1710,24 @@ impl<'m> Gen<'m> {
     }
 
     fn checked(&mut self, f: &Func, op: BinOp, signed: bool, a: Value, b: Value, r: Value) {
-        let w = bits(f.ty(a));
         let ov = self.stop_overflow;
+        self.checked_to(f, op, signed, a, b, r, ov);
+    }
+
+    /// A checked operation whose overflow jumps to `ov`. When `self.resume` is set it is bound right after
+    /// the jump, so a stub that decides not to stop can come back.
+    #[allow(clippy::too_many_arguments)]
+    fn checked_to(
+        &mut self,
+        f: &Func,
+        op: BinOp,
+        signed: bool,
+        a: Value,
+        b: Value,
+        r: Value,
+        ov: Label,
+    ) {
+        let w = bits(f.ty(a));
         if w == 64 && (matches!(op, BinOp::Add | BinOp::Sub) || (op == BinOp::Mul && signed)) {
             let (mut a, mut b) = (a, b);
             let mut d = self.dst(r);
@@ -1636,6 +1745,7 @@ impl<'m> Gen<'m> {
                     let alu = if op == BinOp::Add { Alu::Add } else { Alu::Sub };
                     self.a.alu_ri(alu, d, n, 8);
                 }
+                Some(n) => self.a.imul_rri(d, d, n, 8),
                 _ => {
                     let rb = self.src(b, f, false, RCX);
                     match op {
@@ -1646,7 +1756,7 @@ impl<'m> Gen<'m> {
                 }
             }
             self.a.guard_jump(start, 6);
-            self.a.jcc(if signed { Cc::O } else { Cc::B }, ov);
+            self.ov_jump(if signed { Cc::O } else { Cc::B }, ov);
             self.st(r, d);
             return;
         }
@@ -1656,27 +1766,27 @@ impl<'m> Gen<'m> {
             match (op, signed) {
                 (BinOp::Add, true) => {
                     self.a.alu_rr(Alu::Add, RAX, RCX, 8);
-                    self.a.jcc(Cc::O, ov);
+                    self.ov_jump(Cc::O, ov);
                 }
                 (BinOp::Sub, true) => {
                     self.a.alu_rr(Alu::Sub, RAX, RCX, 8);
-                    self.a.jcc(Cc::O, ov);
+                    self.ov_jump(Cc::O, ov);
                 }
                 (BinOp::Mul, true) => {
                     self.a.imul_rr(RAX, RCX, 8);
-                    self.a.jcc(Cc::O, ov);
+                    self.ov_jump(Cc::O, ov);
                 }
                 (BinOp::Add, false) => {
                     self.a.alu_rr(Alu::Add, RAX, RCX, 8);
-                    self.a.jcc(Cc::B, ov);
+                    self.ov_jump(Cc::B, ov);
                 }
                 (BinOp::Sub, false) => {
                     self.a.alu_rr(Alu::Sub, RAX, RCX, 8);
-                    self.a.jcc(Cc::B, ov);
+                    self.ov_jump(Cc::B, ov);
                 }
                 _ => {
                     self.a.mul(RCX, 8);
-                    self.a.jcc(Cc::B, ov);
+                    self.ov_jump(Cc::B, ov);
                 }
             }
         } else {
@@ -1688,10 +1798,46 @@ impl<'m> Gen<'m> {
             }
             self.a.extend_rr(RDX, RAX, (w / 8) as u8, signed, true);
             self.a.alu_rr(Alu::Cmp, RDX, RAX, 8);
-            self.a.jcc(Cc::Ne, ov);
+            self.ov_jump(Cc::Ne, ov);
             self.mask(RAX, w);
         }
         self.st(r, RAX);
+    }
+
+    /// `r = c ? a : b` with a conditional move: no branch to mispredict. Integers, booleans and addresses.
+    fn ov_jump(&mut self, cc: Cc, ov: Label) {
+        self.a.jcc(cc, ov);
+        if let Some(l) = self.resume.take() {
+            self.a.bind(l);
+        }
+    }
+
+    fn select(&mut self, f: &Func, c: Value, a: Value, b: Value, r: Value) {
+        let mut d = self.dst(r);
+        // The condition: from the flags when they are the comparison's, else test the bool.
+        let mut cc = match self.flags {
+            Some((v, cc)) if v == c => cc,
+            _ => {
+                let rc = self.src(c, f, false, RDX);
+                self.a.test_rr(rc, rc, 4);
+                Cc::Ne
+            }
+        };
+        if self.loc[c.0 as usize] == Where::Reg(d) {
+            d = RAX;
+        }
+        // The result starts as the operand that already sits in its register, and the other one moves
+        // in when the condition says so.
+        let (keep, other) = if self.loc[a.0 as usize] == Where::Reg(d) {
+            (a, b)
+        } else {
+            cc = cc.invert();
+            (b, a)
+        };
+        self.ld(d, keep);
+        let ro = self.src(other, f, false, RCX);
+        self.a.cmov(cc.invert(), d, ro, 8);
+        self.st(r, d);
     }
 
     fn cmp(&mut self, f: &Func, op: CmpOp, a: Value, b: Value, r: Value) {
@@ -1716,7 +1862,12 @@ impl<'m> Gen<'m> {
             }
         } else {
             let cc = self.int_cmp(f, op, a, b);
-            self.a.setcc(cc, RAX);
+            let d = self.dst(r);
+            self.a.setcc(cc, d);
+            self.flags = Some((r, cc));
+            self.a.extend_rr(d, d, 1, false, false);
+            self.st(r, d);
+            return;
         }
         self.a.extend_rr(RAX, RAX, 1, false, false);
         self.st(r, RAX);

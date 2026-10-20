@@ -93,6 +93,7 @@ fn candidates(f: &Func, dom: &Dom, lp: &Loop) -> Vec<usize> {
             let ok = match &inst.op {
                 Op::Const(..)
                 | Op::Cmp(..)
+                | Op::Select(..)
                 | Op::Neg(_)
                 | Op::Not(_)
                 | Op::Cast(..)

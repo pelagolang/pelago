@@ -92,6 +92,16 @@ fn inst_text(f: &Func, i: &Inst, m: Option<&Module>) -> String {
             let u = if *signed { "" } else { "u" };
             format!("{u}{}_checked {}, {}", op.name(), v(*a), v(*b))
         }
+        Op::Select(c, a, b) => format!("select {}, {}, {}", v(*c), v(*a), v(*b)),
+        Op::CheckedIf(op, signed, test, a, b) => {
+            let u = if *signed { "" } else { "u" };
+            let test = match test {
+                Test::Bool(c, true) => v(*c),
+                Test::Bool(c, false) => format!("not {}", v(*c)),
+                Test::Cmp(o, x, y) => format!("{} {}, {}", o.name(), v(*x), v(*y)),
+            };
+            format!("{u}{}_checked_if ({test}), {}, {}", op.name(), v(*a), v(*b))
+        }
         Op::Cmp(op, a, b) => format!("{} {}, {}", op.name(), v(*a), v(*b)),
         Op::Neg(a) => format!("neg {}", v(*a)),
         Op::Not(a) => format!("not {}", v(*a)),
