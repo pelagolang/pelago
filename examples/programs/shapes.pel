@@ -1,4 +1,4 @@
-/// Shapes and their areas: enums, `switch`, structs and methods.
+//~ Shapes and their areas: enums, `switch`, structs and methods.
 
 enum shape {
     circle(radius: float)

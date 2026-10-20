@@ -8,7 +8,7 @@ becomes an error token plus an entry in the error list, and lexing carries on.
 - Hard keywords become keyword tokens; soft keywords (`from`, `to`, `step`, ...) are plain identifiers
   that the parser interprets.
 - Newlines are tokens (a run of blank lines is one). Comments are tokens too, so a formatter can keep them:
-  `//`, nested `/* */`, `///`, and `///* ... *///`.
+  `/// line`, nested `///* block *///`, `//~ doc line` and `//~* doc block *~//`. `//` and `/* */` are lexer errors with a hint (`docs/design/comments.md`).
 - Numbers: decimal with underscores, `0x`, `0b`, `0o`, floats and exponents. After a `.`, digits are a plain
   integer, so `t.0.1` is a tuple access and not a float.
 - Characters and strings with escapes. A string is one token, including `#name` and `#(expr)` parts, and the

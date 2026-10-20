@@ -1,4 +1,4 @@
-/// A generic stack: type parameters, methods that change and read, options.
+//~ A generic stack: type parameters, methods that change and read, options.
 
 struct stack<T> {
     items: [T]

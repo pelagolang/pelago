@@ -10,9 +10,10 @@
 //! * **Newlines are tokens.** Statements end at a newline. A run of blank lines is one
 //!   [`TokenKind::Newline`]. The parser ignores newlines inside brackets and where a line
 //!   obviously continues.
-//! * **Comments are tokens** (trivia), so the formatter can keep them: `// line`, `/* block */`
-//!   (nests), `/// doc line`, and `///* doc block *///` (does not nest). `////` is a plain
-//!   comment, so rows of slashes are not documentation.
+//! * **Comments are tokens** (trivia), so the formatter can keep them: `/// line`, `///* block *///`
+//!   (nests), `//~ doc line`, and `//~* doc block *~//` (does not nest). A doc form never starts
+//!   with `///`, so an editor that toggles `///` cannot half-strip it. `//` and `/* */` are
+//!   errors with a hint, so a habit from another language does not silently become code.
 //! * Strings are one token, including `#name` and `#(expression)` parts. The lexer only
 //!   finds where the string ends (so `"a #(f("x")) b"` works); a later pass splits it.
 //!
@@ -42,6 +43,7 @@ pub enum LexErrorKind {
     UnterminatedString,
     UnterminatedInterpolation,
     UnterminatedBlockComment,
+    NotAComment,
     BadCharLiteral,
     BadEscape,
     StrayHash,
@@ -58,6 +60,9 @@ impl LexErrorKind {
             LexErrorKind::UnterminatedString => "this string is never closed",
             LexErrorKind::UnterminatedInterpolation => "this `#(` in a string is never closed",
             LexErrorKind::UnterminatedBlockComment => "this comment is never closed",
+            LexErrorKind::NotAComment => {
+                "`//` and `/* */` are not comments here; write `///` or `///* ... *///` (documentation: `//~` or `//~* ... *~//`)"
+            }
             LexErrorKind::BadCharLiteral => {
                 "a character literal holds exactly one character, like 'a'"
             }
@@ -244,16 +249,26 @@ impl<'a> Lexer<'a> {
 
     fn slash(&mut self) {
         let rest = self.rest();
-        if rest.starts_with("///*") {
+        if rest.starts_with("//~*") {
             self.doc_block_comment();
-        } else if rest.starts_with("////") {
-            self.line_comment(TokenKind::LineComment);
-        } else if rest.starts_with("///") {
+        } else if rest.starts_with("//~") {
             self.line_comment(TokenKind::DocLineComment);
-        } else if rest.starts_with("//") {
-            self.line_comment(TokenKind::LineComment);
-        } else if rest.starts_with("/*") {
+        } else if rest.starts_with("///*") {
             self.block_comment();
+        } else if rest.starts_with("///") {
+            self.line_comment(TokenKind::LineComment);
+        } else if rest.starts_with("//") {
+            // A leftover from another language: one error for the whole line.
+            let start = self.pos;
+            let len = rest.find('\n').unwrap_or(rest.len());
+            self.pos += len;
+            self.error(start, self.pos, LexErrorKind::NotAComment);
+            self.push(TokenKind::Error, start);
+        } else if rest.starts_with("/*") {
+            let start = self.pos;
+            self.pos += 2;
+            self.error(start, self.pos, LexErrorKind::NotAComment);
+            self.push(TokenKind::Error, start);
         } else {
             self.punct_or_error();
         }
@@ -270,18 +285,19 @@ impl<'a> Lexer<'a> {
         self.push(kind, start);
     }
 
+    /// `///* ... *///`, which nests.
     fn block_comment(&mut self) {
         let start = self.pos;
         let bytes = self.bytes;
-        let mut i = self.pos + 2;
+        let mut i = self.pos + 4;
         let mut depth = 1u32;
         while i < bytes.len() {
-            if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+            if bytes[i..].starts_with(b"///*") {
                 depth += 1;
-                i += 2;
-            } else if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                i += 4;
+            } else if bytes[i..].starts_with(b"*///") {
                 depth -= 1;
-                i += 2;
+                i += 4;
                 if depth == 0 {
                     self.pos = i;
                     self.push(TokenKind::BlockComment, start);
@@ -296,10 +312,11 @@ impl<'a> Lexer<'a> {
         self.push(TokenKind::Error, start);
     }
 
+    /// `//~* ... *~//`, which does not nest.
     fn doc_block_comment(&mut self) {
         let start = self.pos;
         let after_open = &self.rest()[4..];
-        match after_open.find("*///") {
+        match after_open.find("*~//") {
             Some(i) => {
                 self.pos += 4 + i + 4;
                 self.push(TokenKind::DocBlockComment, start);
@@ -924,7 +941,7 @@ mod tests {
 
     #[test]
     fn comments() {
-        let src = "// line\n/* block */ /* a /* nested */ b */ /// doc\n///* doc\nblock *///\n//// not doc\n";
+        let src = "/// line\n///* block *///  ///* a ///* nested */// b *///  //~ doc\n//~* doc\nblock *~//\n//// banner\n";
         assert_eq!(
             kinds(src),
             vec![
@@ -942,33 +959,40 @@ mod tests {
         );
         assert!(lex(src).errors.is_empty());
         let t = texts(src);
-        assert_eq!(t[0], "// line");
-        assert_eq!(t[3], "/* a /* nested */ b */");
-        assert_eq!(t[6], "///* doc\nblock *///");
+        assert_eq!(t[0], "/// line");
+        assert_eq!(t[3], "///* a ///* nested */// b *///");
+        assert_eq!(t[6], "//~* doc\nblock *~//");
     }
 
     #[test]
     fn comment_at_end_of_file_and_crlf() {
-        assert_eq!(kinds("x // done"), vec![Ident, LineComment]);
-        assert_eq!(texts("x // done\r\ny"), vec!["x", "// done", "\n", "y"]);
+        assert_eq!(kinds("x /// done"), vec![Ident, LineComment]);
+        assert_eq!(texts("x /// done\r\ny"), vec!["x", "/// done", "\n", "y"]);
+    }
+
+    #[test]
+    fn other_languages_comments_are_errors_with_a_hint() {
+        assert_eq!(error_kinds("x // old\ny"), vec![LexErrorKind::NotAComment]);
+        assert_eq!(kinds("x // old\ny"), vec![Ident, Error, Newline, Ident]);
+        assert_eq!(error_kinds("/* old */"), vec![LexErrorKind::NotAComment]);
     }
 
     #[test]
     fn comment_errors() {
         assert_eq!(
-            error_kinds("/* open"),
-            vec![LexErrorKind::UnterminatedBlockComment]
-        );
-        assert_eq!(
-            error_kinds("/* /* inner */"),
-            vec![LexErrorKind::UnterminatedBlockComment]
-        );
-        assert_eq!(
             error_kinds("///* open"),
             vec![LexErrorKind::UnterminatedBlockComment]
         );
-        // A doc block ends only at `*///`.
-        assert_eq!(kinds("///* a */ b *///"), vec![DocBlockComment]);
+        assert_eq!(
+            error_kinds("///* ///* inner *///"),
+            vec![LexErrorKind::UnterminatedBlockComment]
+        );
+        assert_eq!(
+            error_kinds("//~* open"),
+            vec![LexErrorKind::UnterminatedBlockComment]
+        );
+        // A doc block ends only at `*~//`.
+        assert_eq!(kinds("//~* a *// b *~//"), vec![DocBlockComment]);
     }
 
     #[test]
@@ -978,7 +1002,7 @@ mod tests {
             vec![Ident, Newline, Ident, Newline, Ident, Newline]
         );
         assert_eq!(
-            kinds("a\n// c\nb"),
+            kinds("a\n/// c\nb"),
             vec![Ident, Newline, LineComment, Newline, Ident]
         );
     }
@@ -1179,9 +1203,10 @@ mod tests {
     fn random_input_never_breaks_the_lexer() {
         const PIECES: &[&str] = &[
             "a", "Z", "_", "9", "0x", "1.", ".", "..", "...", "e", "-", "+", "/", "*", "//", "///",
-            "///*", "*///", "/*", "*/", "\"", "'", "\\", "#", "#(", "(", ")", "{", "}", "[", "]",
-            "\n", "\r\n", " ", "\t", "é", "日", "🙂", "$", "`", "?", "?.", "??=", "!", "!!", "~>",
-            "|>", ">>=", "<<=", "=", ":", ";", ",", "@", "u{", "\u{feff}", "\u{0}",
+            "//~", "//~*", "*~//", "///*", "*///", "/*", "*/", "\"", "'", "\\", "#", "#(", "(",
+            ")", "{", "}", "[", "]", "\n", "\r\n", " ", "\t", "é", "日", "🙂", "$", "`", "?", "?.",
+            "??=", "!", "!!", "~>", "|>", ">>=", "<<=", "=", ":", ";", ",", "@", "u{", "\u{feff}",
+            "\u{0}",
         ];
         let mut rng = Rng(0x9e3779b97f4a7c15);
         for _ in 0..4000 {

@@ -78,7 +78,7 @@ uninitialized variable and no null, which removes a whole class of bugs.
 ```
 print("Hello")
 print(score)
-// this is a comment
+/// this is a comment
 ```
 
 ## 6. Converting between types (proposal, custom)

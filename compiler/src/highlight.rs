@@ -866,10 +866,14 @@ mod tests {
 
     #[test]
     fn comments_attributes_and_types() {
-        let src = "// note\n/// doc\n/* block /* nested */ end */\n@derive(eq)\nstruct point { x: float, y: [float] }\nfn f(xs: list<int>) -> int? { }\n";
-        assert!(has(src, "// note", Class::Comment));
-        assert!(has(src, "/// doc", Class::DocComment));
-        assert!(has(src, "/* block /* nested */ end */", Class::Comment));
+        let src = "/// note\n//~ doc\n///* block ///* nested */// end *///\n@derive(eq)\nstruct point { x: float, y: [float] }\nfn f(xs: list<int>) -> int? { }\n";
+        assert!(has(src, "/// note", Class::Comment));
+        assert!(has(src, "//~ doc", Class::DocComment));
+        assert!(has(
+            src,
+            "///* block ///* nested */// end *///",
+            Class::Comment
+        ));
         assert!(has(src, "@derive", Class::Attribute));
         assert!(has(src, "point", Class::Type));
         assert!(has(src, "float", Class::Type));
