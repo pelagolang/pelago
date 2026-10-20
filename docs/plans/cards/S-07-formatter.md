@@ -18,7 +18,13 @@ The formatter is on the roadmap ("Formatter, language server, editor syntax high
 
 **Known limit of stage 1:** a line indented one level too far, on purpose or by mistake, is kept, because without the tree it cannot be told from a `case` body. Stage 2 derives indentation from the tree and fixes this; until then `fmt --check examples` in CI keeps our own files right, and `--check` reports only lines the layout would change.
 
-**Configuration (owner: yes):** a `[fmt]` section in `pelago.toml`, found by walking up from the file; `indent` and `width` first.
+**Configuration (owner: yes):** a `[fmt]` section in `pelago.toml`, found by walking up from the file; `indent` and `width` first. Built (`compiler/src/config.rs`): `indent` (1 to 8, default 4) and `width` (20 to 400, default 100; used by stage 2 wrapping). `pelago.toml` is the general config file for everything language-related, so other sections can come later; unknown sections and keys are errors with a line number. The CLI and the language server both read it.
+
+```toml
+[fmt]
+indent = 2
+width = 100
+```
 
 **Stage 2 (not built):** line breaking from the tree (questions 1, 5 to 8): wrap at the width, trailing commas when a list breaks, sorting names in import lists (10).
 

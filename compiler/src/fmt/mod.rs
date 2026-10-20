@@ -16,21 +16,20 @@
 //! Line breaking (wrapping long calls, trailing commas when a list breaks) needs the tree and
 //! comes in a later stage; see `docs/plans/cards/S-07-formatter.md`.
 
+use crate::config::FmtConfig;
 use crate::lexer::tokenize;
 use crate::parser::parse_and_check;
 use crate::token::{Punct, Token, TokenKind};
 
-const INDENT: &str = "    ";
-
 /// The indentation levels the author gave a line beyond what its brackets call for.
-fn extra_levels(src: &str, t: &Token, depth: usize) -> usize {
+fn extra_levels(src: &str, t: &Token, depth: usize, indent: usize) -> usize {
     let start = t.span.start as usize;
     let line_start = src[..start].rfind('\n').map_or(0, |i| i + 1);
     let cols: usize = src[line_start..start]
         .chars()
         .map(|c| if c == '\t' { 4 } else { 1 })
         .sum();
-    ((cols + 2) / 4).saturating_sub(depth)
+    ((cols + indent / 2) / indent).saturating_sub(depth)
 }
 
 fn is_opener(k: TokenKind) -> bool {
@@ -50,6 +49,11 @@ fn is_closer(k: TokenKind) -> bool {
 /// Formats a whole file. Fails, leaving nothing to write, when the file has syntax errors or the
 /// result would not hold the same tokens.
 pub fn format(src: &str) -> Result<String, String> {
+    format_with(src, &FmtConfig::default())
+}
+
+/// Like [`format`], with the settings of a `pelago.toml`.
+pub fn format_with(src: &str, config: &FmtConfig) -> Result<String, String> {
     let crlf = src.contains("\r\n");
     let src_lf = src.replace("\r\n", "\n");
     let src = src_lf.as_str();
@@ -61,7 +65,7 @@ pub fn format(src: &str) -> Result<String, String> {
     if !parsed.errors.is_empty() {
         return Err("the file has syntax errors".to_string());
     }
-    let out = layout(src, &lexed.tokens);
+    let out = layout(src, &lexed.tokens, config);
     if signature(src, &lexed.tokens) != signature(&out, &tokenize(&out).tokens) {
         return Err("formatting would change the tokens; not applied (this is a bug)".to_string());
     }
@@ -85,7 +89,7 @@ fn signature(src: &str, tokens: &[Token]) -> Vec<(TokenKind, String)> {
         .collect()
 }
 
-fn layout(src: &str, tokens: &[Token]) -> String {
+fn layout(src: &str, tokens: &[Token], config: &FmtConfig) -> String {
     let text = |t: &Token| &src[t.span.start as usize..t.span.end as usize];
     let mut out = String::with_capacity(src.len());
     // The lines on which the brackets still open were opened.
@@ -139,9 +143,9 @@ fn layout(src: &str, tokens: &[Token]) -> String {
             };
             // What the brackets cannot tell: a `case` body, a `.method()` chain, the arms of a
             // ternary. Keep the levels the author added on top of the bracket depth.
-            depth += extra_levels(src, t, depth);
+            depth += extra_levels(src, t, depth, config.indent);
             for _ in 0..depth {
-                out.push_str(INDENT);
+                out.extend(std::iter::repeat_n(' ', config.indent));
             }
             pending = 0;
         } else if let Some(p) = prev {

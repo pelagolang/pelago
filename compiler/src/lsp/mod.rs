@@ -594,7 +594,11 @@ impl Server {
             "textDocument/formatting" => {
                 // One edit that replaces the whole document; none when it is already formatted
                 // or has errors (the diagnostics say what is wrong).
-                let formatted = match crate::fmt::format(&src) {
+                let config = uri_to_path(&uri)
+                    .and_then(|p| crate::config::Config::find(&p).ok())
+                    .map(|c| c.fmt)
+                    .unwrap_or_default();
+                let formatted = match crate::fmt::format_with(&src, &config) {
                     Ok(f) if f != src => f,
                     _ => return Some(Json::Arr(Vec::new())),
                 };
