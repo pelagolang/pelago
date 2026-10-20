@@ -17,11 +17,13 @@ mod cache;
 mod cfg;
 mod cse;
 mod dce;
+mod demand;
 mod divconst;
 mod dom;
 mod fill;
 mod ifconv;
 mod inline;
+mod ivopt;
 pub use inline::COLD_SUFFIX;
 mod layout;
 mod licm;
@@ -114,11 +116,13 @@ fn passes(f: &mut Func, divs: bool) {
         changed |= step(f, "split", split::run);
         changed |= step(f, "sccp", sccp::run);
         changed |= step(f, "ranges", ranges::run);
+        changed |= step(f, "demand", demand::run);
         if divs {
             changed |= step(f, "divconst", divconst::run);
         }
         changed |= step(f, "cse", cse::run);
         changed |= step(f, "licm", licm::run);
+        changed |= step(f, "ivopt", ivopt::run);
         if divs {
             changed |= step(f, "ifconv", ifconv::run);
         }

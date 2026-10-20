@@ -108,15 +108,67 @@ fn dead_stores(f: &mut Func) -> bool {
 }
 
 /// Block parameters nobody reads: dropped together with the argument every jump passes for them.
+/// A parameter only counts as read when something that matters reads it, so a counter that feeds
+/// nothing but its own next value goes too.
 fn dead_params(f: &mut Func) -> bool {
-    let uses = f.use_counts();
+    let defs = f.defs();
+    let mut param_of: Vec<Option<(usize, usize)>> = vec![None; f.values.len()];
+    for (bi, b) in f.blocks.iter().enumerate() {
+        for (i, p) in b.params.iter().enumerate() {
+            param_of[p.0 as usize] = Some((bi, i));
+        }
+    }
+    let mut live = vec![false; f.values.len()];
+    let mut work: Vec<Value> = Vec::new();
+    let mark = |v: Value, live: &mut Vec<bool>, work: &mut Vec<Value>| {
+        if !live[v.0 as usize] {
+            live[v.0 as usize] = true;
+            work.push(v);
+        }
+    };
+    for b in &f.blocks {
+        for &i in &b.insts {
+            let inst = &f.insts[i];
+            if inst.result.is_none() || !inst.op.is_pure() {
+                inst.op.for_each_value(|v| mark(v, &mut live, &mut work));
+            }
+        }
+        match &b.term {
+            Some(Term::Branch(c, ..)) => mark(*c, &mut live, &mut work),
+            Some(Term::Return(Some(v))) => mark(*v, &mut live, &mut work),
+            _ => {}
+        }
+    }
+    while let Some(v) = work.pop() {
+        if let Some(i) = defs[v.0 as usize] {
+            f.insts[i]
+                .op
+                .for_each_value(|x| mark(x, &mut live, &mut work));
+        } else if let Some((bi, idx)) = param_of[v.0 as usize] {
+            for b in &f.blocks {
+                match &b.term {
+                    Some(Term::Jump(t)) if t.block.0 as usize == bi => {
+                        mark(t.args[idx], &mut live, &mut work)
+                    }
+                    Some(Term::Branch(_, t, e)) => {
+                        for tg in [t, e] {
+                            if tg.block.0 as usize == bi {
+                                mark(tg.args[idx], &mut live, &mut work);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
     let mut drop_at: Vec<(usize, Vec<usize>)> = Vec::new();
     for bi in 1..f.blocks.len() {
         let idx: Vec<usize> = f.blocks[bi]
             .params
             .iter()
             .enumerate()
-            .filter(|(_, p)| uses[p.0 as usize] == 0)
+            .filter(|(_, p)| !live[p.0 as usize])
             .map(|(i, _)| i)
             .collect();
         if !idx.is_empty() {
