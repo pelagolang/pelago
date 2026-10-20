@@ -1260,6 +1260,46 @@ fn main() {
 
 // ---- The native build on the edge cases of `docs/design/backend.md` -------------------------------------
 
+#[test]
+fn appending_with_plus_assign_keeps_its_meaning() {
+    // `s = s + a + b` appends in place; every other shape keeps the copying assignment.
+    let cases: [(&str, &str); 8] = [
+        ("var s = \"a\"\n s = s + \"b\" + \"c\"\n print(s)", "abc\n"),
+        ("var s = \"a\"\n s = s + s\n s = s + s\n print(s)", "aaaa\n"),
+        (
+            "const t = \"x\"\n var s = \"a\"\n s = t + s\n print(s)",
+            "xa\n",
+        ),
+        (
+            "var s = \"\"\n for i of 0..5 { s = s + \"#i,\" }\n print(s)",
+            "0,1,2,3,4,\n",
+        ),
+        (
+            "var s = \"n=\"\n const n = \"7\"\n s = s + n + \"!\"\n print(s)",
+            "n=7!\n",
+        ),
+        ("var s = \"a\"\n s = s + \"#s#s\"\n print(s)", "aaa\n"),
+        (
+            "var s = \"a\"\n s = (s + \"b\") + \"c\"\n print(s)",
+            "abc\n",
+        ),
+        (
+            "var s = \"a\"\n var t = copy s\n s = s + \"b\"\n t = t + \"c\"\n print(s, t)",
+            "ab ac\n",
+        ),
+    ];
+    for (body, want) in cases {
+        let src = format!("fn main() {{\n {body}\n}}");
+        assert_eq!(output_of(&src), want, "{src}");
+        agree(&src);
+    }
+    // An operand that calls a function is not appended in place (the call could change `s`).
+    assert_eq!(
+        output_of("fn f() -> string = \"x\"\nfn main() { var s = \"a\"\n s = s + f()\n print(s) }"),
+        "ax\n"
+    );
+}
+
 /// The program does the same natively as in the interpreter: same output, and the same stop (message
 /// on standard error, status 1) or a clean exit.
 fn agree(src: &str) {
