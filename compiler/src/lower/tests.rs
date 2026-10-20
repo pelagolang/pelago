@@ -2110,3 +2110,22 @@ fn index_tests_that_cannot_fail_are_dropped() {
     }";
     assert!(tests(outside) > 0);
 }
+
+/// A loop that stores one value into a big array is a `rep stos` natively: every element size, and
+/// a value that is not a constant, give what the interpreter gives.
+#[test]
+fn fill_loops_become_string_stores() {
+    agree(
+        "fn main() {
+            var a: [uint8; 1000] = [7; 1000]
+            var b: [int32; 300] = [-5; 300]
+            var c: [bool; 600] = [true; 600]
+            var d: [float; 100] = [1.5; 100]
+            var e: [int; 70] = [3; 70]
+            const k = 41
+            var g = [k + 1; 80]
+            print(a[0], a[999], b[0], b[299], c[0], c[599])
+            print(d[0], d[99], e[0], e[69], g[0], g[79])
+        }",
+    );
+}

@@ -91,25 +91,54 @@ fn fills(
         if !dom.reachable(BlockId(b as u32)) {
             continue;
         }
-        if let Some(x) = fill_loop(f, preds, defs, &derived, s, size, BlockId(b as u32)) {
-            let (exit, skip) = x;
-            return after(f, dom, &derived, exit, &skip);
+        if let Some(l) = fill_loop(f, preds, defs, BlockId(b as u32)) {
+            if l.base == s && !derived.contains(&l.value) && l.count * l.width as i128 == size {
+                return after(f, dom, &derived, l.exit, &l.skip);
+            }
         }
     }
     false
 }
 
-/// Is `b` the body of a loop that fills the slot? Gives the exit block and the instructions that make
-/// up the filling (they are the one allowed use of the slot before the exit).
+/// A loop that stores one value, `count` times, at consecutive addresses from `base`.
+pub struct FillLoop {
+    /// The block that jumps into the loop with the counter at zero.
+    pub pre: BlockId,
+    pub head: BlockId,
+    pub body: BlockId,
+    pub exit: BlockId,
+    pub base: Value,
+    pub value: Value,
+    pub count: i128,
+    /// Bytes per element.
+    pub width: u8,
+    /// The address and store instructions of the body.
+    skip: Vec<usize>,
+}
+
+/// The fill loops of a function that write at least `min_bytes` and are entered by a plain jump from
+/// one block, so that the generator can replace the whole loop with a string store.
+pub fn fill_loops(f: &Func, min_bytes: i128) -> Vec<FillLoop> {
+    let dom = Dom::new(f);
+    let preds = f.predecessors();
+    let defs = f.defs();
+    (0..f.blocks.len())
+        .filter(|b| dom.reachable(BlockId(*b as u32)))
+        .filter_map(|b| fill_loop(f, &preds, &defs, BlockId(b as u32)))
+        .filter(|l| {
+            l.count * l.width as i128 >= min_bytes
+                && matches!(f.blocks[l.pre.0 as usize].term, Some(Term::Jump(_)))
+        })
+        .collect()
+}
+
+/// Is `body` the body of a loop that fills memory?
 fn fill_loop(
     f: &Func,
     preds: &[Vec<BlockId>],
     defs: &[Option<usize>],
-    derived: &HashSet<Value>,
-    s: Value,
-    size: i128,
     body: BlockId,
-) -> Option<(BlockId, Vec<usize>)> {
+) -> Option<FillLoop> {
     let b = &f.blocks[body.0 as usize];
     let Some(Term::Jump(back)) = &b.term else {
         return None;
@@ -165,7 +194,7 @@ fn fill_loop(
     }
     // The body: an offset, an address, one store, the next counter.
     let (mut stride, mut width) = (None, None);
-    let (mut off, mut addr) = (None, None);
+    let (mut off, mut addr, mut base, mut value) = (None, None, None, None);
     let mut skip: Vec<usize> = Vec::new();
     let (mut stored, mut counted) = (false, false);
     for &k in &b.insts {
@@ -176,11 +205,15 @@ fn fill_loop(
                 stride = Some(int_of(f, defs, *m)?);
                 off = Some(r);
             }
-            (Op::PtrAdd(base, o), Some(r)) if *base == s && Some(*o) == off && addr.is_none() => {
+            (Op::PtrAdd(b, o), Some(r))
+                if *b != i && Some(*o) == off && addr.is_none() && f.ty(*b) == IrTy::Ptr =>
+            {
                 addr = Some(r);
+                base = Some(*b);
                 skip.push(k);
             }
-            (Op::Store(p, v), None) if Some(*p) == addr && !derived.contains(v) && !stored => {
+            (Op::Store(p, v), None) if Some(*p) == addr && *v != i && !stored => {
+                value = Some(*v);
                 width = Some(bytes(f.ty(*v)));
                 stored = true;
                 skip.push(k);
@@ -197,10 +230,25 @@ fn fill_loop(
         return None;
     }
     let (stride, width) = (stride?, width?);
-    if stride != width || count <= 0 || count * width != size {
+    if stride != width || count <= 0 {
         return None;
     }
-    Some((exit, skip))
+    // What is stored must not depend on the counter.
+    let v = value?;
+    if Some(v) == off || Some(v) == addr || v == next {
+        return None;
+    }
+    Some(FillLoop {
+        pre: start,
+        head,
+        body,
+        exit,
+        base: base?,
+        value: value?,
+        count,
+        width: width as u8,
+        skip,
+    })
 }
 
 /// Does every other use of the slot lie after the loop?

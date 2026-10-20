@@ -36,7 +36,7 @@ mod tailrec;
 #[cfg(test)]
 mod tests;
 
-pub use fill::filled_slots;
+pub use fill::{fill_loops, filled_slots, FillLoop};
 pub use inline::prune;
 pub use stats::{stats_of, Stats};
 

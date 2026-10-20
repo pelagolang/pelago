@@ -195,6 +195,8 @@ struct Gen<'m> {
     slot_off: HashMap<usize, i32>,
     /// Big slots that a loop fills completely before anything else touches them: not cleared.
     filled: HashSet<usize>,
+    /// Loops that fill memory with one value, done by a string store instead.
+    fills: Vec<crate::ir::opt::FillLoop>,
     frame: i32,
     block_labels: Vec<Label>,
     ret_ty: IrTy,
@@ -264,6 +266,9 @@ fn bits(t: IrTy) -> u32 {
         _ => 64,
     }
 }
+
+/// A loop that stores at least this many bytes of one value is a `rep stos`: it starts slowly.
+const FILL_BYTES: i128 = 512;
 
 fn size_of_ty(t: IrTy) -> i32 {
     size(t) as i32
@@ -343,6 +348,7 @@ impl<'m> Gen<'m> {
             stubs: Vec::new(),
             slot_off: HashMap::new(),
             filled: HashSet::new(),
+            fills: Vec::new(),
             frame: 0,
             block_labels: Vec::new(),
             ret_ty: IrTy::Void,
@@ -384,6 +390,7 @@ impl<'m> Gen<'m> {
     fn layout(&mut self, f: &Func) {
         self.slot_off.clear();
         self.filled = crate::ir::opt::filled_slots(f);
+        self.fills = crate::ir::opt::fill_loops(f, FILL_BYTES);
         let imms = const_values(f);
         let uses = f.use_counts();
         let folds = super::regs::folds(f, &uses, &imms);
@@ -722,7 +729,16 @@ impl<'m> Gen<'m> {
                 }
             }
         }
+        // The header and the body of a fill loop are not generated: its entry block stores the memory.
+        let mut skipped = vec![false; f.blocks.len()];
+        for l in &self.fills {
+            skipped[l.head.0 as usize] = true;
+            skipped[l.body.0 as usize] = true;
+        }
         for (bi, b) in f.blocks.iter().enumerate() {
+            if skipped[bi] {
+                continue;
+            }
             let lb = self.block_labels[bi];
             // A loop starts on a 16-byte boundary (when that costs at most 8 bytes of no-ops).
             if heads[bi] {
@@ -762,7 +778,17 @@ impl<'m> Gen<'m> {
                 }
                 self.inst(f, i, &f.insts[i])?;
             }
-            let next = (bi + 1 < f.blocks.len()).then_some(bi + 1);
+            // The block emitted after this one (the skipped ones are not).
+            let next = (bi + 1..f.blocks.len()).find(|j| !skipped[*j]);
+            if let Some(k) = self.fills.iter().position(|l| l.pre.0 as usize == bi) {
+                self.fill(f, k);
+                let exit = Target {
+                    block: self.fills[k].exit,
+                    args: Vec::new(),
+                };
+                self.edge(f, &exit, next);
+                continue;
+            }
             match &b.term {
                 Some(t) => self.term(f, t, fused, next)?,
                 None => return Err(format!("`{}`: a block has no terminator", f.name)),
@@ -1330,6 +1356,22 @@ impl<'m> Gen<'m> {
                 k += w;
             }
         }
+    }
+
+    /// The fill loop number `k` as one string store: `rep stos` of the element size.
+    fn fill(&mut self, f: &Func, k: usize) {
+        let (base, value, count, width) = {
+            let l = &self.fills[k];
+            (l.base, l.value, l.count, l.width)
+        };
+        // `rdi` may hold a value; `rax`, `rcx` and `rdx` are scratch.
+        self.a.push(RDI);
+        self.ld(RAX, value);
+        let m = self.mem_of(f, base, RCX, RDX);
+        self.a.lea(RDI, m);
+        self.a.mov_ri(RCX, count as i64);
+        self.a.rep_stos(width);
+        self.a.pop(RDI);
     }
 
     /// Fills `size` bytes of the frame with zeros.
