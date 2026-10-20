@@ -270,3 +270,119 @@ mod native_run {
         let _ = std::fs::remove_file(&path);
     }
 }
+
+/// A frame slot is zero when it comes into use, unless the code after it writes every byte first
+/// (then the clearing is left out). A slot written only in part must still read as zero: the stack
+/// under it is dirtied first by another function.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn slots_read_as_zero_unless_overwritten() {
+    use super::gen;
+    use crate::ir::*;
+    let mut m = Module::default();
+    // dirty(): fills 128 bytes of its frame with 0x41.
+    let mut dirty = Func::new("dirty", &[], IrTy::Void);
+    let b = dirty.entry();
+    let s = dirty.emit(b, Op::Slot(128, 8), Some(IrTy::Ptr)).unwrap();
+    let k = dirty
+        .emit(
+            b,
+            Op::Const(IrTy::I64, Const::Int(0x4141414141414141)),
+            Some(IrTy::I64),
+        )
+        .unwrap();
+    for i in 0..16 {
+        let off = dirty
+            .emit(b, Op::Const(IrTy::I64, Const::Int(8 * i)), Some(IrTy::I64))
+            .unwrap();
+        let p = dirty.emit(b, Op::PtrAdd(s, off), Some(IrTy::Ptr)).unwrap();
+        dirty.emit(b, Op::Store(p, k), None);
+    }
+    dirty.terminate(b, Term::Return(None));
+    let dirty = m.add(dirty);
+    // part(): a 32-byte slot, only the first and the last 8 bytes written; returns the sum of all four words.
+    // full(): every byte written, in a different order; returns the sum of the four words.
+    let mut funcs = Vec::new();
+    for (name, offsets) in [("part", vec![0, 24]), ("full", vec![24, 8, 0, 16])] {
+        let mut f = Func::new(name, &[], IrTy::I64);
+        let b = f.entry();
+        let s = f.emit(b, Op::Slot(32, 8), Some(IrTy::Ptr)).unwrap();
+        let mut addr = Vec::new();
+        for i in 0..4 {
+            let off = f
+                .emit(b, Op::Const(IrTy::I64, Const::Int(8 * i)), Some(IrTy::I64))
+                .unwrap();
+            addr.push(f.emit(b, Op::PtrAdd(s, off), Some(IrTy::Ptr)).unwrap());
+        }
+        for (n, o) in offsets.iter().enumerate() {
+            let v = f
+                .emit(
+                    b,
+                    Op::Const(IrTy::I64, Const::Int(n as i128 + 1)),
+                    Some(IrTy::I64),
+                )
+                .unwrap();
+            f.emit(b, Op::Store(addr[o / 8], v), None);
+        }
+        let mut sum = f
+            .emit(b, Op::Load(IrTy::I64, addr[0]), Some(IrTy::I64))
+            .unwrap();
+        for a in &addr[1..] {
+            let x = f.emit(b, Op::Load(IrTy::I64, *a), Some(IrTy::I64)).unwrap();
+            sum = f
+                .emit(b, Op::Bin(BinOp::Add, sum, x), Some(IrTy::I64))
+                .unwrap();
+        }
+        f.terminate(b, Term::Return(Some(sum)));
+        funcs.push(m.add(f));
+    }
+    // main: dirty the stack, then print the two sums as digits.
+    let mut main = Func::new("main", &[], IrTy::Void);
+    let b = main.entry();
+    main.emit(b, Op::Call(dirty, vec![]), None);
+    let out = main.emit(b, Op::Slot(2, 1), Some(IrTy::Ptr)).unwrap();
+    for (i, fid) in funcs.iter().enumerate() {
+        let r = main
+            .emit(b, Op::Call(*fid, vec![]), Some(IrTy::I64))
+            .unwrap();
+        let d = main
+            .emit(b, Op::Const(IrTy::I64, Const::Int(48)), Some(IrTy::I64))
+            .unwrap();
+        let c = main
+            .emit(b, Op::Bin(BinOp::Add, r, d), Some(IrTy::I64))
+            .unwrap();
+        let c8 = main
+            .emit(b, Op::Cast(CastKind::Trunc, c, IrTy::I8), Some(IrTy::I8))
+            .unwrap();
+        let off = main
+            .emit(
+                b,
+                Op::Const(IrTy::I64, Const::Int(i as i128)),
+                Some(IrTy::I64),
+            )
+            .unwrap();
+        let p = main.emit(b, Op::PtrAdd(out, off), Some(IrTy::Ptr)).unwrap();
+        main.emit(b, Op::Store(p, c8), None);
+    }
+    let two = main
+        .emit(b, Op::Const(IrTy::I64, Const::Int(2)), Some(IrTy::I64))
+        .unwrap();
+    main.emit(b, Op::Print(out, two), None);
+    main.terminate(b, Term::Return(None));
+    m.add(main);
+    // part() = 1 + 2 = 3 (the middle words are zero); full() = 1 + 2 + 3 + 4 = 10, as the digit '0' + 10 = ':'.
+    for regalloc in [false, true] {
+        let opts = gen::Options {
+            leak_check: false,
+            target: super::Os::Linux,
+            regalloc,
+        };
+        let image = gen::compile(&m, "main", &opts).unwrap();
+        let r = super::exec::run_image(super::Os::Linux, &image).unwrap();
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("3:", "", 0),
+            "regalloc {regalloc}"
+        );
+    }
+}

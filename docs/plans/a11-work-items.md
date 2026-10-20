@@ -17,9 +17,11 @@ Done:
 - **S2, first round (PR #8):** `ir/opt/ranges.rs` drops a checked `add`, `sub`, `mul` when both operands have a known small non-negative range (widened bytes, `x & 255`, `x % 10`, `x >> 3`, sums and products of those). Loops are not analysed.
 - **S3, first round (PR #8):** `native/gen.rs` keeps integer constants as immediates (`Where::Imm`), fuses a compare with the branch that ends its block, falls through to the next block, uses operands from their own registers and builds results in place, and gives `r10`/`r11` to values not live across a call (`native/regs.rs`).
 
-- **W3 (this PR):** the allocator in `native/regs.rs` (live ranges with holes, all the caller-saved registers, split around calls, a cost model, hints) and parallel moves in `gen.rs`; see `docs/design/backend.md` section 6.
+- **W3 (PR #15):** the allocator in `native/regs.rs` (live ranges with holes, all the caller-saved registers, split around calls, a cost model, hints) and parallel moves in `gen.rs`; see `docs/design/backend.md` section 6.
 
-Still true: the generator is template based (`rax`, `rcx`, `rdx` scratch), a value that gets no register costs a load and a store per use, floats always live in memory, structs travel through memory, and `Slot` zeroes its memory each time it runs.
+- **W5:** loads and stores use `[base + index*scale + disp]` and frame offsets, small `memcopy` is plain moves, a `Slot` is not cleared when the code after it overwrites it; see `docs/design/backend.md` section 6.
+
+Still true: the generator is template based (`rax`, `rcx`, `rdx` scratch), a value that gets no register costs a load and a store per use, floats always live in memory, and structs live in memory (the optimiser does not split them into fields yet).
 
 ## Rules the generator now relies on (read before touching `gen.rs` or `regs.rs`)
 
@@ -62,7 +64,7 @@ Size is S (hours), M (a day), L (several days). "Collides with" means the same f
 - **Collides with:** every other `native/` item. Only start it when W3 and W5 are merged.
 - **Why:** card A-10 (AArch64) should share this layer rather than copy `gen.rs`; decision recorded in A-10.
 
-### W5. Cheaper memory operations
+### W5. Cheaper memory operations — done (addressing modes, frame objects, small copies, slot clearing)
 - **What:** addressing modes (`[base + index*8 + disp]`) for `PtrAdd` + `Load`/`Store`; stop zeroing a `Slot` that the code writes before reading; constant-size `MemCopy` up to 64 bytes as plain moves; zero-fill without `rep stosb` for small slots.
 - **Touches:** `native/gen.rs` (`Op::Slot`, `MemCopy`, `Load`, `Store`, `PtrAdd`), `native/x86.rs` (a base+index memory operand and its golden tests in `x86_golden.rs`), possibly `lower/` where a slot is declared; `ir/opt/promote.rs` if "written before read" is proven in the optimiser instead.
 - **Depends on:** nothing. **Size:** M.
