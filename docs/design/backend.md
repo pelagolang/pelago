@@ -27,7 +27,7 @@ The interpreter (`ir/interp.rs`) is the specification. Every row is a test (card
 | plain `Add`, `Sub`, `Mul` | wrap around at the type's width | the bare instruction at the right operand size |
 | `Cmp` on floats with NaN | like Rust: `==` false, `!=` true, ordered comparisons false | `ucomisd` flags with the parity flag checked |
 | `IntToFloat` | sign-extend from the source width, then convert | `movsx`, then `cvtsi2sd` |
-| `FloatToInt` | the interpreter converts with saturation to `i128` and then cuts to the target width | `cvttsd2si` (64-bit) then cut; **differs outside the `i64` range: open item, the lowering must range-check first** |
+| `FloatToInt` | saturates like Rust's `as i64` (NaN gives 0), then cuts to the target width | `cvttsd2si` (64-bit); the "indefinite" answer `i64::MIN` is checked: NaN gives 0, a positive overflow gives `i64::MAX`, then cut |
 | `Trunc`, `ZExt`, `SExt` | as the names say | `mov`, `movzx`, `movsx`/`movsxd` |
 | `Load`, `Store` | little-endian, any alignment | plain `mov` |
 | `MemCopy` | non-overlapping copy of n bytes | `rep movsb` (small constant sizes inline later) |
@@ -57,7 +57,7 @@ operation, a swap-safe copy for block parameters, stack arguments with padding f
 executable and `pelago run --native <path>` builds and runs it. The test suite has a third column: every `output_of` test and the example programs also run natively
 (plain and optimised IR) and must print the same and exit cleanly with no leak; `native_agrees_on_the_edge_cases` compares the stop messages and exit statuses of about
 fifty programs on the rows of the table above (division, shifts, overflow at every width, NaN, conversions, many arguments, 100,000-deep recursion). Known differences:
-`float32` arithmetic rounds natively (the interpreter keeps `f64`); float remainder (`%`) is refused by the native build; `FloatToInt` outside the `i64` range differs.
+float remainder (`%`) is refused by the native build. (`float32` rounding after every operation and saturating `FloatToInt` now agree in both engines.)
 The benches run in about a millisecond natively (the interpreter: 20 to 60 ms).
 
 ## 5. Windows (PE) target

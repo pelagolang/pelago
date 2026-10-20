@@ -1688,7 +1688,27 @@ impl<'m> Gen<'m> {
             }
             CastKind::FloatToInt => {
                 let x = self.fsrc(a, f, Xmm(0));
-                self.a.cvt_float_to_int(RAX, x, true, from == IrTy::F64);
+                let double = from == IrTy::F64;
+                self.a.cvt_float_to_int(RAX, x, true, double);
+                // `cvttsd2si` answers `i64::MIN` for NaN and anything out of range. Saturate like
+                // Rust's `as`: NaN gives 0, a positive overflow gives `i64::MAX`.
+                let done = self.a.new_label();
+                self.a.mov_ri(RCX, i64::MIN);
+                self.a.alu_rr(Alu::Cmp, RAX, RCX, 8);
+                self.a.jcc(Cc::Ne, done);
+                self.a.fxor(Xmm(1), Xmm(1));
+                self.a.fcmp(x, Xmm(1), double);
+                let nan = self.a.new_label();
+                let big = self.a.new_label();
+                self.a.jcc(Cc::P, nan);
+                self.a.jcc(Cc::A, big);
+                self.a.jmp(done);
+                self.a.bind(nan);
+                self.a.alu_rr(Alu::Xor, RAX, RAX, 4);
+                self.a.jmp(done);
+                self.a.bind(big);
+                self.a.mov_ri(RAX, i64::MAX);
+                self.a.bind(done);
                 self.mask(RAX, bits(to));
                 self.st(r, RAX);
             }
