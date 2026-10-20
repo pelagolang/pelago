@@ -50,6 +50,4 @@ Measured with `compiler/benches/compare.sh` (best of 7, this container):
 | Program | before (S1) | now | C -O0 | C -O2 |
 |---|---|---|---|---|
 | collatz, 1 to 300,000 | 0.23 s | 0.09 s | 0.14 s | 0.07 s |
-| fib(38) | 0.35 s* | 0.30 s | 0.34 s | 0.08 s |
-
-*estimated from the earlier fib(35) measurement; not re-run.
+| fib(38) | 0.36 s | 0.30 s | 0.34 s | 0.08 s |
