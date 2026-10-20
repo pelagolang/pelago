@@ -1206,13 +1206,100 @@ fn the_last_call_of_a_sum_becomes_a_loop() {
             let (o, before, after) = both(&fib_module(k, swap));
             assert_eq!((before, after), (Val::Int(want), Val::Int(want)));
             let fib = o.funcs.iter().find(|f| f.name == "fib").unwrap();
-            // One call is left, the first one.
+            // One call to itself is left, the first one; the other goes to the exact copy.
             assert_eq!(
-                count(fib, |o| matches!(o, Op::Call(..))),
+                count(fib, |o| matches!(o, Op::Call(g, _) if *g == FuncId(0))),
                 1,
                 "{}",
                 print_func(fib, None)
             );
         }
     }
+}
+
+/// `fn s(n, a, b, c) { if n == 0 { 0 } else { a + s(n - 1, b, c, a) } }` in `i8`, so the terms are
+/// `a + (b + (c + 0))` and `main` returns `s(3, x, y, z)`.
+fn rotating_sum(args: [i128; 3]) -> Module {
+    let t = IrTy::I8;
+    let mut m = Module::default();
+    let mut s = Func::new("s", &[t, t, t, t], t);
+    let e = s.entry();
+    let p = s.block_params(e).to_vec();
+    let done = s.new_block(&[]);
+    let rec = s.new_block(&[]);
+    let to = |block| Target {
+        block,
+        args: vec![],
+    };
+    let zero = s.emit(e, Op::Const(t, Const::Int(0)), Some(t)).unwrap();
+    let c = s
+        .emit(e, Op::Cmp(CmpOp::Eq, p[0], zero), Some(IrTy::Bool))
+        .unwrap();
+    s.terminate(e, Term::Branch(c, to(done), to(rec)));
+    let z = s.emit(done, Op::Const(t, Const::Int(0)), Some(t)).unwrap();
+    s.terminate(done, Term::Return(Some(z)));
+    let one = s.emit(rec, Op::Const(t, Const::Int(1)), Some(t)).unwrap();
+    let n1 = s
+        .emit(rec, Op::Bin(BinOp::Sub, p[0], one), Some(t))
+        .unwrap();
+    let r = s
+        .emit(
+            rec,
+            Op::Call(FuncId(0), vec![n1, p[2], p[3], p[1]]),
+            Some(t),
+        )
+        .unwrap();
+    let sum = s
+        .emit(rec, Op::Checked(BinOp::Add, true, p[1], r), Some(t))
+        .unwrap();
+    s.terminate(rec, Term::Return(Some(sum)));
+    m.add(s);
+    let mut f = Func::new("main", &[], t);
+    let e = f.entry();
+    let mut call = vec![f.emit(e, Op::Const(t, Const::Int(3)), Some(t)).unwrap()];
+    for a in args {
+        call.push(f.emit(e, Op::Const(t, Const::Int(a)), Some(t)).unwrap());
+    }
+    let r = f.emit(e, Op::Call(FuncId(0), call), Some(t)).unwrap();
+    f.terminate(e, Term::Return(Some(r)));
+    m.add(f);
+    m
+}
+
+#[test]
+fn a_regrouped_signed_sum_stops_where_the_original_stops() {
+    // Mixed signs, overflow only in the original order, overflow in both, and none at all.
+    let cases: [([i128; 3], bool); 8] = [
+        ([-100, 100, 100], true),
+        ([100, 100, -100], false),
+        ([100, -100, 100], false),
+        ([60, 60, 60], true),
+        ([30, 40, 50], false),
+        ([-60, -60, -60], true),
+        ([-128, 127, -1], false),
+        ([127, 1, -1], false),
+    ];
+    for (args, stops) in cases {
+        let m = rotating_sum(args);
+        let before = run_full(&m, "main", &[]);
+        assert_eq!(before.result.is_err(), stops, "{args:?}");
+        let mut o = m.clone();
+        optimize(&mut o, Options::default());
+        assert!(verify_module(&o).is_empty(), "{}", print_module(&o));
+        let after = run_full(&o, "main", &[]);
+        assert_eq!(before.result, after.result, "{args:?}");
+    }
+}
+
+#[test]
+fn a_signed_sum_of_non_negative_terms_is_a_loop_with_a_way_out() {
+    let m = rotating_sum([30, 40, 50]);
+    let mut o = m.clone();
+    optimize(&mut o, Options::default());
+    let s = o.funcs.iter().find(|f| f.name == "s").unwrap();
+    assert_eq!(
+        count(s, |o| matches!(o, Op::Call(g, _) if *g == FuncId(0))),
+        0
+    );
+    assert!(o.funcs.iter().any(|f| f.name == "s$exact"));
 }

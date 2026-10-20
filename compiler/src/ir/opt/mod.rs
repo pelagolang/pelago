@@ -22,6 +22,7 @@ mod layout;
 mod licm;
 mod loops;
 mod promote;
+mod purity;
 mod ranges;
 mod sccp;
 mod split;
@@ -62,9 +63,30 @@ pub fn optimize(m: &mut Module, opts: Options) {
         }
     }
     if opts.level >= 2 {
-        for i in 0..m.funcs.len() {
-            if tailrec::run(&mut m.funcs[i], FuncId(i as u32)) {
+        let pure = purity::pure_funcs(m);
+        for (i, &is_pure) in pure.iter().enumerate() {
+            let me = FuncId(i as u32);
+            // A signed sum is only regrouped with an exact copy of the function to fall back to.
+            let exact = (is_pure && tailrec::wants_exact(&m.funcs[i], me)).then(|| {
+                let mut copy = m.funcs[i].clone();
+                copy.name.push_str("$exact");
+                let id = FuncId(m.funcs.len() as u32);
+                for b in &copy.blocks {
+                    for &k in &b.insts {
+                        if let Op::Call(g, _) = &mut copy.insts[k].op {
+                            if *g == me {
+                                *g = id;
+                            }
+                        }
+                    }
+                }
+                m.funcs.push(copy);
+                id
+            });
+            if tailrec::run(&mut m.funcs[i], me, exact) {
                 optimize_func(&mut m.funcs[i]);
+            } else if exact.is_some() {
+                m.funcs.pop();
             }
         }
     }
