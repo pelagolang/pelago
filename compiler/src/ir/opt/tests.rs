@@ -715,10 +715,11 @@ fn a_counter_bounded_by_its_loop_test_cannot_overflow() {
     // `i <= n` leaves `n = MAX`, so `i + 1` could pass it; a step of 2 could pass MAX with `i < n`.
     assert_eq!(checks_left(up(1, CmpOp::Le)), 2);
     assert_eq!(checks_left(up(2, CmpOp::Lt)), 2);
-    // A constant bound leaves room for a bigger step.
+    // A constant bound leaves room for a bigger step, and counts the trips: the sum is at most
+    // 4 * 9 or 11 * 10, so it needs no check either.
     let c = |step, cmp, limit| counter_loop(Some(0), step, BinOp::Add, cmp, Some(limit));
-    assert_eq!(checks_left(c(3, CmpOp::Lt, 10)), 1);
-    assert_eq!(checks_left(c(1, CmpOp::Le, 10)), 1);
+    assert_eq!(checks_left(c(3, CmpOp::Lt, 10)), 0);
+    assert_eq!(checks_left(c(1, CmpOp::Le, 10)), 0);
     // Counting down while positive: the subtraction cannot go below zero.
     let down = counter_loop(None, 1, BinOp::Sub, CmpOp::Gt, Some(0));
     assert_eq!(checks_left(down), 1);

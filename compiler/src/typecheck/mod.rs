@@ -20,6 +20,7 @@ mod call;
 mod exhaust;
 mod expr;
 mod iface;
+mod once;
 mod pat;
 mod stmt;
 #[cfg(test)]
@@ -140,7 +141,8 @@ impl Typed {
             | TyKind::Set(_)
             | TyKind::Box(_)
             | TyKind::Iter(_)
-            | TyKind::Any(_) => true,
+            | TyKind::Any(_)
+            | TyKind::Fn(_, _, true) => true,
             TyKind::Param(g) => self.linear.contains(g),
             TyKind::Array(e, _) | TyKind::Option(e) | TyKind::Range(e) => self.is_owning(*e),
             TyKind::Tuple(ts) | TyKind::AltTuple(ts, _) => ts.iter().any(|x| self.is_owning(*x)),
@@ -1339,7 +1341,7 @@ impl<'p> Checker<'p> {
                 let b = self.lower_type(b);
                 self.tt.result(a, b)
             }
-            TypeKind::Fn { params, ret } => {
+            TypeKind::Fn { once, params, ret } => {
                 let ps: Vec<ParamTy> = params
                     .iter()
                     .map(|p| ParamTy {
@@ -1351,7 +1353,7 @@ impl<'p> Checker<'p> {
                     Some(r) => self.lower_type(r),
                     None => self.tt.void,
                 };
-                self.tt.mk(TyKind::Fn(ps, r))
+                self.tt.mk(TyKind::Fn(ps, r, *once))
             }
             TypeKind::Any(e) => match &e.kind {
                 TypeKind::Path { path, .. } => {

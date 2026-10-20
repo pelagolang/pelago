@@ -579,7 +579,19 @@ impl<'p> Checker<'p> {
     /// Calls a function value (`f(1, 2)` where `f` has a `fn` type).
     fn call_value(&mut self, e: &'p Expr, ft: Ty, args: &'p [Arg]) -> Ty {
         match self.kind_of(ft) {
-            TyKind::Fn(ps, ret) => {
+            TyKind::Fn(ps, ret, once) => {
+                let mark = match &e.kind {
+                    ExprKind::Call { mark, .. } => *mark,
+                    _ => CallMark::None,
+                };
+                if once && mark != CallMark::Consumes {
+                    self.err(
+                        e.span,
+                        "this function can be called only once, and the call consumes it; write `f!!(...)`",
+                    );
+                } else if !once && mark == CallMark::Consumes {
+                    self.err(e.span, "this function only reads; remove the `!!`");
+                }
                 if ps.len() != args.len() {
                     self.err(
                         e.span,
@@ -1134,6 +1146,6 @@ impl<'p> Checker<'p> {
             })
             .collect();
         let ret = self.tt.subst(sig.ret, &map);
-        self.tt.mk(TyKind::Fn(params, ret))
+        self.tt.mk(TyKind::Fn(params, ret, false))
     }
 }

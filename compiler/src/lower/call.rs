@@ -642,7 +642,7 @@ impl<'a> Lowerer<'a> {
                 self.match_ty(a, c, map) && self.match_ty(b, d, map)
             }
             (TyKind::Tuple(xs), TyKind::Tuple(ys)) => self.match_all(&xs, &ys, map),
-            (TyKind::Fn(ps, r), TyKind::Fn(qs, s)) => {
+            (TyKind::Fn(ps, r, _), TyKind::Fn(qs, s, _)) => {
                 ps.len() == qs.len()
                     && ps
                         .iter()

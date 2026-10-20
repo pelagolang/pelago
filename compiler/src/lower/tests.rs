@@ -648,6 +648,12 @@ fn program_open_ranges_as_values() {
 }
 
 #[test]
+fn program_once_fn() {
+    let src = "fn eat(sink s: string) -> int = s.len()\nfn run(sink f: once fn() -> int) -> int = f!!()\nfn main() {\n const s = \"hello\"\n print(run(sink [sink s] () ~> eat(sink s)))\n const h = \"abc\"\n const k = [sink h] () ~> h.len()\n print(k() + run(sink k)) }\n";
+    assert_eq!(output_of(src), "5\n6\n");
+}
+
+#[test]
 fn program_builder() {
     let src = "fn main() { const xs = [1, 2, 3, 4, 5, 6]\n print([x of xs if x % 2 == 0 ~> x * 10])\n print([x of xs if x > 4])\n print([i, x of xs if i < 2 ~> \"#i:#x\"])\n print([x of 0..3, y of 0..2 ~> (x, y)])\n print(set { x of xs ~> x % 3 })\n print(map { x of 1..4 ~> x : x * x })\n print(xs.map(x ~> x + 1).to_list()) }\n";
     assert_eq!(output_of(src), "[20, 40, 60]\n[5, 6]\n[\"0:1\", \"1:2\"]\n[(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]\n{1, 2, 0}\n{1: 1, 2: 4, 3: 9}\n[2, 3, 4, 5, 6, 7]\n");
@@ -2314,4 +2320,12 @@ fn the_loop_test_may_read_another_counter() {
             print(n, m, k, c)
         }",
     );
+}
+
+#[test]
+fn default_that_returns_does_not_leak_later_locals() {
+    // `?? return` leaves the default's scope open unless it is popped; the locals after it
+    // then registered in that dead scope and leaked on the way out.
+    let src = "fn pair(n: int) -> int ! string {\n var s: [string] = [\"x#(1)\", \"yy\"]\n const b = s.pop!() ?? return err(\"b\")\n const a = s.pop!() ?? return err(\"a\")\n ok(a.len() + b.len() + n)\n}\nfn main() {\n switch pair(0) { case ok(n): print(n)\n case err(e): print(e) }\n}\n";
+    assert_eq!(output_of(src), "4\n");
 }

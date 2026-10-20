@@ -65,7 +65,7 @@ impl Visitor for Uses {
 impl<'a> Lowerer<'a> {
     /// The IR signature of calling a function value of this type.
     pub(crate) fn fn_value_sig(&mut self, fn_ty: Ty) -> Option<Sig> {
-        let TyKind::Fn(ps, r) = self.kind(fn_ty) else {
+        let TyKind::Fn(ps, r, _) = self.kind(fn_ty) else {
             return None;
         };
         let ret = self.types.zonk(r);

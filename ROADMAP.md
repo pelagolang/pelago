@@ -45,6 +45,7 @@ A serious, self-hosting systems language:
 | Config | `pelago.toml` is the general config file for everything language-related; the formatter reads its `[fmt]` section (`indent`, `width`), found by walking up from the file (`docs/plans/cards/S-07-formatter.md`) | decided |
 | Maps | `map { "a": 1 }`, empty map `{:}` | decided |
 | Closures | `x ~> x * 2` and `~> it * 2` | decided |
+| One-shot closures | A closure that consumes a `[sink]` capture has the type `once fn(...)` (inferred, never written on the closure); calling it is `f!!()` and uses it up; `fn` may stand where `once fn` is wanted; `spawn` takes `once fn` (`functions.md` section 19) | decided, built |
 | Null | None. Absence is `none` in `option<T>` | decided |
 | Ternary | Included, chains right, spaces around `?` and `:`; error-propagation `?` is attached | decided |
 | `++` / `--` | Included as statements only; `+= 1` stays | decided |

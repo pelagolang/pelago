@@ -13,9 +13,16 @@
 //! newlines) as the input, and the file must parse without errors, otherwise [`format`] returns
 //! an error and the file is left alone. Formatting twice gives the same text.
 //!
-//! Line breaking (wrapping long calls, trailing commas when a list breaks) needs the tree and
-//! comes in a later stage; see `docs/plans/cards/S-07-formatter.md`.
+//! Stage 2 adds two things on top of that. Lines longer than the configured width are broken at
+//! the rightmost outermost `( )` or `[ ]` group with a comma (one element per line, trailing
+//! comma, closing bracket on its own line; see [`wrap`]). And the names inside
+//! `import { ... }` are sorted, `...` last (see [`imports`]). Because both change more than
+//! spacing, the output is also parsed and must print the same tree as the input.
+//!
+//! Not done yet: breaking long binary expressions, and fixing a line indented one level too far,
+//! which needs the tree; see `docs/plans/cards/S-07-formatter.md`.
 
+use crate::ast_print::print_file;
 use crate::config::FmtConfig;
 use crate::lexer::tokenize;
 use crate::parser::parse_and_check;
@@ -65,18 +72,45 @@ pub fn format_with(src: &str, config: &FmtConfig) -> Result<String, String> {
     if !parsed.errors.is_empty() {
         return Err("the file has syntax errors".to_string());
     }
-    let out = layout(src, &lexed.tokens, config);
-    if signature(src, &lexed.tokens) != signature(&out, &tokenize(&out).tokens) {
+    // Names in import lists are sorted first; everything after compares against that text.
+    let sorted = imports::sort_imports(src);
+    let src = sorted.as_str();
+    let tokens = tokenize(src).tokens;
+    let out = wrap::wrap(&layout(src, &tokens, config), config);
+    if signature(src, &tokens) != signature(&out, &tokenize(&out).tokens) {
         return Err("formatting would change the tokens; not applied (this is a bug)".to_string());
+    }
+    let (before, _) = parse_and_check(src);
+    let (after, _) = parse_and_check(&out);
+    if !after.errors.is_empty() || print_file(&before.file, src) != print_file(&after.file, &out) {
+        return Err("formatting would change the tree; not applied (this is a bug)".to_string());
     }
     Ok(if crlf { out.replace('\n', "\r\n") } else { out })
 }
 
 /// The tokens that must survive: kind and text, with every newline run reduced to one newline.
+/// Newlines inside brackets and a comma right before a closing bracket do not count: breaking a
+/// long list adds them.
 fn signature(src: &str, tokens: &[Token]) -> Vec<(TokenKind, String)> {
-    tokens
-        .iter()
-        .filter(|t| t.kind != TokenKind::Eof)
+    let mut depth = 0usize;
+    let mut kept: Vec<&Token> = Vec::new();
+    for t in tokens.iter().filter(|t| t.kind != TokenKind::Eof) {
+        if is_opener(t.kind) {
+            depth += 1;
+        } else if is_closer(t.kind) {
+            depth = depth.saturating_sub(1);
+            if kept
+                .last()
+                .is_some_and(|p| p.kind == TokenKind::Punct(Punct::Comma))
+            {
+                kept.pop();
+            }
+        } else if t.kind == TokenKind::Newline && depth > 0 {
+            continue;
+        }
+        kept.push(t);
+    }
+    kept.into_iter()
         .map(|t| {
             let text = &src[t.span.start as usize..t.span.end as usize];
             let text = if t.kind == TokenKind::Newline {
@@ -180,6 +214,9 @@ fn layout(src: &str, tokens: &[Token], config: &FmtConfig) -> String {
     out.push('\n');
     out
 }
+
+mod imports;
+mod wrap;
 
 #[cfg(test)]
 mod tests;

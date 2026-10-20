@@ -341,7 +341,7 @@ const p = point.polar(1.0, 0.5)
 
 ---
 
-## 19. Closures that can be called only once (decided 2026-10-20)
+## 19. Closures that can be called only once (decided and built 2026-10-20)
 
 **The problem (checked on `main`, 2026-10-20).** A closure that only *reads* what it captured with `[sink s]` can be called many times; that already works. A closure whose body *consumes* a capture (`~> eat(sink s)`, or returns `s`) runs the body once on the captured value; a second call reads memory that is already gone, and nothing reports it. `spawn`, tasks and `defer` in `core.pel` rely on such one-shot closures, so they cannot simply be forbidden.
 
@@ -360,7 +360,9 @@ const h = [sink s] () ~> s.len()                      // inferred: fn() -> int (
 - Library: `spawn`, `scope.spawn`, `defer` and the task body take `once fn`.
 - Representation does not change (same environment, same `taken` flag); the new thing is a flag on the function type in the checker, plus one parser rule for the type.
 
-**Work, if accepted:** parser (`once fn` type), `ast_print.rs`, `visit.rs`, `TyKind::Fn` gets a `once` flag with subtyping in `unify`/coercion, inference in the checker, the call rule in `values/`, `core.pel` signatures, `examples/tour.pel`, tests, golden trees.
+**Work (done):** parser (`once fn` type), `ast_print.rs`, `visit.rs`, `TyKind::Fn` gets a `once` flag with subtyping in `unify`/coercion, inference in the checker, the call rule in `values/`, `core.pel` signatures, `examples/tour.pel`, tests, golden trees.
+
+The checker finds the consuming forms that are written out (`sink x` argument, `!!` call on `x`, `x` returned); any other move of a `[sink]` capture is refused by the value pass until the context gives the closure a `once fn` type.
 
 **Decisions (owner, 2026-10-20: "go with yours").**
 

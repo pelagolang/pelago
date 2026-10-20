@@ -295,7 +295,11 @@ impl<T> list<T> {
         const at = rt_offset(rt_hdr_data(h), index * size)
         var i = len - 1
         while i >= index {
-            rt_copy(rt_offset(rt_hdr_data(h), (i + 1) * size), rt_offset(rt_hdr_data(h), i * size), size)
+            rt_copy(
+                rt_offset(rt_hdr_data(h), (i + 1) * size),
+                rt_offset(rt_hdr_data(h), i * size),
+                size,
+            )
             i -= 1
         }
         rt_write<T>(at, sink item)
@@ -310,7 +314,11 @@ impl<T> list<T> {
         const value = rt_read<T>(rt_offset(rt_hdr_data(h), index * size))
         var i = index
         while i < len - 1 {
-            rt_copy(rt_offset(rt_hdr_data(h), i * size), rt_offset(rt_hdr_data(h), (i + 1) * size), size)
+            rt_copy(
+                rt_offset(rt_hdr_data(h), i * size),
+                rt_offset(rt_hdr_data(h), (i + 1) * size),
+                size,
+            )
             i += 1
         }
         rt_hdr_set_len(h, len - 1)
@@ -338,7 +346,11 @@ impl<T> list<T> {
         var i = 0
         var j = rt_hdr_len(h) - 1
         while i < j {
-            rt_swap_bytes(rt_offset(rt_hdr_data(h), i * size), rt_offset(rt_hdr_data(h), j * size), size)
+            rt_swap_bytes(
+                rt_offset(rt_hdr_data(h), i * size),
+                rt_offset(rt_hdr_data(h), j * size),
+                size,
+            )
             i += 1
             j -= 1
         }
@@ -679,7 +691,11 @@ fn rt_map_find_tag(h: ptr, key: ptr, ksize: int, eq: ptr, tag: int) -> int {
     var perturb = tag
     var v = rt_load_int(rt_offset(tab, s * 8))
     while v != 0 {
-        if rt_slot_tag(v) == tag && rt_call_bool2(eq, rt_map_key_at(h, rt_slot_pos(v) - 1, ksize), key) {
+        if rt_slot_tag(v) == tag && rt_call_bool2(
+            eq,
+            rt_map_key_at(h, rt_slot_pos(v) - 1, ksize),
+            key,
+        ) {
             return rt_slot_pos(v) - 1
         }
         perturb = perturb >> 5
@@ -875,7 +891,11 @@ fn rt_map_eq<K, V>(a: ptr, b: ptr) -> bool {
         const tag = rt_map_tag(hash, rt_map_key_at(a, i, ks))
         const j = rt_map_find_tag(b, rt_map_key_at(a, i, ks), ks, eq, tag)
         if j < 0 { return false }
-        if !rt_call_bool2(veq, rt_map_val_at(a, i, ks, vs), rt_map_val_at(b, j, ks, vs)) { return false }
+        if !rt_call_bool2(
+            veq,
+            rt_map_val_at(a, i, ks, vs),
+            rt_map_val_at(b, j, ks, vs),
+        ) { return false }
         i += 1
     }
     true
@@ -951,7 +971,13 @@ impl<K, V> map<K, V> {
     }
 
     fn contains_key(self, key: K) -> bool {
-        rt_map_find(rt_addr_of(self), rt_addr_of(key), rt_size_of<K>(), rt_eq_fn<K>(), rt_hash_fn<K>()) >= 0
+        rt_map_find(
+            rt_addr_of(self),
+            rt_addr_of(key),
+            rt_size_of<K>(),
+            rt_eq_fn<K>(),
+            rt_hash_fn<K>(),
+        ) >= 0
     }
 
     fn insert(inout self, sink key: K, sink value: V) -> V? {
@@ -1036,7 +1062,13 @@ impl<T> set<T> {
     fn is_empty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
 
     fn contains(self, item: T) -> bool {
-        rt_map_find(rt_addr_of(self), rt_addr_of(item), rt_size_of<T>(), rt_eq_fn<T>(), rt_hash_fn<T>()) >= 0
+        rt_map_find(
+            rt_addr_of(self),
+            rt_addr_of(item),
+            rt_size_of<T>(),
+            rt_eq_fn<T>(),
+            rt_hash_fn<T>(),
+        ) >= 0
     }
 
     fn insert(inout self, sink item: T) -> bool {
@@ -1170,7 +1202,11 @@ impl str {
         const sn = suffix.len()
         const n = self.len()
         if sn > n { return false }
-        rt_bytes_eq(rt_offset(rt_hdr_data(rt_addr_of(self)), n - sn), rt_hdr_data(rt_addr_of(suffix)), sn)
+        rt_bytes_eq(
+            rt_offset(rt_hdr_data(rt_addr_of(self)), n - sn),
+            rt_hdr_data(rt_addr_of(suffix)),
+            sn,
+        )
     }
 
     fn contains(self, part: str) -> bool = rt_find(self, part) >= 0
@@ -1208,7 +1244,11 @@ impl str {
         const p = rt_hdr_data(rt_addr_of(self))
         var i = 0
         while i < n {
-            if fnn > 0 && i + fnn <= n && rt_bytes_eq(rt_offset(p, i), rt_hdr_data(rt_addr_of(from)), fnn) {
+            if fnn > 0 && i + fnn <= n && rt_bytes_eq(
+                rt_offset(p, i),
+                rt_hdr_data(rt_addr_of(from)),
+                fnn,
+            ) {
                 rt_str_push(rt_addr_of(out), rt_hdr_data(rt_addr_of(to)), to.len())
                 i += fnn
             } else {
@@ -1290,7 +1330,11 @@ fn rt_find(text: str, part: str) -> int {
     if pn == 0 { return 0 }
     var i = 0
     while i + pn <= n {
-        if rt_bytes_eq(rt_offset(rt_hdr_data(rt_addr_of(text)), i), rt_hdr_data(rt_addr_of(part)), pn) { return i }
+        if rt_bytes_eq(
+            rt_offset(rt_hdr_data(rt_addr_of(text)), i),
+            rt_hdr_data(rt_addr_of(part)),
+            pn,
+        ) { return i }
         i += 1
     }
     -1
@@ -1465,7 +1509,11 @@ impl<T, E> result<T, E> {
             case ok(v): ok(rt_clone<T>(rt_addr_of(v)))
             case err(e): {
                 var text = ""
-                rt_str_push(rt_addr_of(text), rt_hdr_data(rt_addr_of(message)), rt_hdr_len(rt_addr_of(message)))
+                rt_str_push(
+                    rt_addr_of(text),
+                    rt_hdr_data(rt_addr_of(message)),
+                    rt_hdr_len(rt_addr_of(message)),
+                )
                 rt_push_char(rt_addr_of(text), ':')
                 rt_push_char(rt_addr_of(text), ' ')
                 rt_show_to<E>(rt_addr_of(e), rt_addr_of(text))
@@ -1650,8 +1698,8 @@ fn rt_task_run(s: ptr) {
     /// 0: waiting, 3: waiting and detached (the task frees itself when done); anything else already ran.
     if state != 0 && state != 3 { return }
     if state == 0 { rt_store_int(s, 1) }
-    const g = rt_read<fn()>(rt_offset(s, 8))
-    g()
+    const g = rt_read<once fn()>(rt_offset(s, 8))
+    g!!()
 }
 
 //~ Runs every task that has not run yet.
@@ -1675,8 +1723,8 @@ pub fn rt_run_one_pending() -> bool {
 //~ Can a receive on this channel finish now: a value is queued, or no sender is left?
 pub fn rt_chan_ready(ch: ptr) -> bool = rt_hdr_len(ch) > 0 || rt_load_int(rt_offset(ch, 24)) == 0
 
-fn rt_task_body<T>(s: ptr, f: fn() -> T) {
-    rt_write<T>(rt_offset(s, 40), f())
+fn rt_task_body<T>(s: ptr, sink f: once fn() -> T) {
+    rt_write<T>(rt_offset(s, 40), f!!())
     if rt_load_int(s) == 3 {
         rt_drop_at<T>(rt_offset(s, 40))
         rt_free(s)
@@ -1709,11 +1757,11 @@ fn rt_forget_task<T>(sink t: task<T>) {
 }
 
 //~ Starts `f` on a new thread. What the closure uses must be copied or moved in (`sink x ~> ...`).
-pub fn spawn<T>(sink f: fn() -> T) -> task<T> {
+pub fn spawn<T>(sink f: once fn() -> T) -> task<T> {
     const s = rt_alloc(48 + rt_size_of<T>())
     rt_store_int(s, 0)
-    const runner = [sink f, sink s] () ~> rt_task_body<T>(s, f)
-    rt_write<fn()>(rt_offset(s, 8), sink runner)
+    const runner = [sink f, sink s] () ~> rt_task_body<T>(s, sink f)
+    rt_write<once fn()>(rt_offset(s, 8), sink runner)
     rt_pending.push!(rt_addr_int(s))
     task<T> { state: s }
 }
@@ -1724,7 +1772,7 @@ pub struct scope_handle {
 }
 
 impl scope_handle {
-    fn spawn<T>(self, sink f: fn() -> T) -> task<T> = spawn(sink f)
+    fn spawn<T>(self, sink f: once fn() -> T) -> task<T> = spawn(sink f)
 }
 
 /// A channel block: [queue: list 24 bytes][senders: int][receiver alive: int].
@@ -1946,7 +1994,11 @@ fn rt_col_insert<F>(h: ptr, index: int, src: ptr) {
     rt_grow(h, size, len + 1)
     var i = len - 1
     while i >= index {
-        rt_copy(rt_offset(rt_hdr_data(h), (i + 1) * size), rt_offset(rt_hdr_data(h), i * size), size)
+        rt_copy(
+            rt_offset(rt_hdr_data(h), (i + 1) * size),
+            rt_offset(rt_hdr_data(h), i * size),
+            size,
+        )
         i -= 1
     }
     rt_copy(rt_offset(rt_hdr_data(h), index * size), src, size)
@@ -1959,7 +2011,11 @@ fn rt_col_remove<F>(h: ptr, index: int, dst: ptr) {
     rt_copy(dst, rt_offset(rt_hdr_data(h), index * size), size)
     var i = index
     while i < len - 1 {
-        rt_copy(rt_offset(rt_hdr_data(h), i * size), rt_offset(rt_hdr_data(h), (i + 1) * size), size)
+        rt_copy(
+            rt_offset(rt_hdr_data(h), i * size),
+            rt_offset(rt_hdr_data(h), (i + 1) * size),
+            size,
+        )
         i += 1
     }
     rt_hdr_set_len(h, len - 1)
@@ -2060,7 +2116,13 @@ fn rt_map_at<K, V>(h: ptr, key: ptr) -> ptr {
 }
 
 //~ Is there an entry whose key equals the one at `key`?
-fn rt_map_has(h: ptr, key: ptr, ksize: int, eq: ptr, hash: ptr) -> bool = rt_map_find(h, key, ksize, eq, hash) >= 0
+fn rt_map_has(h: ptr, key: ptr, ksize: int, eq: ptr, hash: ptr) -> bool = rt_map_find(
+    h,
+    key,
+    ksize,
+    eq,
+    hash,
+) >= 0
 
 /// ---- Objects ---------------------------------------------------------------------------------
 
