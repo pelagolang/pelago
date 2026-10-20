@@ -53,7 +53,7 @@ counter). Tests run real executables: hello world, `stop`, allocation reuse and 
 decimal output. Reused blocks are cleared on allocation, because the interpreter always hands out zeroed memory. N2 (the code generator) is next.
 
 **N2 and N3 are done.** `native/gen.rs` is the simple code generator (every value in an 8-byte frame slot, zero-extended "canonical" integers, fixed templates per
-operation, a swap-safe copy for block parameters, stack arguments with padding for alignment). `pelago build [--opt] [--leak-check] [-o out] <path>` writes an
+operation, a swap-safe copy for block parameters, stack arguments with padding for alignment). `pelago build [--no-opt] [--leak-check] [-o out] <path>` writes an
 executable and `pelago run --native <path>` builds and runs it. The test suite has a third column: every `output_of` test and the example programs also run natively
 (plain and optimised IR) and must print the same and exit cleanly with no leak; `native_agrees_on_the_edge_cases` compares the stop messages and exit statuses of about
 fifty programs on the rows of the table above (division, shifts, overflow at every width, NaN, conversions, many arguments, 100,000-deep recursion). Known differences:
@@ -100,7 +100,7 @@ Measured on this container (collatz steps for 1 to 300,000 and `fib(35)`, `compi
 | C, `gcc -O0` | 0.23 s |
 | C, `gcc -O2` | 0.10 s |
 
-**Update (A-11 S1 to S3, first round).** The generator now treats integer constants as immediates, fuses a compare with the branch that uses it, falls through to the next block, works on operands in their own registers and uses `r10`/`r11` for values not live across calls; the optimiser turns division by powers of two into shifts and drops overflow checks it can prove cannot fire. Collatz went from 0.30 s to 0.09 s (C `-O0` 0.14 s, `-O2` 0.07 s); `compiler/benches/compare.sh` prints the table.
+**Update (A-11 S1 to S3, first round).** The generator now treats integer constants as immediates, fuses a compare with the branch that uses it, falls through to the next block, works on operands in their own registers and uses `r10`/`r11` for values not live across calls; the optimiser turns division by constants into shifts and high multiplies (`MulHi`/`UMulHi`) and drops overflow checks it can prove cannot fire. Collatz went from 0.30 s to 0.09 s (C `-O0` 0.14 s, `-O2` 0.07 s); `compiler/benches/compare.sh` prints the table.
 
 **The benchmark suite.** `compiler/benches/compare.sh [--json] [--runs N] [name ...]` builds every `compiler/benches/<name>.pel` that has a C twin `compiler/benches/c/<name>.c`, checks that both print the same output, and prints one table (best of N runs, native `--opt` against `gcc -O0` and `-O2`). `--json` adds one JSON line per program for a CI artifact or the weekly routine. A new benchmark is two files with the same name. Baseline on the container after A-11 first round (seconds):
 

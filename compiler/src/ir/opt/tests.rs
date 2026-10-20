@@ -458,15 +458,116 @@ fn division_by_powers_of_two_matches_the_interpreter() {
 }
 
 #[test]
-fn other_divisors_are_left_alone() {
-    for c in [3i128, 6, 10, -2, -1] {
-        let o = same_answer(&division_main(IrTy::I64, BinOp::Div, c, &[7, -7, 100]));
+fn divisors_that_must_still_divide_are_left_alone() {
+    for c in [-2i128, -1, 0, 1 << 63] {
+        let o = same_answer_or_stop(&division_main(IrTy::I64, BinOp::Div, c, &[7, -7, 100]));
         assert_eq!(
             count(&o.funcs[0], |o| matches!(o, Op::Bin(BinOp::Div, ..))),
             1,
             "c = {c}"
         );
     }
+}
+
+#[test]
+fn division_by_other_constants_becomes_a_high_multiply() {
+    for (ty, bits) in [
+        (IrTy::I64, 64u32),
+        (IrTy::I32, 32),
+        (IrTy::Int(16), 16),
+        (IrTy::I8, 8),
+    ] {
+        let top = (1i128 << (bits - 1)) - 1;
+        let xs: Vec<i128> = [0, 1, 2, 3, 6, 7, 9, 10, 11, 99, 100, 101, 641, top, top - 1]
+            .into_iter()
+            .flat_map(|x| [x, -x, -x - 1])
+            .filter(|x| *x >= -top - 1 && *x <= top)
+            .collect();
+        let divisors = [
+            3i128,
+            5,
+            6,
+            7,
+            9,
+            10,
+            11,
+            25,
+            100,
+            641,
+            1000,
+            top,
+            top - 1,
+            -3,
+            -7,
+            -10,
+            -top,
+        ];
+        for c in divisors.into_iter().filter(|c| c.abs() <= top) {
+            for op in [BinOp::Div, BinOp::Rem] {
+                let o = same_answer(&division_main(ty, op, c, &xs));
+                assert_eq!(
+                    count(&o.funcs[0], |o| matches!(
+                        o,
+                        Op::Bin(BinOp::Div | BinOp::Rem, ..)
+                    )),
+                    0,
+                    "{ty:?} {op:?} {c} still divides"
+                );
+                assert_eq!(
+                    count(&o.funcs[0], |o| matches!(o, Op::Bin(BinOp::MulHi, ..))),
+                    1,
+                    "{ty:?} {op:?} {c}"
+                );
+            }
+        }
+        let mask = (1u128 << bits) - 1;
+        let us: Vec<i128> = xs.iter().map(|x| (*x as u128 & mask) as i128).collect();
+        let top_u = mask as i128;
+        for c in [
+            3i128,
+            5,
+            7,
+            10,
+            11,
+            25,
+            100,
+            641,
+            1000,
+            top,
+            top + 2,
+            top_u,
+            top_u - 1,
+        ]
+        .into_iter()
+        .filter(|c| *c >= 3 && *c <= top_u)
+        .filter(|c| !(*c as u128).is_power_of_two())
+        {
+            for op in [BinOp::UDiv, BinOp::URem] {
+                let o = same_answer(&division_main(ty, op, c, &us));
+                assert_eq!(
+                    count(&o.funcs[0], |o| matches!(
+                        o,
+                        Op::Bin(BinOp::UDiv | BinOp::URem, ..)
+                    )),
+                    0,
+                    "{ty:?} {op:?} {c} still divides"
+                );
+                assert_eq!(
+                    count(&o.funcs[0], |o| matches!(o, Op::Bin(BinOp::UMulHi, ..))),
+                    1,
+                    "{ty:?} {op:?} {c}"
+                );
+            }
+        }
+    }
+}
+
+/// `same_answer` for modules whose divisor may be zero: only the shape is checked then.
+fn same_answer_or_stop(m: &Module) -> Module {
+    let mut o = m.clone();
+    optimize(&mut o, Options { level: 1 });
+    assert!(verify_module(&o).is_empty(), "{}", print_module(&o));
+    o
 }
 
 #[test]

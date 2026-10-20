@@ -896,6 +896,27 @@ impl<'m> Gen<'m> {
                 self.mask(out, w);
                 self.st(r, out);
             }
+            BinOp::MulHi | BinOp::UMulHi => {
+                // The product of the extended operands; the high half is `rdx` for 64 bits and a shift below.
+                let signed = op == BinOp::MulHi;
+                self.ld_ext(RAX, a, f, signed);
+                self.ld_ext(RCX, b, f, signed);
+                let out = if w == 64 {
+                    if signed {
+                        self.a.imul1(RCX, 8);
+                    } else {
+                        self.a.mul(RCX, 8);
+                    }
+                    RDX
+                } else {
+                    self.a.imul_rr(RAX, RCX, 8);
+                    let sh = if signed { Shift::Sar } else { Shift::Shr };
+                    self.a.shift_imm(sh, RAX, w as u8, 8);
+                    self.mask(RAX, w);
+                    RAX
+                };
+                self.st(r, out);
+            }
             BinOp::Shl | BinOp::Shr | BinOp::UShr if matches!(self.loc[b.0 as usize], Where::Imm(n) if (0..w as i64).contains(&n)) =>
             {
                 // A constant amount below the width: no check, an immediate shift.
