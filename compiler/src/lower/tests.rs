@@ -1939,6 +1939,7 @@ fn float_to_int_saturates() {
         output_of(src),
         "9223372036854775807 -9223372036854775807 0 2 -3 9223372036854775807 -9223372036854775807\n"
     );
+}
 
 /// Runaway recursion natively: a stop with exit status 1 on both systems, after the output so far.
 #[test]
