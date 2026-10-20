@@ -650,6 +650,153 @@ impl Analysis {
     }
 }
 
+// ---- Code actions ------------------------------------------------------------------------------
+
+/// A quick fix: replace `edit` in the source with `new_text`. It is offered when the request
+/// touches `trigger`, the range of the problem it answers.
+pub struct Fix {
+    pub title: String,
+    pub trigger: Span,
+    pub edit: Span,
+    pub new_text: String,
+}
+
+impl Analysis {
+    /// `did you mean `x`?` suggestions the checker already made, as replacements of the
+    /// misspelt name.
+    pub fn suggestion_fixes(&self, m: ModuleId) -> Vec<Fix> {
+        let mut out = Vec::new();
+        for d in self.diags.iter().filter(|d| d.module == m) {
+            let Some(rest) = d.message.split("; did you mean `").nth(1) else {
+                continue;
+            };
+            let Some(want) = rest.split('`').next().filter(|w| !w.is_empty()) else {
+                continue;
+            };
+            out.push(Fix {
+                title: format!("Change to `{want}`"),
+                trigger: d.span,
+                edit: d.span,
+                new_text: want.to_string(),
+            });
+        }
+        out
+    }
+
+    /// Imports whose name is never mentioned again in the file. A name counts as mentioned when
+    /// an identifier token has its text, or a string holds it (`#name` interpolation).
+    /// `pub import` re-exports and `...` globs are left alone.
+    pub fn unused_imports(&self, m: ModuleId) -> Vec<Fix> {
+        use crate::ast::{ImportKind, ItemKind, StmtKind, Vis};
+        let module = self.program.module(m);
+        let src = module.src.as_str();
+        let tokens = tokenize(src).tokens;
+        let mentioned = |name: &str, item: Span| {
+            tokens.iter().any(|t| {
+                if t.span.start >= item.start && t.span.end <= item.end {
+                    return false;
+                }
+                let s = &src[t.span.start as usize..t.span.end as usize];
+                match t.kind {
+                    TokenKind::Ident => s == name,
+                    TokenKind::Str => s.contains(name),
+                    _ => false,
+                }
+            })
+        };
+        let mut out = Vec::new();
+        for stmt in &module.file.stmts {
+            let StmtKind::Item(item) = &stmt.kind else {
+                continue;
+            };
+            let ItemKind::Import(imp) = &item.kind else {
+                continue;
+            };
+            if item.mods.vis != Vis::Default {
+                continue;
+            }
+            let whole = {
+                // Take the line break with it so no blank line is left behind.
+                let end = item.span.end as usize;
+                let end = if src[end..].starts_with("\r\n") {
+                    end + 2
+                } else if src[end..].starts_with('\n') {
+                    end + 1
+                } else {
+                    end
+                };
+                Span::new(item.span.start, end as u32)
+            };
+            let name_of = |id: &crate::ast::Ident| id.text(src).to_string();
+            match &imp.kind {
+                ImportKind::Module | ImportKind::Alias(_) => {
+                    let (local, at) = match &imp.kind {
+                        ImportKind::Alias(a) => (name_of(a), a.span),
+                        _ => match imp.path.segments.last() {
+                            Some(l) => (name_of(l), l.span),
+                            None => continue,
+                        },
+                    };
+                    if !mentioned(&local, item.span) {
+                        out.push(Fix {
+                            title: "Remove unused import".to_string(),
+                            trigger: at,
+                            edit: whole,
+                            new_text: String::new(),
+                        });
+                    }
+                }
+                ImportKind::Names { names, glob } => {
+                    let unused: Vec<usize> = (0..names.len())
+                        .filter(|&i| {
+                            let n = &names[i];
+                            let local = n.alias.as_ref().unwrap_or(&n.name);
+                            !mentioned(&name_of(local), item.span)
+                        })
+                        .collect();
+                    if unused.is_empty() {
+                        continue;
+                    }
+                    if unused.len() == names.len() && !*glob {
+                        out.push(Fix {
+                            title: "Remove unused import".to_string(),
+                            trigger: names[0].name.span,
+                            edit: whole,
+                            new_text: String::new(),
+                        });
+                        continue;
+                    }
+                    for i in unused {
+                        let n = &names[i];
+                        let end = n.alias.as_ref().map_or(n.name.span.end, |a| a.span.end) as usize;
+                        let start = n.name.span.start as usize;
+                        // Take the comma after the name, or the one before when it is the last.
+                        let after = src[end..].trim_start();
+                        let edit = if let Some(more) = after.strip_prefix(',') {
+                            let skipped = src.len() - more.trim_start().len();
+                            Span::new(start as u32, skipped as u32)
+                        } else {
+                            let before = src[..start].trim_end();
+                            if before.ends_with(',') {
+                                Span::new((before.len() - 1) as u32, end as u32)
+                            } else {
+                                Span::new(start as u32, end as u32)
+                            }
+                        };
+                        out.push(Fix {
+                            title: format!("Remove unused import `{}`", name_of(&n.name)),
+                            trigger: Span::new(start as u32, end as u32),
+                            edit,
+                            new_text: String::new(),
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 mod uri_tests {
     use super::*;
