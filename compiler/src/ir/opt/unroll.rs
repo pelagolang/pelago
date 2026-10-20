@@ -106,7 +106,7 @@ pub fn run(f: &mut Func) -> bool {
     // Block ids stay valid while blocks are only added.
     let found: Vec<(BlockId, BlockId)> = loops::find(f, &dom)
         .into_iter()
-        .filter(|l| l.size == 2 && l.header.0 != 0)
+        .filter(|l| l.size == 2 && l.header.0 != 0 && !f.blocks[l.header.0 as usize].tail)
         .filter_map(|l| {
             let body = (0..l.body.len())
                 .find(|b| l.body[*b] && *b as u32 != l.header.0)

@@ -42,6 +42,7 @@ mod tailrec;
 mod tests;
 mod undo;
 mod unroll;
+mod vectorise;
 
 pub use fill::{fill_loops, filled_slots, FillLoop};
 pub use inline::prune;
@@ -131,8 +132,13 @@ pub fn optimize_func(f: &mut Func) {
 fn passes(f: &mut Func, divs: bool) {
     rounds(f, divs);
     // After inlining, once: the copies it makes must not be unrolled again.
-    if divs && step(f, "unroll", unroll::run) {
-        rounds(f, divs);
+    if divs {
+        // The vectoriser goes first: the unroller must leave the loops it made.
+        let vectorised = step(f, "vectorise", vectorise::run);
+        let unrolled = step(f, "unroll", unroll::run);
+        if vectorised || unrolled {
+            rounds(f, divs);
+        }
     }
     // After the unrolling, which needs the counter the loop test reads.
     if divs && step(f, "ivtest", ivtest::run) {

@@ -718,7 +718,7 @@ pub fn assign(
                 k += 1;
             }
         }
-        // A vector has no memory home: it is never split around a call, so it must not live across one.
+        // A vector is never split around a call (the generator would have to save 16 bytes): one that lives across a call stays in its memory home.
         if vector && !crossed.is_empty() {
             continue;
         }

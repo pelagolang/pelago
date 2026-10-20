@@ -2086,6 +2086,68 @@ fn a_long_counted_loop_is_unrolled_and_keeps_its_results_and_its_stops() {
     agree("fn grow(from: int) -> int { var s = 1\n for i in from..1003 { s *= 3 }\n s }\nfn main() { print(grow(970)) }");
 }
 
+#[test]
+fn counted_loops_of_plain_arithmetic_run_in_vectors_with_the_same_results() {
+    // Counters, a sum and a difference, a shift and an xor over a constant bound. The bounds fall on
+    // every residue of the four iterations a pass covers, so each length of remainder runs.
+    let bounds = [256i64, 257, 258, 259, 1003];
+    let mut src = String::new();
+    for n in bounds {
+        src += &format!("fn f{n}() -> int {{ var p = 5\n var s = 0\n var d = 7\n for i in 0..{n} {{ p += 7\n s += (p ^ 33) & 4095\n d += (p << 2) & 255 }}\n s + d + p }}\nfn g{n}() -> int {{ var e = 1\n for i in 0..{n} {{ e += i & 15 }}\n e }}\n");
+    }
+    // The start is not known, so this one stays scalar; it also runs up to the largest integer.
+    src += "fn top(from: int) -> int { var s = 0\n for i in from..9223372036854775807 { s += (i & 7) << 1 }\n s }\nfn main() {";
+    for n in bounds {
+        src += &format!(" print(f{n}(), g{n}())\n");
+    }
+    src += " print(top(9223372036854775800)) }";
+    let l = lowered(&src);
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    for n in bounds {
+        let name = format!("f{n}");
+        let text = crate::ir::print_func(m.funcs.iter().find(|f| f.name == name).unwrap(), None);
+        assert!(
+            text.contains("vreduce_add"),
+            "{name} is not vectorised:\n{text}"
+        );
+        let plain = run_full(&l.module, &name, &[]).result.map(|v| v.as_i64());
+        let fast = run_full(&m, &name, &[]).result.map(|v| v.as_i64());
+        assert_eq!(plain, fast, "{name}");
+    }
+    for n in [
+        i64::MAX - 20,
+        i64::MAX - 8,
+        i64::MAX - 4,
+        i64::MAX - 3,
+        i64::MAX - 1,
+        i64::MAX,
+    ] {
+        let args = [Val::int(n)];
+        let plain = run_full(&l.module, "top", &args).result.map(|v| v.as_i64());
+        let fast = run_full(&m, "top", &args).result.map(|v| v.as_i64());
+        assert_eq!(plain, fast, "top({n})");
+    }
+    agree(&src);
+}
+
+#[test]
+fn a_checked_sum_is_not_vectorised_and_still_stops_in_the_same_pass() {
+    // The product can overflow, so the loop stays scalar and the stop comes from the same iteration.
+    let src = "fn g(from: int) -> int { var s = 0\n for i in from..1003 { s += i * 4611686018427387 }\n s }\nfn main() { print(g(0)) }";
+    let l = lowered(src);
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let text = crate::ir::print_func(m.funcs.iter().find(|f| f.name == "g").unwrap(), None);
+    assert!(!text.contains("vreduce_add"), "{text}");
+    for n in [0i64, 1, 500, 1000] {
+        let args = [Val::int(n)];
+        let plain = run_full(&l.module, "g", &args);
+        let fast = run_full(&m, "g", &args);
+        assert_eq!(plain.result, fast.result, "g({n})");
+    }
+}
+
 // ---- Float semantics: single precision rounding and saturating float to int -------------------------------
 
 #[test]
