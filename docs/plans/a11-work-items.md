@@ -32,7 +32,7 @@ Still true: the generator is template based (`rax`, `rcx`, `rdx` scratch), every
 
 Size is S (hours), M (a day), L (several days). "Collides with" means the same function or file will probably conflict if two threads run at once; run those one after the other or in one thread.
 
-### W1. High multiply and constant division by any divisor (A-11 S1 part 2)
+### W1. High multiply and constant division by any divisor (A-11 S1 part 2) (done)
 - **What:** add `MulHi`/`UMulHi` to the IR, then rewrite `x / c` and `x % c` for any constant `c` with the magic-number method (signed needs the correction step). `x / 10` is the common case.
 - **Touches:** `compiler/src/ir/mod.rs` (`BinOp`), `ir/verify.rs`, `ir/interp.rs` (`bin`), `ir/print.rs`, `ir/opt/divconst.rs`, `native/gen.rs` (`bin`: `mul`/`imul` one-operand form, `native/x86.rs` already has `mul`), `native/x86_golden.rs` if a new encoding is added, `ir/opt/tests.rs`, `native/tests.rs`.
 - **Depends on:** nothing. **Size:** M.
