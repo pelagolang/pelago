@@ -41,3 +41,13 @@ S1 alone should remove a big share of the collatz time. S1 to S3 together should
 
 **S1, part 1 (done): powers of two.** `ir/opt/divconst.rs` rewrites `x / 2^k` and `x % 2^k` (signed and unsigned) into shifts and masks, with the usual bias for negative dividends, and `x % 2^k == 0` (or `!= 0`) into `x & (2^k - 1)` compared with zero. Tests compare before and after for `i8`, `i32` and `i64` at the edges. On `compiler/benches/collatz.pel` (steps for 1 to 300,000): native `--opt` 0.30 s before, 0.23 s after; C `-O0` 0.15 s, C `-O2` 0.07 s on this container.
 **S1, part 2 (open): other constant divisors.** `x / 10` needs the high half of a 64-bit product, which the IR cannot say. It needs a new `MulHi`/`UMulHi` operation in the IR, the interpreter, the verifier and both code generators; then the magic-number rewrite. Decided to do it as its own change.
+
+**S3, first round (done): the generator stops wasting moves.** Constants are immediates (no register, no frame slot); a comparison that only feeds the branch ending its block is not stored (`cmp` + `jcc`), and a jump to the next block falls through; operands are used from their own registers and results are built in place; `r10` and `r11` hold values that are not live across a call. Still open from S3: real linear scan with live-range splitting, all caller-saved registers, addressing modes, a machine-level IR (needed for A-10 option 2).
+**S2, first round (done): checks that cannot fire.** `ir/opt/ranges.rs` finds values known to be small and non-negative (a widened byte, `x & 255`, `x % 10`, `x >> 3`, sums and products of those) and turns a checked `add`, `sub` or `mul` that provably fits into the plain operation. It does not look through loops: block parameters and loads have no range, so a loop counter's `+ 1` keeps its check unless the lowering already emitted a plain add (as it does for `for i in 0..n`). Next for S2: induction variables (a counter that starts at a constant, goes up by 1 and is bounded by a dominating compare).
+
+Measured with `compiler/benches/compare.sh` (best of 7, this container):
+
+| Program | before (S1) | now | C -O0 | C -O2 |
+|---|---|---|---|---|
+| collatz, 1 to 300,000 | 0.23 s | 0.09 s | 0.14 s | 0.07 s |
+| fib(38) | 0.36 s | 0.30 s | 0.34 s | 0.08 s |

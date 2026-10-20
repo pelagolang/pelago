@@ -100,7 +100,14 @@ impl Bits {
 }
 
 /// For each value, the register it lives in, if any.
-pub fn assign(f: &Func, regs: &[crate::native::x86::Reg]) -> Vec<Option<crate::native::x86::Reg>> {
+///
+/// `saved` are callee-saved registers (any value may live in them); `scratch` are caller-saved ones,
+/// used only for values whose live range has no call or other runtime routine inside it.
+pub fn assign(
+    f: &Func,
+    saved: &[crate::native::x86::Reg],
+    scratch: &[crate::native::x86::Reg],
+) -> Vec<Option<crate::native::x86::Reg>> {
     let nv = f.values.len();
     let nb = f.blocks.len();
     let o = order(f);
@@ -225,15 +232,49 @@ pub fn assign(f: &Func, regs: &[crate::native::x86::Reg]) -> Vec<Option<crate::n
     }
 
     // Greedy assignment, heaviest first.
+    // Constants are used as immediates and take no register (the generator knows them by value).
+    let mut is_const = vec![false; nv];
+    for b in &f.blocks {
+        for &i in &b.insts {
+            if let (Op::Const(..), Some(r)) = (&f.insts[i].op, f.insts[i].result) {
+                is_const[r.0 as usize] = true;
+            }
+        }
+    }
     let eligible = |v: usize| {
-        matches!(f.values[v], IrTy::Int(_) | IrTy::Bool | IrTy::Ptr) && start[v] != u32::MAX
+        matches!(f.values[v], IrTy::Int(_) | IrTy::Bool | IrTy::Ptr)
+            && start[v] != u32::MAX
+            && !is_const[v]
     };
     let mut cands: Vec<usize> = (0..nv).filter(|v| eligible(*v) && weight[*v] > 0).collect();
     cands.sort_by_key(|v| (std::cmp::Reverse(weight[*v]), *v));
-    let mut taken: Vec<Vec<(u32, u32)>> = vec![Vec::new(); regs.len()];
+    // Positions where the generated code calls out and so may change every caller-saved register.
+    let mut clobbers = Vec::new();
+    for b in &f.blocks {
+        for &i in &b.insts {
+            if matches!(
+                f.insts[i].op,
+                Op::Call(..)
+                    | Op::CallPtr(..)
+                    | Op::Alloc(_)
+                    | Op::Free(_)
+                    | Op::Print(..)
+                    | Op::MemCopy(..)
+            ) {
+                clobbers.push(o.inst_pos[i]);
+            }
+        }
+    }
+    let all: Vec<_> = scratch.iter().chain(saved.iter()).copied().collect();
+    let mut taken: Vec<Vec<(u32, u32)>> = vec![Vec::new(); all.len()];
     let mut out = vec![None; nv];
     for v in cands {
-        for (ri, reg) in regs.iter().enumerate() {
+        // A value defined or last used by a call is fine: its register is written after, read before.
+        let over_call = clobbers.iter().any(|&p| start[v] < p && p < end[v]);
+        for (ri, reg) in all.iter().enumerate() {
+            if ri < scratch.len() && over_call {
+                continue;
+            }
             let clash = taken[ri].iter().any(|&(s, e)| start[v] <= e && s <= end[v]);
             if !clash {
                 taken[ri].push((start[v], end[v]));
