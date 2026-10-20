@@ -83,7 +83,7 @@ The tool is called `pelago`; on Windows (PowerShell) use `cargo run -- ...` the 
 
 | Editor | Repository | State |
 |---|---|---|
-| VS Code | [pelagolang/vscode-pelago](https://github.com/pelagolang/vscode-pelago) | highlighting, snippets and the language server; install from the `.vsix` attached to each [release](https://github.com/pelagolang/vscode-pelago/releases) (not on the Marketplace yet) |
+| VS Code | [pelagolang/vscode-pelago](https://github.com/pelagolang/vscode-pelago) | highlighting, snippets and the language server; install from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=pelagolang.pelago), or from the `.vsix` attached to each [release](https://github.com/pelagolang/vscode-pelago/releases) (not on Open VSX yet) |
 | Zed | [pelagolang/zed-pelago](https://github.com/pelagolang/zed-pelago) | Tree-sitter highlighting plus the language server (`pelago` must be on your `PATH`); not published yet |
 | Tree-sitter | [pelagolang/tree-sitter-pelago](https://github.com/pelagolang/tree-sitter-pelago) | grammar for Zed, Neovim and Helix |
 
