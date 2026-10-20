@@ -31,7 +31,7 @@ The interpreter (`ir/interp.rs`) is the specification. Every row is a test (card
 | `Trunc`, `ZExt`, `SExt` | as the names say | `mov`, `movzx`, `movsx`/`movsxd` |
 | `Load`, `Store` | little-endian, any alignment | plain `mov` |
 | `MemCopy` | non-overlapping copy of n bytes | `rep movsb` (small constant sizes inline later) |
-| `Print` | bytes to standard output | a loop of `write(1, ...)` calls until all bytes are written |
+| `Print` | bytes to standard output | appended to a 64 KiB buffer (mapped at start); written out when full, at exit and at a stop; text bigger than the buffer goes straight through; no buffer (mapping failed) means a `write` per call |
 | `Stop(msg)` | print `stopped: msg` to standard error, exit status 1 | jump to the shared runtime routine with the message |
 | `Alloc`, `Free` | zero-length allocations are fine; a freed block may be reused | the runtime allocator (section 3) |
 | leaks | counted at the end of a test build | the allocator counts live blocks (test builds only) |
