@@ -682,3 +682,20 @@ fn rename_follows_fields_methods_and_cases() {
     ));
     assert!(error_message(&r).contains("would cause"), "{r:?}");
 }
+
+#[test]
+fn formatting_replaces_the_document_or_returns_nothing() {
+    let mut s = started();
+    open(&mut s, URI, "fn main() {\n  print(1)   \n}\n");
+    let params = obj(vec![("textDocument", doc(URI))]);
+    let r = result(s.handle(&request(5, "textDocument/formatting", params.clone())));
+    let edits = r.arr().unwrap();
+    assert_eq!(edits.len(), 1);
+    assert_eq!(
+        edits[0].get("newText").and_then(Json::str),
+        Some("fn main() {\n    print(1)\n}\n")
+    );
+    open(&mut s, URI, "fn main() {\n    print(1)\n}\n");
+    let r = result(s.handle(&request(6, "textDocument/formatting", params)));
+    assert!(r.arr().unwrap().is_empty());
+}
