@@ -341,6 +341,36 @@ const p = point.polar(1.0, 0.5)
 
 ---
 
+## 19. Closures that can be called only once (draft 3, needs answers)
+
+**The problem (checked on `main`, 2026-10-20).** A closure that only *reads* what it captured with `[sink s]` can be called many times; that already works. A closure whose body *consumes* a capture (`~> eat(sink s)`, or returns `s`) runs the body once on the captured value; a second call reads memory that is already gone, and nothing reports it. `spawn`, tasks and `defer` in `core.pel` rely on such one-shot closures, so they cannot simply be forbidden.
+
+**Proposal (the owner chose a type form, "once fn").**
+
+```
+fn run_later(f: once fn() -> int) -> int = f!!()     // a one-shot function value
+const g = [sink s] () ~> eat(sink s)                  // inferred: once fn() -> string
+const h = [sink s] () ~> s.len()                      // inferred: fn() -> int (reads only)
+```
+
+- `once fn(A) -> R` is a function type that can be called once. `fn(A) -> R` is a subtype: a many-call closure can be passed where a `once fn` is expected, never the other way round.
+- A closure expression gets `once fn` when its body consumes a `[sink]` capture, and plain `fn` otherwise. Nothing to write at the closure.
+- A `once fn` value is owning: it moves, cannot be copied, and *calling it consumes it*. The call is marked like other consumers, `f!!()`, so a second call is an ordinary use-after-move error from the existing value-semantics pass.
+- A `once fn` that is never called is dropped like today (the environment frees its captures).
+- Library: `spawn`, `scope.spawn`, `defer` and the task body take `once fn`.
+- Representation does not change (same environment, same `taken` flag); the new thing is a flag on the function type in the checker, plus one parser rule for the type.
+
+**Work, if accepted:** parser (`once fn` type), `ast_print.rs`, `visit.rs`, `TyKind::Fn` gets a `once` flag with subtyping in `unify`/coercion, inference in the checker, the call rule in `values/`, `core.pel` signatures, `examples/tour.pel`, tests, golden trees.
+
+**Questions for the owner**
+
+1. Spelling: `once fn(int) -> int` (recommended: reads well, `once` is only special before `fn`, so it can stay a soft keyword), or `fn!!(int) -> int` (matches the `!!` mark, but cryptic)?
+2. Calling: `f!!()` (recommended: consumption is always visible at the call site, like `c.close!!()`), or plain `f()` that quietly moves `f`?
+3. Inference only (recommended), or may the programmer also write `once` on a closure that does not need it, for example `once () ~> ...`?
+4. Do `defer` and `meta` closures also take `once fn`, or stay as they are in version 1?
+
+---
+
 ## Decisions from draft 2
 
 - **G1** Variadic parameters are written `...nums: int`, spread with `sum(...xs)`.
