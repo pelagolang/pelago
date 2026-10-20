@@ -303,31 +303,45 @@ impl<'a> Lowerer<'a> {
 
     // ---- Ranges as values --------------------------------------------------------------------------------
 
-    /// `lo..hi` and `lo..=hi` kept in a value: the two ends and whether the end counts.
+    /// A range kept in a value: the two ends, whether the end counts, and whether each end is
+    /// there (`2..` has no end, `..3` has no start; a missing end is stored as zero).
     pub(crate) fn range_value(&mut self, e: &'a Expr, dst: Value, t: Ty) -> Res {
         let ExprKind::Range {
-            start: Some(lo),
-            end: Some(hi),
+            start,
+            end,
             inclusive,
             ..
         } = &e.kind
         else {
-            return self.unsupported(e.span, "a range with an open end kept as a value");
+            return self.unsupported(e.span, "this range");
         };
         let fs = self.struct_fields(t);
-        if fs.len() != 3 {
+        if fs.len() != 5 {
             return self.unsupported(e.span, "a range of this type");
         }
-        let p0 = self.at(dst, fs[0].off);
-        if let Res::Never = self.into(lo, p0, fs[0].ty) {
-            return Res::Never;
+        for (side, f) in [(start, &fs[0]), (end, &fs[1])] {
+            let p = self.at(dst, f.off);
+            match side {
+                Some(x) => {
+                    if let Res::Never = self.into(x, p, f.ty) {
+                        return Res::Never;
+                    }
+                }
+                None => {
+                    let zero = match self.scalar_of(f.ty) {
+                        Some(s) if s.is_float() => self.konst(s, Const::Float(0.0), e.span),
+                        Some(s) => self.konst(s, Const::Int(0), e.span),
+                        None => return self.unsupported(e.span, "an open range of this type"),
+                    };
+                    self.store_at(dst, f.off, zero);
+                }
+            }
         }
-        let p1 = self.at(dst, fs[1].off);
-        if let Res::Never = self.into(hi, p1, fs[1].ty) {
-            return Res::Never;
+        let flags = [*inclusive, start.is_some(), end.is_some()];
+        for (f, v) in fs[2..].iter().zip(flags) {
+            let flag = self.konst(IrTy::Bool, Const::Bool(v), e.span);
+            self.store_at(dst, f.off, flag);
         }
-        let flag = self.konst(IrTy::Bool, Const::Bool(*inclusive), e.span);
-        self.store_at(dst, fs[2].off, flag);
         Res::Unit
     }
 }

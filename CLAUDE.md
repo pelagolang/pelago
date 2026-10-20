@@ -88,6 +88,7 @@ inheritance written `:`; one `switch` for pattern matching; `~>` closures; `#nam
 
 ## Git
 
+- Commit subjects and PR titles use Conventional Commits: `type(scope): summary` with `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `chore`, `ci`, `build`; `!` or a `BREAKING CHANGE:` footer for breaking changes. See `docs/contributing/commits.md`; CI lints it.
 - Develop on `claude/programming-language-design-psjufd`. PR #1 is merged into `main`; later work needs a new
   pull request, and only when the owner asks for one.
 - The owner switches GitHub's default branch (Settings, General, Default branch); the tools here cannot.

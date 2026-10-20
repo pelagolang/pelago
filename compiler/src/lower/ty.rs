@@ -230,7 +230,7 @@ impl<'a> Lowerer<'a> {
             TyKind::Soa(e, _) => self.soa_column_types(e),
             TyKind::Str => vec![ptr, int],
             TyKind::Map(..) | TyKind::Set(_) => vec![ptr, int, int, int],
-            TyKind::Range(e) => vec![e, e, self.types.bool_],
+            TyKind::Range(e) => vec![e, e, self.types.bool_, self.types.bool_, self.types.bool_],
             // A function value: code address and environment address.
             TyKind::Fn(..) => vec![ptr, ptr],
             // `any`: the value's address and its table of methods.
