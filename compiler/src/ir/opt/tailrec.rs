@@ -25,6 +25,16 @@ struct Site {
     sum: Option<(Sum, Value)>,
 }
 
+/// Regrouping `x1 + (x2 + (.. + r))` into `((0 + x1) + x2) + ..` could move where a signed overflow
+/// shows when the terms have different signs, so a signed sum is guarded. The collected sum starts
+/// at 0 and only takes terms that are not negative while no partial sum overflows. With such a
+/// prefix, `prefix + t` stops exactly when the original order does, whatever the value `t` of the
+/// rest is: a non-negative `t` makes every partial sum grow, so some overflow iff the total does,
+/// and a negative `t` keeps every partial sum between `t` and the prefix. The base case therefore
+/// just adds. The first term that is negative, or that overflows the collected sum, leaves the
+/// loop: the call it would have made is made as an ordinary call, and the result is `prefix + (x +
+/// result)` with checked additions, which is what the original did from there on. Unsigned and
+/// wrapping sums need no guard.
 pub fn run(f: &mut Func, me: FuncId) -> bool {
     let mut sites = tail_calls(f, me);
     if sites.is_empty() || escapes(f, &sites) {
@@ -62,31 +72,33 @@ pub fn run(f: &mut Func, me: FuncId) -> bool {
             }
         }
     }
+    // Blocks made from here on (the slow paths) already add what they must.
+    let original = f.blocks.len();
     let site_blocks: HashSet<usize> = sites.iter().map(|s| s.block).collect();
     for s in sites {
-        let bid = BlockId(s.block as u32);
+        let mut bid = BlockId(s.block as u32);
         let mut args = s.args;
         f.blocks[s.block].insts.pop();
         if let (Some((sum, x)), Some(a)) = (s.sum, acc) {
             // acc + x, then the call that was added to it becomes the next round.
             f.blocks[s.block].insts.pop();
-            let op = match sum {
-                Sum::Wrapping => Op::Bin(BinOp::Add, a, x),
-                Sum::Checked(signed) => Op::Checked(BinOp::Add, signed, a, x),
-            };
-            let next = f.emit(bid, op, Some(f.ret)).unwrap();
+            let (at, next) = add(f, bid, sum, a, x, me, &args);
+            bid = at;
             args.push(next);
         } else if let Some(a) = acc {
             args.push(a);
         }
-        f.blocks[s.block].term = Some(Term::Jump(Target {
-            block: header,
-            args,
-        }));
+        f.terminate(
+            bid,
+            Term::Jump(Target {
+                block: header,
+                args,
+            }),
+        );
     }
     // Every other way out of the function adds what was collected.
     if let (Some(a), Some(kind)) = (acc, kind) {
-        for bi in 0..f.blocks.len() {
+        for bi in 0..original {
             if site_blocks.contains(&bi) || bi == 0 {
                 continue;
             }
@@ -101,6 +113,59 @@ pub fn run(f: &mut Func, me: FuncId) -> bool {
         }
     }
     true
+}
+
+/// `acc + x` for a site in block `at`, where the call with `args` was. For a signed checked sum the
+/// addition is guarded (see `run`): when `x` is negative or the sum would overflow, control goes to
+/// a block that makes the call and adds in the original order. Gives the block to go on in and the
+/// sum.
+fn add(
+    f: &mut Func,
+    at: BlockId,
+    sum: Sum,
+    acc: Value,
+    x: Value,
+    me: FuncId,
+    args: &[Value],
+) -> (BlockId, Value) {
+    let ty = f.ret;
+    let to = |block| Target {
+        block,
+        args: vec![],
+    };
+    match sum {
+        Sum::Wrapping => (
+            at,
+            f.emit(at, Op::Bin(BinOp::Add, acc, x), Some(ty)).unwrap(),
+        ),
+        Sum::Checked(false) => (
+            at,
+            f.emit(at, Op::Checked(BinOp::Add, false, acc, x), Some(ty))
+                .unwrap(),
+        ),
+        Sum::Checked(true) => {
+            // The collected sum is never negative, so with a non-negative `x` the wrapped sum has
+            // its sign bit set exactly when the addition overflowed; a negative `x` has it set too.
+            let total = f.emit(at, Op::Bin(BinOp::Add, acc, x), Some(ty)).unwrap();
+            let bits = f.emit(at, Op::Bin(BinOp::Or, x, total), Some(ty)).unwrap();
+            let zero = f.emit(at, Op::Const(ty, Const::Int(0)), Some(ty)).unwrap();
+            let bad = f
+                .emit(at, Op::Cmp(CmpOp::Lt, bits, zero), Some(IrTy::Bool))
+                .unwrap();
+            let slow = f.new_block(&[]);
+            let r = f.emit(slow, Op::Call(me, args.to_vec()), Some(ty)).unwrap();
+            let t = f
+                .emit(slow, Op::Checked(BinOp::Add, true, x, r), Some(ty))
+                .unwrap();
+            let all = f
+                .emit(slow, Op::Checked(BinOp::Add, true, acc, t), Some(ty))
+                .unwrap();
+            f.terminate(slow, Term::Return(Some(all)));
+            let go = f.new_block(&[]);
+            f.terminate(at, Term::Branch(bad, to(slow), to(go)));
+            (go, total)
+        }
+    }
 }
 
 /// The blocks that end in `return f(args)`, or in `return x + f(args)`, for the function itself.
