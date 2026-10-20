@@ -1143,3 +1143,76 @@ fn a_counter_that_wraps_with_a_mask_keeps_a_small_range() {
     f.terminate(done, Term::Return(Some(x)));
     assert_eq!(checks_left(f), 0);
 }
+
+/// `fn fib(n) { if n < 2 { n } else { fib(n - 1) + fib(n - 2) } }` with the sum written as
+/// `first + second` or `second + first`, and `main` returning `fib(k)`.
+fn fib_module(k: i128, swap: bool) -> Module {
+    let mut m = Module::default();
+    let mut s = Func::new("fib", &[IrTy::I64], IrTy::I64);
+    let e = s.entry();
+    let n = s.block_params(e)[0];
+    let base = s.new_block(&[]);
+    let rec = s.new_block(&[]);
+    let to = |block| Target {
+        block,
+        args: vec![],
+    };
+    let two = s
+        .emit(e, Op::Const(IrTy::I64, Const::Int(2)), Some(IrTy::I64))
+        .unwrap();
+    let c = s
+        .emit(e, Op::Cmp(CmpOp::Lt, n, two), Some(IrTy::Bool))
+        .unwrap();
+    s.terminate(e, Term::Branch(c, to(base), to(rec)));
+    s.terminate(base, Term::Return(Some(n)));
+    let one = s
+        .emit(rec, Op::Const(IrTy::I64, Const::Int(1)), Some(IrTy::I64))
+        .unwrap();
+    let n1 = s
+        .emit(rec, Op::Bin(BinOp::Sub, n, one), Some(IrTy::I64))
+        .unwrap();
+    let a = s
+        .emit(rec, Op::Call(FuncId(0), vec![n1]), Some(IrTy::I64))
+        .unwrap();
+    let n2 = s
+        .emit(rec, Op::Bin(BinOp::Sub, n, two), Some(IrTy::I64))
+        .unwrap();
+    let b = s
+        .emit(rec, Op::Call(FuncId(0), vec![n2]), Some(IrTy::I64))
+        .unwrap();
+    let (x, y) = if swap { (b, a) } else { (a, b) };
+    let r = s
+        .emit(rec, Op::Checked(BinOp::Add, true, x, y), Some(IrTy::I64))
+        .unwrap();
+    s.terminate(rec, Term::Return(Some(r)));
+    m.add(s);
+    let mut f = Func::new("main", &[], IrTy::I64);
+    let e = f.entry();
+    let kv = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(k)), Some(IrTy::I64))
+        .unwrap();
+    let r = f
+        .emit(e, Op::Call(FuncId(0), vec![kv]), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(e, Term::Return(Some(r)));
+    m.add(f);
+    m
+}
+
+#[test]
+fn the_last_call_of_a_sum_becomes_a_loop() {
+    for swap in [false, true] {
+        for (k, want) in [(0, 0), (1, 1), (2, 1), (10, 55), (20, 6765)] {
+            let (o, before, after) = both(&fib_module(k, swap));
+            assert_eq!((before, after), (Val::Int(want), Val::Int(want)));
+            let fib = o.funcs.iter().find(|f| f.name == "fib").unwrap();
+            // One call is left, the first one.
+            assert_eq!(
+                count(fib, |o| matches!(o, Op::Call(..))),
+                1,
+                "{}",
+                print_func(fib, None)
+            );
+        }
+    }
+}
