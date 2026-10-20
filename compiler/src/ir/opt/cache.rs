@@ -61,6 +61,11 @@ fn escape_analysis(m: &Module) -> Vec<Vec<bool>> {
 }
 
 /// Is the address `p` (or an address made from it) used for anything but reading and writing memory?
+///
+/// This is a whitelist: only a load or store through it, a copy or print of memory behind it, offsets
+/// from it, and a direct call whose parameter does not escape are known to be harmless. Every other use
+/// (a store of the address, a cast, a block argument, a return, an indirect call, a new operation added
+/// later) counts as keeping it, so a case the analysis does not know can only turn the pass off.
 fn param_escapes(f: &Func, p: Value, esc: &[Vec<bool>]) -> bool {
     let mut derived: HashSet<Value> = HashSet::from([p]);
     loop {

@@ -73,6 +73,8 @@ Measured with `compiler/benches/compare.sh` (best of 7, this container):
 
 **List headers in registers, bounds checks, huge pages.** New pass `ir/opt/cache.rs`: a slot of at most 32 bytes whose address only goes to calls that do not keep it (an escape analysis over the module) is read and written through a private copy that promotion turns into registers; the copy is written back before and read again after each such call, so the push loop keeps `len` and `cap` in registers and only the rare `rt_grow_slow` sees the real header. `ranges.rs` decides `i >=u n` / `i <u n` right after the guard `i < n` when `i` is not negative (the bounds check of `for i in 0..xs.len() { xs[i] }`). `rt.rs` asks for transparent huge pages (`madvise`, Linux) for mappings of 4 MiB and more: a 40 MB buffer then takes a few page faults instead of ten thousand. list_sum 0.037 s to 0.024 s (C -O2 0.031 s), strbuild 0.007 s to 0.006 s.
 
+Safety of the slot cache and the huge pages: the escape analysis in `ir/opt/cache.rs` is a whitelist (anything it does not positively recognise counts as keeping the address); `a_slot_given_to_calls_is_cached_unless_a_callee_keeps_its_address` covers a callee that stores the address, casts it to an integer, returns it, passes it to a second callee that stores it, and a call through a function address. `madvise(MADV_HUGEPAGE)` is only asked for mappings of 4 MiB and more, so small buffers keep ordinary pages; where transparent huge pages are off it does nothing, and Windows never calls it.
+
 PRs: #7 (S1, powers of two), #8 (S2 and S3, first rounds). The open work, with files and dependencies for each item, is in [a11-work-items.md](../a11-work-items.md).
 
 
