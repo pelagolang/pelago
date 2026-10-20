@@ -9,7 +9,7 @@ use crate::lexer::tokenize;
 use crate::package::{Diagnostic, ModuleId, Program};
 use crate::resolve::{resolve, DefId, DefKind, Resolved};
 use crate::span::Span;
-use crate::token::TokenKind;
+use crate::token::{Punct, TokenKind};
 use crate::typecheck::{check, Typed};
 use crate::types::TyKind;
 use std::collections::HashMap;
@@ -229,6 +229,9 @@ fn tt(name: &str) -> u32 {
     TOKEN_TYPES.iter().position(|t| *t == name).unwrap_or(0) as u32
 }
 
+/// A signature label, the byte ranges of its parameters in the label, and the active parameter.
+pub type Signature = (String, Vec<(usize, usize)>, usize);
+
 impl Analysis {
     fn text(&self, m: ModuleId) -> &str {
         &self.program.module(m).src
@@ -285,6 +288,120 @@ impl Analysis {
         out.sort_by_key(|(f, s)| (*f, s.start));
         out.dedup();
         out
+    }
+
+    /// The name under the cursor if it can be renamed: it must be declared in a file of the package
+    /// (not the library, not a built-in).
+    pub fn prepare_rename(&self, m: ModuleId, off: usize) -> Option<(String, Span)> {
+        let id = self.ident_at(m, off)?;
+        let def = self.resolved.def(self.def_of_name(m, id.start)?);
+        let file = def.file?;
+        if !self.modules.iter().any(|(_, x)| *x == file) || def.kind == DefKind::Module {
+            return None;
+        }
+        Some((def.name.clone(), id))
+    }
+
+    /// Every place that has to change to rename the name at `off`; an error message when the new
+    /// name is not a plain identifier or the name cannot be renamed.
+    pub fn rename(
+        &self,
+        m: ModuleId,
+        off: usize,
+        new: &str,
+    ) -> Result<Vec<(ModuleId, Span)>, String> {
+        let mut chars = new.chars();
+        let ident = chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            && chars.all(|c| c.is_alphanumeric() || c == '_')
+            && new != "_";
+        if !ident || crate::keyword::Keyword::from_ident(new).is_some() {
+            return Err(format!("`{new}` is not a valid name"));
+        }
+        if self.prepare_rename(m, off).is_none() {
+            return Err("this name cannot be renamed".to_string());
+        }
+        Ok(self.references(m, off, true))
+    }
+
+    /// Signature help for the call around `off`: the label, the byte ranges of the parameters
+    /// inside the label, and the index of the parameter being written.
+    pub fn signature_help(&self, m: ModuleId, off: usize) -> Option<Signature> {
+        let lex = tokenize(self.text(m));
+        let toks: Vec<_> = lex
+            .tokens
+            .iter()
+            .filter(|t| (t.span.end as usize) <= off)
+            .collect();
+        // Walk back to the `(` that is still open, counting the commas at its own depth.
+        let mut depth = 0i32;
+        let mut commas = 0usize;
+        let mut open = None;
+        for (i, t) in toks.iter().enumerate().rev() {
+            match t.kind {
+                TokenKind::Punct(Punct::RParen | Punct::RBracket | Punct::RBrace) => depth += 1,
+                TokenKind::Punct(Punct::LBracket | Punct::LBrace) => {
+                    if depth == 0 {
+                        return None;
+                    }
+                    depth -= 1;
+                }
+                TokenKind::Punct(Punct::LParen) => {
+                    if depth == 0 {
+                        open = Some(i);
+                        break;
+                    }
+                    depth -= 1;
+                }
+                TokenKind::Punct(Punct::Comma) if depth == 0 => commas += 1,
+                _ => {}
+            }
+        }
+        let callee = toks.get(open?.checked_sub(1)?)?;
+        if callee.kind != TokenKind::Ident {
+            return None;
+        }
+        let def = self.def_of_name(m, callee.span.start)?;
+        if !matches!(
+            self.resolved.def(def).kind,
+            DefKind::Fn | DefKind::BuiltinFn
+        ) {
+            return None;
+        }
+        let label = self.describe(def);
+        let open_paren = label.find('(')?;
+        // The parameters are the comma separated pieces of the top level inside the parentheses.
+        let mut ranges = Vec::new();
+        let (mut d, mut start) = (0i32, open_paren + 1);
+        for (i, c) in label.char_indices().skip_while(|(i, _)| *i <= open_paren) {
+            match c {
+                '(' | '[' | '{' | '<' => d += 1,
+                ')' if d == 0 => {
+                    if i > start {
+                        ranges.push((start, i));
+                    }
+                    break;
+                }
+                ')' | ']' | '}' | '>' => d -= 1,
+                ',' if d == 0 => {
+                    ranges.push((start, i));
+                    start = i + 1;
+                    while label[start..].starts_with(' ') {
+                        start += 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let info_has_self = self.typed.fn_infos.get(&def).is_some_and(|i| i.has_self);
+        // A method called with a dot does not pass `self`: skip that piece of the label.
+        let called_on_value = open
+            .and_then(|o| o.checked_sub(2))
+            .and_then(|k| toks.get(k))
+            .is_some_and(|t| t.kind == TokenKind::Punct(Punct::Dot));
+        let skip = usize::from(info_has_self && called_on_value);
+        let ranges: Vec<_> = ranges.into_iter().skip(skip).collect();
+        let active = commas.min(ranges.len().saturating_sub(1));
+        Some((label, ranges, active))
     }
 
     /// The text shown on hover and the range it applies to.

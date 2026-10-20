@@ -18,6 +18,8 @@ const SMALL: usize = 60;
 /// A self-recursive function is copied into itself only up to this cost, and at this many calls.
 const RECURSIVE_LIMIT: usize = 120;
 const RECURSIVE_SITES: usize = 3;
+/// ... and the function may grow by this much (instructions plus two per block).
+const RECURSIVE_GROWTH: usize = 200;
 
 pub fn run(m: &mut Module) -> bool {
     let n = m.funcs.len();
@@ -136,6 +138,15 @@ fn find_site(
     None
 }
 
+/// How many calls to itself the function makes.
+pub fn self_calls(f: &Func, me: FuncId) -> usize {
+    f.blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|&&i| matches!(&f.insts[i].op, Op::Call(c, _) if *c == me))
+        .count()
+}
+
 /// A small self-recursive function gets one level of itself inlined at its own calls that do not
 /// end the function (a call whose result is returned straight away is a tail call, or the slow path
 /// of a guard, and stays): half the calls of `fib` disappear, and the copy sees the arguments as
@@ -153,7 +164,12 @@ pub fn recursive_once(f: &mut Func, me: FuncId) -> bool {
         .filter(|&i| matches!(&f.insts[i].op, Op::Call(c, _) if *c == me))
         .collect();
     let mut changed = false;
+    let grown = cost(f) + RECURSIVE_GROWTH;
     for id in sites.into_iter().take(RECURSIVE_SITES) {
+        // Each copy is about the size of the function: stop at the budget.
+        if cost(f) + cost(&body) > grown {
+            break;
+        }
         let found = f
             .blocks
             .iter()

@@ -2,7 +2,7 @@
 //! output (card S-06). No external crates: [`json`] reads and writes the messages.
 //!
 //! What it offers: diagnostics from every compiler stage, hover (the type or signature), go to
-//! definition, find references, the document outline, completion (names, and members after a dot;
+//! definition, find references, rename, signature help, the document outline, completion (names, and members after a dot;
 //! not scope-exact), and semantic tokens (the colours of
 //! `highlight.rs`, refined by what the name resolver knows).
 //!
@@ -187,6 +187,14 @@ impl Server {
                     (
                         "codeActionProvider",
                         obj(vec![("codeActionKinds", strs(&["quickfix"]))]),
+                    ),
+                    (
+                        "renameProvider",
+                        obj(vec![("prepareProvider", Json::Bool(true))]),
+                    ),
+                    (
+                        "signatureHelpProvider",
+                        obj(vec![("triggerCharacters", strs(&["(", ","]))]),
                     ),
                     ("documentSymbolProvider", Json::Bool(true)),
                     (
@@ -421,6 +429,72 @@ impl Server {
                         .filter_map(|(f, s)| location(f, s))
                         .collect(),
                 ))
+            }
+            "textDocument/prepareRename" => {
+                let (name, span) = a.prepare_rename(m, off()?)?;
+                Some(obj(vec![
+                    (
+                        "range",
+                        range_json(&map, span.start as usize, span.end as usize),
+                    ),
+                    ("placeholder", text(name)),
+                ]))
+            }
+            "textDocument/rename" => {
+                let new = params.get("newName").and_then(Json::str)?;
+                let edits = a.rename(m, off()?, new).ok()?;
+                // One list of edits per file.
+                let mut by_file: Vec<(String, Vec<Json>)> = Vec::new();
+                for (f, s) in edits {
+                    let Some((u, _)) = a.modules.iter().find(|(_, x)| *x == f) else {
+                        continue;
+                    };
+                    let shown = self.docs.get(u).map_or(u.clone(), |(orig, _)| orig.clone());
+                    let lm = LineMap::new(&a.program.module(f).src);
+                    let edit = obj(vec![
+                        ("range", range_json(&lm, s.start as usize, s.end as usize)),
+                        ("newText", text(new)),
+                    ]);
+                    match by_file.iter_mut().find(|(k, _)| *k == shown) {
+                        Some((_, list)) => list.push(edit),
+                        None => by_file.push((shown, vec![edit])),
+                    }
+                }
+                Some(obj(vec![(
+                    "changes",
+                    Json::Obj(
+                        by_file
+                            .into_iter()
+                            .map(|(k, v)| (k, Json::Arr(v)))
+                            .collect(),
+                    ),
+                )]))
+            }
+            "textDocument/signatureHelp" => {
+                let (label, params_at, active) = a.signature_help(m, off()?)?;
+                // Label offsets are in UTF-16 units; labels here are ASCII except for type names.
+                let units = |b: usize| label[..b].encode_utf16().count() as f64;
+                let plist: Vec<Json> = params_at
+                    .iter()
+                    .map(|(s, e)| {
+                        obj(vec![(
+                            "label",
+                            Json::Arr(vec![Json::Num(units(*s)), Json::Num(units(*e))]),
+                        )])
+                    })
+                    .collect();
+                Some(obj(vec![
+                    (
+                        "signatures",
+                        Json::Arr(vec![obj(vec![
+                            ("label", text(label)),
+                            ("parameters", Json::Arr(plist)),
+                            ("activeParameter", num(active as f64)),
+                        ])]),
+                    ),
+                    ("activeSignature", num(0.0)),
+                    ("activeParameter", num(active as f64)),
+                ]))
             }
             "textDocument/documentSymbol" => {
                 fn conv(map: &LineMap, s: &analysis::Symbol) -> Json {
