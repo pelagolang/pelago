@@ -620,6 +620,10 @@ impl<'m> Gen<'m> {
             self.a.push(RBP);
             self.a.mov_rr(RBP, RSP, 8);
             if self.frame > 0 {
+                // A big frame must not step over the guard: touch each page, top down, first.
+                for k in 1..=(self.frame / 4096) {
+                    self.a.alu_mi(Alu::Or, mem(RSP, -4096 * k), 0, 8);
+                }
                 self.a.alu_ri(Alu::Sub, RSP, self.frame, 8);
             }
         }

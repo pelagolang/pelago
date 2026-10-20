@@ -15,22 +15,25 @@
 //! | 128 | the output buffer ([`PRINT_BUF`] bytes, mapped at start; 0 when the mapping failed) |
 //! | 136 | bytes waiting in the output buffer |
 //! | 144 | the base (lowest address) of our own stack, 0 if the system stack is used |
-//! | 152 | scratch for `VirtualProtect` (Windows) |
+//! | 152 | Windows: the lowest committed address of our stack (it grows downwards on demand) |
+//! | 160 | scratch for `VirtualProtect` (Windows) |
 
 use super::elf::Blob;
 use super::x86::*;
 use super::Os;
 
-pub const STATE_SIZE: usize = 160;
+pub const STATE_SIZE: usize = 176;
 /// Size of the buffer that `print` fills; it is written out when full, at exit and at a stop.
 const PRINT_BUF: i64 = 64 * 1024;
 const CHUNK: i64 = 1 << 20;
 const STACK: i64 = 1 << 30;
-/// The stack on Windows is committed up front, so it is smaller.
+/// The stack on Windows is reserved up front and committed on demand.
 const STACK_WIN: i64 = 1 << 28;
+/// What is committed at start, and how much more each guard page hit commits.
+const COMMIT_WIN: i64 = 512 * 1024;
 
 /// The kernel32 functions the Windows image imports, in the order of its import table.
-pub const IMPORTS: [&str; 7] = [
+pub const IMPORTS: [&str; 8] = [
     "GetStdHandle",
     "WriteFile",
     "ExitProcess",
@@ -38,6 +41,7 @@ pub const IMPORTS: [&str; 7] = [
     "VirtualFree",
     "AddVectoredExceptionHandler",
     "VirtualProtect",
+    "GetConsoleMode",
 ];
 const IMP_GET_STD_HANDLE: usize = 0;
 const IMP_WRITE_FILE: usize = 1;
@@ -46,11 +50,12 @@ const IMP_VIRTUAL_ALLOC: usize = 3;
 const IMP_VIRTUAL_FREE: usize = 4;
 const IMP_ADD_VEH: usize = 5;
 const IMP_VIRTUAL_PROTECT: usize = 6;
+const IMP_GET_CONSOLE_MODE: usize = 7;
 
 /// Linux: the lowest 1 MiB of our stack is mapped inaccessible, so running into it is a fault.
 const GUARD_LINUX: i64 = 1 << 20;
-/// Windows: the stack is committed; a `PAGE_GUARD` page 64 KiB above its base raises an exception while
-/// there is still room below to run the handler.
+/// Windows: a `PAGE_GUARD` page this far above the lowest committed address raises an exception while
+/// there is still committed room below it to run the handler; the handler commits more.
 const GUARD_WIN: i64 = 64 * 1024;
 /// Faults this far below the base count as stack overflow too (a frame can step over a guard).
 const SLACK: i32 = 1 << 20;
@@ -139,16 +144,28 @@ pub fn emit(
     // interpreter; if the mapping fails, the stack the system gave us stays.
     let keep = a.new_label();
     if win {
+        // Reserve the whole stack, commit its top. If either fails, the system stack stays (and no
+        // guard is set up: the base stays 0).
         a.alu_rr(Alu::Xor, RCX, RCX, 4);
         a.mov_ri(RDX, STACK_WIN);
-        a.mov_ri(R8, 0x3000); // commit and reserve
+        a.mov_ri(R8, 0x2000); // reserve
         a.mov_ri(R9, 4); // read and write
         win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
         a.test_rr(RAX, RAX, 8);
         a.jcc(Cc::E, keep);
+        a.mov_rr(RBX, RAX, 8);
+        a.lea(RCX, mem(RBX, (STACK_WIN - COMMIT_WIN) as i32));
+        a.mov_ri(RDX, COMMIT_WIN);
+        a.mov_ri(R8, 0x1000); // commit
+        a.mov_ri(R9, 4);
+        win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::E, keep);
         state(a, RCX, 144);
+        a.store(mem(RCX, 0), RBX, 8);
+        state(a, RCX, 152);
         a.store(mem(RCX, 0), RAX, 8);
-        a.lea(RSP, mem(RAX, STACK_WIN as i32));
+        a.lea(RSP, mem(RBX, STACK_WIN as i32));
     } else {
         a.mov_ri(RAX, 9);
         a.alu_rr(Alu::Xor, RDI, RDI, 4);
@@ -190,17 +207,41 @@ pub fn emit(
     }
     state(a, RSI, 128);
     a.store(mem(RSI, 0), RAX, 8);
+    // A person watching a terminal sees each print at once: no buffer there.
+    let piped = a.new_label();
+    if win {
+        a.mov_ri(RCX, -11);
+        win_call(a, IMP_GET_STD_HANDLE, |_| {});
+        a.mov_rr(RCX, RAX, 8);
+        state(a, RDX, 160);
+        win_call(a, IMP_GET_CONSOLE_MODE, |_| {});
+        a.test_rr(RAX, RAX, 4);
+        a.jcc(Cc::E, piped);
+    } else {
+        a.alu_ri(Alu::Sub, RSP, 64, 8);
+        a.mov_ri(RAX, 16); // ioctl(1, TCGETS, &termios)
+        a.mov_ri(RDI, 1);
+        a.mov_ri(RSI, 0x5401);
+        a.mov_rr(RDX, RSP, 8);
+        a.syscall();
+        a.alu_ri(Alu::Add, RSP, 64, 8);
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::Ne, piped);
+    }
+    state(a, RSI, 128);
+    a.store_imm(mem(RSI, 0), 0, 8);
+    a.bind(piped);
     // Guard against running off the stack, and report stray addresses as stops.
     let noguard = a.new_label();
     if win {
-        state(a, RAX, 144);
+        state(a, RAX, 152);
         a.load(RCX, mem(RAX, 0), 8);
         a.test_rr(RCX, RCX, 8);
         a.jcc(Cc::E, noguard);
         a.alu_ri(Alu::Add, RCX, GUARD_WIN as i32, 8);
         a.mov_ri(RDX, 4096);
         a.mov_ri(R8, 0x104); // read and write, guard page
-        state(a, R9, 152);
+        state(a, R9, 160);
         win_call(a, IMP_VIRTUAL_PROTECT, |_| {});
         a.bind(noguard);
         a.mov_ri(RCX, 1);
@@ -477,19 +518,48 @@ pub fn emit(
     // anything but a guard page hit, a stack overflow or an access violation is passed on.
     {
         let (check, overflow, invalid) = (a.new_label(), a.new_label(), a.new_label());
+        let grow = a.new_label();
         a.bind(fault);
         if win {
             let pass = a.new_label();
             a.load(RAX, mem(RCX, 0), 8);
             a.load(RDX, mem(RAX, 0), 4);
             a.alu_ri(Alu::Cmp, RDX, 0x8000_0001u32 as i32, 4); // guard page violation
-            a.jcc(Cc::E, overflow);
+            a.jcc(Cc::E, grow);
             a.alu_ri(Alu::Cmp, RDX, 0xC000_00FDu32 as i32, 4); // stack overflow
             a.jcc(Cc::E, overflow);
             a.alu_ri(Alu::Cmp, RDX, 0xC000_0005u32 as i32, 4); // access violation
             a.jcc(Cc::E, check);
             a.bind(pass);
             a.alu_rr(Alu::Xor, RAX, RAX, 4);
+            a.ret();
+            // Our stack's guard page: commit the next chunk below, put the guard further down, and
+            // go on. When the reservation is used up (or the commit fails), that is an overflow.
+            a.bind(grow);
+            state(a, R8, 152);
+            a.load(RCX, mem(R8, 0), 8);
+            a.test_rr(RCX, RCX, 8);
+            a.jcc(Cc::E, pass); // not ours
+            state(a, R9, 144);
+            a.load(RAX, mem(R9, 0), 8);
+            a.lea(RDX, mem(RCX, -(COMMIT_WIN as i32)));
+            a.alu_rr(Alu::Cmp, RDX, RAX, 8);
+            a.jcc(Cc::B, overflow);
+            a.mov_rr(RCX, RDX, 8);
+            a.mov_ri(RDX, COMMIT_WIN);
+            a.mov_ri(R8, 0x1000);
+            a.mov_ri(R9, 4);
+            win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+            a.test_rr(RAX, RAX, 8);
+            a.jcc(Cc::E, overflow);
+            state(a, R8, 152);
+            a.store(mem(R8, 0), RAX, 8);
+            a.lea(RCX, mem(RAX, GUARD_WIN as i32));
+            a.mov_ri(RDX, 4096);
+            a.mov_ri(R8, 0x104);
+            state(a, R9, 160);
+            win_call(a, IMP_VIRTUAL_PROTECT, |_| {});
+            a.mov_ri(RAX, -1); // EXCEPTION_CONTINUE_EXECUTION
             a.ret();
             a.bind(check);
             a.load(RAX, mem(RAX, 0x28), 8);
@@ -503,7 +573,7 @@ pub fn emit(
         a.jcc(Cc::E, invalid);
         a.alu_rr(Alu::Sub, RAX, RCX, 8);
         a.alu_ri(Alu::Add, RAX, SLACK, 8);
-        let end = if win { GUARD_WIN + 4096 } else { GUARD_LINUX };
+        let end = if win { STACK_WIN } else { GUARD_LINUX };
         a.mov_ri(RDX, SLACK as i64 + end);
         a.alu_rr(Alu::Cmp, RAX, RDX, 8);
         a.jcc(Cc::B, overflow);
