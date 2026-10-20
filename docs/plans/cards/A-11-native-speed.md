@@ -51,3 +51,5 @@ Measured with `compiler/benches/compare.sh` (best of 7, this container):
 |---|---|---|---|---|
 | collatz, 1 to 300,000 | 0.23 s | 0.09 s | 0.14 s | 0.07 s |
 | fib(38) | 0.36 s | 0.30 s | 0.34 s | 0.08 s |
+
+**S4, first part (done): `build` optimises by default.** `pelago build` and `pelago run --native` run the optimiser unless `--no-opt` is given (`--opt` is still accepted and does nothing there); `pelago run` and `pelago ir` stay unoptimised unless `--opt`. The inliner threshold (`SMALL` in `ir/opt/inline.rs`) was tried at 15, 40 and 100 on the ten benches: all differences were within run-to-run noise, so it stays at 40. Leaf functions without a frame pointer and arguments kept in registers are generator work (`native/gen.rs`) and wait for the backend thread.

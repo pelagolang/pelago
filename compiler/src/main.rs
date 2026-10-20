@@ -80,9 +80,9 @@ fn real_main() {
             match rest.iter().find(|a| !a.starts_with("--")) {
                 Some(path) => ir_or_run(path, cmd, &flags, out_name),
                 None => {
-                    eprintln!("usage: pelago {cmd} [--opt] [--stats] <file or directory>");
+                    eprintln!("usage: pelago {cmd} [--opt|--no-opt] [--stats] <file or directory>");
                     eprintln!("       pelago run --native <path>      build natively and run");
-                    eprintln!("       pelago build [--opt] [--leak-check] [--target=linux|windows] [-o out] <path>");
+                    eprintln!("       pelago build [--no-opt] [--leak-check] [--target=linux|windows] [-o out] <path>");
                     std::process::exit(2);
                 }
             }
@@ -280,7 +280,13 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
     }
     let mut module = lowered.module;
     let before = pelago::ir::opt::stats_of(&module);
-    if flags.contains(&"--opt") {
+    // Native builds optimise unless `--no-opt`; the interpreter and `ir` only with `--opt`.
+    let optimise = if native {
+        !flags.contains(&"--no-opt")
+    } else {
+        flags.contains(&"--opt")
+    };
+    if optimise {
         pelago::ir::opt::optimize(&mut module, pelago::ir::opt::Options::default());
         pelago::ir::opt::prune(&mut module, &["main"]);
     }
