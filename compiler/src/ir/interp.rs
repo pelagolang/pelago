@@ -588,6 +588,11 @@ fn bin(o: BinOp, a: Val, b: Val, t: IrTy) -> Result<Val, String> {
                 BinOp::Rem => sx.wrapping_rem(sy) as u128,
                 BinOp::UDiv => x / y,
                 BinOp::URem => x % y,
+                BinOp::MulHi if bits <= 64 => ((sx * sy) >> bits) as u128,
+                BinOp::UMulHi if bits <= 64 => (x * y) >> bits,
+                BinOp::MulHi | BinOp::UMulHi => {
+                    return Err("mulhi needs 64 bits or fewer".to_string())
+                }
                 BinOp::And => x & y,
                 BinOp::Or => x | y,
                 BinOp::Xor => x ^ y,

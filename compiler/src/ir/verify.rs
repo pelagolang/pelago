@@ -293,6 +293,11 @@ fn check_inst(f: &Func, m: Option<&Module>, inst: &Inst) -> Vec<String> {
                     e.push("the result type differs from the operands'".to_string());
                 }
             }
+            if matches!(op, BinOp::MulHi | BinOp::UMulHi)
+                && !matches!(t(*a), Some(IrTy::Int(1..=64)))
+            {
+                e.push("`mulhi` works on integers of 64 bits or fewer".to_string());
+            }
             if matches!(inst.op, Op::Checked(..))
                 && !matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
             {

@@ -95,6 +95,9 @@ pub enum BinOp {
     Rem,
     UDiv,
     URem,
+    /// The high half of the full product: `(a * b) >> bits`, signed and unsigned. Integers up to 64 bits.
+    MulHi,
+    UMulHi,
     And,
     Or,
     Xor,
@@ -114,6 +117,8 @@ impl BinOp {
             BinOp::Rem => "rem",
             BinOp::UDiv => "udiv",
             BinOp::URem => "urem",
+            BinOp::MulHi => "mulhi",
+            BinOp::UMulHi => "umulhi",
             BinOp::And => "and",
             BinOp::Or => "or",
             BinOp::Xor => "xor",

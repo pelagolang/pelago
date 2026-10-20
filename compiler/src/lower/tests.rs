@@ -1273,6 +1273,46 @@ fn main() {
 
 // ---- The native build on the edge cases of `docs/design/backend.md` -------------------------------------
 
+#[test]
+fn appending_with_plus_assign_keeps_its_meaning() {
+    // `s = s + a + b` appends in place; every other shape keeps the copying assignment.
+    let cases: [(&str, &str); 8] = [
+        ("var s = \"a\"\n s = s + \"b\" + \"c\"\n print(s)", "abc\n"),
+        ("var s = \"a\"\n s = s + s\n s = s + s\n print(s)", "aaaa\n"),
+        (
+            "const t = \"x\"\n var s = \"a\"\n s = t + s\n print(s)",
+            "xa\n",
+        ),
+        (
+            "var s = \"\"\n for i of 0..5 { s = s + \"#i,\" }\n print(s)",
+            "0,1,2,3,4,\n",
+        ),
+        (
+            "var s = \"n=\"\n const n = \"7\"\n s = s + n + \"!\"\n print(s)",
+            "n=7!\n",
+        ),
+        ("var s = \"a\"\n s = s + \"#s#s\"\n print(s)", "aaa\n"),
+        (
+            "var s = \"a\"\n s = (s + \"b\") + \"c\"\n print(s)",
+            "abc\n",
+        ),
+        (
+            "var s = \"a\"\n var t = copy s\n s = s + \"b\"\n t = t + \"c\"\n print(s, t)",
+            "ab ac\n",
+        ),
+    ];
+    for (body, want) in cases {
+        let src = format!("fn main() {{\n {body}\n}}");
+        assert_eq!(output_of(&src), want, "{src}");
+        agree(&src);
+    }
+    // An operand that calls a function is not appended in place (the call could change `s`).
+    assert_eq!(
+        output_of("fn f() -> string = \"x\"\nfn main() { var s = \"a\"\n s = s + f()\n print(s) }"),
+        "ax\n"
+    );
+}
+
 /// The program does the same natively as in the interpreter: same output, and the same stop (message
 /// on standard error, status 1) or a clean exit.
 fn agree(src: &str) {
@@ -1321,6 +1361,70 @@ fn agree(src: &str) {
             ),
         }
     }
+}
+
+/// Division and remainder by constants that are not powers of two run as a high multiply (card A-11,
+/// W1); the loops give the optimiser values it cannot fold, spread over the whole range.
+#[test]
+fn native_agrees_on_division_by_constants() {
+    agree(
+        "fn main() {
+            var s = 0
+            var h = 1
+            for i in 0..4000 {
+                h = h *% 6364136223846793005 +% 1442695040888963407
+                const x = h
+                const y = i - 2000
+                s = s ^ (x / 10) ^ (x % 10) ^ (x / 3) ^ (x % 7) ^ (x / -7) ^ (x % -10)
+                s = s ^ (x / 641) ^ (x % 1000) ^ (y / 10) ^ (y % 10) ^ (y / 100) ^ (y % 3)
+                s = s ^ (x / 9223372036854775807) ^ (x / -9223372036854775807)
+            }
+            print(s)
+        }",
+    );
+    agree(
+        "fn main() {
+            var s: uint = 0
+            var h: uint = 1
+            for i in 0..4000 {
+                h = h *% 6364136223846793005 +% 1442695040888963407
+                s = s ^ (h / 10) ^ (h % 10) ^ (h / 3) ^ (h % 7) ^ (h / 641) ^ (h % 1000)
+                s = s ^ (h / 18446744073709551615) ^ (h / 9223372036854775809)
+            }
+            print(s)
+        }",
+    );
+    agree(
+        "fn main() {
+            var s: int32 = 0
+            var u: uint32 = 0
+            var h: uint32 = 1
+            var x: int32 = 1
+            for i in 0..4000 {
+                h = h *% 1664525 +% 1013904223
+                x = x *% 1664525 +% 1013904223
+                s = s ^ (x / 10) ^ (x % 10) ^ (x / 7) ^ (x % -3) ^ (x / 100)
+                u = u ^ (h / 10) ^ (h % 7) ^ (h / 641) ^ (h / 4294967295)
+            }
+            print(s, u)
+        }",
+    );
+    agree(
+        "fn main() {
+            var s: int8 = 0
+            var u: uint8 = 0
+            const lo: int8 = -128
+            const hi: int8 = 127
+            const top: uint8 = 255
+            for x of lo..=hi {
+                s = s ^ (x / 10) ^ (x % 10) ^ (x / 3) ^ (x % 7) ^ (x / -5)
+            }
+            for b of 0..=top {
+                u = u ^ (b / 10) ^ (b % 7) ^ (b / 3) ^ (b / 255) ^ (b % 100)
+            }
+            print(s, u)
+        }",
+    );
 }
 
 #[test]

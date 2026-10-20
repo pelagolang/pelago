@@ -458,15 +458,116 @@ fn division_by_powers_of_two_matches_the_interpreter() {
 }
 
 #[test]
-fn other_divisors_are_left_alone() {
-    for c in [3i128, 6, 10, -2, -1] {
-        let o = same_answer(&division_main(IrTy::I64, BinOp::Div, c, &[7, -7, 100]));
+fn divisors_that_must_still_divide_are_left_alone() {
+    for c in [-2i128, -1, 0, 1 << 63] {
+        let o = same_answer_or_stop(&division_main(IrTy::I64, BinOp::Div, c, &[7, -7, 100]));
         assert_eq!(
             count(&o.funcs[0], |o| matches!(o, Op::Bin(BinOp::Div, ..))),
             1,
             "c = {c}"
         );
     }
+}
+
+#[test]
+fn division_by_other_constants_becomes_a_high_multiply() {
+    for (ty, bits) in [
+        (IrTy::I64, 64u32),
+        (IrTy::I32, 32),
+        (IrTy::Int(16), 16),
+        (IrTy::I8, 8),
+    ] {
+        let top = (1i128 << (bits - 1)) - 1;
+        let xs: Vec<i128> = [0, 1, 2, 3, 6, 7, 9, 10, 11, 99, 100, 101, 641, top, top - 1]
+            .into_iter()
+            .flat_map(|x| [x, -x, -x - 1])
+            .filter(|x| *x >= -top - 1 && *x <= top)
+            .collect();
+        let divisors = [
+            3i128,
+            5,
+            6,
+            7,
+            9,
+            10,
+            11,
+            25,
+            100,
+            641,
+            1000,
+            top,
+            top - 1,
+            -3,
+            -7,
+            -10,
+            -top,
+        ];
+        for c in divisors.into_iter().filter(|c| c.abs() <= top) {
+            for op in [BinOp::Div, BinOp::Rem] {
+                let o = same_answer(&division_main(ty, op, c, &xs));
+                assert_eq!(
+                    count(&o.funcs[0], |o| matches!(
+                        o,
+                        Op::Bin(BinOp::Div | BinOp::Rem, ..)
+                    )),
+                    0,
+                    "{ty:?} {op:?} {c} still divides"
+                );
+                assert_eq!(
+                    count(&o.funcs[0], |o| matches!(o, Op::Bin(BinOp::MulHi, ..))),
+                    1,
+                    "{ty:?} {op:?} {c}"
+                );
+            }
+        }
+        let mask = (1u128 << bits) - 1;
+        let us: Vec<i128> = xs.iter().map(|x| (*x as u128 & mask) as i128).collect();
+        let top_u = mask as i128;
+        for c in [
+            3i128,
+            5,
+            7,
+            10,
+            11,
+            25,
+            100,
+            641,
+            1000,
+            top,
+            top + 2,
+            top_u,
+            top_u - 1,
+        ]
+        .into_iter()
+        .filter(|c| *c >= 3 && *c <= top_u)
+        .filter(|c| !(*c as u128).is_power_of_two())
+        {
+            for op in [BinOp::UDiv, BinOp::URem] {
+                let o = same_answer(&division_main(ty, op, c, &us));
+                assert_eq!(
+                    count(&o.funcs[0], |o| matches!(
+                        o,
+                        Op::Bin(BinOp::UDiv | BinOp::URem, ..)
+                    )),
+                    0,
+                    "{ty:?} {op:?} {c} still divides"
+                );
+                assert_eq!(
+                    count(&o.funcs[0], |o| matches!(o, Op::Bin(BinOp::UMulHi, ..))),
+                    1,
+                    "{ty:?} {op:?} {c}"
+                );
+            }
+        }
+    }
+}
+
+/// `same_answer` for modules whose divisor may be zero: only the shape is checked then.
+fn same_answer_or_stop(m: &Module) -> Module {
+    let mut o = m.clone();
+    optimize(&mut o, Options { level: 1 });
+    assert!(verify_module(&o).is_empty(), "{}", print_module(&o));
+    o
 }
 
 #[test]
@@ -669,4 +770,201 @@ fn loops_with_dropped_checks_give_the_same_answers() {
         let m = module_of(counter_loop(start, step, op, cmp, Some(limit)));
         both(&m);
     }
+}
+
+/// `fn main(a, b) { acc = 0; i = 0; while i < n { acc += <body op> a b; i += 1 }; acc }` where the
+/// loop is entered through a branch (`a < b`) when `guarded`, so it has no preheader of its own.
+fn invariant_loop(body: BinOp, guarded: bool, n: i128) -> Func {
+    let mut f = Func::new("main", &[IrTy::I64, IrTy::I64], IrTy::I64);
+    let e = f.entry();
+    let (a, b) = (f.block_params(e)[0], f.block_params(e)[1]);
+    let head = f.new_block(&[IrTy::I64, IrTy::I64]);
+    let step = f.new_block(&[]);
+    let done = f.new_block(&[IrTy::I64]);
+    let konst = |f: &mut Func, blk, v: i128| {
+        f.emit(blk, Op::Const(IrTy::I64, Const::Int(v)), Some(IrTy::I64))
+            .unwrap()
+    };
+    let to = |blk, args| Target { block: blk, args };
+    let zero = konst(&mut f, e, 0);
+    if guarded {
+        let c = f
+            .emit(e, Op::Cmp(CmpOp::Lt, a, b), Some(IrTy::Bool))
+            .unwrap();
+        f.terminate(
+            e,
+            Term::Branch(c, to(head, vec![zero, zero]), to(done, vec![zero])),
+        );
+    } else {
+        f.terminate(e, Term::Jump(to(head, vec![zero, zero])));
+    }
+    let (i, acc) = (f.block_params(head)[0], f.block_params(head)[1]);
+    let lim = konst(&mut f, head, n);
+    let c = f
+        .emit(head, Op::Cmp(CmpOp::Lt, i, lim), Some(IrTy::Bool))
+        .unwrap();
+    f.terminate(head, Term::Branch(c, to(step, vec![]), to(done, vec![acc])));
+    let k = f.emit(step, Op::Bin(body, a, b), Some(IrTy::I64)).unwrap();
+    let acc2 = f
+        .emit(step, Op::Bin(BinOp::Add, acc, k), Some(IrTy::I64))
+        .unwrap();
+    let one = konst(&mut f, step, 1);
+    let i2 = f
+        .emit(step, Op::Bin(BinOp::Add, i, one), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(step, Term::Jump(to(head, vec![i2, acc2])));
+    let r = f.block_params(done)[0];
+    f.terminate(done, Term::Return(Some(r)));
+    f
+}
+
+fn in_loop_blocks(f: &Func, p: impl Fn(&Op) -> bool) -> bool {
+    // Blocks 1 and 2 are the loop's header and step.
+    [1usize, 2]
+        .iter()
+        .any(|b| f.blocks[*b].insts.iter().any(|i| p(&f.insts[*i].op)))
+}
+
+fn same_results(f: &Func, args: &[(i128, i128)]) {
+    let mut g = f.clone();
+    assert!(licm::run(&mut g), "{}", print_func(f, None));
+    assert!(verify_func(&g).is_empty(), "{}", print_func(&g, None));
+    let (m, n) = (module_of(f.clone()), module_of(g));
+    for &(x, y) in args {
+        let a = [Val::Int(x as u128), Val::Int(y as u128)];
+        assert_eq!(
+            run_full(&m, "main", &a).result,
+            run_full(&n, "main", &a).result
+        );
+    }
+}
+
+#[test]
+fn invariant_arithmetic_moves_in_front_of_the_loop() {
+    for guarded in [false, true] {
+        let f = invariant_loop(BinOp::Mul, guarded, 5);
+        assert!(in_loop_blocks(&f, |o| matches!(o, Op::Bin(BinOp::Mul, ..))));
+        let mut g = f.clone();
+        assert!(licm::run(&mut g));
+        assert!(!in_loop_blocks(&g, |o| matches!(
+            o,
+            Op::Bin(BinOp::Mul, ..)
+        )));
+        // A guarded loop gets a block of its own for the product; an unguarded one reuses the entry.
+        assert_eq!(g.blocks.len(), f.blocks.len() + usize::from(guarded));
+        same_results(&f, &[(3, 4), (4, 3), (0, 0), (7, 7), (1 << 40, 5)]);
+    }
+}
+
+#[test]
+fn division_stays_in_the_loop_because_it_can_stop() {
+    // `a / b` with b = 0 stops, and the loop may run zero times.
+    let mut g = invariant_loop(BinOp::UDiv, false, 0);
+    assert!(!licm::run(&mut g));
+    assert!(in_loop_blocks(&g, |o| matches!(
+        o,
+        Op::Bin(BinOp::UDiv, ..)
+    )));
+}
+
+#[test]
+fn a_load_moves_only_when_the_loop_writes_no_memory() {
+    // `s = slot; store s, a; while i < 3 { acc += load s; [store s, i] }`
+    let build = |writes: bool| {
+        let mut f = Func::new("main", &[IrTy::I64], IrTy::I64);
+        let e = f.entry();
+        let a = f.block_params(e)[0];
+        let head = f.new_block(&[IrTy::I64, IrTy::I64]);
+        let step = f.new_block(&[]);
+        let done = f.new_block(&[IrTy::I64]);
+        let to = |blk, args| Target { block: blk, args };
+        let s = f.emit(e, Op::Slot(8, 8), Some(IrTy::Ptr)).unwrap();
+        f.emit(e, Op::Store(s, a), None);
+        let zero = f
+            .emit(e, Op::Const(IrTy::I64, Const::Int(0)), Some(IrTy::I64))
+            .unwrap();
+        f.terminate(e, Term::Jump(to(head, vec![zero, zero])));
+        let (i, acc) = (f.block_params(head)[0], f.block_params(head)[1]);
+        let three = f
+            .emit(head, Op::Const(IrTy::I64, Const::Int(3)), Some(IrTy::I64))
+            .unwrap();
+        let c = f
+            .emit(head, Op::Cmp(CmpOp::Lt, i, three), Some(IrTy::Bool))
+            .unwrap();
+        f.terminate(head, Term::Branch(c, to(step, vec![]), to(done, vec![acc])));
+        let v = f
+            .emit(step, Op::Load(IrTy::I64, s), Some(IrTy::I64))
+            .unwrap();
+        let acc2 = f
+            .emit(step, Op::Bin(BinOp::Add, acc, v), Some(IrTy::I64))
+            .unwrap();
+        if writes {
+            f.emit(step, Op::Store(s, i), None);
+        }
+        let one = f
+            .emit(step, Op::Const(IrTy::I64, Const::Int(1)), Some(IrTy::I64))
+            .unwrap();
+        let i2 = f
+            .emit(step, Op::Bin(BinOp::Add, i, one), Some(IrTy::I64))
+            .unwrap();
+        f.terminate(step, Term::Jump(to(head, vec![i2, acc2])));
+        let r = f.block_params(done)[0];
+        f.terminate(done, Term::Return(Some(r)));
+        f
+    };
+    let f = build(false);
+    same_results(&f, &[(5, 0), (9, 0)]);
+    let mut g = f.clone();
+    licm::run(&mut g);
+    assert!(!in_loop_blocks(&g, |o| matches!(o, Op::Load(..))));
+    let mut w = build(true);
+    assert!(!licm::run(&mut w));
+    assert!(in_loop_blocks(&w, |o| matches!(o, Op::Load(..))));
+}
+
+#[test]
+fn a_loop_is_laid_out_with_its_test_at_the_bottom() {
+    // entry, head, body, done  ->  entry, body, head, done
+    let f = counter_loop(Some(0), 1, BinOp::Add, CmpOp::Lt, Some(10));
+    let mut g = f.clone();
+    assert!(layout::run(&mut g));
+    assert!(verify_func(&g).is_empty(), "{}", print_func(&g, None));
+    let is_head = |b: &Block| matches!(b.term, Some(Term::Branch(..)));
+    let at = g.blocks.iter().position(is_head).unwrap();
+    assert_eq!(at, g.blocks.len() - 2, "{}", print_func(&g, None));
+    // The body jumps to the block right after it, the header branches back up.
+    let Some(Term::Jump(t)) = &g.blocks[at - 1].term else {
+        panic!("{}", print_func(&g, None))
+    };
+    assert_eq!(t.block.0 as usize, at);
+    assert!(!layout::run(&mut g), "a second run changes nothing");
+    let (a, b) = (module_of(f), module_of(g));
+    assert_eq!(
+        run_full(&a, "main", &[]).result,
+        run_full(&b, "main", &[]).result
+    );
+}
+
+#[test]
+fn blocks_that_stop_go_last() {
+    let mut f = Func::new("main", &[IrTy::I64], IrTy::I64);
+    let e = f.entry();
+    let a = f.block_params(e)[0];
+    let bad = f.new_block(&[]);
+    let ok = f.new_block(&[]);
+    let c = f
+        .emit(e, Op::Cmp(CmpOp::Ne, a, a), Some(IrTy::Bool))
+        .unwrap();
+    let to = |block| Target {
+        block,
+        args: vec![],
+    };
+    f.terminate(e, Term::Branch(c, to(bad), to(ok)));
+    f.terminate(bad, Term::Stop("no".into()));
+    f.terminate(ok, Term::Return(Some(a)));
+    assert!(layout::run(&mut f));
+    assert!(matches!(f.blocks[2].term, Some(Term::Stop(_))));
+    assert!(verify_func(&f).is_empty(), "{}", print_func(&f, None));
+    let m = module_of(f);
+    assert_eq!(run_full(&m, "main", &[Val::Int(7)]).result, Ok(Val::Int(7)));
 }

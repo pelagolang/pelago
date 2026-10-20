@@ -1067,6 +1067,9 @@ impl<'a> Lowerer<'a> {
             return self.unsupported(e.span, "assigning to this kind of place");
         };
         if op == Punct::Eq {
+            if let Some(r) = self.append_chain(p, lhs, rhs, lt) {
+                return r;
+            }
             return self.store_new(p, lt, rhs, lhs);
         }
         if op == Punct::QuestionQuestionEq {

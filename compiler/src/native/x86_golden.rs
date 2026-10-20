@@ -259,6 +259,8 @@ pub fn golden() -> Vec<Case> {
         ("neg sil", "40 f6 de", |a| a.neg(RSI, 1)),
         ("not rdx", "48 f7 d2", |a| a.not(RDX, 8)),
         ("not al", "f6 d0", |a| a.not(RAX, 1)),
+        ("imul rcx", "48 f7 e9", |a| a.imul1(RCX, 8)),
+        ("imul r9", "49 f7 e9", |a| a.imul1(R9, 8)),
         ("mul rcx", "48 f7 e1", |a| a.mul(RCX, 8)),
         ("mul ecx", "f7 e1", |a| a.mul(RCX, 4)),
         ("mul r9", "49 f7 e1", |a| a.mul(R9, 8)),

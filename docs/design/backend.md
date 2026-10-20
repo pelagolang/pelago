@@ -110,7 +110,7 @@ Measured on this container (collatz steps for 1 to 300,000 and `fib(35)`, `compi
 | C, `gcc -O0` | 0.23 s |
 | C, `gcc -O2` | 0.10 s |
 
-**Update (A-11 S1 to S3, first round).** The generator now treats integer constants as immediates, fuses a compare with the branch that uses it, falls through to the next block, works on operands in their own registers and uses `r10`/`r11` for values not live across calls; the optimiser turns division by powers of two into shifts and drops overflow checks it can prove cannot fire. Collatz went from 0.30 s to 0.09 s (C `-O0` 0.14 s, `-O2` 0.07 s); `compiler/benches/compare.sh` prints the table.
+**Update (A-11 S1 to S3, first round).** The generator now treats integer constants as immediates, fuses a compare with the branch that uses it, falls through to the next block, works on operands in their own registers and uses `r10`/`r11` for values not live across calls; the optimiser turns division by constants into shifts and high multiplies (`MulHi`/`UMulHi`) and drops overflow checks it can prove cannot fire. Collatz went from 0.30 s to 0.09 s (C `-O0` 0.14 s, `-O2` 0.07 s); `compiler/benches/compare.sh` prints the table.
 
 **The benchmark suite.** `compiler/benches/compare.sh [--json] [--runs N] [name ...]` builds every `compiler/benches/<name>.pel` that has a C twin `compiler/benches/c/<name>.c`, checks that both print the same output, and prints one table (best of N runs, native `--opt` against `gcc -O0` and `-O2`). `--json` adds one JSON line per program for a CI artifact or the weekly routine. A new benchmark is two files with the same name. Baseline on the container after A-11 first round (seconds):
 
