@@ -27,6 +27,7 @@ mod ranges;
 mod sccp;
 mod split;
 mod stats;
+mod tailrec;
 #[cfg(test)]
 mod tests;
 
@@ -63,6 +64,13 @@ pub fn optimize(m: &mut Module, opts: Options) {
         inline::run(m);
         for i in 0..m.funcs.len() {
             passes(&mut m.funcs[i], true);
+        }
+    }
+    if opts.level >= 2 {
+        for i in 0..m.funcs.len() {
+            if tailrec::run(&mut m.funcs[i], FuncId(i as u32)) {
+                optimize_func(&mut m.funcs[i]);
+            }
         }
     }
     check_module(m, "the pipeline");
