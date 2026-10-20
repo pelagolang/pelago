@@ -2182,3 +2182,24 @@ fn fill_loops_become_string_stores() {
         }",
     );
 }
+
+/// Appending a literal of 1, 2, 4 or 8 bytes is a store of a constant natively, also when the bytes
+/// are not ASCII (the constant is sign extended); other lengths still copy.
+#[test]
+fn literals_are_stored_as_constants() {
+    agree(
+        "fn main() {
+            var s = \"\"
+            for i in 0..3 {
+                s = s + \"x\"
+                s = s + \"é\"
+                s = s + \"abcd\"
+                s = s + \"€\"
+                s = s + \"abcdefgh\"
+                s = s + \"ÿÿÿÿ\"
+                s = s + \"12345\"
+            }
+            print(s, s.len())
+        }",
+    );
+}

@@ -15,6 +15,7 @@
 
 mod cache;
 mod cfg;
+mod constdata;
 mod cse;
 mod dce;
 mod demand;
@@ -73,6 +74,11 @@ pub fn optimize(m: &mut Module, opts: Options) {
         cache::run(m);
         for i in 0..m.funcs.len() {
             passes(&mut m.funcs[i], true);
+        }
+        if constdata::run(m) {
+            for i in 0..m.funcs.len() {
+                passes(&mut m.funcs[i], true);
+            }
         }
     }
     if opts.level >= 2 {
