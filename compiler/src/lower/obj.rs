@@ -255,6 +255,9 @@ impl<'a> Lowerer<'a> {
     /// `x to? dog`: the object moves into the option when it is a `dog`.
     pub(crate) fn downcast(&mut self, e: &'a Expr, v: &'a Expr, dst: Value, t: Ty) -> Res {
         let sp = e.span;
+        if let Some(TyKind::Any(iface)) = self.ty_of(v).map(|s| self.kind(s)) {
+            return self.downcast_any(e, v, dst, t, iface);
+        }
         let TyKind::Option(target) = self.kind(t) else {
             return self.unsupported(sp, "`to?` to this type");
         };

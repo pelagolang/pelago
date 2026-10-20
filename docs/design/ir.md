@@ -154,7 +154,7 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 - **IR14** An `obj` is a heap block: a table pointer, then the fields (the base's first). The table is static data built on first use: drop, copy,
   the ancestors list (for `is` and `to?`), and the `open` / `override` methods in hierarchy order. Calls to those methods go through the
   table. `to?` moves the object into the `option` when the test passes.
-- **IR15** `any I` is a heap copy of the value plus a table for the pair (type, interface): a drop function and one entry per interface method.
+- **IR15** `any I` is a heap copy of the value plus a table for the pair (type, interface): a drop function, the type's `eq` and `hash` glue when the interface builds on them (so `==`, `!=` and `hash` work on `any`, and `a to? sq` compares the table with the one for `sq`), and one entry per interface method.
   An entry takes the address of the copy where the method wants `self`, and loads it first when the type passes `self` by value.
 - **IR16** `init` builds a struct in the return slot (or in a temporary when it can fail); for an `obj` the caller allocates the block and `init`
   gets its address. `deinit` runs before the fields are dropped. Fields with defaults are filled before `init` runs.

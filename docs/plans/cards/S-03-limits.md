@@ -14,8 +14,6 @@ Larger items already have their own cards (S-01 maps, S-02 threads, A-03 tempora
 | 4 | A call chain that recurses deeply (a recursive function, dropping a long chain of boxes) uses the host stack of the interpreter and can overflow it; only self `become` on plain numbers is a loop. | Run the interpreter on a thread with a big stack now; a general tail-call pass in the IR later; iterative drop of self-referential boxes. | None. | A-02 box lands (long chains), or a user reports a stack overflow. |
 | 5 | Open-ended ranges (`2..`, `..3`) cannot be kept in a value (a `range` holds two ends and a flag). | Add the missing-end cases to the range layout: a flag byte for "has start" and "has end". Slicing with open ends already works. | A byte of layout. | A program stores or passes an open range. |
 | 6 | Spread of a list into call arguments (`f(...xs)` for a non-variadic parameter) is not lowered. | Unpack at the call site into the parameter list (length known only at run time for lists, so only legal for variadic parameters; for arrays it unpacks at compile time). | No. | Someone needs it; confirm the checker rules first. |
-| 9 | `to?` works only for `obj` downcasts, not for `any` interfaces. | Compare the table pointer to the table for the target type; return the data pointer wrapped in `option`. | No. | A program wants `x to? dog` on an `any`. |
-| 10 | `==`, `<`, `hash` on `any` values are not lowered. | Add `eq`/`hash` slots to the table when the interface requires them. | No. | A program compares `any` values. |
 | 11 | Tasks that were never joined run at the end of `main`, after `main`'s locals are gone. | Real threads (S-02) make the question disappear; until then it is documented behaviour. | - | S-02. |
 | 12 | Stage-0 `print` of floats prints the shortest form of 6 digits (`0.333333`), not the shortest round-trip form. | Implement shortest round-trip printing (Ryu or Grisu style) in `core.pel`. | Slightly slower printing, better output. | Before the first public release, or when a test needs exact floats. |
 | 14 | `@inline`, `@noinline`, `@cold` hints are parsed but ignored. | Carry them into `Func` and use them in A-04's inliner. | None. | A-04 stage 6. |
@@ -24,3 +22,5 @@ Notes:
 
 - Items 1, 2, 3 and 14 are *speed* items and each makes the output faster, which is the long-run aim, so none of them is blocked by a "future speed" worry.
 - Items 7 and 8 are checker bugs, not limits of lowering. They are listed here so they are not lost; they are small and should be done early.
+
+**Done (moved out of the table):** #9 `to?` on an `any` (`a to? sq` when the table is the one for `sq`; the value moves out of its heap copy; the type must provide the interface) and #10 `==` and `hash` on `any` values (slots 1 and 2 of the table hold the type's `eq` and `hash`; the interface must build on `eq` / `hash`; two values of different types are unequal). `<` on an `any` is a checker error: values of different types have no order.

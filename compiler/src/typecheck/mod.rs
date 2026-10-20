@@ -116,6 +116,9 @@ pub struct Typed {
     /// pattern, refers to, keyed by the file and the start of the name (the resolver cannot know:
     /// it needs the type of the value).
     pub member_uses: HashMap<(ModuleId, u32), DefId>,
+    /// For each interface: does it build on the library's `eq`, and on `hash`? (An `any` of such an
+    /// interface keeps the matching function in its table.)
+    pub iface_eq_hash: HashMap<DefId, (bool, bool)>,
     names: Vec<String>,
 }
 
@@ -580,6 +583,15 @@ impl<'p> Checker<'p> {
             let z = self.tt.zonk(t);
             fn_rets.insert(d, z);
         }
+        let mut iface_eq_hash = HashMap::new();
+        if let (Some(eq), Some(hash)) = (self.core_iface("eq"), self.core_iface("hash")) {
+            for d in (0..self.res.defs.len() as u32).map(DefId) {
+                if self.def(d).kind == DefKind::Interface {
+                    let c = self.iface_closure(d);
+                    iface_eq_hash.insert(d, (c.contains(&eq), c.contains(&hash)));
+                }
+            }
+        }
         let mut diagnostics = self.res.diagnostics.clone();
         diagnostics.extend(self.diags);
         Typed {
@@ -592,6 +604,7 @@ impl<'p> Checker<'p> {
             impls,
             calls,
             member_uses: self.member_uses,
+            iface_eq_hash,
             tys,
             local_tys,
             names: self.res.defs.iter().map(|d| d.name.clone()).collect(),
