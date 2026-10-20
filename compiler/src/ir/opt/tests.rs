@@ -505,3 +505,45 @@ fn remainder_compared_with_zero_becomes_a_mask() {
         }
     }
 }
+
+/// `main` computes `(x & 255) op y` on checked arithmetic, where `x` comes from a call so it is unknown.
+fn range_main(op: BinOp, signed: bool, bound: i128, small: bool, x: i128) -> Module {
+    let mut d = Func::new("d", &[], IrTy::I64);
+    let e = d.entry();
+    let c = d.emit(e, Op::Const(IrTy::I64, Const::Int(x)), Some(IrTy::I64));
+    d.terminate(e, Term::Return(c));
+    let mut m = Module::default();
+    let id = m.add(d);
+    let mut f = Func::new("main", &[], IrTy::I64);
+    let e = f.entry();
+    let u = f.emit(e, Op::Call(id, vec![]), Some(IrTy::I64)).unwrap();
+    let mask = f.emit(e, Op::Const(IrTy::I64, Const::Int(bound)), Some(IrTy::I64));
+    let masked = f.emit(e, Op::Bin(BinOp::And, u, mask.unwrap()), Some(IrTy::I64));
+    // `small` uses the masked value on both sides; otherwise the other side is the unknown value.
+    let other = if small { masked.unwrap() } else { u };
+    let r = f.emit(
+        e,
+        Op::Checked(op, signed, masked.unwrap(), other),
+        Some(IrTy::I64),
+    );
+    f.terminate(e, Term::Return(r));
+    m.add(f);
+    m
+}
+
+#[test]
+fn checks_that_cannot_fire_are_dropped() {
+    for (op, signed) in [(BinOp::Add, true), (BinOp::Mul, true), (BinOp::Add, false)] {
+        let o = same_answer(&range_main(op, signed, 255, true, 0x1234_5678));
+        let main = o.funcs.iter().find(|f| f.name == "main").unwrap();
+        assert_eq!(count(main, |o| matches!(o, Op::Checked(..))), 0, "{op:?}");
+    }
+    // The other operand is unknown: the check stays.
+    let o = same_answer(&range_main(BinOp::Add, true, 255, false, 7));
+    let main = o.funcs.iter().find(|f| f.name == "main").unwrap();
+    assert_eq!(count(main, |o| matches!(o, Op::Checked(..))), 1);
+    // A product that could overflow stays checked: (2^40) * (2^40).
+    let o = same_answer(&range_main(BinOp::Mul, true, (1 << 40) - 1, true, 7));
+    let main = o.funcs.iter().find(|f| f.name == "main").unwrap();
+    assert_eq!(count(main, |o| matches!(o, Op::Checked(..))), 1);
+}

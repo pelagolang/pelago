@@ -100,5 +100,7 @@ Measured on this container (collatz steps for 1 to 300,000 and `fib(35)`, `compi
 | C, `gcc -O0` | 0.23 s |
 | C, `gcc -O2` | 0.10 s |
 
-What is still slow, in order of likely payoff: every checked operation and bounds check is a compare and branch, the calling convention goes through memory for every
+**Update (A-11 S1 to S3, first round).** The generator now treats integer constants as immediates, fuses a compare with the branch that uses it, falls through to the next block, works on operands in their own registers and uses `r10`/`r11` for values not live across calls; the optimiser turns division by powers of two into shifts and drops overflow checks it can prove cannot fire. Collatz went from 0.30 s to 0.09 s (C `-O0` 0.14 s, `-O2` 0.07 s); `compiler/benches/compare.sh` prints the table.
+
+What was still slow before that round, in order of likely payoff: every checked operation and bounds check is a compare and branch, the calling convention goes through memory for every
 float, small `MemCopy` uses `rep movsb`, and no value is split between a register and memory (a value too rarely used for a register still pays a load and a store per use).
