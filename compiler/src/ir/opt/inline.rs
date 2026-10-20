@@ -10,7 +10,8 @@ use std::collections::{HashMap, HashSet};
 /// A function whose name ends like this is the rarely taken half of a fast path (`rt_grow_slow`:
 /// the buffer is full). It stays a call, so the fast path around it stays small enough to be copied
 /// into every caller and its callers stay free of the call.
-const COLD_SUFFIX: &str = "_slow";
+/// Functions with this ending run rarely: never inlined, and calls to them weigh little in register allocation.
+pub const COLD_SUFFIX: &str = "_slow";
 
 /// A callee at most this big (instructions plus two per block) is always copied.
 const SMALL: usize = 60;

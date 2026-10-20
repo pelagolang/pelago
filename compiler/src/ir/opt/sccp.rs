@@ -28,6 +28,7 @@ fn foldable(op: &Op) -> bool {
         Op::Const(..)
             | Op::Bin(..)
             | Op::Checked(..)
+            | Op::Select(..)
             | Op::Cmp(..)
             | Op::Neg(_)
             | Op::Not(_)

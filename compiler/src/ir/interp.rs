@@ -421,6 +421,21 @@ impl Machine<'_> {
             },
             Op::Bin(o, a, b) => bin(*o, get(a), get(b), ty(a))?,
             Op::Checked(o, signed, a, b) => checked(*o, *signed, get(a), get(b), bits_of(ty(a)))?,
+            Op::CheckedIf(o, signed, test, a, b) => {
+                let stops = match test {
+                    Test::Bool(c, when) => get(c) == Val::Bool(*when),
+                    Test::Cmp(o, x, y) => cmp(*o, get(x), get(y), bits_of(ty(x))),
+                };
+                if stops {
+                    checked(*o, *signed, get(a), get(b), bits_of(ty(a)))?
+                } else {
+                    bin(*o, get(a), get(b), ty(a))?
+                }
+            }
+            Op::Select(c, a, b) => match get(c) {
+                Val::Bool(true) => get(a),
+                _ => get(b),
+            },
             Op::Cmp(o, a, b) => Val::Bool(cmp(*o, get(a), get(b), bits_of(ty(a)))),
             Op::Neg(a) => match get(a) {
                 Val::Float(x) => Val::Float(-x),
@@ -574,6 +589,10 @@ pub(crate) fn fold(op: &Op, f: &Func, get: &dyn Fn(Value) -> Option<Val>) -> Opt
         Op::Checked(o, signed, a, b) => {
             checked(*o, *signed, known(a)?, known(b)?, bits_of(f.ty(*a))).ok()?
         }
+        Op::Select(c, a, b) => match known(c)? {
+            Val::Bool(true) => known(a)?,
+            _ => known(b)?,
+        },
         Op::Cmp(o, a, b) => Val::Bool(cmp(*o, known(a)?, known(b)?, bits_of(f.ty(*a)))),
         Op::Neg(a) => match known(a)? {
             Val::Int(n) => Val::Int(mask(0u128.wrapping_sub(n), bits_of(f.ty(*a)))),
