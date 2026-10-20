@@ -1,6 +1,7 @@
 Id: A-11
 Title: Native speed: from 4.5 times slower than C at -O2 towards 1.5 to 2 times
 Column: Doing
+Work items: [a11-work-items.md](../a11-work-items.md) (the open work, split for parallel threads)
 Order: after A-09 N6 (track A)
 Depends on: A-09; A-04 (the IR optimiser)
 Size: XL, in stages (S1 to S6), each measured
@@ -53,3 +54,5 @@ Measured with `compiler/benches/compare.sh` (best of 7, this container):
 | fib(38) | 0.36 s | 0.30 s | 0.34 s | 0.08 s |
 
 **S4, first part (done): `build` optimises by default.** `pelago build` and `pelago run --native` run the optimiser unless `--no-opt` is given (`--opt` is still accepted and does nothing there); `pelago run` and `pelago ir` stay unoptimised unless `--opt`. The inliner threshold (`SMALL` in `ir/opt/inline.rs`) was tried at 15, 40 and 100 on the ten benches: all differences were within run-to-run noise, so it stays at 40. Leaf functions without a frame pointer and arguments kept in registers are generator work (`native/gen.rs`) and wait for the backend thread.
+
+PRs: #7 (S1, powers of two), #8 (S2 and S3, first rounds). The open work, with files and dependencies for each item, is in [a11-work-items.md](../a11-work-items.md).
