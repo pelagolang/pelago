@@ -11,6 +11,7 @@
 //! | 0 to 95 | heads of the twelve free lists (block sizes 32 B to 64 KiB) |
 //! | 96, 104 | next free byte and end of the current chunk |
 //! | 112 | live blocks (for the leak check) |
+//! | 120 | the one freed large block kept for reuse (0 when none) |
 
 use super::elf::Blob;
 use super::x86::*;
@@ -354,6 +355,30 @@ pub fn emit(
     a.lea(RSI, mem(RBX, 4095));
     a.alu_ri(Alu::And, RSI, -4096, 8);
     a.mov_rr(R12, RSI, 8);
+    // The block freed last, if it is big enough and not more than twice as big, is reused (cleared)
+    // instead of a new mapping with its page faults.
+    let mapnew = a.new_label();
+    state(a, RDX, 120);
+    a.load(RCX, mem(RDX, 0), 8);
+    a.test_rr(RCX, RCX, 8);
+    a.jcc(Cc::E, mapnew);
+    a.load(RAX, mem(RCX, 8), 8);
+    a.alu_rr(Alu::Cmp, RAX, RSI, 8);
+    a.jcc(Cc::B, mapnew);
+    a.lea(RDI, mem(RSI, 0));
+    a.alu_rr(Alu::Add, RDI, RDI, 8);
+    a.alu_rr(Alu::Cmp, RAX, RDI, 8);
+    a.jcc(Cc::A, mapnew);
+    a.store_imm(mem(RDX, 0), 0, 8);
+    a.mov_rr(RBX, RCX, 8);
+    a.lea(RDI, mem(RCX, 16));
+    a.lea(RCX, mem(RAX, -16));
+    a.alu_rr(Alu::Xor, RAX, RAX, 4);
+    a.rep_stosb();
+    a.mov_rr(RDX, RBX, 8);
+    a.jmp(out);
+    a.bind(mapnew);
+    a.mov_rr(RSI, R12, 8);
     emit_mmap_reg(a, RSI, win);
     a.mov_rr(RDX, RAX, 8);
     map_failed(a, RDX, oom, win);
@@ -387,6 +412,15 @@ pub fn emit(
     a.bind(fdone);
     a.ret();
     a.bind(flarge);
+    // Keep one large block for the next large allocation; unmap when the slot is taken.
+    let unmap = a.new_label();
+    state(a, RSI, 120);
+    a.load(RCX, mem(RSI, 0), 8);
+    a.test_rr(RCX, RCX, 8);
+    a.jcc(Cc::Ne, unmap);
+    a.store(mem(RSI, 0), RDX, 8);
+    a.ret();
+    a.bind(unmap);
     if win {
         a.mov_rr(RCX, RDX, 8);
         a.alu_rr(Alu::Xor, RDX, RDX, 4);
