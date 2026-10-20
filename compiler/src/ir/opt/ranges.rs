@@ -136,6 +136,8 @@ struct Ctx<'a> {
     edges: Vec<Vec<(BlockId, Vec<Value>)>>,
     val: Vec<L>,
     steps: Vec<u8>,
+    /// An upper bound for some block parameters (accumulators of counted loops, see `loop_caps`).
+    caps: Vec<Option<u128>>,
 }
 
 impl Ctx<'_> {
@@ -205,6 +207,7 @@ impl Ctx<'_> {
             edges,
             val,
             steps: vec![0; f.values.len()],
+            caps: vec![None; f.values.len()],
         }
     }
 
@@ -365,7 +368,100 @@ impl Ctx<'_> {
         for (p, args) in &self.edges[b] {
             acc = join(acc, self.range_at(args[k], *p));
         }
-        acc
+        match (acc, self.caps[self.f.blocks[b].params[k].0 as usize]) {
+            (L::R((lo, hi)), Some(cap)) if lo <= cap => L::R((lo, hi.min(cap))),
+            _ => acc,
+        }
+    }
+
+    /// Upper bounds for the accumulators of loops that run a known number of times. A loop whose
+    /// header is `branch (lt c, N)` with `N` a constant, whose counter `c` starts at 0 and grows by
+    /// one on the only way back, runs its body at most `N` times. A parameter `p` that starts at
+    /// most at `b` and gains at most `d` on the way back (`p + d`, `d` known to be below `dmax`) is
+    /// then at most `b + N * dmax` at the header, whatever the body does in between: the sum of a
+    /// loop that appends two bytes 2 000 000 times cannot overflow, which no comparison says.
+    fn loop_caps(&self) -> Vec<Option<u128>> {
+        let mut caps = vec![None; self.f.values.len()];
+        for &h in &self.dom.rpo {
+            let hi = h.0 as usize;
+            let [e0, e1] = self.edges[hi].as_slice() else {
+                continue;
+            };
+            let (entry, latch) = match (
+                self.dom.dominates(h, e0.0) && e0.0 != h,
+                self.dom.dominates(h, e1.0) && e1.0 != h,
+            ) {
+                (false, true) => (e0, e1),
+                (true, false) => (e1, e0),
+                _ => continue,
+            };
+            let Some(Term::Branch(cond, yes, _)) = &self.f.blocks[hi].term else {
+                continue;
+            };
+            if !yes.args.is_empty()
+                || self.edges[yes.block.0 as usize].len() != 1
+                || !self.dom.dominates(yes.block, latch.0)
+            {
+                continue;
+            }
+            let Some(Op::Cmp(CmpOp::Lt | CmpOp::ULt, c, n)) =
+                self.defs[cond.0 as usize].map(|d| &self.f.insts[d].op)
+            else {
+                continue;
+            };
+            let params = &self.f.blocks[hi].params;
+            let Some(kc) = params.iter().position(|p| p == c) else {
+                continue;
+            };
+            let Some(count) = self.konst(*n) else {
+                continue;
+            };
+            let sum = |v: Value| match self.defs[v.0 as usize].map(|d| &self.f.insts[d].op) {
+                Some(Op::Bin(BinOp::Add, a, b) | Op::Checked(BinOp::Add, _, a, b)) => {
+                    Some((*a, *b))
+                }
+                _ => None,
+            };
+            let counts = self.konst(entry.1[kc]) == Some(0)
+                && sum(latch.1[kc]).is_some_and(|(a, b)| {
+                    (a == *c && self.konst(b) == Some(1)) || (b == *c && self.konst(a) == Some(1))
+                });
+            if !counts {
+                continue;
+            }
+            for (kp, &p) in params.iter().enumerate() {
+                let t = self.f.ty(p);
+                if kp == kc || !t.is_int() {
+                    continue;
+                }
+                let (Some((a, b)), L::R(start)) =
+                    (sum(latch.1[kp]), self.range_at(entry.1[kp], entry.0))
+                else {
+                    continue;
+                };
+                let d = if a == p {
+                    b
+                } else if b == p {
+                    a
+                } else {
+                    continue;
+                };
+                if d == p {
+                    continue;
+                }
+                let L::R(gain) = self.range_at(d, latch.0) else {
+                    continue;
+                };
+                let cap = gain
+                    .1
+                    .checked_mul(count)
+                    .and_then(|g| g.checked_add(start.1));
+                if let Some(cap) = cap.filter(|c| *c <= smax(t)) {
+                    caps[p.0 as usize] = Some(cap);
+                }
+            }
+        }
+        caps
     }
 
     /// Runs the analysis to a fixed point. False when it did not settle (then nothing may be used).
@@ -526,6 +622,16 @@ pub fn run(f: &mut Func) -> bool {
         return false;
     }
     cx.narrow();
+    // Accumulators of counted loops have an upper bound that no comparison gives: solve again with it.
+    let caps = cx.loop_caps();
+    if caps.iter().any(Option::is_some) {
+        let mut again = Ctx::new(f);
+        again.caps = caps;
+        if again.solve() {
+            again.narrow();
+            cx = again;
+        }
+    }
     let mut safe = Vec::new();
     let mut unsigned = Vec::new();
     let mut decided: Vec<(usize, bool)> = Vec::new();

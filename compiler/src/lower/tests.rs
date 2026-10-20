@@ -2246,3 +2246,55 @@ fn literals_are_stored_as_constants() {
         }",
     );
 }
+
+/// A length that grows by a checked add is read back as the new length minus the step in the address
+/// and in the call that grows the buffer; the loop's exit still sees the length itself.
+#[test]
+fn a_growing_length_is_added_in_place() {
+    agree(
+        "fn main() {
+            var s = \"\"
+            var t = 0
+            for i in 0..3000 {
+                s = s + \"ab\"
+                t += s.len() & 7
+            }
+            var xs: [int] = []
+            for i in 0..3000 { xs.push!(i * 3) }
+            var u = 0
+            for i in 0..xs.len() { u += xs[i] }
+            print(s.len(), t, xs.len(), u, xs[2999])
+        }",
+    );
+}
+
+/// An accumulator of a loop that runs a known number of times has no overflow check when the trip
+/// count times the biggest step stays in range; when it does not, the program still stops.
+#[test]
+fn accumulators_of_counted_loops_keep_their_traps() {
+    agree(
+        "fn main() {
+            var t = 0
+            var n = 0
+            for i in 0..2000 {
+                n += 2
+                t += n & 7
+            }
+            print(t, n)
+        }",
+    );
+    agree(
+        "fn main() {
+            var t = 0
+            for i in 0..100 { t += 4611686018427387904 }
+            print(t)
+        }",
+    );
+    agree(
+        "fn main() {
+            var t = 9223372036854775800
+            for i in 0..100 { t += 1 }
+            print(t)
+        }",
+    );
+}

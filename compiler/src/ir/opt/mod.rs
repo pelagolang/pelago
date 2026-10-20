@@ -38,6 +38,7 @@ mod stats;
 mod tailrec;
 #[cfg(test)]
 mod tests;
+mod undo;
 mod unroll;
 
 pub use fill::{fill_loops, filled_slots, FillLoop};
@@ -105,6 +106,10 @@ pub fn optimize(m: &mut Module, opts: Options) {
                 optimize_func(&mut m.funcs[i]);
             }
         }
+    }
+    // Last of all: the algebra in the passes above would turn `(x + 2) - 2` back into `x`.
+    for f in &mut m.funcs {
+        step(f, "undo", undo::run);
     }
     check_module(m, "the pipeline");
 }

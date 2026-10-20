@@ -725,6 +725,18 @@ fn a_counter_bounded_by_its_loop_test_cannot_overflow() {
 }
 
 #[test]
+fn a_sum_in_a_counted_loop_is_bounded_by_the_trip_count() {
+    // `acc += i` for `i` in `0..1000`: the sum is at most 1000 * 999, so neither check is needed.
+    let c = |limit| counter_loop(Some(0), 1, BinOp::Add, CmpOp::Lt, Some(limit));
+    assert_eq!(checks_left(c(1000)), 0);
+    // A trip count times a gain that passes `MAX` leaves the sum checked.
+    assert_eq!(checks_left(c(1 << 62)), 1);
+    // Another step than one is not a count of the trips.
+    let by_two = counter_loop(Some(0), 2, BinOp::Add, CmpOp::Lt, Some(1000));
+    assert_eq!(checks_left(by_two), 1);
+}
+
+#[test]
 fn a_counter_nothing_bounds_stays_checked() {
     // The test looks at another value, or the counter may start negative.
     let other = counter_loop(Some(0), 1, BinOp::Add, CmpOp::Lt, None);
