@@ -484,6 +484,27 @@ impl Machine<'_> {
                 self.free(get(p))?;
                 Val::Unit
             }
+            Op::Realloc(p, n) => {
+                let n = get(n).signed(64);
+                if !(0..=(1 << 32)).contains(&n) {
+                    return Err("allocated a bad size".to_string());
+                }
+                let old = get(p);
+                let new = self.alloc(n as usize);
+                if let Val::Ptr(a) = old {
+                    if a != 0 {
+                        match self.heap.get(&a) {
+                            Some((size, true)) => {
+                                let keep = (*size).min(n as usize);
+                                self.mem.copy_within(a..a + keep, new);
+                            }
+                            _ => return Err("reallocated memory that is not live".to_string()),
+                        }
+                    }
+                }
+                self.free(old)?;
+                Val::Ptr(new)
+            }
             Op::Load(t, p) => {
                 let a = addr(&get(p))?;
                 self.read(*t, a)?

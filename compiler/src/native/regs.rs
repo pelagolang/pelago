@@ -60,7 +60,12 @@ pub fn is_call_like(op: &Op, consts: &[Option<i64>]) -> bool {
         Op::MemCopy(_, _, n) => !small_copy(consts[n.0 as usize]),
         _ => matches!(
             op,
-            Op::Call(..) | Op::CallPtr(..) | Op::Alloc(_) | Op::Free(_) | Op::Print(..)
+            Op::Call(..)
+                | Op::CallPtr(..)
+                | Op::Alloc(_)
+                | Op::Free(_)
+                | Op::Realloc(..)
+                | Op::Print(..)
         ),
     }
 }
@@ -305,6 +310,7 @@ pub(super) fn inst_uses(op: &Op, out: &mut Vec<Value>) {
         | Op::Cmp(_, a, b)
         | Op::PtrAdd(a, b)
         | Op::Store(a, b)
+        | Op::Realloc(a, b)
         | Op::Print(a, b) => out.extend([*a, *b]),
         Op::MemCopy(a, b, c) => out.extend([*a, *b, *c]),
         Op::Call(_, args) => out.extend(args.iter().copied()),

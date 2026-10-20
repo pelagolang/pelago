@@ -226,6 +226,10 @@ pub enum Op {
     Store(Value, Value),
     /// Heap memory of the given size in bytes; gives its address.
     Alloc(Value),
+    /// Change the size of a heap block (a null address allocates): gives the block's address, which may
+    /// be a new one. The first bytes up to the smaller size are kept, the rest is zero; the old
+    /// address is dead. A large block can move without copying.
+    Realloc(Value, Value),
     Free(Value),
 }
 

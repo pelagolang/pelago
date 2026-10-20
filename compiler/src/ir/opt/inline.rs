@@ -6,8 +6,13 @@
 use crate::ir::*;
 use std::collections::{HashMap, HashSet};
 
+/// A function whose name ends like this is the rarely taken half of a fast path (`rt_grow_slow`:
+/// the buffer is full). It stays a call, so the fast path around it stays small enough to be copied
+/// into every caller and its callers stay free of the call.
+const COLD_SUFFIX: &str = "_slow";
+
 /// A callee at most this big (instructions plus two per block) is always copied.
-const SMALL: usize = 40;
+const SMALL: usize = 60;
 
 pub fn run(m: &mut Module) -> bool {
     let n = m.funcs.len();
@@ -111,6 +116,9 @@ fn find_site(
             };
             let g = c.0 as usize;
             if g == fi || recursive[g] || seen_bad.contains(&g) {
+                continue;
+            }
+            if m.funcs[g].name.ends_with(COLD_SUFFIX) {
                 continue;
             }
             let c = cost(&m.funcs[g]);

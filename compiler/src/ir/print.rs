@@ -126,6 +126,7 @@ fn inst_text(f: &Func, i: &Inst, m: Option<&Module>) -> String {
         Op::Store(p, x) => format!("store {}, {}", v(*p), v(*x)),
         Op::Alloc(n) => format!("alloc {}", v(*n)),
         Op::Free(p) => format!("free {}", v(*p)),
+        Op::Realloc(p, n) => format!("realloc {}, {}", v(*p), v(*n)),
     };
     let _ = f;
     match i.result {

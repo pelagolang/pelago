@@ -138,7 +138,7 @@ float, small `MemCopy` uses `rep movsb`, and no value is split between a registe
 ### Floats in SSE registers (A-11 W11)
 
 Floats go through the same allocator as integers, in a second bank: `xmm2` to `xmm15` (`gen::XMM_REGS`). `xmm0` and `xmm1` stay the templates' scratch registers and `xmm0` carries a
-float result and the first float argument. Our convention has no callee-saved SSE register, so the whole bank is caller-saved: a float that lives across a call, an `alloc`, a `free`
+float result and the first float argument. Our convention has no callee-saved SSE register, so the whole bank is caller-saved: a float that lives across a call, an `alloc`, a `free`, a `realloc`
 or a `print` is stored in its frame slot before and loaded after, exactly like the caller-saved general registers (a `memcopy` with `rep movsb` leaves them alone). The cost model is
 the same: a register is taken when the splits around calls cost no more than the loads and stores of memory.
 

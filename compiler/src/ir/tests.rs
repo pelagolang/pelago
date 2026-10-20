@@ -499,3 +499,46 @@ fn memory_ops_are_type_checked() {
         "{errs:?}"
     );
 }
+
+/// `p = alloc 16; p[0] = 5; q = realloc p, 32; return q[0] + q[3]` (the second word of the new tail is
+/// zero); with `stale`, the old address is read instead.
+fn realloc_fn(stale: bool) -> Module {
+    let mut f = Func::new("f", &[], IrTy::I64);
+    let e = f.entry();
+    let n = c(&mut f, e, 16);
+    let p = f.emit(e, Op::Alloc(n), Some(IrTy::Ptr)).unwrap();
+    let v = c(&mut f, e, 5);
+    f.emit(e, Op::Store(p, v), None);
+    let big = c(&mut f, e, 32);
+    let q = f.emit(e, Op::Realloc(p, big), Some(IrTy::Ptr)).unwrap();
+    let off = c(&mut f, e, 24);
+    let tail = f.emit(e, Op::PtrAdd(q, off), Some(IrTy::Ptr)).unwrap();
+    let from = if stale { p } else { q };
+    let a = f
+        .emit(e, Op::Load(IrTy::I64, from), Some(IrTy::I64))
+        .unwrap();
+    let b = f
+        .emit(e, Op::Load(IrTy::I64, tail), Some(IrTy::I64))
+        .unwrap();
+    let r = f
+        .emit(e, Op::Bin(BinOp::Add, a, b), Some(IrTy::I64))
+        .unwrap();
+    f.emit(e, Op::Free(q), None);
+    f.terminate(e, Term::Return(Some(r)));
+    let mut m = Module::default();
+    m.add(f);
+    m
+}
+
+#[test]
+fn realloc_moves_the_contents_and_kills_the_old_address() {
+    let m = realloc_fn(false);
+    assert_eq!(verify_module(&m), Vec::<String>::new());
+    let ok = run_full(&m, "f", &[]);
+    assert_eq!((ok.result, ok.leaked), (Ok(Val::int(5)), 0));
+    let stale = run_full(&realloc_fn(true), "f", &[]);
+    assert_eq!(
+        stale.result,
+        Err("used memory after it was freed".to_string())
+    );
+}

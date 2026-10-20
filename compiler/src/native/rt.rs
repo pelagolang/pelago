@@ -64,6 +64,9 @@ pub struct Runtime {
     pub alloc: Label,
     /// `rt_free(ptr = rdi)`: accepts null.
     pub free: Label,
+    /// `rt_realloc(ptr = rdi, size = rsi) -> rax`: a block of the new size holding the old contents (null
+    /// allocates); the rest is zero. A large block is remapped, so growing a big buffer copies nothing.
+    pub realloc: Label,
     /// `rt_exit(status = rdi)`
     pub exit: Label,
     /// `rt_write_u64(fd = rdi, value = rsi)`: decimal digits.
@@ -93,6 +96,7 @@ pub fn emit(
         stop: a.new_label(),
         alloc: a.new_label(),
         free: a.new_label(),
+        realloc: a.new_label(),
         exit: a.new_label(),
         write_u64: a.new_label(),
     };
@@ -432,6 +436,83 @@ pub fn emit(
         a.mov_ri(RAX, 11);
         a.syscall();
     }
+    a.ret();
+
+    // ---- rt_realloc --------------------------------------------------------------------------------
+    // A large block moves with `mremap` (Linux): the kernel moves the pages, nothing is copied and the
+    // new tail is zero. Anything else gets a new block, the smaller of the two sizes copied, and the
+    // old block freed.
+    a.bind(rt.realloc);
+    let (generic, rdone) = (a.new_label(), a.new_label());
+    a.push(RBX);
+    a.push(R12);
+    a.push(R13);
+    a.mov_rr(RBX, RDI, 8);
+    a.mov_rr(R12, RSI, 8);
+    a.test_rr(RBX, RBX, 8);
+    a.jcc(Cc::E, generic);
+    a.lea(RDX, mem(RBX, -16));
+    a.load(RAX, mem(RDX, 0), 8);
+    a.alu_ri(Alu::Cmp, RAX, LARGE_CLASS, 8);
+    a.jcc(Cc::Ne, generic);
+    if !win {
+        // New mapping length: header plus payload, whole pages.
+        a.lea(RCX, mem(R12, 16 + 4095));
+        a.alu_ri(Alu::And, RCX, -4096, 8);
+        a.load(RSI, mem(RDX, 8), 8); // old length
+        a.alu_rr(Alu::Cmp, RCX, RSI, 8);
+        a.jcc(Cc::E, rdone); // same pages: the block stays
+        a.mov_rr(R13, RCX, 8);
+        a.mov_rr(RDI, RDX, 8);
+        a.mov_rr(RDX, RCX, 8);
+        a.mov_ri(R10, 1); // may move
+        a.mov_ri(RAX, 25);
+        a.syscall();
+        a.alu_ri(Alu::Cmp, RAX, -4095, 8);
+        a.jcc(Cc::Ae, oom);
+        a.store(mem(RAX, 8), R13, 8);
+        a.lea(RBX, mem(RAX, 16));
+        a.jmp(rdone);
+    }
+    // Generic: allocate, copy what fits, free the old block.
+    a.bind(generic);
+    a.mov_rr(RDI, R12, 8);
+    a.call(rt.alloc);
+    a.mov_rr(R13, RAX, 8);
+    let rfree = a.new_label();
+    a.test_rr(RBX, RBX, 8);
+    a.jcc(Cc::E, rfree);
+    // Bytes the old block can give: the rest of its class, or its mapping.
+    a.load(RAX, mem(RBX, -16), 8);
+    let (rclass, rcopy) = (a.new_label(), a.new_label());
+    a.alu_ri(Alu::Cmp, RAX, LARGE_CLASS, 8);
+    a.jcc(Cc::Ne, rclass);
+    a.load(RCX, mem(RBX, -8), 8);
+    a.jmp(rcopy);
+    a.bind(rclass);
+    a.mov_rr(RCX, RAX, 8);
+    a.mov_ri(RAX, 32);
+    a.shift_cl(Shift::Shl, RAX, 8);
+    a.mov_rr(RCX, RAX, 8);
+    a.bind(rcopy);
+    a.alu_ri(Alu::Sub, RCX, 16, 8);
+    a.alu_rr(Alu::Cmp, RCX, R12, 8);
+    let keep = a.new_label();
+    a.jcc(Cc::Be, keep);
+    a.mov_rr(RCX, R12, 8);
+    a.bind(keep);
+    a.mov_rr(RDI, R13, 8);
+    a.mov_rr(RSI, RBX, 8);
+    a.rep_movsb();
+    a.mov_rr(RDI, RBX, 8);
+    a.call(rt.free);
+    a.bind(rfree);
+    a.mov_rr(RBX, R13, 8);
+    a.bind(rdone);
+    a.mov_rr(RAX, RBX, 8);
+    a.pop(R13);
+    a.pop(R12);
+    a.pop(RBX);
     a.ret();
     rt
 }

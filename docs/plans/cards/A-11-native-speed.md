@@ -67,6 +67,8 @@ Measured with `compiler/benches/compare.sh` (best of 7, this container):
 
 **S3, fourth round (done): floats in SSE registers (W11).** `native/regs.rs` allocates floats in `xmm2` to `xmm15` with the same priorities and splitting around calls as the integer registers (no SSE register is callee-saved); `gen.rs` does arithmetic, compares, negation, casts, loads, stores, arguments and results directly on them, and fuses `<`, `<=`, `>`, `>=` with the branch. `floatloop` 0.36 s to 0.13 s (C `-O0` 0.23 s, `-O2` 0.15 s). Details in `docs/design/backend.md` section 6.
 
+**Growing buffers (list_sum, strbuild).** Pushing 5,000,000 integers took 0.08 s against 0.023 s for C, and the C program with `malloc` + `memcpy` + `free` instead of `realloc` takes 0.07 s: all of the gap was copying big buffers and faulting in fresh pages at every doubling. New IR operation `realloc` (null allocates; the first bytes are kept, the rest is zero; the old address is dead) and runtime routine `rt_realloc`: a large block is moved with `mremap` on Linux, so nothing is copied and the pages stay; smaller blocks and Windows allocate, copy and free. `rt_grow` in `core.pel` is now a small check that every push loop inlines; the work is in `rt_grow_slow`, which the inliner never inlines (name suffix `_slow`). list_sum 0.082 s to 0.037 s, strbuild 0.012 s to 0.007 s.
+
 PRs: #7 (S1, powers of two), #8 (S2 and S3, first rounds). The open work, with files and dependencies for each item, is in [a11-work-items.md](../a11-work-items.md).
 
 
