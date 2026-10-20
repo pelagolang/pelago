@@ -1,43 +1,71 @@
-//! Register assignment for the native code generator (stage N5).
+//! Register assignment for the native code generator (stages N5 and A-11 W3).
 //!
-//! A simple, safe scheme: some values live in a callee-saved register for their whole life, all
-//! the others stay in their stack slot as before. Which values: the ones used most, weighted by how
-//! deeply they sit in loops, among those that can share a register because their live ranges do not
-//! overlap. Callee-saved registers survive calls, so no value is ever saved or restored around one.
+//! Integer, boolean and pointer values may live in a register for their whole life; every other value
+//! keeps its stack slot. The scheme is a linear-scan style allocator over live ranges with holes:
 //!
 //! * Liveness comes from the usual backward dataflow over the blocks (a block's parameters are
-//!   defined at its start; the arguments of a jump are used by the jump).
-//! * Each value gets one interval: from its definition to its last use, widened to cover every
-//!   block where it is live. Two values may share a register only when their intervals are disjoint.
+//!   defined at its start; the arguments of a jump are used by the jump). From it each value gets a
+//!   **list of ranges** (half open, in the linear order of the function), not one interval, so two
+//!   values whose lives interleave without overlapping can share a register.
+//! * Positions are even for instructions and odd just after them: an instruction reads its operands
+//!   at `p` and writes its result at `p + 1`. A result may therefore take the register of an operand
+//!   that dies in that instruction (`gen.rs` builds results so this is safe).
+//! * Values are taken heaviest first (uses weighted by loop depth) and given the cheapest register
+//!   whose occupied ranges do not meet theirs. The cost model compares, for each value:
+//!   memory, which costs one load or store per use or definition; a callee-saved register
+//!   (`rbx r12-r15`), which costs one save and one restore per call of the function and nothing when
+//!   another value already pays for that register; and a caller-saved register
+//!   (`r10 r11 r8 r9 rsi rdi`), which is free when no call-like operation lies inside the range and
+//!   otherwise **splits the value around each such operation**: it is stored to its home slot before
+//!   the operation and reloaded after it (`Alloc::across` lists them for the generator).
+//!
+//!   A register is used when it is no dearer than memory. Ties go to the register a related value
+//!   already has (the first operand of a two-address operation, the other end of a block-parameter
+//!   copy), then to the argument register the value is passed in, which saves moves.
+//! * Constants and the results of fused compare-and-branch pairs take no register (the generator
+//!   knows them).
 
 use crate::ir::{Func, IrTy, Op, Term, Value};
+use crate::native::x86::Reg;
+use std::collections::HashMap;
 
-/// Positions in the linear order of the function: even numbers for the block start, the
-/// instructions and the terminator, in layout order.
-struct Order {
-    block_start: Vec<u32>,
-    block_end: Vec<u32>,
-    inst_pos: Vec<u32>,
+/// The result of the assignment for one function.
+pub struct Alloc {
+    /// For each value, the register it lives in, if any.
+    pub reg: Vec<Option<Reg>>,
+    /// For each call-like instruction (by id): the values in caller-saved registers that are live
+    /// across it. The generator stores them before the operation and loads them after.
+    pub across: HashMap<usize, Vec<Value>>,
 }
 
-fn order(f: &Func) -> Order {
-    let mut o = Order {
-        block_start: vec![0; f.blocks.len()],
-        block_end: vec![0; f.blocks.len()],
-        inst_pos: vec![0; f.insts.len()],
+/// The instructions that end in a call to a function or a runtime routine: every caller-saved
+/// register may change.
+pub fn is_call_like(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::Call(..)
+            | Op::CallPtr(..)
+            | Op::Alloc(_)
+            | Op::Free(_)
+            | Op::Print(..)
+            | Op::MemCopy(..)
+    )
+}
+
+/// The compare that ends a block and only feeds the block's branch: the branch tests the flags
+/// directly and the comparison is never stored. Gives the instruction.
+pub fn fused_cmp(f: &Func, bi: usize, uses: &[u32]) -> Option<usize> {
+    let b = &f.blocks[bi];
+    let (&last, Some(Term::Branch(c, ..))) = (b.insts.last()?, &b.term) else {
+        return None;
     };
-    let mut p = 0u32;
-    for (bi, b) in f.blocks.iter().enumerate() {
-        o.block_start[bi] = p;
-        p += 2;
-        for &i in &b.insts {
-            o.inst_pos[i] = p;
-            p += 2;
-        }
-        o.block_end[bi] = p;
-        p += 2;
-    }
-    o
+    let Op::Cmp(_, x, _) = &f.insts[last].op else {
+        return None;
+    };
+    (f.insts[last].result == Some(*c)
+        && uses[c.0 as usize] == 1
+        && !matches!(f.ty(*x), IrTy::F32 | IrTy::F64))
+    .then_some(last)
 }
 
 fn inst_uses(op: &Op, out: &mut Vec<Value>) {
@@ -99,18 +127,75 @@ impl Bits {
     }
 }
 
-/// For each value, the register it lives in, if any.
-///
-/// `saved` are callee-saved registers (any value may live in them); `scratch` are caller-saved ones,
-/// used only for values whose live range has no call or other runtime routine inside it.
-pub fn assign(
-    f: &Func,
-    saved: &[crate::native::x86::Reg],
-    scratch: &[crate::native::x86::Reg],
-) -> Vec<Option<crate::native::x86::Reg>> {
+/// Positions in the linear order of the function: even numbers for the block start, the
+/// instructions and the terminator, in layout order. A block's parameters are defined at
+/// `block_start + 1`.
+struct Order {
+    block_start: Vec<u32>,
+    block_end: Vec<u32>,
+    inst_pos: Vec<u32>,
+    term_pos: Vec<u32>,
+}
+
+fn order(f: &Func) -> Order {
+    let mut o = Order {
+        block_start: vec![0; f.blocks.len()],
+        block_end: vec![0; f.blocks.len()],
+        inst_pos: vec![0; f.insts.len()],
+        term_pos: vec![0; f.blocks.len()],
+    };
+    let mut p = 0u32;
+    for (bi, b) in f.blocks.iter().enumerate() {
+        o.block_start[bi] = p;
+        p += 2;
+        for &i in &b.insts {
+            o.inst_pos[i] = p;
+            p += 2;
+        }
+        o.term_pos[bi] = p;
+        p += 2;
+        o.block_end[bi] = p;
+    }
+    o
+}
+
+/// The ranges of one value, half open and sorted from the end of the function to its start while
+/// they are built (new ranges always begin at or before every existing one).
+fn add_range(r: &mut Vec<(u32, u32)>, from: u32, to: u32) {
+    match r.last_mut() {
+        Some(l) if to >= l.0 => {
+            l.0 = l.0.min(from);
+            l.1 = l.1.max(to);
+        }
+        _ => r.push((from, to)),
+    }
+}
+
+/// The value is made at `pos`: its first range begins there.
+fn set_from(r: &mut Vec<(u32, u32)>, pos: u32) {
+    match r.last_mut() {
+        Some(l) if l.0 <= pos && pos < l.1 => l.0 = pos,
+        // Never read: a one-position range, so nothing else is overwritten by the write.
+        _ => r.push((pos, pos + 1)),
+    }
+}
+
+/// Is any range of `a` over one of `taken`? `taken` is sorted and its ranges are disjoint.
+fn overlaps(a: &[(u32, u32)], taken: &[(u32, u32)]) -> bool {
+    a.iter().any(|&(from, to)| {
+        let i = taken.partition_point(|x| x.1 <= from);
+        i < taken.len() && taken[i].0 < to
+    })
+}
+
+/// Assigns registers. `saved` are callee-saved registers, `scratch` caller-saved ones in the order
+/// to try them, and `args` the registers that carry the integer parameters and arguments (in order,
+/// used only as a preference).
+pub fn assign(f: &Func, saved: &[Reg], scratch: &[Reg], args: &[Reg]) -> Alloc {
     let nv = f.values.len();
     let nb = f.blocks.len();
     let o = order(f);
+    let uses = f.use_counts();
 
     // Uses and definitions per block.
     let mut use_b: Vec<Bits> = (0..nb).map(|_| Bits::new(nv)).collect();
@@ -181,58 +266,72 @@ pub fn assign(
             }
         }
     }
+    let block_weight = |bi: usize| 10u64.pow(depth[bi].min(6));
 
-    // Intervals and weights.
-    let mut start = vec![u32::MAX; nv];
-    let mut end = vec![0u32; nv];
-    let mut weight = vec![0u64; nv];
-    let mut touch = |v: usize, pos: u32, w: u64, start: &mut Vec<u32>, end: &mut Vec<u32>| {
-        start[v] = start[v].min(pos);
-        end[v] = end[v].max(pos);
-        weight[v] += w;
-    };
-    let mut entry_params = Vec::new();
-    if let Some(b0) = f.blocks.first() {
-        entry_params = b0.params.clone();
-    }
-    for p in &entry_params {
-        touch(p.0 as usize, 0, 1, &mut start, &mut end);
-    }
-    for (bi, b) in f.blocks.iter().enumerate() {
-        let w = 10u64.pow(depth[bi].min(6));
-        for p in &b.params {
-            touch(p.0 as usize, o.block_start[bi], w, &mut start, &mut end);
+    // Fused compares: their result is never stored.
+    let mut fused_res = vec![false; nv];
+    for bi in 0..nb {
+        if let Some(i) = fused_cmp(f, bi, &uses) {
+            fused_res[f.insts[i].result.unwrap().0 as usize] = true;
         }
-        for &i in &b.insts {
-            let pos = o.inst_pos[i];
-            tmp.clear();
-            inst_uses(&f.insts[i].op, &mut tmp);
-            for v in tmp.clone() {
-                touch(v.0 as usize, pos, w, &mut start, &mut end);
-            }
-            if let Some(r) = f.insts[i].result {
-                touch(r.0 as usize, pos, w, &mut start, &mut end);
+    }
+
+    // Live ranges (built from the last block to the first) and weights.
+    let mut ranges: Vec<Vec<(u32, u32)>> = vec![Vec::new(); nv];
+    let mut weight = vec![0u64; nv];
+    for bi in (0..nb).rev() {
+        let b = &f.blocks[bi];
+        let w = block_weight(bi);
+        let (from, end) = (o.block_start[bi], o.block_end[bi]);
+        for (word, bits) in live_out[bi].0.iter().enumerate() {
+            let mut x = *bits;
+            while x != 0 {
+                let v = word * 64 + x.trailing_zeros() as usize;
+                x &= x - 1;
+                add_range(&mut ranges[v], from, end);
             }
         }
         tmp.clear();
         if let Some(t) = &b.term {
             term_uses(t, &mut tmp);
         }
-        for v in tmp.clone() {
-            touch(v.0 as usize, o.block_end[bi], w, &mut start, &mut end);
+        for v in &tmp {
+            add_range(&mut ranges[v.0 as usize], from, o.term_pos[bi] + 1);
+            weight[v.0 as usize] += w;
         }
-        for v in 0..nv {
-            if live_in[bi].has(v) {
-                touch(v, o.block_start[bi], 0, &mut start, &mut end);
+        for &i in b.insts.iter().rev() {
+            let pos = o.inst_pos[i];
+            if let Some(r) = f.insts[i].result {
+                set_from(&mut ranges[r.0 as usize], pos + 1);
+                weight[r.0 as usize] += w;
             }
-            if live_out[bi].has(v) {
-                touch(v, o.block_end[bi], 0, &mut start, &mut end);
+            tmp.clear();
+            inst_uses(&f.insts[i].op, &mut tmp);
+            for v in &tmp {
+                add_range(&mut ranges[v.0 as usize], from, pos + 1);
+                weight[v.0 as usize] += w;
+            }
+        }
+        for p in &b.params {
+            set_from(&mut ranges[p.0 as usize], from + 1);
+            weight[p.0 as usize] += w;
+        }
+    }
+    for r in &mut ranges {
+        r.reverse();
+    }
+
+    // The call-like operations: where they are, how often they run.
+    let mut calls: Vec<(u32, usize, u64)> = Vec::new();
+    for (bi, b) in f.blocks.iter().enumerate() {
+        for &i in &b.insts {
+            if is_call_like(&f.insts[i].op) {
+                calls.push((o.inst_pos[i], i, block_weight(bi)));
             }
         }
     }
 
-    // Greedy assignment, heaviest first.
-    // Constants are used as immediates and take no register (the generator knows them by value).
+    // Constants have no register: the generator uses them as immediates.
     let mut is_const = vec![false; nv];
     for b in &f.blocks {
         for &i in &b.insts {
@@ -241,47 +340,140 @@ pub fn assign(
             }
         }
     }
-    let eligible = |v: usize| {
-        matches!(f.values[v], IrTy::Int(_) | IrTy::Bool | IrTy::Ptr)
-            && start[v] != u32::MAX
-            && !is_const[v]
-    };
-    let mut cands: Vec<usize> = (0..nv).filter(|v| eligible(*v) && weight[*v] > 0).collect();
-    cands.sort_by_key(|v| (std::cmp::Reverse(weight[*v]), *v));
-    // Positions where the generated code calls out and so may change every caller-saved register.
-    let mut clobbers = Vec::new();
+
+    // Related values (two-address operations, copies, block-parameter copies) and the argument
+    // register a value travels in: only preferences.
+    let mut partners: Vec<Vec<Value>> = vec![Vec::new(); nv];
+    fn link(a: Value, b: Value, partners: &mut [Vec<Value>]) {
+        partners[a.0 as usize].push(b);
+        partners[b.0 as usize].push(a);
+    }
+    let mut want_arg: Vec<Option<Reg>> = vec![None; nv];
+    if let Some(b0) = f.blocks.first() {
+        let mut k = 0;
+        for p in &b0.params {
+            if !matches!(f.ty(*p), IrTy::F32 | IrTy::F64) {
+                want_arg[p.0 as usize] = args.get(k).copied();
+                k += 1;
+            }
+        }
+    }
     for b in &f.blocks {
         for &i in &b.insts {
-            if matches!(
-                f.insts[i].op,
-                Op::Call(..)
-                    | Op::CallPtr(..)
-                    | Op::Alloc(_)
-                    | Op::Free(_)
-                    | Op::Print(..)
-                    | Op::MemCopy(..)
-            ) {
-                clobbers.push(o.inst_pos[i]);
+            let inst = &f.insts[i];
+            match (&inst.op, inst.result) {
+                (Op::Bin(_, a, c) | Op::Checked(_, _, a, c), Some(r)) => {
+                    link(r, *a, &mut partners);
+                    link(r, *c, &mut partners);
+                }
+                (Op::Cast(_, a, _), Some(r)) => link(r, *a, &mut partners),
+                (Op::PtrAdd(a, _), Some(r)) => link(r, *a, &mut partners),
+                (Op::Call(_, vs), _) | (Op::CallPtr(_, _, _, vs), _) => {
+                    let mut k = 0;
+                    for v in vs {
+                        if !matches!(f.ty(*v), IrTy::F32 | IrTy::F64) {
+                            if want_arg[v.0 as usize].is_none() {
+                                want_arg[v.0 as usize] = args.get(k).copied();
+                            }
+                            k += 1;
+                        }
+                    }
+                }
+                _ => {}
             }
         }
+        let edge = |tg: &crate::ir::Target, partners: &mut [Vec<Value>]| {
+            for (p, a) in f.block_params(tg.block).iter().zip(&tg.args) {
+                link(*p, *a, partners);
+            }
+        };
+        match &b.term {
+            Some(Term::Jump(t)) => edge(t, &mut partners),
+            Some(Term::Branch(_, t, e)) => {
+                edge(t, &mut partners);
+                edge(e, &mut partners);
+            }
+            _ => {}
+        }
     }
-    let all: Vec<_> = scratch.iter().chain(saved.iter()).copied().collect();
+
+    // Heaviest first.
+    let eligible = |v: usize| {
+        matches!(f.values[v], IrTy::Int(_) | IrTy::Bool | IrTy::Ptr)
+            && !ranges[v].is_empty()
+            && !is_const[v]
+            && !fused_res[v]
+            && uses[v] > 0
+    };
+    let mut cands: Vec<usize> = (0..nv).filter(|v| eligible(*v)).collect();
+    cands.sort_by_key(|v| (std::cmp::Reverse(weight[*v]), *v));
+
+    let all: Vec<Reg> = scratch.iter().chain(saved.iter()).copied().collect();
     let mut taken: Vec<Vec<(u32, u32)>> = vec![Vec::new(); all.len()];
-    let mut out = vec![None; nv];
+    let mut saved_used = vec![false; all.len()];
+    let mut out: Vec<Option<Reg>> = vec![None; nv];
+    let mut across: HashMap<usize, Vec<Value>> = HashMap::new();
     for v in cands {
-        // A value defined or last used by a call is fine: its register is written after, read before.
-        let over_call = clobbers.iter().any(|&p| start[v] < p && p < end[v]);
+        // The call-like operations inside the lifetime, and what a split around each would cost.
+        let mut crossed: Vec<usize> = Vec::new();
+        let mut cross_cost = 0u64;
+        for &(from, to) in &ranges[v] {
+            let mut k = calls.partition_point(|c| c.0 < from);
+            while k < calls.len() && calls[k].0 + 2 <= to {
+                crossed.push(k);
+                cross_cost += 2 * calls[k].2;
+                k += 1;
+            }
+        }
+        let mem_cost = weight[v];
+        let partner_regs: Vec<Reg> = partners[v]
+            .iter()
+            .filter_map(|p| out[p.0 as usize])
+            .collect();
+        let mut best: Option<(u64, u32, usize)> = None;
         for (ri, reg) in all.iter().enumerate() {
-            if ri < scratch.len() && over_call {
+            if overlaps(&ranges[v], &taken[ri]) {
                 continue;
             }
-            let clash = taken[ri].iter().any(|&(s, e)| start[v] <= e && s <= end[v]);
-            if !clash {
-                taken[ri].push((start[v], end[v]));
-                out[v] = Some(*reg);
-                break;
+            let is_saved = ri >= scratch.len();
+            let cost = if is_saved {
+                // Saved at entry and restored at exit, once for all the values that use the register.
+                if saved_used[ri] {
+                    0
+                } else {
+                    2
+                }
+            } else {
+                cross_cost
+            };
+            let rank = if partner_regs.contains(reg) {
+                0
+            } else if want_arg[v] == Some(*reg) {
+                1
+            } else {
+                2 + ri as u32
+            };
+            if best.is_none_or(|(c, r, _)| (cost, rank) < (c, r)) {
+                best = Some((cost, rank, ri));
+            }
+        }
+        let Some((cost, _, ri)) = best else { continue };
+        // Equal cost still favours the register: it has no latency, and the copies cost nothing here.
+        if cost > mem_cost {
+            continue;
+        }
+        for &(from, to) in &ranges[v] {
+            let at = taken[ri].partition_point(|x| x.0 < from);
+            taken[ri].insert(at, (from, to));
+        }
+        out[v] = Some(all[ri]);
+        if ri >= scratch.len() {
+            saved_used[ri] = true;
+        } else {
+            for k in crossed {
+                across.entry(calls[k].1).or_default().push(Value(v as u32));
             }
         }
     }
-    out
+    Alloc { reg: out, across }
 }
