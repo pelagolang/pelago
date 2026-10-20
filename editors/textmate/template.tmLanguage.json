@@ -389,6 +389,10 @@
         },
         {
           "name": "keyword.other.soft.pelago",
+          "match": "(?<![.\\w])once(?=\\s+fn\\b)"
+        },
+        {
+          "name": "keyword.other.soft.pelago",
           "match": "(?<![.\\w])(?:spawn|select)(?=\\s*[({])"
         },
         {

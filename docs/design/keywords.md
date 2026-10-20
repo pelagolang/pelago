@@ -219,6 +219,7 @@ interfaces, and a class can only be extended if marked `open`.
 |---|---|---|---|---|
 | `unsafe` | A block where the compiler's safety checks are switched off | Rust, C# | 3 | |
 | `linear` | Marks a type whose values must be consumed exactly once. Reserved (soft); arrives after the type checker | Austral, Hylo | 3 | |
+| `once` | Marks a function type that can be called only once (`once fn() -> int`); soft, special before `fn` in a type | Rust (`FnOnce`) | 3 | |
 | `async` / `await` | Concurrency without blocking a thread | JS, Rust, C# | 3 | |
 | `test` | A built-in test block that only compiles in test mode | Zig | 3 | |
 | `assert` | Crash if this condition is false | C, Python | 1 | |
