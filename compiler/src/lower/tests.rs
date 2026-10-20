@@ -639,6 +639,15 @@ fn program_any_downcast() {
 }
 
 #[test]
+fn program_open_ranges_as_values() {
+    let src = "fn from_ten(r: range<int>) -> bool = r.contains(10)\nfn main() {\n const a = 2..\n const b = ..3\n const c = 1..4\n const d = 1..=4\n print(a.contains(100), a.contains(1), b.contains(-5), b.contains(3))\n print(c.contains(4), d.contains(4), c.contains(0))\n print(from_ten(5..), from_ten(..10), from_ten(..=10))\n print(a == 2.., a == c, b == ..3)\n var rs = [2.., ..3, 0..9]\n print(rs.len()) }\n";
+    assert_eq!(
+        output_of(src),
+        "true false true false\nfalse true false\ntrue false true\ntrue false true\n3\n"
+    );
+}
+
+#[test]
 fn program_builder() {
     let src = "fn main() { const xs = [1, 2, 3, 4, 5, 6]\n print([x of xs if x % 2 == 0 ~> x * 10])\n print([x of xs if x > 4])\n print([i, x of xs if i < 2 ~> \"#i:#x\"])\n print([x of 0..3, y of 0..2 ~> (x, y)])\n print(set { x of xs ~> x % 3 })\n print(map { x of 1..4 ~> x : x * x })\n print(xs.map(x ~> x + 1).to_list()) }\n";
     assert_eq!(output_of(src), "[20, 40, 60]\n[5, 6]\n[\"0:1\", \"1:2\"]\n[(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]\n{1, 2, 0}\n{1: 1, 2: 4, 3: 9}\n[2, 3, 4, 5, 6, 7]\n");

@@ -1481,15 +1481,22 @@ impl<T> range<T> {
         const size = rt_size_of<T>()
         const cmp = rt_cmp_fn<T>()
         const probe = rt_addr_of(item)
-        if rt_call_int2(cmp, probe, h) < 0 { return false }
-        const c = rt_call_int2(cmp, probe, rt_offset(h, size))
-        if rt_load_bool(rt_offset(h, size * 2)) { c <= 0 } else { c < 0 }
+        if rt_load_bool(rt_offset(h, size * 2 + 1)) {
+            if rt_call_int2(cmp, probe, h) < 0 { return false }
+        }
+        if rt_load_bool(rt_offset(h, size * 2 + 2)) {
+            const c = rt_call_int2(cmp, probe, rt_offset(h, size))
+            return if rt_load_bool(rt_offset(h, size * 2)) { c <= 0 } else { c < 0 }
+        }
+        true
     }
 }
 
 impl range<int> {
     fn iter(self) -> iter<int> {
         const h = rt_addr_of(self)
+        if !rt_load_bool(rt_offset(h, 17)) { panic("an open range with no start cannot be iterated") }
+        if !rt_load_bool(rt_offset(h, 18)) { panic("an open range with no end cannot be iterated") }
         var out: list<int> = []
         var i = rt_load_int(h)
         var end = rt_load_int(rt_offset(h, 8))
