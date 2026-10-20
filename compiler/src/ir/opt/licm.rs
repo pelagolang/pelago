@@ -146,7 +146,7 @@ fn is_slot_address(f: &Func, defs: &[Option<usize>], v: Value) -> bool {
 }
 
 /// The block that runs right before the loop is entered, made if there is none.
-fn preheader(f: &mut Func, lp: &Loop) -> BlockId {
+pub(super) fn preheader(f: &mut Func, lp: &Loop) -> BlockId {
     let h = lp.header;
     let preds = f.predecessors();
     let outside: Vec<BlockId> = preds[h.0 as usize]

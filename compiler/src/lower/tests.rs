@@ -2011,6 +2011,38 @@ fn a_branch_with_plain_sides_becomes_a_select() {
     agree(src);
 }
 
+#[test]
+fn masks_nobody_reads_go_and_counters_that_move_together_become_one() {
+    let src = "fn main() { var x = 1\n var y = 2\n var t = 0\n for i in 0..1000 { x += 3\n y += 1\n t += (x * 3 + y) & 1023\n x = x & 65535\n y = y & 65535 }\n print(t) }";
+    let l = lowered(src);
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let text = crate::ir::print_func(m.funcs.iter().find(|f| f.name == "main").unwrap(), None);
+    assert!(!text.contains("65535"), "{text}");
+    // The two counters and the formula over them became one counter that steps by 3 * 3 + 1.
+    assert!(text.contains("const i64 10\n"), "{text}");
+    agree(src);
+}
+
+#[test]
+fn a_mask_that_is_read_in_full_stays() {
+    // `x > 40000` reads every bit of the masked counter, so the mask cannot go.
+    let src = "fn main() { var x = 1\n var n = 0\n for i in 0..100000 { x += 3\n x = x & 65535\n if x > 40000 { n += 1 } }\n print(n, x) }";
+    let l = lowered(src);
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let text = crate::ir::print_func(m.funcs.iter().find(|f| f.name == "main").unwrap(), None);
+    assert!(text.contains("65535"), "{text}");
+    agree(src);
+}
+
+#[test]
+fn counters_that_the_loop_also_reads_keep_their_own_value() {
+    // `x` and `y` are read outside the formula, so combining them would add a counter, not remove two.
+    let src = "fn main() { var x = 1\n var y = 2\n var t = 0\n for i in 0..1000 { x += 3\n y += 5\n t += (x + y) & 255\n t += x & 15 }\n print(t, x, y) }";
+    agree(src);
+}
+
 // ---- Float semantics: single precision rounding and saturating float to int -------------------------------
 
 #[test]
