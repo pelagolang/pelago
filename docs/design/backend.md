@@ -83,7 +83,7 @@ compiler's own tests, with real Windows executables built and run on a Windows r
 
 ## 6. Registers (N5) and first measurements
 
-`native/regs.rs` gives integer, boolean and pointer values a register for their whole life; every other value (and every float) stays in its frame slot. Liveness is the usual
+`native/regs.rs` gives integer, boolean and pointer values a register for their whole life (floats have the SSE registers, see below); every other value stays in its frame slot. Liveness is the usual
 backward dataflow over the blocks (a block's parameters are defined at its start, a jump's arguments are used by the jump). Each value gets a **list of live ranges** (half open,
 with holes), and two values share a register when none of their ranges meet. An instruction reads its operands at an even position and writes its result just after it, so a result
 may take the register of an operand that dies there (`gen.rs` builds results so that is safe, see `bin`). The values are taken heaviest first, weighted by `10^loop depth`, and each
@@ -114,23 +114,39 @@ Measured on this container (collatz steps for 1 to 300,000 and `fib(35)`, `compi
 
 **Update (A-11 S1 to S3, first round).** The generator now treats integer constants as immediates, fuses a compare with the branch that uses it, falls through to the next block, works on operands in their own registers and uses `r10`/`r11` for values not live across calls; the optimiser turns division by constants into shifts and high multiplies (`MulHi`/`UMulHi`) and drops overflow checks it can prove cannot fire. Collatz went from 0.30 s to 0.09 s (C `-O0` 0.14 s, `-O2` 0.07 s); `compiler/benches/compare.sh` prints the table.
 
-**The benchmark suite.** `compiler/benches/compare.sh [--json] [--runs N] [name ...]` builds every `compiler/benches/<name>.pel` that has a C twin `compiler/benches/c/<name>.c`, checks that all print the same output, and prints one table (best of N runs, native `--opt` against `gcc -O0` and `-O2`). When `rustc` is installed and a Rust twin `compiler/benches/rs/<name>.rs` exists, it also builds it with `rustc -O -C overflow-checks=off` and adds the Rust column; without `rustc` the table is C only. **The goal is a "vs -O2" ratio of 1.00x or less**: rows that reach it are marked `<= C`, and the last lines give the geometric means. `--json` adds one JSON line per program for a CI artifact or the weekly routine. A new benchmark is a `.pel` and a `.c` file with the same name (and a `.rs` if wanted). Current numbers on the container (seconds, best of 5, 2026-10-20, main after W1/W5 and the map and string work):
+**The benchmark suite.** `compiler/benches/compare.sh [--json] [--runs N] [name ...]` builds every `compiler/benches/<name>.pel` that has a C twin `compiler/benches/c/<name>.c`, checks that all print the same output, and prints one table (best of N runs, native `--opt` against `gcc -O0` and `-O2`). When `rustc` is installed and a Rust twin `compiler/benches/rs/<name>.rs` exists, it also builds it with `rustc -O -C overflow-checks=off` and adds the Rust column; without `rustc` the table is C only. **The goal is a "vs -O2" ratio of 1.00x or less**: rows that reach it are marked `<= C`, and the last lines give the geometric means. `--json` adds one JSON line per program for a CI artifact or the weekly routine. A new benchmark is a `.pel` and a `.c` file with the same name (and a `.rs` if wanted). Current numbers on the container (seconds, best of 5, 2026-10-20, main with floats in registers):
 
 | program | what it stresses | pelago | C -O0 | C -O2 | Rust -O | vs -O2 | vs Rust |
 |---|---|---|---|---|---|---|---|
-| collatz | division by 2, branches | 0.105 | 0.148 | 0.073 | 0.042 | 1.44x | 2.51x |
-| divmod | division by constants 10, 3, 7 | 0.084 | 0.069 | 0.040 | 0.041 | 2.13x | 2.07x |
-| fib38 | calls, recursion | 0.285 | 0.365 | 0.086 | 0.130 | 3.29x | 2.19x |
-| tak | recursion, three arguments | 0.260 | 0.227 | 0.139 | 0.174 | 1.87x | 1.50x |
-| loop_sum | tight loop, overflow checks | 0.351 | 0.811 | 0.299 | 0.305 | 1.17x | 1.15x |
-| sieve | array stores, bounds checks | 0.137 | 0.195 | 0.134 | 0.137 | 1.02x | 1.00x |
-| list_sum | `push!` growth, indexing | 0.084 | 0.047 | 0.028 | 0.029 | 3.02x | 2.89x |
-| floatloop | floats (always in memory) | 0.354 | 0.239 | 0.144 | 0.133 | 2.46x | 2.66x |
-| structloop | struct values passed and returned | 0.087 | 0.105 | 0.012 | 0.005 | 7.49x | 16.24x |
-| strbuild | `string` concatenation, 20,000 rounds | 0.001 | 0.010 | 0.009 | 0.002 | 0.07x | 0.33x |
-| mapwork | `map` insert and get, 200,000 keys | 0.016 | 0.018 | 0.020 | 0.021 | 0.81x | 0.76x |
+| collatz | division by 2, branches | 0.098 | 0.145 | 0.067 | 0.044 | 1.47x | 2.22x |
+| divmod | division by constants 10, 3, 7 | 0.078 | 0.069 | 0.034 | 0.038 | 2.26x | 2.05x |
+| fib38 | calls, recursion | 0.288 | 0.342 | 0.078 | 0.115 | 3.71x | 2.50x |
+| tak | recursion, three arguments | 0.299 | 0.237 | 0.147 | 0.181 | 2.04x | 1.65x |
+| loop_sum | tight loop, overflow checks | 0.334 | 0.807 | 0.323 | 0.306 | 1.03x | 1.09x |
+| sieve | array stores, bounds checks | 0.151 | 0.206 | 0.128 | 0.135 | 1.19x | 1.12x |
+| list_sum | `push!` growth, indexing | 0.091 | 0.048 | 0.028 | 0.031 | 3.20x | 2.93x |
+| floatloop | floats (in SSE registers) | 0.134 | 0.240 | 0.143 | 0.135 | 0.94x | 1.00x |
+| structloop | struct values passed and returned | 0.089 | 0.104 | 0.012 | 0.007 | 7.29x | 13.01x |
+| strbuild | `string` concatenation, 20,000 rounds | 0.000 | 0.010 | 0.009 | 0.002 | 0.05x | 0.22x |
+| mapwork | `map` insert and get, 200,000 keys | 0.014 | 0.026 | 0.018 | 0.020 | 0.73x | 0.68x |
 
-Geometric mean 1.47x C `-O2` (1.79x Rust); at or below `-O2` on 2 of 11 programs (`strbuild` now wins because concatenation of a local string is rewritten in place; `strbuild` and `mapwork` are runtime-library workloads). The Rust twins are straight ports with overflow checks off to match the build; Rust bounds-checks indexing, as Pelago does. The biggest gaps are struct-valued calls and calls in general (`fib38`).
+Geometric mean 1.33x C `-O2` (1.56x Rust); at or below `-O2` on 3 of 11 programs (`floatloop` with floats in registers; `strbuild` wins because concatenation of a local string is rewritten in place; `strbuild` and `mapwork` are runtime-library workloads). The Rust twins are straight ports with overflow checks off to match the build; Rust bounds-checks indexing, as Pelago does. The biggest gaps are struct-valued calls and calls in general (`fib38`).
 
 What was still slow before that round, in order of likely payoff: every checked operation and bounds check is a compare and branch, the calling convention goes through memory for every
 float, small `MemCopy` uses `rep movsb`, and no value is split between a register and memory (a value too rarely used for a register still pays a load and a store per use).
+
+### Floats in SSE registers (A-11 W11)
+
+Floats go through the same allocator as integers, in a second bank: `xmm2` to `xmm15` (`gen::XMM_REGS`). `xmm0` and `xmm1` stay the templates' scratch registers and `xmm0` carries a
+float result and the first float argument. Our convention has no callee-saved SSE register, so the whole bank is caller-saved: a float that lives across a call, an `alloc`, a `free`
+or a `print` is stored in its frame slot before and loaded after, exactly like the caller-saved general registers (a `memcopy` with `rep movsb` leaves them alone). The cost model is
+the same: a register is taken when the splits around calls cost no more than the loads and stores of memory.
+
+In `gen.rs` a float is `Where::Xmm(x)` or `Where::Mem(off)` (still the home of a float nothing reads and of the frame-only build). `ldf`, `stf`, `fsrc` and `fdst` hide the
+difference. Arithmetic is two-address in the result's register (a commutative operation whose result register is the right operand swaps; `-` and `/` build in `xmm0`). `Neg`
+flips the sign with `xorps` against a mask built in `xmm1`; `0.0` is `xorps x, x`; `IntToFloat` clears its destination first to avoid the false dependency on the old value. Float
+`<`, `<=`, `>` and `>=` fuse with the branch that ends their block (`ucomis` then `ja` or `jae`, operands swapped for `<` and `<=` so unordered gives false); `==` and `!=` need the
+parity flag as well and are not fused. The x87 remainder still reads memory: its operands wait in 16 bytes of frame scratch (`Gen::fscratch`). Arguments, parameters and block
+parameters are copied by the same parallel move as integers (`Gen::moves`), a cycle of SSE registers parks one on the stack with `sub rsp, 8; movsd`.
+
+Measured (best of 7, this container): `floatloop` 0.357 s to 0.133 s; C `-O2` is 0.150 s (it keeps the float order, so does not vectorise either), C `-O0` 0.229 s.

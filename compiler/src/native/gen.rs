@@ -8,7 +8,7 @@
 //! width. The rules for division, shifts, overflow and NaN are in `docs/design/backend.md`.
 
 use super::elf::{self, Blob, Symbol};
-use super::regs::{Base, Fold};
+use super::regs::{Base, Fold, Place};
 use super::rt::{self, Runtime};
 use super::x86::*;
 use super::{pe, Os};
@@ -19,6 +19,26 @@ use std::collections::{HashMap, HashSet};
 
 const INT_REGS: [Reg; 6] = [RDI, RSI, RDX, RCX, R8, R9];
 const MAX_FLOAT_REGS: usize = 8;
+
+/// The SSE registers values can live in. `xmm0` and `xmm1` are the templates' scratch registers (and
+/// `xmm0` carries a float result); the rest belong to the caller, so a value that lives across a call
+/// is stored before it and loaded after, like the caller-saved general registers.
+const XMM_REGS: [Xmm; 14] = [
+    Xmm(2),
+    Xmm(3),
+    Xmm(4),
+    Xmm(5),
+    Xmm(6),
+    Xmm(7),
+    Xmm(8),
+    Xmm(9),
+    Xmm(10),
+    Xmm(11),
+    Xmm(12),
+    Xmm(13),
+    Xmm(14),
+    Xmm(15),
+];
 
 // Tests can shrink the register set (the number of registers of each kind the allocator may use) to
 // push the allocator through its spilling and splitting paths with ordinary programs.
@@ -61,6 +81,8 @@ const SCRATCH_REGS: [Reg; 6] = [R10, R11, R8, R9, RSI, RDI];
 enum Where {
     Mem(i32),
     Reg(Reg),
+    /// A float in an SSE register.
+    Xmm(Xmm),
     /// A constant integer, boolean or pointer: no storage, loaded or used as an immediate where it is read.
     Imm(i64),
     /// A value nothing reads (or a compare fused into its branch): writes to it are dropped.
@@ -139,7 +161,9 @@ struct Gen<'m> {
     saves: Vec<(Reg, i32)>,
     /// Per call-like instruction: the values in caller-saved registers that live across it, as the
     /// register and the frame offset where the value waits during the operation.
-    across: HashMap<usize, Vec<(Reg, i32)>>,
+    across: HashMap<usize, Vec<(Where, i32)>>,
+    /// Frame offset of 16 bytes where the operands of a float remainder wait (the x87 unit reads memory).
+    fscratch: i32,
     /// The block and the position in it of the instruction being generated.
     at: (usize, usize),
     /// Frame offsets already written in the current block (a value is stored once per block).
@@ -282,6 +306,7 @@ impl<'m> Gen<'m> {
             fold: Vec::new(),
             saves: Vec::new(),
             across: HashMap::new(),
+            fscratch: 0,
             at: (0, 0),
             stored: HashSet::new(),
             stubs: Vec::new(),
@@ -324,14 +349,6 @@ impl<'m> Gen<'m> {
 
     // ---- Frames --------------------------------------------------------------------------------------
 
-    /// The frame address of a value that lives in memory (floats always do).
-    fn vmem(&self, v: Value) -> Mem {
-        match self.loc[v.0 as usize] {
-            Where::Mem(off) => mem(RBP, off),
-            w => panic!("value {} is in {w:?}, not in memory", v.0),
-        }
-    }
-
     fn layout(&mut self, f: &Func) {
         self.slot_off.clear();
         let imms = const_values(f);
@@ -341,7 +358,8 @@ impl<'m> Gen<'m> {
             let n = reg_limit();
             let saved: Vec<Reg> = VALUE_REGS.iter().copied().take(n).collect();
             let scratch: Vec<Reg> = SCRATCH_REGS.iter().copied().take(n).collect();
-            super::regs::assign(f, &saved, &scratch, &INT_REGS, &folds, &imms)
+            let xmm: Vec<Xmm> = XMM_REGS.iter().copied().take(n).collect();
+            super::regs::assign(f, &saved, &scratch, &xmm, &INT_REGS, &folds, &imms)
         } else {
             super::regs::Alloc {
                 reg: vec![None; f.values.len()],
@@ -362,7 +380,8 @@ impl<'m> Gen<'m> {
                 (Some(n), _) => Where::Imm(n),
                 _ if folds[v] != Fold::No => Where::Folded,
                 _ if fused[v] || (uses[v] == 0 && !is_float(f.values[v])) => Where::Dead,
-                (None, Some(r)) => Where::Reg(*r),
+                (None, Some(Place::Gpr(r))) => Where::Reg(*r),
+                (None, Some(Place::Xmm(x))) => Where::Xmm(*x),
                 (None, None) => {
                     at += 8;
                     Where::Mem(-at)
@@ -372,7 +391,7 @@ impl<'m> Gen<'m> {
         // Room to keep the callee-saved registers this function uses.
         self.saves.clear();
         for r in VALUE_REGS {
-            if alloc.reg.contains(&Some(r)) {
+            if alloc.reg.contains(&Some(Place::Gpr(r))) {
                 at += 8;
                 self.saves.push((r, -at));
             }
@@ -389,10 +408,24 @@ impl<'m> Gen<'m> {
                     at += 8;
                     -at
                 });
-                let reg = alloc.reg[v.0 as usize].expect("a split value has a register");
-                list.push((reg, off));
+                let place = match alloc.reg[v.0 as usize] {
+                    Some(Place::Gpr(r)) => Where::Reg(r),
+                    Some(Place::Xmm(x)) => Where::Xmm(x),
+                    None => unreachable!("a split value has a register"),
+                };
+                list.push((place, off));
             }
             self.across.insert(id, list);
+        }
+        // The x87 unit reads its operands from memory: a float remainder needs somewhere to put them.
+        let has_frem = f
+            .blocks
+            .iter()
+            .flat_map(|b| &b.insts)
+            .any(|&i| matches!(f.insts[i].op, Op::Bin(BinOp::Rem, a, _) if is_float(f.ty(a))));
+        if has_frem {
+            at += 16;
+            self.fscratch = -at;
         }
         for b in &f.blocks {
             for &i in &b.insts {
@@ -430,6 +463,7 @@ impl<'m> Gen<'m> {
             Where::Mem(off) => self.a.load(r, mem(RBP, off), 8),
             Where::Imm(n) => self.a.mov_ri(r, n),
             Where::Frame(off) => self.a.lea(r, mem(RBP, off)),
+            Where::Xmm(x) => self.a.movq_from_xmm(r, x, true),
             w => panic!("value {} is read from {w:?}", v.0),
         }
     }
@@ -495,14 +529,47 @@ impl<'m> Gen<'m> {
         scratch
     }
 
+    /// Loads a float into the given SSE register.
     fn ldf(&mut self, x: Xmm, v: Value, f: &Func) {
-        let m = self.vmem(v);
-        self.a.fload(x, m, f.ty(v) == IrTy::F64);
+        match self.loc[v.0 as usize] {
+            Where::Xmm(y) => {
+                if x != y {
+                    self.a.fmov_rr(x, y);
+                }
+            }
+            Where::Mem(off) => self.a.fload(x, mem(RBP, off), f.ty(v) == IrTy::F64),
+            w => panic!("float {} is read from {w:?}", v.0),
+        }
     }
 
+    /// Writes a float from the given SSE register to where the value lives.
     fn stf(&mut self, v: Value, x: Xmm, f: &Func) {
-        let m = self.vmem(v);
-        self.a.fstore(m, x, f.ty(v) == IrTy::F64);
+        match self.loc[v.0 as usize] {
+            Where::Xmm(y) => {
+                if x != y {
+                    self.a.fmov_rr(y, x);
+                }
+            }
+            Where::Mem(off) => self.a.fstore(mem(RBP, off), x, f.ty(v) == IrTy::F64),
+            w => panic!("float {} is written to {w:?}", v.0),
+        }
+    }
+
+    /// The SSE register a float result is built in: its own when it has one, `xmm0` otherwise.
+    fn fdst(&self, v: Value) -> Xmm {
+        match self.loc[v.0 as usize] {
+            Where::Xmm(x) => x,
+            _ => Xmm(0),
+        }
+    }
+
+    /// An SSE register holding the float: its own, else `scratch` after loading it there.
+    fn fsrc(&mut self, v: Value, f: &Func, scratch: Xmm) -> Xmm {
+        if let Where::Xmm(x) = self.loc[v.0 as usize] {
+            return x;
+        }
+        self.ldf(scratch, v, f);
+        scratch
     }
 
     /// Cuts a 64-bit register down to `bits`, zero-extended again.
@@ -540,10 +607,7 @@ impl<'m> Gen<'m> {
         for (p, loc) in params.iter().zip(classify(&tys)) {
             match loc {
                 Loc::Int(i) => copies.push((self.loc[p.0 as usize], Where::Reg(INT_REGS[i]))),
-                Loc::Float(i) => {
-                    let m = self.vmem(*p);
-                    self.a.fstore(m, Xmm(i as u8), true);
-                }
+                Loc::Float(i) => copies.push((self.loc[p.0 as usize], Where::Xmm(Xmm(i as u8)))),
                 Loc::Stack(k) => {
                     copies.push((self.loc[p.0 as usize], Where::Mem(16 + 8 * k as i32)))
                 }
@@ -617,6 +681,7 @@ impl<'m> Gen<'m> {
             Term::Jump(tg) => self.edge(f, tg, next),
             Term::Branch(c, t, e) => {
                 let cc = match fused {
+                    Some((_, op, x, y)) if is_float(f.ty(x)) => self.float_cmp(f, op, x, y),
                     Some((_, op, x, y)) => self.int_cmp(f, op, x, y),
                     None => {
                         let rc = self.src(*c, f, false, RAX);
@@ -731,6 +796,10 @@ impl<'m> Gen<'m> {
                             self.a.load(RAX, mem(RBP, off), 8);
                             self.a.push(RAX);
                         }
+                        Where::Xmm(x) => {
+                            self.a.alu_ri(Alu::Sub, RSP, 8, 8);
+                            self.a.fstore(mem(RSP, 0), x, true);
+                        }
                         w => unreachable!("{w:?} cannot be in a cycle"),
                     }
                     for m in pend.iter_mut().filter(|m| m.1 == d0) {
@@ -749,6 +818,13 @@ impl<'m> Gen<'m> {
             (Where::Reg(r), Where::Imm(n)) => self.a.mov_ri(r, n),
             (Where::Reg(r), Where::Frame(off)) => self.a.lea(r, mem(RBP, off)),
             (Where::Reg(r), Where::Stack) => self.a.pop(r),
+            (Where::Xmm(x), Where::Xmm(y)) => self.a.fmov_rr(x, y),
+            (Where::Xmm(x), Where::Mem(off)) => self.a.fload(x, mem(RBP, off), true),
+            (Where::Mem(off), Where::Xmm(y)) => self.a.fstore(mem(RBP, off), y, true),
+            (Where::Xmm(x), Where::Stack) => {
+                self.a.fload(x, mem(RSP, 0), true);
+                self.a.lea(RSP, mem(RSP, 8));
+            }
             (Where::Mem(off), Where::Reg(x)) => self.a.store(mem(RBP, off), x, 8),
             (Where::Mem(off), Where::Imm(n)) if i32::try_from(n).is_ok() => {
                 self.a.store_imm(mem(RBP, off), n as i32, 8)
@@ -772,14 +848,22 @@ impl<'m> Gen<'m> {
     fn inst(&mut self, f: &Func, id: usize, inst: &Inst) -> Result<(), String> {
         // Values waiting in caller-saved registers go to their frame slot for the length of a call.
         let keep = self.across.get(&id).cloned().unwrap_or_default();
-        for &(r, off) in &keep {
+        for &(w, off) in &keep {
             if self.stored.insert(off) {
-                self.a.store(mem(RBP, off), r, 8);
+                match w {
+                    Where::Reg(r) => self.a.store(mem(RBP, off), r, 8),
+                    Where::Xmm(x) => self.a.fstore(mem(RBP, off), x, true),
+                    w => unreachable!("{w:?} waits across a call"),
+                }
             }
         }
         self.inst_body(f, id, inst)?;
-        for &(r, off) in &keep {
-            self.a.load(r, mem(RBP, off), 8);
+        for &(w, off) in &keep {
+            match w {
+                Where::Reg(r) => self.a.load(r, mem(RBP, off), 8),
+                Where::Xmm(x) => self.a.fload(x, mem(RBP, off), true),
+                w => unreachable!("{w:?} waits across a call"),
+            }
         }
         Ok(())
     }
@@ -808,6 +892,15 @@ impl<'m> Gen<'m> {
                     (Const::Float(x), IrTy::F32) => (*x as f32).to_bits() as i64,
                     (Const::Float(x), _) => x.to_bits() as i64,
                 };
+                if let Where::Xmm(x) = self.loc[res.unwrap().0 as usize] {
+                    if bits_v == 0 {
+                        self.a.fxor(x, x);
+                    } else {
+                        self.a.mov_ri(RAX, bits_v);
+                        self.a.movq_to_xmm(x, RAX, true);
+                    }
+                    return Ok(());
+                }
                 self.a.mov_ri(RAX, bits_v);
                 self.st(res.unwrap(), RAX);
             }
@@ -817,13 +910,20 @@ impl<'m> Gen<'m> {
             Op::Neg(a) => {
                 let t = f.ty(*a);
                 if is_float(t) {
-                    self.ld(RAX, *a);
+                    // Flip the sign bit with an `xorps` against a mask built in `xmm1`.
+                    let r = res.unwrap();
+                    let d = self.fdst(r);
+                    self.ldf(d, *a, f);
                     if t == IrTy::F32 {
-                        self.a.alu_ri(Alu::Xor, RAX, i32::MIN, 4);
+                        self.a.mov_ri(RAX, 0x8000_0000);
+                        self.a.movq_to_xmm(Xmm(1), RAX, false);
                     } else {
-                        self.a.mov_ri(RCX, i64::MIN);
-                        self.a.alu_rr(Alu::Xor, RAX, RCX, 8);
+                        self.a.mov_ri(RAX, i64::MIN);
+                        self.a.movq_to_xmm(Xmm(1), RAX, true);
                     }
+                    self.a.fxor(d, Xmm(1));
+                    self.stf(r, d, f);
+                    return Ok(());
                 } else {
                     self.ld(RAX, *a);
                     self.a.neg(RAX, 8);
@@ -917,8 +1017,9 @@ impl<'m> Gen<'m> {
                 let r = res.unwrap();
                 match t {
                     IrTy::F32 | IrTy::F64 => {
-                        self.a.fload(Xmm(0), m, *t == IrTy::F64);
-                        self.stf(r, Xmm(0), f);
+                        let d = self.fdst(r);
+                        self.a.fload(d, m, *t == IrTy::F64);
+                        self.stf(r, d, f);
                     }
                     _ => {
                         let d = self.dst(r);
@@ -931,8 +1032,8 @@ impl<'m> Gen<'m> {
                 let t = f.ty(*x);
                 let m = self.mem_of(f, *p, RCX, RDX);
                 if is_float(t) {
-                    self.ldf(Xmm(0), *x, f);
-                    self.a.fstore(m, Xmm(0), t == IrTy::F64);
+                    let rx = self.fsrc(*x, f, Xmm(0));
+                    self.a.fstore(m, rx, t == IrTy::F64);
                 } else if let Some(n) = self.imm32(*x, f, false) {
                     self.a.store_imm(m, n, size(t));
                 } else {
@@ -1150,10 +1251,7 @@ impl<'m> Gen<'m> {
         for (arg, loc) in args.iter().zip(&locs) {
             match loc {
                 Loc::Int(i) => copies.push((Where::Reg(INT_REGS[*i]), self.loc[arg.0 as usize])),
-                Loc::Float(i) => {
-                    let m = self.vmem(*arg);
-                    self.a.fload(Xmm(*i as u8), m, f.ty(*arg) == IrTy::F64);
-                }
+                Loc::Float(i) => copies.push((Where::Xmm(Xmm(*i as u8)), self.loc[arg.0 as usize])),
                 Loc::Stack(_) => {}
             }
         }
@@ -1168,8 +1266,7 @@ impl<'m> Gen<'m> {
         }
         if let Some(r) = res {
             if is_float(ret) {
-                let m = self.vmem(r);
-                self.a.fstore(m, Xmm(0), ret == IrTy::F64);
+                self.stf(r, Xmm(0), f);
             } else {
                 self.st(r, RAX);
             }
@@ -1178,9 +1275,23 @@ impl<'m> Gen<'m> {
 
     // ---- Arithmetic ----------------------------------------------------------------------------------
 
+    /// A memory operand holding the float: its frame slot, or the frame scratch (at `k`) after storing it there.
+    fn fmem(&mut self, v: Value, f: &Func, k: i32) -> Mem {
+        match self.loc[v.0 as usize] {
+            Where::Mem(off) => mem(RBP, off),
+            Where::Xmm(x) => {
+                let m = mem(RBP, self.fscratch + k);
+                self.a.fstore(m, x, f.ty(v) == IrTy::F64);
+                m
+            }
+            w => panic!("float {} is read from {w:?}", v.0),
+        }
+    }
+
     fn bin(&mut self, f: &Func, op: BinOp, a: Value, b: Value, r: Value) -> Result<(), String> {
         let t = f.ty(a);
         if is_float(t) {
+            let dbl = t == IrTy::F64;
             let sse = match op {
                 BinOp::Add => Sse::Add,
                 BinOp::Sub => Sse::Sub,
@@ -1188,10 +1299,10 @@ impl<'m> Gen<'m> {
                 BinOp::Div => Sse::Div,
                 BinOp::Rem => {
                     // x87 `fprem` is exactly C's `fmod`: the sign of the dividend, NaN for a zero divisor.
-                    let d = t == IrTy::F64;
-                    let (ma, mb) = (self.vmem(a), self.vmem(b));
-                    self.a.x87_load(mb, d);
-                    self.a.x87_load(ma, d);
+                    // It reads memory: operands in SSE registers wait in the frame scratch.
+                    let (ma, mb) = (self.fmem(a, f, 0), self.fmem(b, f, 8));
+                    self.a.x87_load(mb, dbl);
+                    self.a.x87_load(ma, dbl);
                     let again = self.a.new_label();
                     self.a.bind(again);
                     self.a.x87_prem();
@@ -1200,16 +1311,34 @@ impl<'m> Gen<'m> {
                     self.a.alu_ri(Alu::And, RAX, 1, 4);
                     self.a.jcc(Cc::Ne, again);
                     self.a.x87_drop_second();
-                    let mr = self.vmem(r);
-                    self.a.x87_store_pop(mr, d);
+                    match self.loc[r.0 as usize] {
+                        Where::Mem(off) => self.a.x87_store_pop(mem(RBP, off), dbl),
+                        Where::Xmm(x) => {
+                            let m = mem(RBP, self.fscratch);
+                            self.a.x87_store_pop(m, dbl);
+                            self.a.fload(x, m, dbl);
+                        }
+                        w => unreachable!("a float result in {w:?}"),
+                    }
                     return Ok(());
                 }
                 _ => return Err("not a float operation".to_string()),
             };
-            self.ldf(Xmm(0), a, f);
-            self.ldf(Xmm(1), b, f);
-            self.a.farith(sse, Xmm(0), Xmm(1), t == IrTy::F64);
-            self.stf(r, Xmm(0), f);
+            // Two-address: built in the result's own register. When that is the register of `b`, a
+            // commutative operation swaps the operands and the others are built in `xmm0`.
+            let (mut a, mut b) = (a, b);
+            let mut d = self.fdst(r);
+            if a != b && self.loc[b.0 as usize] == Where::Xmm(d) {
+                if matches!(op, BinOp::Add | BinOp::Mul) {
+                    std::mem::swap(&mut a, &mut b);
+                } else {
+                    d = Xmm(0);
+                }
+            }
+            self.ldf(d, a, f);
+            let xb = self.fsrc(b, f, Xmm(1));
+            self.a.farith(sse, d, xb, dbl);
+            self.stf(r, d, f);
             return Ok(());
         }
         let w = bits(t);
@@ -1417,41 +1546,22 @@ impl<'m> Gen<'m> {
     fn cmp(&mut self, f: &Func, op: CmpOp, a: Value, b: Value, r: Value) {
         let t = f.ty(a);
         if is_float(t) {
-            self.ldf(Xmm(0), a, f);
-            self.ldf(Xmm(1), b, f);
-            let d = t == IrTy::F64;
-            match op {
-                CmpOp::Eq | CmpOp::Ne => {
-                    self.a.fcmp(Xmm(0), Xmm(1), d);
-                    if op == CmpOp::Eq {
-                        self.a.setcc(Cc::E, RAX);
-                        self.a.setcc(Cc::Np, RCX);
-                        self.a.alu_rr(Alu::And, RAX, RCX, 1);
-                    } else {
-                        self.a.setcc(Cc::Ne, RAX);
-                        self.a.setcc(Cc::P, RCX);
-                        self.a.alu_rr(Alu::Or, RAX, RCX, 1);
-                    }
+            if matches!(op, CmpOp::Eq | CmpOp::Ne) {
+                // Equal needs the zero flag set and the parity flag clear (unordered sets both).
+                let (xa, xb) = (self.fsrc(a, f, Xmm(0)), self.fsrc(b, f, Xmm(1)));
+                self.a.fcmp(xa, xb, t == IrTy::F64);
+                if op == CmpOp::Eq {
+                    self.a.setcc(Cc::E, RAX);
+                    self.a.setcc(Cc::Np, RCX);
+                    self.a.alu_rr(Alu::And, RAX, RCX, 1);
+                } else {
+                    self.a.setcc(Cc::Ne, RAX);
+                    self.a.setcc(Cc::P, RCX);
+                    self.a.alu_rr(Alu::Or, RAX, RCX, 1);
                 }
-                CmpOp::Lt | CmpOp::ULt | CmpOp::Le | CmpOp::ULe => {
-                    // `a < b` is `b > a`; unordered gives "not above".
-                    self.a.fcmp(Xmm(1), Xmm(0), d);
-                    let cc = if matches!(op, CmpOp::Lt | CmpOp::ULt) {
-                        Cc::A
-                    } else {
-                        Cc::Ae
-                    };
-                    self.a.setcc(cc, RAX);
-                }
-                _ => {
-                    self.a.fcmp(Xmm(0), Xmm(1), d);
-                    let cc = if matches!(op, CmpOp::Gt | CmpOp::UGt) {
-                        Cc::A
-                    } else {
-                        Cc::Ae
-                    };
-                    self.a.setcc(cc, RAX);
-                }
+            } else {
+                let cc = self.float_cmp(f, op, a, b);
+                self.a.setcc(cc, RAX);
             }
         } else {
             let cc = self.int_cmp(f, op, a, b);
@@ -1459,6 +1569,31 @@ impl<'m> Gen<'m> {
         }
         self.a.extend_rr(RAX, RAX, 1, false, false);
         self.st(r, RAX);
+    }
+
+    /// Compares two floats with an ordering (`<`, `<=`, `>`, `>=`); gives the condition that holds when
+    /// `op` is true. `a < b` is `b > a`; unordered operands give "not above".
+    fn float_cmp(&mut self, f: &Func, op: CmpOp, a: Value, b: Value) -> Cc {
+        let d = f.ty(a) == IrTy::F64;
+        let (xa, xb) = (self.fsrc(a, f, Xmm(0)), self.fsrc(b, f, Xmm(1)));
+        match op {
+            CmpOp::Lt | CmpOp::ULt => {
+                self.a.fcmp(xb, xa, d);
+                Cc::A
+            }
+            CmpOp::Le | CmpOp::ULe => {
+                self.a.fcmp(xb, xa, d);
+                Cc::Ae
+            }
+            CmpOp::Gt | CmpOp::UGt => {
+                self.a.fcmp(xa, xb, d);
+                Cc::A
+            }
+            _ => {
+                self.a.fcmp(xa, xb, d);
+                Cc::Ae
+            }
+        }
     }
 
     /// Compares two integer, boolean or pointer values; gives the condition that holds when `op` is true.
@@ -1506,22 +1641,27 @@ impl<'m> Gen<'m> {
             }
             CastKind::IntToFloat => {
                 self.ld_ext(RAX, a, f, true);
-                self.a.cvt_int_to_float(Xmm(0), RAX, true, to == IrTy::F64);
-                self.stf(r, Xmm(0), f);
+                let d = self.fdst(r);
+                // The conversion keeps the rest of its destination: clear it to break the dependency.
+                self.a.fxor(d, d);
+                self.a.cvt_int_to_float(d, RAX, true, to == IrTy::F64);
+                self.stf(r, d, f);
             }
             CastKind::FloatToInt => {
-                self.ldf(Xmm(0), a, f);
-                self.a
-                    .cvt_float_to_int(RAX, Xmm(0), true, from == IrTy::F64);
+                let x = self.fsrc(a, f, Xmm(0));
+                self.a.cvt_float_to_int(RAX, x, true, from == IrTy::F64);
                 self.mask(RAX, bits(to));
                 self.st(r, RAX);
             }
             CastKind::FloatResize => {
-                self.ldf(Xmm(0), a, f);
+                let d = self.fdst(r);
                 if from != to {
-                    self.a.cvt_float_resize(Xmm(0), Xmm(0), to == IrTy::F64);
+                    let x = self.fsrc(a, f, Xmm(0));
+                    self.a.cvt_float_resize(d, x, to == IrTy::F64);
+                } else {
+                    self.ldf(d, a, f);
                 }
-                self.stf(r, Xmm(0), f);
+                self.stf(r, d, f);
             }
         }
     }
