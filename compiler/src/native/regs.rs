@@ -25,16 +25,23 @@
 //! * Constants and the results of fused compare-and-branch pairs take no register (the generator
 //!   knows them).
 
-use crate::ir::{BinOp, Func, IrTy, Op, Term, Value};
-use crate::native::x86::Reg;
+use crate::ir::{BinOp, CmpOp, Func, IrTy, Op, Term, Value};
+use crate::native::x86::{Reg, Xmm};
 use std::collections::HashMap;
+
+/// A register a value can live in.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Place {
+    Gpr(Reg),
+    Xmm(Xmm),
+}
 
 /// The result of the assignment for one function.
 pub struct Alloc {
     /// For each value, the register it lives in, if any.
-    pub reg: Vec<Option<Reg>>,
-    /// For each call-like instruction (by id): the values in caller-saved registers that are live
-    /// across it. The generator stores them before the operation and loads them after.
+    pub reg: Vec<Option<Place>>,
+    /// For each call-like instruction (by id): the values in caller-saved registers (integer or SSE)
+    /// that are live across it. The generator stores them before the operation and loads them after.
     pub across: HashMap<usize, Vec<Value>>,
 }
 
@@ -265,10 +272,23 @@ pub fn fused_cmp(f: &Func, bi: usize, uses: &[u32]) -> Option<usize> {
     let Op::Cmp(_, x, _) = &f.insts[last].op else {
         return None;
     };
-    (f.insts[last].result == Some(*c)
-        && uses[c.0 as usize] == 1
-        && !matches!(f.ty(*x), IrTy::F32 | IrTy::F64))
-    .then_some(last)
+    // A float `==` or `!=` needs the parity flag as well as the zero flag: it is not fused.
+    let flags_only = !matches!(f.ty(*x), IrTy::F32 | IrTy::F64)
+        || matches!(
+            &f.insts[last].op,
+            Op::Cmp(
+                CmpOp::Lt
+                    | CmpOp::ULt
+                    | CmpOp::Le
+                    | CmpOp::ULe
+                    | CmpOp::Gt
+                    | CmpOp::UGt
+                    | CmpOp::Ge
+                    | CmpOp::UGe,
+                ..
+            )
+        );
+    (f.insts[last].result == Some(*c) && uses[c.0 as usize] == 1 && flags_only).then_some(last)
 }
 
 pub(super) fn inst_uses(op: &Op, out: &mut Vec<Value>) {
@@ -415,12 +435,13 @@ fn term_reads(t: &Term, folds: &[Fold], out: &mut Vec<Value>) {
 }
 
 /// Assigns registers. `saved` are callee-saved registers, `scratch` caller-saved ones in the order
-/// to try them, and `args` the registers that carry the integer parameters and arguments (in order,
-/// used only as a preference).
+/// to try them, `xmm` the SSE registers for floats (all caller-saved), and `args` the registers that
+/// carry the integer parameters and arguments (in order, used only as a preference).
 pub fn assign(
     f: &Func,
     saved: &[Reg],
     scratch: &[Reg],
+    xmm: &[Xmm],
     args: &[Reg],
     folds: &[Fold],
     consts: &[Option<i64>],
@@ -557,11 +578,16 @@ pub fn assign(
     }
 
     // The call-like operations: where they are, how often they run.
-    let mut calls: Vec<(u32, usize, u64)> = Vec::new();
+    let mut calls: Vec<(u32, usize, u64, bool)> = Vec::new();
     for (bi, b) in f.blocks.iter().enumerate() {
         for &i in &b.insts {
             if is_call_like(&f.insts[i].op, consts) {
-                calls.push((o.inst_pos[i], i, block_weight(bi)));
+                calls.push((
+                    o.inst_pos[i],
+                    i,
+                    block_weight(bi),
+                    matches!(f.insts[i].op, Op::MemCopy(..)),
+                ));
             }
         }
     }
@@ -573,12 +599,12 @@ pub fn assign(
         partners[a.0 as usize].push(b);
         partners[b.0 as usize].push(a);
     }
-    let mut want_arg: Vec<Option<Reg>> = vec![None; nv];
+    let mut want_arg: Vec<Option<Place>> = vec![None; nv];
     if let Some(b0) = f.blocks.first() {
         let mut k = 0;
         for p in &b0.params {
             if !matches!(f.ty(*p), IrTy::F32 | IrTy::F64) {
-                want_arg[p.0 as usize] = args.get(k).copied();
+                want_arg[p.0 as usize] = args.get(k).map(|r| Place::Gpr(*r));
                 k += 1;
             }
         }
@@ -601,7 +627,7 @@ pub fn assign(
                     for v in vs {
                         if !matches!(f.ty(*v), IrTy::F32 | IrTy::F64) {
                             if want_arg[v.0 as usize].is_none() {
-                                want_arg[v.0 as usize] = args.get(k).copied();
+                                want_arg[v.0 as usize] = args.get(k).map(|r| Place::Gpr(*r));
                             }
                             k += 1;
                         }
@@ -625,10 +651,13 @@ pub fn assign(
         }
     }
 
-    // Heaviest first.
+    // Heaviest first. Integers, booleans and pointers share the general registers, floats take the SSE
+    // registers; both banks go through the same loop.
     let eligible = |v: usize| {
-        matches!(f.values[v], IrTy::Int(_) | IrTy::Bool | IrTy::Ptr)
-            && !ranges[v].is_empty()
+        matches!(
+            f.values[v],
+            IrTy::Int(_) | IrTy::Bool | IrTy::Ptr | IrTy::F32 | IrTy::F64
+        ) && !ranges[v].is_empty()
             && consts[v].is_none()
             && folds[v] == Fold::No
             && !fused_res[v]
@@ -637,35 +666,44 @@ pub fn assign(
     let mut cands: Vec<usize> = (0..nv).filter(|v| eligible(*v)).collect();
     cands.sort_by_key(|v| (std::cmp::Reverse(weight[*v]), *v));
 
-    let all: Vec<Reg> = scratch.iter().chain(saved.iter()).copied().collect();
+    // Every register with whether it is callee-saved. The SSE registers all belong to the caller.
+    let all: Vec<(Place, bool)> = scratch
+        .iter()
+        .map(|r| (Place::Gpr(*r), false))
+        .chain(xmm.iter().map(|x| (Place::Xmm(*x), false)))
+        .chain(saved.iter().map(|r| (Place::Gpr(*r), true)))
+        .collect();
     let mut taken: Vec<Vec<(u32, u32)>> = vec![Vec::new(); all.len()];
     let mut saved_used = vec![false; all.len()];
-    let mut out: Vec<Option<Reg>> = vec![None; nv];
+    let mut out: Vec<Option<Place>> = vec![None; nv];
     let mut across: HashMap<usize, Vec<Value>> = HashMap::new();
     for v in cands {
+        let float = matches!(f.values[v], IrTy::F32 | IrTy::F64);
         // The call-like operations inside the lifetime, and what a split around each would cost.
+        // (A block copy with `rep movsb` leaves the SSE registers alone.)
         let mut crossed: Vec<usize> = Vec::new();
         let mut cross_cost = 0u64;
         for &(from, to) in &ranges[v] {
             let mut k = calls.partition_point(|c| c.0 < from);
             while k < calls.len() && calls[k].0 + 2 <= to {
-                crossed.push(k);
-                cross_cost += 2 * calls[k].2;
+                if !float || !calls[k].3 {
+                    crossed.push(k);
+                    cross_cost += 2 * calls[k].2;
+                }
                 k += 1;
             }
         }
         let mem_cost = weight[v];
-        let partner_regs: Vec<Reg> = partners[v]
+        let partner_regs: Vec<Place> = partners[v]
             .iter()
             .filter_map(|p| out[p.0 as usize])
             .collect();
         let mut best: Option<(u64, u32, usize)> = None;
-        for (ri, reg) in all.iter().enumerate() {
-            if overlaps(&ranges[v], &taken[ri]) {
+        for (ri, (reg, is_saved)) in all.iter().enumerate() {
+            if matches!(reg, Place::Xmm(_)) != float || overlaps(&ranges[v], &taken[ri]) {
                 continue;
             }
-            let is_saved = ri >= scratch.len();
-            let cost = if is_saved {
+            let cost = if *is_saved {
                 // Saved at entry and restored at exit, once for all the values that use the register.
                 if saved_used[ri] {
                     0
@@ -695,8 +733,8 @@ pub fn assign(
             let at = taken[ri].partition_point(|x| x.0 < from);
             taken[ri].insert(at, (from, to));
         }
-        out[v] = Some(all[ri]);
-        if ri >= scratch.len() {
+        out[v] = Some(all[ri].0);
+        if all[ri].1 {
             saved_used[ri] = true;
         } else {
             for k in crossed {
