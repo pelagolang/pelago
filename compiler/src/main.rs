@@ -95,6 +95,10 @@ fn real_main() {
                 std::process::exit(2);
             }
         },
+        Some("fmt") => {
+            let rest: Vec<String> = args.collect();
+            fmt_command(&rest);
+        }
         Some("lex") => match args.next() {
             Some(path) => lex_file(&path),
             None => {
@@ -122,6 +126,7 @@ fn usage() {
     eprintln!("  ir <path>  check, lower to the IR, verify and print it");
     eprintln!("  run <path>  lower to the IR and run `main` in the interpreter (`--native` builds and runs machine code)");
     eprintln!("  build [-o out] <path>  build a native x86-64 Linux executable");
+    eprintln!("  fmt [--check] <path>...  format `.pel` files in place (`-` formats standard input to standard output)");
     eprintln!("  check <path>  parse and resolve names of a file or a directory of `.pel` files");
     eprintln!("  parse-bench <file>  time lexing plus parsing on a file");
     eprintln!("  lex <file> print the tokens of a source file (`-` reads standard input)");
@@ -198,6 +203,96 @@ fn print_punct() {
     let texts: Vec<&str> = Punct::ALL.iter().map(|p| p.as_str()).collect();
     println!("{} tokens", texts.len());
     println!("  {}", texts.join(" "));
+}
+
+/// `pelago fmt [--check] <file or directory>...`
+fn fmt_command(args: &[String]) {
+    let check = args.iter().any(|a| a == "--check");
+    let paths: Vec<&String> = args.iter().filter(|a| *a != "--check").collect();
+    if paths.is_empty() {
+        eprintln!("usage: pelago fmt [--check] <file or directory>...  (`-` reads standard input)");
+        std::process::exit(2);
+    }
+    if paths.len() == 1 && paths[0] == "-" {
+        let mut src = String::new();
+        if std::io::Read::read_to_string(&mut std::io::stdin(), &mut src).is_err() {
+            eprintln!("cannot read standard input");
+            std::process::exit(2);
+        }
+        match pelago::fmt::format(&src) {
+            Ok(out) => print!("{out}"),
+            Err(e) => {
+                eprintln!("<stdin>: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    fn gather(p: &std::path::Path, out: &mut Vec<std::path::PathBuf>) -> std::io::Result<()> {
+        if p.is_dir() {
+            let mut entries: Vec<_> = std::fs::read_dir(p)?
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .map(|e| e.path())
+                .collect();
+            entries.sort();
+            for e in entries {
+                gather(&e, out)?;
+            }
+        } else if p.is_file() && (p.extension().and_then(|e| e.to_str()) == Some("pel")) {
+            out.push(p.to_path_buf());
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    for p in &paths {
+        let path = std::path::Path::new(p.as_str());
+        // A file named on the command line is formatted whatever its extension.
+        if path.is_file() {
+            files.push(path.to_path_buf());
+        } else if let Err(e) = gather(path, &mut files) {
+            eprintln!("{p}: {e}");
+            std::process::exit(2);
+        }
+    }
+    let (mut changed, mut failed) = (0, 0);
+    for f in &files {
+        let src = match std::fs::read_to_string(f) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("{}: {e}", f.display());
+                failed += 1;
+                continue;
+            }
+        };
+        match pelago::fmt::format(&src) {
+            Ok(out) if out == src => {}
+            Ok(out) => {
+                changed += 1;
+                if check {
+                    println!("{}", f.display());
+                } else if let Err(e) = std::fs::write(f, out) {
+                    eprintln!("{}: {e}", f.display());
+                    failed += 1;
+                }
+            }
+            Err(e) => {
+                eprintln!("{}: {e}", f.display());
+                failed += 1;
+            }
+        }
+    }
+    if !check {
+        println!(
+            "{} file(s), {} reformatted, {} skipped",
+            files.len(),
+            changed,
+            failed
+        );
+    }
+    if failed > 0 || (check && changed > 0) {
+        std::process::exit(1);
+    }
 }
 
 fn check_path(path: &str) {

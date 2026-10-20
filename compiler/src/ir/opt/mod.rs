@@ -19,6 +19,7 @@ mod cse;
 mod dce;
 mod divconst;
 mod dom;
+mod fill;
 mod ifconv;
 mod inline;
 pub use inline::COLD_SUFFIX;
@@ -35,6 +36,7 @@ mod tailrec;
 #[cfg(test)]
 mod tests;
 
+pub use fill::filled_slots;
 pub use inline::prune;
 pub use stats::{stats_of, Stats};
 

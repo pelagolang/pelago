@@ -190,6 +190,7 @@ impl Server {
                     ("hoverProvider", Json::Bool(true)),
                     ("definitionProvider", Json::Bool(true)),
                     ("referencesProvider", Json::Bool(true)),
+                    ("documentFormattingProvider", Json::Bool(true)),
                     (
                         "codeActionProvider",
                         obj(vec![("codeActionKinds", strs(&["quickfix"]))]),
@@ -589,6 +590,18 @@ impl Server {
                 Some(Json::Arr(
                     a.symbols(m).iter().map(|s| conv(&map, s)).collect(),
                 ))
+            }
+            "textDocument/formatting" => {
+                // One edit that replaces the whole document; none when it is already formatted
+                // or has errors (the diagnostics say what is wrong).
+                let formatted = match crate::fmt::format(&src) {
+                    Ok(f) if f != src => f,
+                    _ => return Some(Json::Arr(Vec::new())),
+                };
+                Some(Json::Arr(vec![obj(vec![
+                    ("range", range_json(&map, 0, src.len())),
+                    ("newText", text(formatted)),
+                ])]))
             }
             "textDocument/codeAction" => {
                 let r = params.get("range")?;
