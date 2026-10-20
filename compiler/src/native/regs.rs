@@ -19,7 +19,7 @@
 //!   otherwise **splits the value around each such operation**: it is stored to its home slot before
 //!   the operation and reloaded after it (`Alloc::across` lists them for the generator).
 //!
-//!   A register is used when it is no dearer than memory. Ties go to the register a related value
+//!   A register is used when it is no dearer than memory. Ties go to the register most related values
 //!   already has (the first operand of a two-address operation, the other end of a block-parameter
 //!   copy), then to the argument register the value is passed in, which saves moves.
 //! * Constants and the results of fused compare-and-branch pairs take no register (the generator
@@ -720,7 +720,7 @@ pub fn assign(
             .iter()
             .filter_map(|p| out[p.0 as usize])
             .collect();
-        let mut best: Option<(u64, u32, usize)> = None;
+        let mut best: Option<(u64, i64, usize)> = None;
         for (ri, (reg, is_saved)) in all.iter().enumerate() {
             if matches!(reg, Place::Xmm(_)) != float || overlaps(&ranges[v], &taken[ri]) {
                 continue;
@@ -735,12 +735,15 @@ pub fn assign(
             } else {
                 cross_cost
             };
-            let rank = if partner_regs.contains(reg) {
-                0
+            // The register most related values already have wins: a sum that feeds a loop parameter and
+            // reads the same parameter then needs no copy at all.
+            let shared = partner_regs.iter().filter(|p| *p == reg).count() as i64;
+            let rank = if shared > 0 {
+                -shared
             } else if want_arg[v] == Some(*reg) {
                 1
             } else {
-                2 + ri as u32
+                2 + ri as i64
             };
             if best.is_none_or(|(c, r, _)| (cost, rank) < (c, r)) {
                 best = Some((cost, rank, ri));

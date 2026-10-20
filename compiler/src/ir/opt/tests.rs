@@ -1760,3 +1760,83 @@ fn a_call_is_guarded_by_the_entry_test_of_the_function() {
     // `main` has no such test.
     assert!(peel::analyze(&m.funcs[1]).is_none());
 }
+
+/// `var a = [1; count]` in a slot of `size` bytes, then `a[3]`; `read_first` reads the slot before the loop.
+fn fill_func(count: i128, size: u32, read_first: bool) -> Func {
+    let mut f = Func::new("main", &[], IrTy::I64);
+    let e = f.entry();
+    let head = f.new_block(&[IrTy::I64]);
+    let body = f.new_block(&[]);
+    let done = f.new_block(&[]);
+    let c = |f: &mut Func, b, n| {
+        f.emit(b, Op::Const(IrTy::I64, Const::Int(n)), Some(IrTy::I64))
+            .unwrap()
+    };
+    let s = f.emit(e, Op::Slot(size, 8), Some(IrTy::Ptr)).unwrap();
+    let (zero, one, eight, n) = (
+        c(&mut f, e, 0),
+        c(&mut f, e, 1),
+        c(&mut f, e, 8),
+        c(&mut f, e, count),
+    );
+    if read_first {
+        f.emit(e, Op::Load(IrTy::I64, s), Some(IrTy::I64));
+    }
+    f.terminate(
+        e,
+        Term::Jump(Target {
+            block: head,
+            args: vec![zero],
+        }),
+    );
+    let i = f.block_params(head)[0];
+    let lt = f
+        .emit(head, Op::Cmp(CmpOp::Lt, i, n), Some(IrTy::Bool))
+        .unwrap();
+    f.terminate(
+        head,
+        Term::Branch(
+            lt,
+            Target {
+                block: body,
+                args: vec![],
+            },
+            Target {
+                block: done,
+                args: vec![],
+            },
+        ),
+    );
+    let off = f
+        .emit(body, Op::Bin(BinOp::Mul, i, eight), Some(IrTy::I64))
+        .unwrap();
+    let p = f.emit(body, Op::PtrAdd(s, off), Some(IrTy::Ptr)).unwrap();
+    f.emit(body, Op::Store(p, one), None);
+    let next = f
+        .emit(body, Op::Bin(BinOp::Add, i, one), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(
+        body,
+        Term::Jump(Target {
+            block: head,
+            args: vec![next],
+        }),
+    );
+    let at = c(&mut f, done, 24);
+    let q = f.emit(done, Op::PtrAdd(s, at), Some(IrTy::Ptr)).unwrap();
+    let r = f
+        .emit(done, Op::Load(IrTy::I64, q), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(done, Term::Return(Some(r)));
+    f
+}
+
+#[test]
+fn a_slot_a_loop_fills_to_the_end_needs_no_clearing() {
+    let set = |count, size, read_first| filled_slots(&fill_func(count, size, read_first)).len();
+    assert_eq!(set(1000, 8000, false), 1);
+    // Not the whole slot, a read first, a small slot: all cleared as before.
+    assert_eq!(set(999, 8000, false), 0);
+    assert_eq!(set(1000, 8000, true), 0);
+    assert_eq!(set(10, 80, false), 0);
+}

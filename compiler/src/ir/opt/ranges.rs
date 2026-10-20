@@ -487,14 +487,37 @@ fn widen(old: L, new: L, max: u128) -> L {
     }
 }
 
+/// The unsigned comparisons: what the front end writes for an index against a length. (On ranges that
+/// are never negative the signed and the unsigned reading agree.)
+fn is_bounds_test(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::Cmp(CmpOp::ULt | CmpOp::ULe | CmpOp::UGt | CmpOp::UGe, ..)
+    )
+}
+
+/// The answer of `x op y` for every pair in the two ranges, if it is the same for all of them.
+fn decide(op: CmpOp, x: Range, y: Range) -> Option<bool> {
+    let (always, never) = match op {
+        CmpOp::ULt => (x.1 < y.0, x.0 >= y.1),
+        CmpOp::ULe => (x.1 <= y.0, x.0 > y.1),
+        CmpOp::UGt => (x.0 > y.1, x.1 <= y.0),
+        CmpOp::UGe => (x.0 >= y.1, x.1 < y.0),
+        _ => return None,
+    };
+    if always {
+        Some(true)
+    } else if never {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 pub fn run(f: &mut Func) -> bool {
     if !f.insts.iter().any(|i| {
-        matches!(
-            i.op,
-            Op::Checked(..)
-                | Op::Bin(BinOp::Div | BinOp::Rem, ..)
-                | Op::Cmp(CmpOp::ULt | CmpOp::UGe, ..)
-        )
+        matches!(i.op, Op::Checked(..) | Op::Bin(BinOp::Div | BinOp::Rem, ..))
+            || is_bounds_test(&i.op)
     }) {
         return false;
     }
@@ -507,18 +530,26 @@ pub fn run(f: &mut Func) -> bool {
     let mut unsigned = Vec::new();
     let mut decided: Vec<(usize, bool)> = Vec::new();
     for ii in 0..f.insts.len() {
-        // `i <u n` right after the guard `i < n` (signed) holds when `i` is not negative: this is the
-        // bounds check of `for i in 0..xs.len() { xs[i] }`.
-        if let Op::Cmp(o @ (CmpOp::ULt | CmpOp::UGe), a, b) = f.insts[ii].op.clone() {
+        if let Op::Cmp(o, a, b) = f.insts[ii].op {
             let blk = cx.block_of[ii];
-            if blk != u32::MAX
-                && matches!(cx.range_at(a, BlockId(blk)), L::R(_))
-                && cx.facts[blk as usize].iter().any(|r| {
-                    (r.kind == Kind::Lt && r.a == a && r.b == b)
-                        || (r.kind == Kind::Gt && r.a == b && r.b == a)
-                })
-            {
-                decided.push((ii, o == CmpOp::ULt));
+            if is_bounds_test(&f.insts[ii].op) && blk != u32::MAX {
+                let blk = BlockId(blk);
+                // `i <u n` right after the guard `i < n` (signed) holds when `i` is not negative: this
+                // is the bounds check of `for i in 0..xs.len() { xs[i] }`.
+                let guarded = matches!(o, CmpOp::ULt | CmpOp::UGe)
+                    && matches!(cx.range_at(a, blk), L::R(_))
+                    && cx.facts[blk.0 as usize].iter().any(|r| {
+                        (r.kind == Kind::Lt && r.a == a && r.b == b)
+                            || (r.kind == Kind::Gt && r.a == b && r.b == a)
+                    });
+                if guarded {
+                    decided.push((ii, o == CmpOp::ULt));
+                } else if let (L::R(x), L::R(y)) = (cx.range_at(a, blk), cx.range_at(b, blk)) {
+                    // Or both sides have known ranges, and the answer is the same for all of them.
+                    if let Some(answer) = decide(o, x, y) {
+                        decided.push((ii, answer));
+                    }
+                }
             }
             continue;
         }
