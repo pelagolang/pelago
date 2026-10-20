@@ -1206,10 +1206,10 @@ fn the_last_call_of_a_sum_becomes_a_loop() {
             let (o, before, after) = both(&fib_module(k, swap));
             assert_eq!((before, after), (Val::Int(want), Val::Int(want)));
             let fib = o.funcs.iter().find(|f| f.name == "fib").unwrap();
-            // One call to itself is left, the first one; the other goes to the exact copy.
+            // The first call stays, and the slow path of the guard makes the second one.
             assert_eq!(
                 count(fib, |o| matches!(o, Op::Call(g, _) if *g == FuncId(0))),
-                1,
+                2,
                 "{}",
                 print_func(fib, None)
             );
@@ -1297,9 +1297,26 @@ fn a_signed_sum_of_non_negative_terms_is_a_loop_with_a_way_out() {
     let mut o = m.clone();
     optimize(&mut o, Options::default());
     let s = o.funcs.iter().find(|f| f.name == "s").unwrap();
+    // The loop has no call left; the one that remains is the slow path of the guard.
     assert_eq!(
         count(s, |o| matches!(o, Op::Call(g, _) if *g == FuncId(0))),
-        0
+        1
     );
-    assert!(o.funcs.iter().any(|f| f.name == "s$exact"));
+}
+
+#[test]
+fn every_mix_of_signs_stops_or_not_as_before() {
+    let vals = [-128, -64, -1, 30, 100, 127];
+    for a in vals {
+        for b in vals {
+            for c in vals {
+                let m = rotating_sum([a, b, c]);
+                let before = run_full(&m, "main", &[]);
+                let mut o = m.clone();
+                optimize(&mut o, Options::default());
+                let after = run_full(&o, "main", &[]);
+                assert_eq!(before.result, after.result, "{:?}", [a, b, c]);
+            }
+        }
+    }
 }
