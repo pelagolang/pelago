@@ -18,6 +18,7 @@ mod dce;
 mod divconst;
 mod dom;
 mod inline;
+mod layout;
 mod licm;
 mod loops;
 mod promote;
@@ -80,6 +81,8 @@ pub fn optimize_func(f: &mut Func) {
             break;
         }
     }
+    // Last, because every pass above is free to renumber and reorder blocks.
+    step(f, "layout", layout::run);
 }
 
 fn step(f: &mut Func, name: &str, pass: fn(&mut Func) -> bool) -> bool {

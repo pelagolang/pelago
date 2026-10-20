@@ -820,3 +820,50 @@ fn a_load_moves_only_when_the_loop_writes_no_memory() {
     assert!(!licm::run(&mut w));
     assert!(in_loop_blocks(&w, |o| matches!(o, Op::Load(..))));
 }
+
+#[test]
+fn a_loop_is_laid_out_with_its_test_at_the_bottom() {
+    // entry, head, body, done  ->  entry, body, head, done
+    let f = counter_loop(Some(0), 1, BinOp::Add, CmpOp::Lt, Some(10));
+    let mut g = f.clone();
+    assert!(layout::run(&mut g));
+    assert!(verify_func(&g).is_empty(), "{}", print_func(&g, None));
+    let is_head = |b: &Block| matches!(b.term, Some(Term::Branch(..)));
+    let at = g.blocks.iter().position(is_head).unwrap();
+    assert_eq!(at, g.blocks.len() - 2, "{}", print_func(&g, None));
+    // The body jumps to the block right after it, the header branches back up.
+    let Some(Term::Jump(t)) = &g.blocks[at - 1].term else {
+        panic!("{}", print_func(&g, None))
+    };
+    assert_eq!(t.block.0 as usize, at);
+    assert!(!layout::run(&mut g), "a second run changes nothing");
+    let (a, b) = (module_of(f), module_of(g));
+    assert_eq!(
+        run_full(&a, "main", &[]).result,
+        run_full(&b, "main", &[]).result
+    );
+}
+
+#[test]
+fn blocks_that_stop_go_last() {
+    let mut f = Func::new("main", &[IrTy::I64], IrTy::I64);
+    let e = f.entry();
+    let a = f.block_params(e)[0];
+    let bad = f.new_block(&[]);
+    let ok = f.new_block(&[]);
+    let c = f
+        .emit(e, Op::Cmp(CmpOp::Ne, a, a), Some(IrTy::Bool))
+        .unwrap();
+    let to = |block| Target {
+        block,
+        args: vec![],
+    };
+    f.terminate(e, Term::Branch(c, to(bad), to(ok)));
+    f.terminate(bad, Term::Stop("no".into()));
+    f.terminate(ok, Term::Return(Some(a)));
+    assert!(layout::run(&mut f));
+    assert!(matches!(f.blocks[2].term, Some(Term::Stop(_))));
+    assert!(verify_func(&f).is_empty(), "{}", print_func(&f, None));
+    let m = module_of(f);
+    assert_eq!(run_full(&m, "main", &[Val::Int(7)]).result, Ok(Val::Int(7)));
+}
