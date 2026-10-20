@@ -21,6 +21,7 @@ mod divconst;
 mod dom;
 mod ifconv;
 mod inline;
+pub use inline::COLD_SUFFIX;
 mod layout;
 mod licm;
 mod loops;

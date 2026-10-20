@@ -388,7 +388,13 @@ impl<'m> Gen<'m> {
             let saved: Vec<Reg> = VALUE_REGS.iter().copied().take(n).collect();
             let scratch: Vec<Reg> = SCRATCH_REGS.iter().copied().take(n).collect();
             let xmm: Vec<Xmm> = XMM_REGS.iter().copied().take(n).collect();
-            super::regs::assign(f, &saved, &scratch, &xmm, &INT_REGS, &folds, &imms)
+            let cold: Vec<bool> = self
+                .m
+                .funcs
+                .iter()
+                .map(|g| g.name.ends_with(crate::ir::opt::COLD_SUFFIX))
+                .collect();
+            super::regs::assign(f, &saved, &scratch, &xmm, &INT_REGS, &folds, &imms, &cold)
         } else {
             super::regs::Alloc {
                 reg: vec![None; f.values.len()],

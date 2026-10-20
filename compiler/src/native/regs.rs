@@ -446,7 +446,9 @@ fn term_reads(t: &Term, folds: &[Fold], out: &mut Vec<Value>) {
 
 /// Assigns registers. `saved` are callee-saved registers, `scratch` caller-saved ones in the order
 /// to try them, `xmm` the SSE registers for floats (all caller-saved), and `args` the registers that
-/// carry the integer parameters and arguments (in order, used only as a preference).
+/// carry the integer parameters and arguments (in order, used only as a preference). `cold` says which
+/// functions (by number) run rarely.
+#[allow(clippy::too_many_arguments)]
 pub fn assign(
     f: &Func,
     saved: &[Reg],
@@ -455,6 +457,7 @@ pub fn assign(
     args: &[Reg],
     folds: &[Fold],
     consts: &[Option<i64>],
+    cold: &[bool],
 ) -> Alloc {
     let nv = f.values.len();
     let nb = f.blocks.len();
@@ -592,10 +595,16 @@ pub fn assign(
     for (bi, b) in f.blocks.iter().enumerate() {
         for &i in &b.insts {
             if is_call_like(&f.insts[i].op, consts) {
+                // A call to a function that runs rarely weighs one, wherever it stands: the values
+                // that live across it may stay in caller-saved registers and be saved around it.
+                let weight = match &f.insts[i].op {
+                    Op::Call(g, _) if cold.get(g.0 as usize).copied().unwrap_or(false) => 1,
+                    _ => block_weight(bi),
+                };
                 calls.push((
                     o.inst_pos[i],
                     i,
-                    block_weight(bi),
+                    weight,
                     matches!(f.insts[i].op, Op::MemCopy(..)),
                 ));
             }
