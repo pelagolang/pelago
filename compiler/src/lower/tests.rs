@@ -2329,3 +2329,26 @@ fn default_that_returns_does_not_leak_later_locals() {
     let src = "fn pair(n: int) -> int ! string {\n var s: [string] = [\"x#(1)\", \"yy\"]\n const b = s.pop!() ?? return err(\"b\")\n const a = s.pop!() ?? return err(\"a\")\n ok(a.len() + b.len() + n)\n}\nfn main() {\n switch pair(0) { case ok(n): print(n)\n case err(e): print(e) }\n}\n";
     assert_eq!(output_of(src), "4\n");
 }
+
+/// Keys that land in the same slot of a small table go on along the probe sequence: lookups, inserts
+/// that replace, removals and a set, with the first slot holding another key.
+#[test]
+fn maps_find_keys_that_collide_in_the_first_slot() {
+    agree(
+        "fn main() {
+            var m: map<int, int> = {:}
+            for i in 0..60 { m.insert!(i * 1048576, i) }
+            for i in 0..60 { m.insert!(i * 1048576, i + 100) }
+            var t = 0
+            for i in 0..60 { t += m.get(i * 1048576) ?? 0 }
+            for i in 0..60 { t += m.get(i * 1048576 + 1) ?? 1000 }
+            print(m.len(), t)
+            var s: set<int> = set {}
+            for i in 0..40 { s.insert!(i * 65536) }
+            for i in 0..40 { s.insert!(i * 65536) }
+            var c = 0
+            for i in 0..80 { if s.contains(i * 65536) { c += 1 } }
+            print(s.len(), c)
+        }",
+    );
+}
