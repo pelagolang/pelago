@@ -728,6 +728,9 @@ pub fn emit(
     emit_mmap_reg(a, RSI, win);
     a.mov_rr(RDX, RAX, 8);
     map_failed(a, RDX, oom, win);
+    if !win {
+        advise_huge(a, RDX, R12);
+    }
     a.store_imm(mem(RDX, 0), LARGE_CLASS, 8);
     a.store(mem(RDX, 8), R12, 8);
     a.bind(out);
@@ -844,7 +847,9 @@ pub fn emit(
         a.alu_ri(Alu::Cmp, RAX, -4095, 8);
         a.jcc(Cc::Ae, oom);
         a.store(mem(RAX, 8), R13, 8);
-        a.lea(RBX, mem(RAX, 16));
+        a.mov_rr(RDX, RAX, 8);
+        advise_huge(a, RDX, R13);
+        a.lea(RBX, mem(RDX, 16));
         a.jmp(rdone);
     }
     // Generic: allocate, copy what fits, free the old block.
@@ -918,6 +923,25 @@ fn emit_mmap_reg(a: &mut Asm, len: Reg, win: bool) {
     a.mov_ri(R8, -1);
     a.alu_rr(Alu::Xor, R9, R9, 4);
     a.syscall();
+}
+
+/// Mappings at least this big ask for huge pages: a 40 MB buffer then takes a few page faults instead
+/// of ten thousand. Only a hint (the kernel may say no); Linux only.
+const HUGE_MIN: i32 = 4 << 20;
+
+/// `madvise(addr, len, MADV_HUGEPAGE)` for a big mapping; `addr` and `len` registers are kept.
+fn advise_huge(a: &mut Asm, addr: Reg, len: Reg) {
+    let skip = a.new_label();
+    a.alu_ri(Alu::Cmp, len, HUGE_MIN, 8);
+    a.jcc(Cc::B, skip);
+    a.push(addr);
+    a.mov_rr(RDI, addr, 8);
+    a.mov_rr(RSI, len, 8);
+    a.mov_ri(RDX, 14);
+    a.mov_ri(RAX, 28);
+    a.syscall();
+    a.pop(addr);
+    a.bind(skip);
 }
 
 /// Jumps to `oom` when the mapping call that left its result in `r` failed.
