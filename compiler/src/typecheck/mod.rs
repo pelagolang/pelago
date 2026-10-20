@@ -112,6 +112,10 @@ pub struct Typed {
     /// The function run by each call, method call, operator, `?` conversion and `for` iteration,
     /// keyed by the expression's file and span.
     pub calls: HashMap<(ModuleId, u32, u32), CallTarget>,
+    /// The field, method or enum case each member name after a `.`, or inside a struct literal or
+    /// pattern, refers to, keyed by the file and the start of the name (the resolver cannot know:
+    /// it needs the type of the value).
+    pub member_uses: HashMap<(ModuleId, u32), DefId>,
     names: Vec<String>,
 }
 
@@ -378,6 +382,7 @@ pub(crate) struct Checker<'p> {
     pending_sinks: Vec<(ModuleId, Span, String)>,
     /// Which function each call, operator or conversion runs, with its type arguments.
     calls: Vec<RawCall>,
+    member_uses: HashMap<(ModuleId, u32), DefId>,
     owning_cache: Option<std::collections::HashSet<DefId>>,
     linear: std::collections::HashSet<DefId>,
     pending_nonlinear: Vec<(ModuleId, Span, Ty, DefId)>,
@@ -440,6 +445,7 @@ impl<'p> Checker<'p> {
             pending_matches: Vec::new(),
             pending_sinks: Vec::new(),
             calls: Vec::new(),
+            member_uses: HashMap::new(),
             owning_cache: None,
             linear: std::collections::HashSet::new(),
             pending_nonlinear: Vec::new(),
@@ -585,6 +591,7 @@ impl<'p> Checker<'p> {
             adts,
             impls,
             calls,
+            member_uses: self.member_uses,
             tys,
             local_tys,
             names: self.res.defs.iter().map(|d| d.name.clone()).collect(),
@@ -755,6 +762,11 @@ impl<'p> Checker<'p> {
     }
 
     /// The definition a name at `id` was resolved to.
+    /// Remembers that the member name at `span` refers to `def` (for the language server).
+    pub(crate) fn note_member(&mut self, span: Span, def: DefId) {
+        self.member_uses.insert((self.file, span.start), def);
+    }
+
     pub(crate) fn used(&self, id: &Ident) -> Option<DefId> {
         self.res.use_at(self.file, id.span.start)
     }

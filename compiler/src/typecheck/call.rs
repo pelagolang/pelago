@@ -125,6 +125,7 @@ impl<'p> Checker<'p> {
                         self.err(span, format!("the field `{name}` of `{tn}` is private"));
                     }
                 }
+                self.note_member(span, f);
                 let ft = self.field_ty(f);
                 let map = self.adt_map(def, args);
                 return Some(self.tt.subst(ft, &map));
@@ -412,6 +413,9 @@ impl<'p> Checker<'p> {
                     match found {
                         Some((fd, ft)) => {
                             given.push(fd);
+                            if fi.value.is_some() {
+                                self.note_member(fi.name.span, fd);
+                            }
                             match &fi.value {
                                 Some(v) => {
                                     self.check_coerce(v, ft);
@@ -902,7 +906,10 @@ impl<'p> Checker<'p> {
                 .member(def, n)
                 .filter(|m| self.def(*m).kind == DefKind::Variant)
             {
-                Some(v) => self.variant_call(e, v, args, Exp::Is(want)),
+                Some(v) => {
+                    self.note_member(name.span, v);
+                    self.variant_call(e, v, args, Exp::Is(want))
+                }
                 None => {
                     let tn = self.def(def).name.clone();
                     self.err(name.span, format!("`{tn}` has no case `{n}`"));
@@ -1053,6 +1060,7 @@ impl<'p> Checker<'p> {
             self.err(name.span, msg);
             return self.tt.unknown;
         };
+        self.note_member(name.span, m.def);
         if !m.sig.has_self {
             let s = self.show(recv);
             self.err(

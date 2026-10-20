@@ -255,6 +255,7 @@ impl Analysis {
             .uses
             .get(&(m, start))
             .or_else(|| self.resolved.decls.get(&(m, start)))
+            .or_else(|| self.typed.member_uses.get(&(m, start)))
             .copied()
     }
 
@@ -276,6 +277,7 @@ impl Analysis {
             .resolved
             .uses
             .iter()
+            .chain(self.typed.member_uses.iter())
             .filter(|(_, d)| **d == def)
             .map(|((f, s), _)| (*f, Span::new(*s, *s + len)))
             .collect();
