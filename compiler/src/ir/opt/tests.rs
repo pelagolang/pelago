@@ -1380,10 +1380,11 @@ fn the_last_call_of_a_sum_becomes_a_loop() {
             let (o, before, after) = both(&fib_module(k, swap));
             assert_eq!((before, after), (Val::Int(want), Val::Int(want)));
             let fib = o.funcs.iter().find(|f| f.name == "fib").unwrap();
-            // The first call stays, and the slow path of the guard makes the second one.
+            // The loop's call was replaced by a copy of the function, which brings its own loop
+            // call and the slow paths of the guards; without the copy there would be two calls.
             assert_eq!(
                 count(fib, |o| matches!(o, Op::Call(g, _) if *g == FuncId(0))),
-                2,
+                3,
                 "{}",
                 print_func(fib, None)
             );
