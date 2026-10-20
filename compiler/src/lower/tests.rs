@@ -1525,6 +1525,10 @@ fn native_agrees_on_the_edge_cases() {
         "fn fib(n: int) -> int = n < 2 ? n : fib(n - 1) + fib(n - 2)\nfn main() { print(fib(0 - 5), fib(1), fib(20)) }",
         "fn m(n: int, a: int) -> int { if n == 0 { 0 } else { a + m(n - 1, 1 - a) } }\nfn main() { print(m(5, 4611686018427387904), m(6, 0 - 7)) }",
         "fn m(n: int, a: int) -> int { if n == 0 { 0 } else { a + m(n - 1, a) } }\nfn main() { print(m(3, 4611686018427387904)) }",
+        // A test at the entry that returns at once: calls are guarded by it.
+        "fn tak(x: int, y: int, z: int) -> int { if y < x { tak(tak(x - 1, y, z), tak(y - 1, z, x), tak(z - 1, x, y)) } else { z } }\nfn main() { print(tak(18, 12, 6), tak(3, 9, 1), tak(0 - 2, 5, 7)) }",
+        "fn c(n: int) -> int { if n <= 0 { 0 } else { c(n - 1) + c(n - 2) + 1 } }\nfn main() { print(c(20), c(0 - 4), c(1)) }",
+        "fn a(m: int, n: int) -> int { if m == 0 { n + 1 } else if n == 0 { a(m - 1, 1) } else { a(m - 1, a(m, n - 1)) } }\nfn main() { print(a(2, 3), a(3, 3)) }",
     ];
     for p in programs {
         agree(p);

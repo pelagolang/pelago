@@ -1529,3 +1529,28 @@ fn a_loop_test_is_followed_by_its_exit_and_guards_go_last() {
         .unwrap();
     assert!(slow >= last_loop_jump, "{}", print_func(fib, None));
 }
+
+#[test]
+fn a_call_is_guarded_by_the_entry_test_of_the_function() {
+    // fib returns `n` at once when `n < 2`: calls with such arguments are not made.
+    let m = fib_module(12, false);
+    assert!(peel::analyze(&m.funcs[0]).is_some());
+    let (o, ..) = both(&m);
+    let fib = o.funcs.iter().find(|f| f.name == "fib").unwrap();
+    let mut guarded = fib.blocks.iter().filter(|b| {
+        let call = b
+            .insts
+            .iter()
+            .any(|&i| matches!(fib.insts[i].op, Op::Call(..)));
+        call && matches!(b.term, Some(Term::Jump(_)))
+    });
+    // Every call that does not end the function sits alone in the block a test leads to.
+    assert!(guarded.clone().count() >= 1, "{}", print_func(fib, None));
+    assert!(
+        guarded.all(|b| b.insts.len() <= 3),
+        "{}",
+        print_func(fib, None)
+    );
+    // `main` has no such test.
+    assert!(peel::analyze(&m.funcs[1]).is_none());
+}
