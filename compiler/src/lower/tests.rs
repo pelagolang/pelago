@@ -1926,6 +1926,15 @@ fn big_buffers_keep_their_contents_while_they_grow() {
     agree(src);
 }
 
+#[test]
+fn a_buffer_past_a_mebibyte_keeps_its_contents_while_it_grows() {
+    // On Windows a block of 1 MiB or more reserves eight times its size and commits as it grows; this
+    // list passes 1 MiB and then grows in place.
+    let src = "fn main() {\n var xs: [int] = []\n for i in 0..300000 { xs.push!(i) }\n var t = 0\n for i in 0..xs.len() { t += xs[i] }\n print(xs.len(), t, xs[299999]) }\n";
+    assert_eq!(output_of(src), "300000 44999850000 299999\n");
+    agree(src);
+}
+
 // ---- Float semantics: single precision rounding and saturating float to int -------------------------------
 
 #[test]
