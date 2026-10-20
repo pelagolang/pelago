@@ -526,6 +526,17 @@ impl Asm {
         self.int_op(size, &[0x0F, 0xAF], dst.0, Rm::Reg(src.0), &[], 0);
     }
 
+    /// `dst = src * imm` (the three-operand form; `size` is 4 or 8).
+    pub fn imul_rri(&mut self, dst: Reg, src: Reg, v: i32, size: u8) {
+        if fits_i8(v as i64) {
+            self.int_op(size, &[0x6B], dst.0, Rm::Reg(src.0), &[], 1);
+            self.imm(v as i64, 1);
+        } else {
+            self.int_op(size, &[0x69], dst.0, Rm::Reg(src.0), &[], 4);
+            self.imm(v as i64, 4);
+        }
+    }
+
     pub fn neg(&mut self, r: Reg, size: u8) {
         let op = if size == 1 { 0xF6 } else { 0xF7 };
         self.int_op(size, &[op], 3, Rm::Reg(r.0), &[r], 0);

@@ -251,6 +251,15 @@ pub fn golden() -> Vec<Case> {
         ("test sil, sil", "40 84 f6", |a| a.test_rr(RSI, RSI, 1)),
         ("imul rax, rbx", "48 0f af c3", |a| a.imul_rr(RAX, RBX, 8)),
         ("imul eax, ecx", "0f af c1", |a| a.imul_rr(RAX, RCX, 4)),
+        ("imul rax, rbx, 10", "48 6b c3 0a", |a| {
+            a.imul_rri(RAX, RBX, 10, 8)
+        }),
+        ("imul r8, r9, 1000", "4d 69 c1 e8 03 00 00", |a| {
+            a.imul_rri(R8, R9, 1000, 8)
+        }),
+        ("imul ecx, edx, -3", "6b ca fd", |a| {
+            a.imul_rri(RCX, RDX, -3, 4)
+        }),
         ("imul r8, r9", "4d 0f af c1", |a| a.imul_rr(R8, R9, 8)),
         ("imul ax, cx", "66 0f af c1", |a| a.imul_rr(RAX, RCX, 2)),
         ("neg rax", "48 f7 d8", |a| a.neg(RAX, 8)),

@@ -1380,6 +1380,15 @@ impl<'m> Gen<'m> {
         }
         let w = bits(t);
         match op {
+            BinOp::Mul if self.imm32(b, f, false).is_some() => {
+                // `imul d, a, imm`: no register for the constant.
+                let n = self.imm32(b, f, false).unwrap();
+                let d = self.dst(r);
+                let ra = self.src(a, f, false, RCX);
+                self.a.imul_rri(d, ra, n, 8);
+                self.mask(d, w);
+                self.st(r, d);
+            }
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor => {
                 // Built in the result's own register when it has one. That may be the register of
                 // `a` (nothing to load) or of `b`: then a commutative operation swaps the operands
@@ -1475,15 +1484,17 @@ impl<'m> Gen<'m> {
                 let Where::Imm(n) = self.loc[b.0 as usize] else {
                     unreachable!()
                 };
-                self.ld_ext(RAX, a, f, op == BinOp::Shr);
+                // Built in the result's own register (no round trip through `rax`).
+                let d = self.dst(r);
+                self.ld_ext(d, a, f, op == BinOp::Shr);
                 let sh = match op {
                     BinOp::Shl => Shift::Shl,
                     BinOp::Shr => Shift::Sar,
                     _ => Shift::Shr,
                 };
-                self.a.shift_imm(sh, RAX, n as u8, 8);
-                self.mask(RAX, w);
-                self.st(r, RAX);
+                self.a.shift_imm(sh, d, n as u8, 8);
+                self.mask(d, w);
+                self.st(r, d);
             }
             BinOp::Shl | BinOp::Shr | BinOp::UShr => {
                 self.ld(RCX, b);
