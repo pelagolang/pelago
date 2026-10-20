@@ -670,3 +670,153 @@ fn loops_with_dropped_checks_give_the_same_answers() {
         both(&m);
     }
 }
+
+/// `fn main(a, b) { acc = 0; i = 0; while i < n { acc += <body op> a b; i += 1 }; acc }` where the
+/// loop is entered through a branch (`a < b`) when `guarded`, so it has no preheader of its own.
+fn invariant_loop(body: BinOp, guarded: bool, n: i128) -> Func {
+    let mut f = Func::new("main", &[IrTy::I64, IrTy::I64], IrTy::I64);
+    let e = f.entry();
+    let (a, b) = (f.block_params(e)[0], f.block_params(e)[1]);
+    let head = f.new_block(&[IrTy::I64, IrTy::I64]);
+    let step = f.new_block(&[]);
+    let done = f.new_block(&[IrTy::I64]);
+    let konst = |f: &mut Func, blk, v: i128| {
+        f.emit(blk, Op::Const(IrTy::I64, Const::Int(v)), Some(IrTy::I64))
+            .unwrap()
+    };
+    let to = |blk, args| Target { block: blk, args };
+    let zero = konst(&mut f, e, 0);
+    if guarded {
+        let c = f
+            .emit(e, Op::Cmp(CmpOp::Lt, a, b), Some(IrTy::Bool))
+            .unwrap();
+        f.terminate(
+            e,
+            Term::Branch(c, to(head, vec![zero, zero]), to(done, vec![zero])),
+        );
+    } else {
+        f.terminate(e, Term::Jump(to(head, vec![zero, zero])));
+    }
+    let (i, acc) = (f.block_params(head)[0], f.block_params(head)[1]);
+    let lim = konst(&mut f, head, n);
+    let c = f
+        .emit(head, Op::Cmp(CmpOp::Lt, i, lim), Some(IrTy::Bool))
+        .unwrap();
+    f.terminate(head, Term::Branch(c, to(step, vec![]), to(done, vec![acc])));
+    let k = f.emit(step, Op::Bin(body, a, b), Some(IrTy::I64)).unwrap();
+    let acc2 = f
+        .emit(step, Op::Bin(BinOp::Add, acc, k), Some(IrTy::I64))
+        .unwrap();
+    let one = konst(&mut f, step, 1);
+    let i2 = f
+        .emit(step, Op::Bin(BinOp::Add, i, one), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(step, Term::Jump(to(head, vec![i2, acc2])));
+    let r = f.block_params(done)[0];
+    f.terminate(done, Term::Return(Some(r)));
+    f
+}
+
+fn in_loop_blocks(f: &Func, p: impl Fn(&Op) -> bool) -> bool {
+    // Blocks 1 and 2 are the loop's header and step.
+    [1usize, 2]
+        .iter()
+        .any(|b| f.blocks[*b].insts.iter().any(|i| p(&f.insts[*i].op)))
+}
+
+fn same_results(f: &Func, args: &[(i128, i128)]) {
+    let mut g = f.clone();
+    assert!(licm::run(&mut g), "{}", print_func(f, None));
+    assert!(verify_func(&g).is_empty(), "{}", print_func(&g, None));
+    let (m, n) = (module_of(f.clone()), module_of(g));
+    for &(x, y) in args {
+        let a = [Val::Int(x as u128), Val::Int(y as u128)];
+        assert_eq!(
+            run_full(&m, "main", &a).result,
+            run_full(&n, "main", &a).result
+        );
+    }
+}
+
+#[test]
+fn invariant_arithmetic_moves_in_front_of_the_loop() {
+    for guarded in [false, true] {
+        let f = invariant_loop(BinOp::Mul, guarded, 5);
+        assert!(in_loop_blocks(&f, |o| matches!(o, Op::Bin(BinOp::Mul, ..))));
+        let mut g = f.clone();
+        assert!(licm::run(&mut g));
+        assert!(!in_loop_blocks(&g, |o| matches!(
+            o,
+            Op::Bin(BinOp::Mul, ..)
+        )));
+        // A guarded loop gets a block of its own for the product; an unguarded one reuses the entry.
+        assert_eq!(g.blocks.len(), f.blocks.len() + usize::from(guarded));
+        same_results(&f, &[(3, 4), (4, 3), (0, 0), (7, 7), (1 << 40, 5)]);
+    }
+}
+
+#[test]
+fn division_stays_in_the_loop_because_it_can_stop() {
+    // `a / b` with b = 0 stops, and the loop may run zero times.
+    let mut g = invariant_loop(BinOp::UDiv, false, 0);
+    assert!(!licm::run(&mut g));
+    assert!(in_loop_blocks(&g, |o| matches!(
+        o,
+        Op::Bin(BinOp::UDiv, ..)
+    )));
+}
+
+#[test]
+fn a_load_moves_only_when_the_loop_writes_no_memory() {
+    // `s = slot; store s, a; while i < 3 { acc += load s; [store s, i] }`
+    let build = |writes: bool| {
+        let mut f = Func::new("main", &[IrTy::I64], IrTy::I64);
+        let e = f.entry();
+        let a = f.block_params(e)[0];
+        let head = f.new_block(&[IrTy::I64, IrTy::I64]);
+        let step = f.new_block(&[]);
+        let done = f.new_block(&[IrTy::I64]);
+        let to = |blk, args| Target { block: blk, args };
+        let s = f.emit(e, Op::Slot(8, 8), Some(IrTy::Ptr)).unwrap();
+        f.emit(e, Op::Store(s, a), None);
+        let zero = f
+            .emit(e, Op::Const(IrTy::I64, Const::Int(0)), Some(IrTy::I64))
+            .unwrap();
+        f.terminate(e, Term::Jump(to(head, vec![zero, zero])));
+        let (i, acc) = (f.block_params(head)[0], f.block_params(head)[1]);
+        let three = f
+            .emit(head, Op::Const(IrTy::I64, Const::Int(3)), Some(IrTy::I64))
+            .unwrap();
+        let c = f
+            .emit(head, Op::Cmp(CmpOp::Lt, i, three), Some(IrTy::Bool))
+            .unwrap();
+        f.terminate(head, Term::Branch(c, to(step, vec![]), to(done, vec![acc])));
+        let v = f
+            .emit(step, Op::Load(IrTy::I64, s), Some(IrTy::I64))
+            .unwrap();
+        let acc2 = f
+            .emit(step, Op::Bin(BinOp::Add, acc, v), Some(IrTy::I64))
+            .unwrap();
+        if writes {
+            f.emit(step, Op::Store(s, i), None);
+        }
+        let one = f
+            .emit(step, Op::Const(IrTy::I64, Const::Int(1)), Some(IrTy::I64))
+            .unwrap();
+        let i2 = f
+            .emit(step, Op::Bin(BinOp::Add, i, one), Some(IrTy::I64))
+            .unwrap();
+        f.terminate(step, Term::Jump(to(head, vec![i2, acc2])));
+        let r = f.block_params(done)[0];
+        f.terminate(done, Term::Return(Some(r)));
+        f
+    };
+    let f = build(false);
+    same_results(&f, &[(5, 0), (9, 0)]);
+    let mut g = f.clone();
+    licm::run(&mut g);
+    assert!(!in_loop_blocks(&g, |o| matches!(o, Op::Load(..))));
+    let mut w = build(true);
+    assert!(!licm::run(&mut w));
+    assert!(in_loop_blocks(&w, |o| matches!(o, Op::Load(..))));
+}

@@ -18,6 +18,8 @@ mod dce;
 mod divconst;
 mod dom;
 mod inline;
+mod licm;
+mod loops;
 mod promote;
 mod ranges;
 mod sccp;
@@ -71,6 +73,7 @@ pub fn optimize_func(f: &mut Func) {
         changed |= step(f, "sccp", sccp::run);
         changed |= step(f, "divconst", divconst::run);
         changed |= step(f, "ranges", ranges::run);
+        changed |= step(f, "licm", licm::run);
         changed |= step(f, "simplify", cfg::run);
         changed |= step(f, "dce", dce::run);
         if !changed {
