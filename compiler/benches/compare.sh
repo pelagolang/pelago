@@ -74,7 +74,8 @@ def best(path):
             print(f"TIMEOUT: {path} did not finish within {limit:.0f} s", file=sys.stderr, flush=True)
             sys.exit(2)
         times.append(time.perf_counter() - t)
-    return min(times), text
+    # C's text-mode stdout writes CRLF on Windows; Pelago and Rust write LF.
+    return min(times), text.replace(b"\r\n", b"\n")
 
 import math, os
 
