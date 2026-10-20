@@ -702,6 +702,16 @@ impl Asm {
         self.bytes(&[0xF3, 0xAA]);
     }
 
+    /// Fills `rcx` elements of `size` bytes at `[rdi]` with `al`, `ax`, `eax` or `rax`.
+    pub fn rep_stos(&mut self, size: u8) {
+        match size {
+            1 => self.bytes(&[0xF3, 0xAA]),
+            2 => self.bytes(&[0x66, 0xF3, 0xAB]),
+            4 => self.bytes(&[0xF3, 0xAB]),
+            _ => self.bytes(&[0xF3, 0x48, 0xAB]),
+        }
+    }
+
     // ---- SSE ----------------------------------------------------------------------------------------
 
     fn sse(&mut self, prefix: Option<u8>, w: bool, opcode: &[u8], reg: u8, rm: Rm) {

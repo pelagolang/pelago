@@ -324,6 +324,9 @@ pub fn golden() -> Vec<Case> {
         ("ud2", "0f 0b", |a| a.ud2()),
         ("rep movsb", "f3 a4", |a| a.rep_movsb()),
         ("rep stosb", "f3 aa", |a| a.rep_stosb()),
+        ("rep stosw", "66 f3 ab", |a| a.rep_stos(2)),
+        ("rep stosd", "f3 ab", |a| a.rep_stos(4)),
+        ("rep stosq", "f3 48 ab", |a| a.rep_stos(8)),
         ("movsd xmm0, [rax]", "f2 0f 10 00", |a| {
             a.fload(Xmm(0), mem(RAX, 0), true)
         }),
