@@ -1193,6 +1193,14 @@ impl<'p> Checker<'p> {
                     | TyKind::Box(_)
             )
         {
+            if ordering && matches!(k, TyKind::Any(_)) {
+                let s = self.show(lt);
+                self.err(
+                    e.span,
+                    format!("`{s}` cannot be ordered: values of different types behind `any` have no order"),
+                );
+                return self.tt.bool_;
+            }
             let need = if ordering { "order" } else { "eq" };
             if let Some(i) = self.core_iface(need) {
                 if !self.provides(lt, i) {
@@ -1484,6 +1492,18 @@ impl<'p> Checker<'p> {
                     self.err(
                         e.span,
                         format!("`{b}` is not a kind of `{a}`, so this can never succeed"),
+                    );
+                }
+            }
+            // `a to? sq` on an `any shape`: `sq` has to provide `shape`.
+            if let TyKind::Any(iface) = self.kind_of(vt) {
+                if !matches!(self.kind_of(target), TyKind::Unknown | TyKind::Error)
+                    && !self.provides(target, iface)
+                {
+                    let (a, b) = (self.show(vt), self.show(target));
+                    self.err(
+                        e.span,
+                        format!("`{b}` does not provide the interface of `{a}`, so this can never succeed"),
                     );
                 }
             }

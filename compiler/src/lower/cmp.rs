@@ -137,6 +137,7 @@ impl<'a> Lowerer<'a> {
                 ok
             }
             TyKind::Set(_) | TyKind::Map(..) => self.eq_collection(a, b, ty, fail),
+            TyKind::Any(_) => self.eq_any(a, b, fail),
             _ => false,
         }
     }
@@ -429,6 +430,13 @@ impl<'a> Lowerer<'a> {
                 let p = self.load_at(a, 0, IrTy::Ptr);
                 self.hash_part(p, inner, acc)
             }
+            TyKind::Any(_) => match self.hash_any(a) {
+                Some(h) => {
+                    self.mix(acc, h);
+                    true
+                }
+                None => false,
+            },
             _ => false,
         }
     }

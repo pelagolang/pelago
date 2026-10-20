@@ -993,6 +993,22 @@ fn equality_and_order_need_interfaces() {
 }
 
 #[test]
+fn any_compares_and_downcasts_within_its_interface() {
+    let defs = "interface key : hash { fn area(self) -> int }\nstruct sq { s: int }\nimpl hash for sq { fn hash(self) -> int = self.s }\nimpl key for sq { fn area(self) -> int = 1 }\nstruct blob { n: int }\n";
+    clean(&format!(
+        "{defs}fn t(a: any key, b: any key) -> bool = a == b\nfn u(a: any key) -> sq? = a to? sq"
+    ));
+    flagged(
+        &format!("{defs}fn t(a: any key, b: any key) -> bool = a < b"),
+        "cannot be ordered",
+    );
+    flagged(
+        &format!("{defs}fn u(a: any key) -> blob? = a to? blob"),
+        "does not provide the interface",
+    );
+}
+
+#[test]
 fn any_needs_the_interface() {
     let defs = "interface shape { fn area(self) -> float }\nstruct sq { s: float }\nimpl shape for sq { fn area(self) -> float = 1.0 }\nstruct blob { n: int }\n";
     clean(&format!(

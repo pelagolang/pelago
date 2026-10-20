@@ -627,6 +627,18 @@ fn program_iface() {
 }
 
 #[test]
+fn program_any_equality_and_hash() {
+    let src = "interface key: hash { fn area(self) -> int }\nstruct sq { s: int }\nstruct rect { w: int, h: int }\nimpl hash for sq { fn hash(self) -> int = self.s }\nimpl hash for rect { fn hash(self) -> int = self.w * 31 + self.h }\nimpl key for sq { fn area(self) -> int = self.s * self.s }\nimpl key for rect { fn area(self) -> int = self.w * self.h }\nfn main() {\n var seen: set<any key> = set {}\n seen.insert!(sq { s: 3 })\n seen.insert!(sq { s: 3 })\n seen.insert!(sq { s: 4 })\n seen.insert!(rect { w: 3, h: 3 })\n print(seen.len())\n const probe: any key = sq { s: 4 }\n print(seen.contains(probe))\n const other: any key = rect { w: 1, h: 1 }\n print(seen.contains(other))\n const x: any key = sq { s: 3 }\n const y: any key = sq { s: 3 }\n const z: any key = rect { w: 3, h: 1 }\n print(x == y, x == z, x != z) }\n";
+    assert_eq!(output_of(src), "3\ntrue\nfalse\ntrue false true\n");
+}
+
+#[test]
+fn program_any_downcast() {
+    let src = "interface shape { fn area(self) -> int }\nstruct sq { s: int }\nstruct rect { w: int, h: int }\nstruct named { name: string }\nimpl shape for sq { fn area(self) -> int = self.s * self.s }\nimpl shape for rect { fn area(self) -> int = self.w * self.h }\nimpl shape for named { fn area(self) -> int = self.name.len() }\nfn main() {\n const a: any shape = sq { s: 3 }\n const b = a to? sq\n print((b ?? sq { s: 0 }).s)\n const c: any shape = rect { w: 2, h: 5 }\n const d = c to? sq\n print((d ?? sq { s: 0 }).s, c.area())\n const e: any shape = named { name: \"abc\" }\n const f = e to? named\n print((f ?? named { name: \"\" }).name) }\n";
+    assert_eq!(output_of(src), "3\n0 10\nabc\n");
+}
+
+#[test]
 fn program_builder() {
     let src = "fn main() { const xs = [1, 2, 3, 4, 5, 6]\n print([x of xs if x % 2 == 0 ~> x * 10])\n print([x of xs if x > 4])\n print([i, x of xs if i < 2 ~> \"#i:#x\"])\n print([x of 0..3, y of 0..2 ~> (x, y)])\n print(set { x of xs ~> x % 3 })\n print(map { x of 1..4 ~> x : x * x })\n print(xs.map(x ~> x + 1).to_list()) }\n";
     assert_eq!(output_of(src), "[20, 40, 60]\n[5, 6]\n[\"0:1\", \"1:2\"]\n[(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]\n{1, 2, 0}\n{1: 1, 2: 4, 3: 9}\n[2, 3, 4, 5, 6, 7]\n");

@@ -6,15 +6,19 @@
 //! | slot | holds |
 //! |------|-------|
 //! | 0 | the function that drops the heap copy and frees it |
-//! | 1 | (reserved) |
-//! | 2.. | one function per method of the interface, in declaration order |
+//! | 1 | the type's `eq` glue (two addresses, gives a bool), when the interface builds on `eq` |
+//! | 2 | the type's `hash` glue (an address, gives an i64), when the interface builds on `hash` |
+//! | 3.. | one function per method of the interface, in declaration order |
 //!
 //! A method in the table takes the address of the heap copy where the method wants `self`; it loads
 //! the value first when the type passes `self` by value.
 
+use super::expr::strip_parens;
 use super::*;
 
-const FIRST_METHOD: usize = 2;
+const EQ_SLOT: usize = 1;
+const HASH_SLOT: usize = 2;
+const FIRST_METHOD: usize = 3;
 
 pub(crate) struct AnyThunkJob {
     pub id: FuncId,
@@ -44,20 +48,76 @@ impl<'a> Lowerer<'a> {
         ms.iter().position(|x| *x == m).map(|i| FIRST_METHOD + i)
     }
 
+    /// The data block of the table for `t` seen as `iface` (made empty on first use; the table is
+    /// filled in by the first code that needs a value in it).
+    fn any_table_data(&mut self, t: Ty, iface: DefId) -> u32 {
+        let t = self.types.zonk(t);
+        if let Some(i) = self.any_tables.get(&(t, iface)) {
+            return *i;
+        }
+        let nslots = FIRST_METHOD + self.iface_methods(iface).len();
+        let i = self.module.add_zeroed_data(nslots * 8 + 8);
+        self.any_tables.insert((t, iface), i);
+        i
+    }
+
+    /// `x to? sq` on an `any shape`: when the table is the one for (`sq`, `shape`), the value moves
+    /// out of its heap copy into the option, and the copy is freed. A failed test leaves `x` alone.
+    pub(crate) fn downcast_any(
+        &mut self,
+        e: &'a Expr,
+        v: &'a Expr,
+        dst: Value,
+        t: Ty,
+        iface: DefId,
+    ) -> Res {
+        let sp = e.span;
+        let (TyKind::Option(target), Some(info)) = (self.kind(t), self.enum_info(t)) else {
+            return self.unsupported(sp, "`to?` to this type");
+        };
+        let named = matches!(strip_parens(v).kind, ExprKind::Name(_));
+        let place = if named { self.place(v) } else { None };
+        let Some(p) = place else {
+            return self.unsupported(sp, "`to?` on an `any` that is not a variable");
+        };
+        let idx = self.any_table_data(target, iface);
+        let Some(want) = self.emit(Op::DataAddr(idx), Some(IrTy::Ptr), sp) else {
+            return Res::Never;
+        };
+        let have = self.load_at(p, 8, IrTy::Ptr);
+        let Some(same) = self.emit(Op::Cmp(CmpOp::Eq, have, want), Some(IrTy::Bool), sp) else {
+            return Res::Never;
+        };
+        let yes = self.new_block(&[]);
+        let no = self.new_block(&[]);
+        let done = self.new_block(&[]);
+        self.branch(same, yes, no);
+        self.start(no);
+        let zero = self.konst(info.tag, Const::Int(0), sp);
+        self.store_at(dst, 0, zero);
+        self.jump(done, vec![]);
+        self.start(yes);
+        let one = self.konst(info.tag, Const::Int(1), sp);
+        self.store_at(dst, 0, one);
+        let data = self.load_at(p, 0, IrTy::Ptr);
+        if let Some(f) = info.variants[1].first() {
+            let at = self.addr(dst, f.off);
+            self.copy_mem_or_scalar(at, data, target);
+        }
+        self.emit(Op::Free(data), None, sp);
+        self.mark_moved(v);
+        self.jump(done, vec![]);
+        self.start(done);
+        Res::Unit
+    }
+
     /// The address of the table for `t` seen as `iface`.
     pub(crate) fn any_vtable(&mut self, t: Ty, iface: DefId) -> Option<Value> {
         let t = self.types.zonk(t);
         let methods = self.iface_methods(iface);
         let nslots = FIRST_METHOD + methods.len();
         let sp = Span::new(0, 0);
-        let idx = match self.any_tables.get(&(t, iface)) {
-            Some(i) => *i,
-            None => {
-                let i = self.module.add_zeroed_data(nslots * 8 + 8);
-                self.any_tables.insert((t, iface), i);
-                i
-            }
-        };
+        let idx = self.any_table_data(t, iface);
         let vt = self.emit(Op::DataAddr(idx), Some(IrTy::Ptr), sp)?;
         let flag = self.addr(vt, (nslots * 8) as u32);
         let built = self.load_at(flag, 0, IrTy::Bool);
@@ -70,6 +130,25 @@ impl<'a> Lowerer<'a> {
         if let Some(f) = self.glue_fn(GlueKind::BoxDrop, t) {
             if let Some(a) = self.emit(Op::FuncAddr(f), Some(IrTy::Ptr), sp) {
                 self.store_at(vt, 0, a);
+            }
+        }
+        let (has_eq, has_hash) = self
+            .typed
+            .iface_eq_hash
+            .get(&iface)
+            .copied()
+            .unwrap_or((false, false));
+        for (wanted, kind, slot) in [
+            (has_eq, GlueKind::Eq, EQ_SLOT),
+            (has_hash, GlueKind::Hash, HASH_SLOT),
+        ] {
+            if !wanted {
+                continue;
+            }
+            if let Some(f) = self.glue_fn(kind, t) {
+                if let Some(a) = self.emit(Op::FuncAddr(f), Some(IrTy::Ptr), sp) {
+                    self.store_at(vt, (slot * 8) as u32, a);
+                }
             }
         }
         for (i, m) in methods.iter().enumerate() {
@@ -216,6 +295,43 @@ impl<'a> Lowerer<'a> {
     pub(crate) fn box_drop_body(&mut self, data: Value, ty: Ty) {
         self.drop_at(data, ty);
         self.emit(Op::Free(data), None, Span::new(0, 0));
+    }
+
+    /// Compares two `any` values at `a` and `b`: equal when both hold the same type (the same table)
+    /// and that type's `eq` says so. Jumps to `fail` otherwise.
+    pub(crate) fn eq_any(&mut self, a: Value, b: Value, fail: BlockId) -> bool {
+        let sp = Span::new(0, 0);
+        let (ta, tb) = (self.load_at(a, 8, IrTy::Ptr), self.load_at(b, 8, IrTy::Ptr));
+        let same = self.emit(Op::Cmp(CmpOp::Eq, ta, tb), Some(IrTy::Bool), sp);
+        let Some(same) = same else { return false };
+        let ok = self.new_block(&[]);
+        self.branch(same, ok, fail);
+        self.start(ok);
+        let (da, db) = (self.load_at(a, 0, IrTy::Ptr), self.load_at(b, 0, IrTy::Ptr));
+        let f = self.load_at(ta, (EQ_SLOT * 8) as u32, IrTy::Ptr);
+        let Some(r) = self.emit(
+            Op::CallPtr(vec![IrTy::Ptr, IrTy::Ptr], IrTy::Bool, f, vec![da, db]),
+            Some(IrTy::Bool),
+            sp,
+        ) else {
+            return false;
+        };
+        let next = self.new_block(&[]);
+        self.branch(r, next, fail);
+        self.start(next);
+        true
+    }
+
+    /// The hash of an `any` at `a`: its type's `hash` glue on the heap copy.
+    pub(crate) fn hash_any(&mut self, a: Value) -> Option<Value> {
+        let data = self.load_at(a, 0, IrTy::Ptr);
+        let vt = self.load_at(a, 8, IrTy::Ptr);
+        let f = self.load_at(vt, (HASH_SLOT * 8) as u32, IrTy::Ptr);
+        self.emit(
+            Op::CallPtr(vec![IrTy::Ptr], IrTy::I64, f, vec![data]),
+            Some(IrTy::I64),
+            Span::new(0, 0),
+        )
     }
 
     /// Prints an `any` whose interface has `show`.
