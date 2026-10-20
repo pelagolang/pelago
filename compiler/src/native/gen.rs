@@ -179,6 +179,8 @@ struct Gen<'m> {
     /// Copies of block parameters kept out of line: label, the copies, and the block to jump to.
     stubs: Vec<Stub>,
     slot_off: HashMap<usize, i32>,
+    /// Big slots that a loop fills completely before anything else touches them: not cleared.
+    filled: HashSet<usize>,
     frame: i32,
     block_labels: Vec<Label>,
     ret_ty: IrTy,
@@ -323,6 +325,7 @@ impl<'m> Gen<'m> {
             stored: HashSet::new(),
             stubs: Vec::new(),
             slot_off: HashMap::new(),
+            filled: HashSet::new(),
             frame: 0,
             block_labels: Vec::new(),
             ret_ty: IrTy::Void,
@@ -363,6 +366,7 @@ impl<'m> Gen<'m> {
 
     fn layout(&mut self, f: &Func) {
         self.slot_off.clear();
+        self.filled = crate::ir::opt::filled_slots(f);
         let imms = const_values(f);
         let uses = f.use_counts();
         let folds = super::regs::folds(f, &uses, &imms);
@@ -650,8 +654,21 @@ impl<'m> Gen<'m> {
             self.a.mov_rr(RBP, RSP, 8);
             if self.frame > 0 {
                 // A big frame must not step over the guard: touch each page, top down, first.
-                for k in 1..=(self.frame / 4096) {
-                    self.a.alu_mi(Alu::Or, mem(RSP, -4096 * k), 0, 8);
+                let pages = self.frame / 4096;
+                if pages <= 8 {
+                    for k in 1..=pages {
+                        self.a.alu_mi(Alu::Or, mem(RSP, -4096 * k), 0, 8);
+                    }
+                } else {
+                    // A loop, not a probe per page in the code: a 40 MB array is 10 000 of them.
+                    let top = self.a.new_label();
+                    self.a.lea(R11, mem(RSP, -4096 * pages));
+                    self.a.mov_rr(R10, RSP, 8);
+                    self.a.bind(top);
+                    self.a.alu_ri(Alu::Sub, R10, 4096, 8);
+                    self.a.alu_mi(Alu::Or, mem(R10, 0), 0, 8);
+                    self.a.alu_rr(Alu::Cmp, R10, R11, 8);
+                    self.a.jcc(Cc::A, top);
                 }
                 self.a.alu_ri(Alu::Sub, RSP, self.frame, 8);
             }
@@ -1081,7 +1098,7 @@ impl<'m> Gen<'m> {
                 // Memory is zero when a slot comes into use, as in the interpreter, unless the code
                 // right after overwrites every byte before anything else touches it.
                 let off = self.slot_off[&id];
-                if !self.overwritten_first(f, id, off, *sz as i32) {
+                if !self.filled.contains(&id) && !self.overwritten_first(f, id, off, *sz as i32) {
                     self.zero_frame(off, *sz as i32);
                 }
             }

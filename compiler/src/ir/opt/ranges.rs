@@ -487,12 +487,38 @@ fn widen(old: L, new: L, max: u128) -> L {
     }
 }
 
+/// The unsigned comparisons: what the front end writes for an index against a length. (On ranges that
+/// are never negative the signed and the unsigned reading agree.)
+fn is_bounds_test(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::Cmp(CmpOp::ULt | CmpOp::ULe | CmpOp::UGt | CmpOp::UGe, ..)
+    )
+}
+
+/// The answer of `x op y` for every pair in the two ranges, if it is the same for all of them.
+fn decide(op: CmpOp, x: Range, y: Range) -> Option<bool> {
+    let (always, never) = match op {
+        CmpOp::ULt => (x.1 < y.0, x.0 >= y.1),
+        CmpOp::ULe => (x.1 <= y.0, x.0 > y.1),
+        CmpOp::UGt => (x.0 > y.1, x.1 <= y.0),
+        CmpOp::UGe => (x.0 >= y.1, x.1 < y.0),
+        _ => return None,
+    };
+    if always {
+        Some(true)
+    } else if never {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 pub fn run(f: &mut Func) -> bool {
-    if !f
-        .insts
-        .iter()
-        .any(|i| matches!(i.op, Op::Checked(..) | Op::Bin(BinOp::Div | BinOp::Rem, ..)))
-    {
+    if !f.insts.iter().any(|i| {
+        matches!(i.op, Op::Checked(..) | Op::Bin(BinOp::Div | BinOp::Rem, ..))
+            || is_bounds_test(&i.op)
+    }) {
         return false;
     }
     let mut cx = Ctx::new(f);
@@ -502,7 +528,21 @@ pub fn run(f: &mut Func) -> bool {
     cx.narrow();
     let mut safe = Vec::new();
     let mut unsigned = Vec::new();
+    let mut decided = Vec::new();
     for ii in 0..f.insts.len() {
+        // An index test `i <u len` with both sides known: the answer is the same every time.
+        if let Op::Cmp(c, a, b) = f.insts[ii].op {
+            let blk = cx.block_of[ii];
+            if is_bounds_test(&f.insts[ii].op) && blk != u32::MAX {
+                let blk = BlockId(blk);
+                if let (L::R(x), L::R(y)) = (cx.range_at(a, blk), cx.range_at(b, blk)) {
+                    if let Some(answer) = decide(c, x, y) {
+                        decided.push((ii, answer));
+                    }
+                }
+            }
+            continue;
+        }
         // A signed division of a non-negative number by a positive constant is the unsigned one,
         // which needs no fix-up for negative dividends once `divconst` has turned it into a multiply.
         if let Op::Bin(BinOp::Div | BinOp::Rem, a, b) = f.insts[ii].op.clone() {
@@ -543,7 +583,10 @@ pub fn run(f: &mut Func) -> bool {
             safe.push(ii);
         }
     }
-    let changed = !safe.is_empty() || !unsigned.is_empty();
+    let changed = !safe.is_empty() || !unsigned.is_empty() || !decided.is_empty();
+    for (ii, answer) in decided {
+        f.insts[ii].op = Op::Const(IrTy::Bool, Const::Bool(answer));
+    }
     for ii in unsigned {
         if let Op::Bin(o, a, b) = f.insts[ii].op.clone() {
             let o = if o == BinOp::Div {

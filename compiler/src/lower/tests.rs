@@ -2002,3 +2002,60 @@ fn native_runaway_recursion_stops_cleanly() {
         }
     }
 }
+
+/// A big array written by `[x; n]` is not cleared first; what an earlier call left on the stack must
+/// not show, and the stack probes for a big frame must still work.
+#[test]
+fn big_arrays_are_filled_in_place() {
+    agree(
+        "fn dirty() -> int {
+            var a = [7; 900]
+            a[5] + a[899]
+        }
+        fn main() {
+            const d = dirty()
+            var f = [1; 900]
+            var s = 0
+            for i in 0..900 { s += f[i] }
+            var big = [2; 40000]
+            var t = 0
+            for i in 0..40000 { t += big[i] }
+            print(d, s, t)
+        }",
+    );
+}
+
+/// An index the loop bounds keep inside the array needs no test; one nothing bounds keeps its test.
+#[test]
+fn index_tests_that_cannot_fail_are_dropped() {
+    let tests = |src: &str| {
+        let l = lowered(src);
+        let mut m = l.module.clone();
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        let f = m.funcs.iter().find(|f| f.name == "main").unwrap();
+        let n = f
+            .blocks
+            .iter()
+            .flat_map(|b| &b.insts)
+            .filter(|i| matches!(f.insts[**i].op, Op::Cmp(CmpOp::UGe, ..)))
+            .count();
+        agree(src);
+        n
+    };
+    let inside = "fn main() {
+        var a = [1; 100]
+        var s = 0
+        for i in 0..100 { s += a[i] }
+        var j = 3
+        while j <= 99 { a[j] = 0; j += 3 }
+        print(s, a[99])
+    }";
+    assert_eq!(tests(inside), 0);
+    let outside = "fn main() {
+        var a = [1; 100]
+        var j = 3
+        while j <= 100 { a[j] = 0; j += 3 }
+        print(a[99])
+    }";
+    assert!(tests(outside) > 0);
+}
