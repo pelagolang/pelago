@@ -119,6 +119,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
     g.stop_stubs();
     let mut syms = Vec::new();
     for (i, f) in m.funcs.iter().enumerate() {
+        g.a.align(16, 15);
         let start = g.a.here();
         g.function(i, f)?;
         syms.push(Symbol {
@@ -287,6 +288,7 @@ fn classify(tys: &[IrTy]) -> Vec<Loc> {
 impl<'m> Gen<'m> {
     fn new(m: &'m Module) -> Gen<'m> {
         let mut a = Asm::new();
+        a.pad_jumps = true;
         let funcs = m.funcs.iter().map(|_| a.new_label()).collect();
         let (d, s, o, u) = (a.new_label(), a.new_label(), a.new_label(), a.new_label());
         Gen {
@@ -615,8 +617,21 @@ impl<'m> Gen<'m> {
         }
         self.moves(&copies);
         let uses = f.use_counts();
+        // The blocks a jump back leads to start a loop.
+        let mut heads = vec![false; f.blocks.len()];
+        for (bi, b) in f.blocks.iter().enumerate() {
+            for t in b.term.iter().flat_map(super::regs::successors) {
+                if t <= bi {
+                    heads[t] = true;
+                }
+            }
+        }
         for (bi, b) in f.blocks.iter().enumerate() {
             let lb = self.block_labels[bi];
+            // A loop starts on a 16-byte boundary (when that costs at most 8 bytes of no-ops).
+            if heads[bi] {
+                self.a.align(16, 8);
+            }
             self.a.bind(lb);
             self.stored.clear();
             // A comparison that only feeds the branch ending its block is not stored: the branch
@@ -680,6 +695,7 @@ impl<'m> Gen<'m> {
             }
             Term::Jump(tg) => self.edge(f, tg, next),
             Term::Branch(c, t, e) => {
+                let start = self.a.here();
                 let cc = match fused {
                     Some((_, op, x, y)) if is_float(f.ty(x)) => self.float_cmp(f, op, x, y),
                     Some((_, op, x, y)) => self.int_cmp(f, op, x, y),
@@ -689,6 +705,8 @@ impl<'m> Gen<'m> {
                         Cc::Ne
                     }
                 };
+                // The compare and the jump after it run as one micro-operation: keep them in one 32-byte block.
+                self.a.guard_jump(start, 6);
                 let (mt, me) = (self.edge_copies(f, t), self.edge_copies(f, e));
                 let (tb, eb) = (t.block.0 as usize, e.block.0 as usize);
                 let (tl, el) = (self.block_labels[tb], self.block_labels[eb]);
@@ -1481,6 +1499,7 @@ impl<'m> Gen<'m> {
                 }
             }
             self.ld(d, a);
+            let start = self.a.here();
             match self.imm32(b, f, signed) {
                 Some(n) if op != BinOp::Mul => {
                     let alu = if op == BinOp::Add { Alu::Add } else { Alu::Sub };
@@ -1495,6 +1514,7 @@ impl<'m> Gen<'m> {
                     }
                 }
             }
+            self.a.guard_jump(start, 6);
             self.a.jcc(if signed { Cc::O } else { Cc::B }, ov);
             self.st(r, d);
             return;

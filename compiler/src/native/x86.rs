@@ -153,6 +153,11 @@ pub struct Asm {
     pub code: Vec<u8>,
     labels: Vec<Option<usize>>,
     fixups: Vec<Fixup>,
+    /// Keep jumps (and the compare that fuses with one) clear of 32-byte boundaries: a jump that
+    /// crosses or ends at one runs slowly on Skylake-derived Intel cores (the JCC erratum).
+    pub pad_jumps: bool,
+    /// The position of the latest label bound.
+    last_bound: usize,
 }
 
 fn fits_i8(v: i64) -> bool {
@@ -181,6 +186,7 @@ impl Asm {
     pub fn bind(&mut self, l: Label) {
         debug_assert!(self.labels[l.0 as usize].is_none(), "label bound twice");
         self.labels[l.0 as usize] = Some(self.code.len());
+        self.last_bound = self.code.len();
     }
 
     pub fn label_offset(&self, l: Label) -> Option<usize> {
@@ -189,6 +195,61 @@ impl Asm {
 
     pub fn byte(&mut self, b: u8) {
         self.code.push(b);
+    }
+
+    /// `n` bytes of no-ops, as few instructions as possible.
+    pub fn nops(&mut self, mut n: usize) {
+        const NOPS: [&[u8]; 9] = [
+            &[0x90],
+            &[0x66, 0x90],
+            &[0x0F, 0x1F, 0x00],
+            &[0x0F, 0x1F, 0x40, 0x00],
+            &[0x0F, 0x1F, 0x44, 0x00, 0x00],
+            &[0x66, 0x0F, 0x1F, 0x44, 0x00, 0x00],
+            &[0x0F, 0x1F, 0x80, 0x00, 0x00, 0x00, 0x00],
+            &[0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
+            &[0x66, 0x0F, 0x1F, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00],
+        ];
+        while n > 0 {
+            let k = n.min(NOPS.len());
+            self.code.extend_from_slice(NOPS[k - 1]);
+            n -= k;
+        }
+    }
+
+    /// Pads with no-ops up to a multiple of `to` (a power of two) when that takes at most `max_skip` bytes.
+    pub fn align(&mut self, to: usize, max_skip: usize) {
+        let skip = self.code.len().wrapping_neg() & (to - 1);
+        if skip != 0 && skip <= max_skip {
+            self.nops(skip);
+        }
+    }
+
+    /// Called before emitting a jump of `len` bytes. `start` is where the instruction that sets its flags
+    /// begins (the pair fuses into one micro-operation), or `here()` for a jump on its own. If the
+    /// bytes from `start` to the end of the jump would cross a 32-byte boundary or end on one, no-ops
+    /// move them to the next boundary. The padding goes before `start`, so the pair stays together.
+    pub fn guard_jump(&mut self, start: usize, len: usize) {
+        if !self.pad_jumps {
+            return;
+        }
+        let end = self.code.len() + len;
+        if end - start >= 32 || (start / 32 == (end - 1) / 32 && !end.is_multiple_of(32)) {
+            return;
+        }
+        let pad = 32 - start % 32;
+        if start == self.code.len() {
+            self.nops(pad);
+        } else if self.fixups.last().is_none_or(|f| f.at < start) && self.last_bound <= start {
+            // Insert the no-ops in front of the instruction that sets the flags. A label that sits there
+            // keeps pointing at the no-ops, which is harmless.
+            let tail = self.code.split_off(start);
+            self.nops(pad);
+            self.code.extend_from_slice(&tail);
+        } else {
+            let here = self.code.len();
+            self.guard_jump(here, len);
+        }
     }
 
     pub fn bytes(&mut self, b: &[u8]) {
@@ -555,11 +616,13 @@ impl Asm {
     }
 
     pub fn jmp(&mut self, l: Label) {
+        self.guard_jump(self.code.len(), 5);
         self.byte(0xE9);
         self.rel32_to(l, 0);
     }
 
     pub fn jcc(&mut self, cc: Cc, l: Label) {
+        self.guard_jump(self.code.len(), 6);
         self.bytes(&[0x0F, 0x80 + cc as u8]);
         self.rel32_to(l, 0);
     }
@@ -743,5 +806,43 @@ impl Asm {
             out[f.at..f.at + 4].copy_from_slice(&(rel as i32).to_le_bytes());
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod pad_tests {
+    use super::*;
+
+    #[test]
+    fn a_jump_never_crosses_or_ends_at_a_32_byte_boundary() {
+        for lead in 0..70 {
+            let mut a = Asm::new();
+            a.pad_jumps = true;
+            let l = a.new_label();
+            a.bind(l);
+            a.nops(lead);
+            let start = a.here();
+            a.alu_rr(Alu::Cmp, RAX, RCX, 8);
+            a.guard_jump(start, 6);
+            let jstart = a.here();
+            a.jcc(Cc::E, l);
+            let (s, e) = (a.code.len() - 6, a.code.len());
+            assert!(jstart == s);
+            assert_eq!(s / 32, (e - 1) / 32, "crosses with {lead} lead bytes");
+            assert_ne!(e % 32, 0, "ends on a boundary with {lead} lead bytes");
+            // the compare stays right in front of the jump
+            assert_eq!(&a.code[s - 3..s], &[0x48, 0x39, 0xC8]);
+        }
+    }
+
+    #[test]
+    fn align_pads_only_when_cheap() {
+        let mut a = Asm::new();
+        a.nops(3);
+        a.align(16, 8);
+        assert_eq!(a.here(), 3);
+        a.nops(6);
+        a.align(16, 8);
+        assert_eq!(a.here(), 16);
     }
 }

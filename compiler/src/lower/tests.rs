@@ -1313,11 +1313,26 @@ fn appending_with_plus_assign_keeps_its_meaning() {
         assert_eq!(output_of(&src), want, "{src}");
         agree(&src);
     }
-    // An operand that calls a function is not appended in place (the call could change `s`).
-    assert_eq!(
-        output_of("fn f() -> string = \"x\"\nfn main() { var s = \"a\"\n s = s + f()\n print(s) }"),
-        "ax\n"
-    );
+    // Calls of plain functions and string fields are appended in place too; anything that could
+    // touch the target keeps the copying assignment.
+    let defs = "struct box { a: string, b: string }\nstruct outer { inner: box, n: string }\nfn f() -> string = \"x\"\nfn g(t: string) -> string = \"<#t>\"\n";
+    let cases: [(&str, &str); 10] = [
+        ("var s = \"a\"\n s = s + f()\n print(s)", "ax\n"),
+        ("var s = \"a\"\n s = s + g(\"q\") + f()\n print(s)", "a<q>x\n"),
+        ("var s = \"a\"\n s = s + g(s)\n print(s)", "a<a>\n"),
+        ("var s = \"a\"\n for i of 0..3 { s = s + g(s) }\n print(s)", "a<a><a<a>><a<a><a<a>>>\n"),
+        ("var o = box { a: \"1\", b: \"2\" }\n o.a = o.a + \"x\" + o.b\n print(o.a, o.b)", "1x2 2\n"),
+        ("var o = box { a: \"1\", b: \"2\" }\n o.a = o.a + o.a\n print(o.a, o.b)", "11 2\n"),
+        ("var o = box { a: \"1\", b: \"2\" }\n o.a = o.b + o.a\n print(o.a, o.b)", "21 2\n"),
+        ("var o = outer { inner: box { a: \"1\", b: \"2\" }, n: \"z\" }\n o.inner.a = o.inner.a + o.n + f()\n print(o.inner.a, o.n)", "1zx z\n"),
+        ("var o = outer { inner: box { a: \"1\", b: \"2\" }, n: \"z\" }\n o.n = o.n + o.inner.a\n o.inner.b = o.inner.b + o.n\n print(o.n, o.inner.b)", "z1 2z1\n"),
+        ("var o = box { a: \"\", b: \"\" }\n for i of 0..4 { o.a = o.a + \"#i\" + f() }\n print(o.a)", "0x1x2x3x\n"),
+    ];
+    for (body, want) in cases {
+        let src = format!("{defs}fn main() {{\n {body}\n}}");
+        assert_eq!(output_of(&src), want, "{src}");
+        agree(&src);
+    }
 }
 
 /// The program does the same natively as in the interpreter: same output, and the same stop (message
