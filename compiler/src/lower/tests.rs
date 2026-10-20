@@ -1905,3 +1905,34 @@ fn main() {
         assert_eq!(output_of(src), want, "{src}");
     }
 }
+
+// ---- Float semantics: single precision rounding and saturating float to int -------------------------------
+
+#[test]
+fn float32_rounds_after_every_operation() {
+    // 16777216 + 1 is not a float32: the sum rounds back (to even), as it does natively.
+    assert_eq!(
+        output_of("fn main() { const a: float32 = 16777218.0\n const b: float32 = 1.0\n print((a + b) to float, (a + b + b) to float) }"),
+        "16777220 16777220\n"
+    );
+    // 0.1 is not exact in single precision, and the widening shows it.
+    assert_eq!(
+        output_of("fn main() { const a: float32 = 0.1\n print((a to float) == 0.1, (a to float) == ((0.1 to float32) to float)) }"),
+        "false true\n"
+    );
+    // An integer converts to float32 with one rounding.
+    assert_eq!(
+        output_of("fn main() { const n = 16777217\n print((n to float32) to float) }"),
+        "16777216\n"
+    );
+}
+
+#[test]
+fn float_to_int_saturates() {
+    // `floor` goes through the conversion to an integer and back.
+    let src = "fn main() { const z = 0.0\n const big = 1e30\n print(big.floor(), (-big).floor(), (z / z).floor(), 2.9.floor(), (-2.9).floor(), 1e19.ceil(), (-1e19).ceil()) }";
+    assert_eq!(
+        output_of(src),
+        "9223372036854775807 -9223372036854775807 0 2 -3 9223372036854775807 -9223372036854775807\n"
+    );
+}
