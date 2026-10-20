@@ -1,0 +1,19 @@
+struct vec {
+    x: int
+    y: int
+
+    fn add(self, o: vec) -> vec = vec { x: self.x + o.x, y: self.y + o.y }
+    fn dot(self, o: vec) -> int = self.x * o.x + self.y * o.y
+}
+
+fn main() {
+    var p = vec { x: 1, y: 2 }
+    const d = vec { x: 3, y: 1 }
+    var t = 0
+    for i in 0..10000000 {
+        p = p.add(d)
+        t += p.dot(d) & 1023
+        p = vec { x: p.x & 65535, y: p.y & 65535 }
+    }
+    print(t)
+}

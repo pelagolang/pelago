@@ -1,0 +1,12 @@
+fn main() {
+    var x = 0.5
+    var v = 0.0
+    var e = 0.0
+    for i in 0..20000000 {
+        const a = -x * 0.001
+        v += a * 0.01
+        x += v * 0.01
+        e += x * x + v * v
+    }
+    print(e)
+}

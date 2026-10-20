@@ -1,0 +1,7 @@
+fn main() {
+    var m: map<int, int> = {:}
+    for i in 0..200000 { m.insert!(i, i * 3) }
+    var t = 0
+    for i in 0..200000 { t += m.get(i) ?? 0 }
+    print(m.len(), t)
+}

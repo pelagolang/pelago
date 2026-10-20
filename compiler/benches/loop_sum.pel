@@ -1,5 +1,5 @@
 fn main() {
     var t = 0
-    for i in 0..200000 { t += i }
+    for i in 0..300000000 { t += i ^ (t & 7) }
     print(t)
 }
