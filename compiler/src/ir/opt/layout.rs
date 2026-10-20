@@ -3,11 +3,14 @@
 //! jumps run. This pass chooses it:
 //!
 //! * The first successor of a branch comes first (the `then` side, the body of a loop), the rest
-//!   of the function after it.
+//!   of the function after it. Inside a loop, a successor that stays in the loop comes before one
+//!   that leaves it (the exit of the loop test, a guard that returns).
 //! * A loop is laid out with its test at the bottom: body first, header last. The loop is entered
 //!   by one jump to the header, and after that every iteration ends in the header's conditional
 //!   jump back to the body, instead of a conditional jump out plus an unconditional jump back.
-//! * Blocks that only stop the program go to the end, out of the way of the code that runs.
+//! * Blocks that only stop the program go to the end, out of the way of the code that runs, and so
+//!   do the blocks that only a guard inside a loop leaves to (an exit taken from the middle of the
+//!   body, not from the loop test).
 //!
 //! Nothing but the order of `Func::blocks` changes (and the block numbers in the jumps).
 
@@ -21,8 +24,9 @@ pub fn run(f: &mut Func) -> bool {
     if dom.rpo.len() != n {
         return false;
     }
-    let mut order = reverse_post_order(f);
-    for lp in loops::find(f, &dom) {
+    let lps = loops::find(f, &dom);
+    let mut order = reverse_post_order(f, &lps);
+    for lp in &lps {
         if lp.header.0 == 0 {
             continue;
         }
@@ -33,11 +37,36 @@ pub fn run(f: &mut Func) -> bool {
             order.insert(last, lp.header);
         }
     }
+    // Blocks outside a loop that are only reached from guards in its body.
+    let preds = f.predecessors();
+    let mut guarded = vec![false; n];
+    for lp in &lps {
+        for (bi, b) in f.blocks.iter().enumerate() {
+            let id = BlockId(bi as u32);
+            if !lp.contains(id) || id == lp.header {
+                continue;
+            }
+            let succ = f.successors(id);
+            if succ.len() == 2 && matches!(b.term, Some(Term::Branch(..))) {
+                for (k, t) in succ.iter().enumerate() {
+                    let stay = lp.contains(succ[1 - k]);
+                    if stay && !lp.contains(*t) {
+                        guarded[t.0 as usize] = true;
+                    }
+                }
+            }
+        }
+    }
     let cold = |b: &BlockId| {
         matches!(
             f.blocks[b.0 as usize].term,
             Some(Term::Stop(_) | Term::Unreachable)
-        )
+        ) || (guarded[b.0 as usize]
+            && preds[b.0 as usize].iter().all(|p| {
+                let ps = f.successors(*p);
+                lps.iter()
+                    .any(|l| l.contains(*p) && *p != l.header && ps.iter().any(|q| l.contains(*q)))
+            }))
     };
     let (mut hot, cold): (Vec<BlockId>, Vec<BlockId>) =
         order.iter().partition(|b| !cold(b) || b.0 == 0);
@@ -67,12 +96,16 @@ pub fn run(f: &mut Func) -> bool {
 
 /// Reverse post-order of a depth-first search that tries the last successor first, so that the
 /// first successor comes first in the result.
-fn reverse_post_order(f: &Func) -> Vec<BlockId> {
+fn reverse_post_order(f: &Func, lps: &[loops::Loop]) -> Vec<BlockId> {
     let n = f.blocks.len();
     let mut seen = vec![false; n];
     let mut post = Vec::with_capacity(n);
     let succ = |b: BlockId| {
         let mut s = f.successors(b);
+        // The innermost loop the block is in: the successors that stay in it go first.
+        if let Some(lp) = lps.iter().filter(|l| l.contains(b)).min_by_key(|l| l.size) {
+            s.sort_by_key(|t| !lp.contains(*t));
+        }
         s.reverse();
         s
     };
