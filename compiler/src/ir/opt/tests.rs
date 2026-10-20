@@ -353,3 +353,155 @@ fn unreachable_code_and_dead_values_go() {
     assert_eq!(m.funcs[0].blocks.len(), 1);
     assert_eq!(count(&m.funcs[0], |op| matches!(op, Op::Bin(..))), 0);
 }
+
+/// `main` calls `d(x) = x op c` for many dividends and mixes the answers into one value, so before and
+/// after can be compared. `d` is not inlined (level 1), so its division stays a real division.
+fn division_main(ty: IrTy, op: BinOp, c: i128, xs: &[i128]) -> Module {
+    let mut d = Func::new("d", &[ty], ty);
+    let e = d.entry();
+    let x = d.blocks[0].params[0];
+    let cv = d.emit(e, Op::Const(ty, Const::Int(c)), Some(ty)).unwrap();
+    let q = d.emit(e, Op::Bin(op, x, cv), Some(ty)).unwrap();
+    d.terminate(e, Term::Return(Some(q)));
+    let mut m = Module::default();
+    let id = m.add(d);
+    let mut f = Func::new("main", &[], ty);
+    let e = f.entry();
+    let mut acc = f.emit(e, Op::Const(ty, Const::Int(0)), Some(ty)).unwrap();
+    let three = f.emit(e, Op::Const(ty, Const::Int(3)), Some(ty)).unwrap();
+    for &x in xs {
+        let xv = f.emit(e, Op::Const(ty, Const::Int(x)), Some(ty)).unwrap();
+        let q = f.emit(e, Op::Call(id, vec![xv]), Some(ty)).unwrap();
+        let m3 = f
+            .emit(e, Op::Bin(BinOp::Mul, acc, three), Some(ty))
+            .unwrap();
+        acc = f.emit(e, Op::Bin(BinOp::Xor, m3, q), Some(ty)).unwrap();
+    }
+    f.terminate(e, Term::Return(Some(acc)));
+    m.add(f);
+    m
+}
+
+/// Optimises without inlining and checks that the answer did not change; gives the module.
+fn same_answer(m: &Module) -> Module {
+    let before = run_full(m, "main", &[]);
+    let mut o = m.clone();
+    optimize(&mut o, Options { level: 1 });
+    assert!(verify_module(&o).is_empty(), "{}", print_module(&o));
+    let after = run_full(&o, "main", &[]);
+    assert_eq!(before.result, after.result);
+    o
+}
+
+#[test]
+fn division_by_powers_of_two_matches_the_interpreter() {
+    for (ty, bits) in [(IrTy::I64, 64u32), (IrTy::I32, 32), (IrTy::I8, 8)] {
+        let top = (1i128 << (bits - 1)) - 1;
+        let xs: Vec<i128> = [
+            0,
+            1,
+            2,
+            3,
+            5,
+            7,
+            8,
+            9,
+            100,
+            127,
+            top,
+            top - 1,
+            -1,
+            -2,
+            -3,
+            -5,
+            -8,
+            -9,
+            -100,
+            -top,
+            -top - 1,
+        ]
+        .into_iter()
+        .filter(|x| *x >= -(1i128 << (bits - 1)) && *x <= top)
+        .collect();
+        // The first few powers and the last few cover the edges; the middle ones are the same code.
+        let edge = |k: &u32| *k < 4 || *k + 4 >= bits;
+        for k in (0..bits - 1).filter(edge) {
+            for op in [BinOp::Div, BinOp::Rem] {
+                let o = same_answer(&division_main(ty, op, 1i128 << k, &xs));
+                assert_eq!(
+                    count(&o.funcs[0], |o| matches!(
+                        o,
+                        Op::Bin(BinOp::Div | BinOp::Rem, ..)
+                    )),
+                    0,
+                    "{ty:?} {op:?} 2^{k} still divides"
+                );
+            }
+        }
+        // Unsigned, including a divisor with the top bit set.
+        let mask = (1u128 << bits) - 1;
+        let us: Vec<i128> = xs.iter().map(|x| (*x as u128 & mask) as i128).collect();
+        for k in (0..bits).filter(edge) {
+            for op in [BinOp::UDiv, BinOp::URem] {
+                let o = same_answer(&division_main(ty, op, 1i128 << k, &us));
+                assert_eq!(
+                    count(&o.funcs[0], |o| matches!(
+                        o,
+                        Op::Bin(BinOp::UDiv | BinOp::URem, ..)
+                    )),
+                    0,
+                    "{ty:?} {op:?} 2^{k} still divides"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn other_divisors_are_left_alone() {
+    for c in [3i128, 6, 10, -2, -1] {
+        let o = same_answer(&division_main(IrTy::I64, BinOp::Div, c, &[7, -7, 100]));
+        assert_eq!(
+            count(&o.funcs[0], |o| matches!(o, Op::Bin(BinOp::Div, ..))),
+            1,
+            "c = {c}"
+        );
+    }
+}
+
+#[test]
+fn remainder_compared_with_zero_becomes_a_mask() {
+    for (op, signed) in [(BinOp::Rem, true), (BinOp::URem, false)] {
+        for cmp in [CmpOp::Eq, CmpOp::Ne] {
+            for x in [0i128, 1, 2, 3, 7, 8, -1, -2, -3, -8, i64::MAX as i128] {
+                let x = if signed { x } else { x & 0xffff_ffff_ffff_ffff };
+                let mut d = Func::new("d", &[IrTy::I64], IrTy::Bool);
+                let e = d.entry();
+                let p = d.blocks[0].params[0];
+                let c = d.emit(e, Op::Const(IrTy::I64, Const::Int(4)), Some(IrTy::I64));
+                let r = d.emit(e, Op::Bin(op, p, c.unwrap()), Some(IrTy::I64));
+                let z = d.emit(e, Op::Const(IrTy::I64, Const::Int(0)), Some(IrTy::I64));
+                let t = d.emit(e, Op::Cmp(cmp, r.unwrap(), z.unwrap()), Some(IrTy::Bool));
+                d.terminate(e, Term::Return(t));
+                let mut m = Module::default();
+                let id = m.add(d);
+                let mut f = Func::new("main", &[], IrTy::Bool);
+                let e = f.entry();
+                let xv = f.emit(e, Op::Const(IrTy::I64, Const::Int(x)), Some(IrTy::I64));
+                let t = f.emit(e, Op::Call(id, vec![xv.unwrap()]), Some(IrTy::Bool));
+                f.terminate(e, Term::Return(t));
+                m.add(f);
+                let o = same_answer(&m);
+                let d = &o.funcs[0];
+                assert_eq!(
+                    count(d, |o| matches!(
+                        o,
+                        Op::Bin(BinOp::Rem | BinOp::URem | BinOp::Sub, ..)
+                    )),
+                    0
+                );
+                assert_eq!(count(d, |o| matches!(o, Op::Bin(BinOp::And, ..))), 1);
+            }
+        }
+    }
+}

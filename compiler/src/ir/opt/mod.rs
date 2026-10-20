@@ -15,6 +15,7 @@
 
 mod cfg;
 mod dce;
+mod divconst;
 mod inline;
 mod promote;
 mod sccp;
@@ -66,6 +67,7 @@ pub fn optimize_func(f: &mut Func) {
         changed |= step(f, "promote", promote::run);
         changed |= step(f, "split", split::run);
         changed |= step(f, "sccp", sccp::run);
+        changed |= step(f, "divconst", divconst::run);
         changed |= step(f, "simplify", cfg::run);
         changed |= step(f, "dce", dce::run);
         if !changed {

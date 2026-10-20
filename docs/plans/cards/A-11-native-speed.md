@@ -1,6 +1,6 @@
 Id: A-11
 Title: Native speed: from 4.5 times slower than C at -O2 towards 1.5 to 2 times
-Column: Needs decision
+Column: Doing
 Order: after A-09 N6 (track A)
 Depends on: A-09; A-04 (the IR optimiser)
 Size: XL, in stages (S1 to S6), each measured
@@ -36,3 +36,8 @@ S1 alone should remove a big share of the collatz time. S1 to S3 together should
 1. Order S1 (constants), S2 (checks), S3 (registers)? Recommended: yes, S1 first because it is small and visible.
 2. Keep overflow checks on in release builds (recommended; a flag may turn them off later, with the checks themselves optimised first)?
 3. Introduce the machine-level IR with S3 (recommended)?
+
+# Progress
+
+**S1, part 1 (done): powers of two.** `ir/opt/divconst.rs` rewrites `x / 2^k` and `x % 2^k` (signed and unsigned) into shifts and masks, with the usual bias for negative dividends, and `x % 2^k == 0` (or `!= 0`) into `x & (2^k - 1)` compared with zero. Tests compare before and after for `i8`, `i32` and `i64` at the edges. On `compiler/benches/collatz.pel` (steps for 1 to 300,000): native `--opt` 0.30 s before, 0.23 s after; C `-O0` 0.15 s, C `-O2` 0.07 s on this container.
+**S1, part 2 (open): other constant divisors.** `x / 10` needs the high half of a 64-bit product, which the IR cannot say. It needs a new `MulHi`/`UMulHi` operation in the IR, the interpreter, the verifier and both code generators; then the magic-number rewrite. Decided to do it as its own change.
