@@ -1638,6 +1638,29 @@ fn main() {
     }
 }
 
+/// Large blocks (more than 64 KiB) freed and allocated again: the one kept for reuse must come back zeroed.
+#[test]
+fn large_blocks_are_reused_zeroed() {
+    agree(
+        r#"fn build(n: int, k: int) -> int {
+    var v: [int] = []
+    for i in 0..n { v.push!(i * k) }
+    var t = 0
+    for i in 0..n { t += v[i] % 7 }
+    t
+}
+fn main() {
+    var s = 0
+    for r in 0..12 {
+        s += build(9000 + r * 500, r + 1)
+        s += build(40000 - r * 3000, 3)
+    }
+    print(s)
+}
+"#,
+    );
+}
+
 /// Floats in SSE registers (A-11 W11): arithmetic in place, compares fused into branches, values kept
 /// across calls, swaps through block parameters, arguments in `xmm0..7` and on the stack.
 #[test]
