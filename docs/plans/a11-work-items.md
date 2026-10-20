@@ -26,7 +26,7 @@ Still true: the generator is template based (`rax`, `rcx`, `rdx` scratch), a val
 ## Rules the generator now relies on (read before touching `gen.rs` or `regs.rs`)
 
 1. **A result may share a register with an operand that dies in the same instruction.** The allocator's ranges are half open and an instruction writes its result just after it reads its operands. Any template that writes the result's register before it has read every operand is wrong: `bin` and `checked` handle it (the result in `b`'s register swaps a commutative operation and builds `sub` in `rax`); the other templates build in `rax` and store last. Keep it that way.
-2. **Constants have no storage.** `const_values()` marks them `Where::Imm`; `ld`/`ld_ext`/`imm32` read them, `st` panics on them. `regs.rs` skips them. Float constants are not immediates. A value nothing reads is `Where::Dead` (writes are dropped, reads panic).
+2. **Constants have no storage.** `const_values()` marks them `Where::Imm`; `ld`/`ld_ext`/`imm32` read them, `st` panics on them. `regs.rs` skips them. Float constants are not immediates (a float constant is built in its xmm register or frame slot). A value nothing reads is `Where::Dead` (writes are dropped, reads panic).
 3. **Registers.** `rax rcx rdx` are the templates' scratch (and the go-between of `Gen::moves`); `r10 r11 r8 r9 rsi rdi` hold values that are not live across a call-like op (`Call`, `CallPtr`, `Alloc`, `Free`, `Print`, `MemCopy`), or are split around it (stored before, loaded after, `Alloc::across`); `rbx r12 to r15` survive calls and are saved in the prologue. Anything that needs particular registers (call arguments, entry parameters, `memcopy`, `print`) must go through `Gen::moves`, never a sequence of `ld`s. A template that uses `rdi`, `rsi`, `r8` to `r11` itself (the large `Slot` clears with `rep stosb`) must save it.
 4. **Edges:** `edge_copies()` lists what a jump must copy (nothing for a parameter that is dead or already in place), `moves()` makes the copies at once, `edge()` jumps unless the target is the next block. A branch with copies puts the side it does not fall into out of line (`stub()`).
 5. **Canonical form:** integers and booleans in registers or slots are zero-extended to 64 bits; signed uses widen with `ld_ext`.
@@ -92,7 +92,7 @@ Size is S (hours), M (a day), L (several days). "Collides with" means the same f
 - **Touches:** new `ir/opt/licm.rs`, `ir/opt/mod.rs`, `ir/opt/tests.rs`, `native/gen.rs` (alignment only, via a new `Asm::align`).
 - **Depends on:** W2 (dominators). **Size:** M to L. **Collides with:** `gen.rs` only for alignment.
 
-### W11. Floats in registers
+### W11. Floats in registers (done: PR `claude/perf/float-regs`)
 - **What:** keep float values in `xmm` registers (callee-saved does not exist in the System V ABI, so only for ranges without calls); arithmetic directly on registers; float compare fused with branches.
 - **Touches:** `native/regs.rs`, `native/gen.rs` (`bin`, `cmp`, `cast`, `call`), `native/x86.rs`.
 - **Depends on:** W3 (the allocator must handle two register classes). **Size:** M to L. **Collides with:** the `gen.rs` group.

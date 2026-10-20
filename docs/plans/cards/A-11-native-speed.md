@@ -63,4 +63,6 @@ Measured with `compiler/benches/compare.sh` (best of 7, this container):
 
 **S3, third round (done): memory operations (W5).** Pointers into frame objects are frame offsets; `ptradd` of a constant or a scaled index folds into the `[base + index*scale + disp]` of the load or store; a `memcopy` of up to 64 bytes is plain 8-byte moves; a `Slot` is cleared only when its block does not overwrite it first. `structloop` went from 0.65 s to 0.08 s (C `-O0` 0.10 s, `-O2` 0.011 s: the rest is that C keeps the struct in registers, which needs the optimiser to split structs into fields), `sieve` from 0.14 to 0.11 s.
 
+**S3, fourth round (done): floats in SSE registers (W11).** `native/regs.rs` allocates floats in `xmm2` to `xmm15` with the same priorities and splitting around calls as the integer registers (no SSE register is callee-saved); `gen.rs` does arithmetic, compares, negation, casts, loads, stores, arguments and results directly on them, and fuses `<`, `<=`, `>`, `>=` with the branch. `floatloop` 0.36 s to 0.13 s (C `-O0` 0.23 s, `-O2` 0.15 s). Details in `docs/design/backend.md` section 6.
+
 PRs: #7 (S1, powers of two), #8 (S2 and S3, first rounds). The open work, with files and dependencies for each item, is in [a11-work-items.md](../a11-work-items.md).

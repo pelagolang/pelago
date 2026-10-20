@@ -83,7 +83,7 @@ compiler's own tests, with real Windows executables built and run on a Windows r
 
 ## 6. Registers (N5) and first measurements
 
-`native/regs.rs` gives integer, boolean and pointer values a register for their whole life; every other value (and every float) stays in its frame slot. Liveness is the usual
+`native/regs.rs` gives integer, boolean and pointer values a register for their whole life (floats have the SSE registers, see below); every other value stays in its frame slot. Liveness is the usual
 backward dataflow over the blocks (a block's parameters are defined at its start, a jump's arguments are used by the jump). Each value gets a **list of live ranges** (half open,
 with holes), and two values share a register when none of their ranges meet. An instruction reads its operands at an even position and writes its result just after it, so a result
 may take the register of an operand that dies there (`gen.rs` builds results so that is safe, see `bin`). The values are taken heaviest first, weighted by `10^loop depth`, and each
@@ -124,7 +124,7 @@ Measured on this container (collatz steps for 1 to 300,000 and `fib(35)`, `compi
 | loop_sum | tight loop, overflow checks | 0.768 | 0.793 | 0.311 | 2.5x |
 | sieve | array stores, bounds checks | 0.175 | 0.203 | 0.130 | 1.3x |
 | list_sum | `push!` growth, indexing | 0.121 | 0.048 | 0.031 | 4.0x |
-| floatloop | floats (always in memory) | 0.357 | 0.237 | 0.140 | 2.6x |
+| floatloop | floats (always in memory) | 0.357 | 0.237 | 0.140 | 2.6x (0.133 s, 0.9x, with SSE registers) |
 | structloop | struct values passed and returned | 0.711 | 0.103 | 0.012 | 60x |
 | strbuild | `string` concatenation, 20,000 rounds | 0.120 | 0.009 | 0.009 | 13x |
 | mapwork | `map` insert and get, 200,000 keys | 0.027 | 0.012 | 0.012 | 2.2x |
@@ -133,3 +133,19 @@ The two big gaps are the struct-valued calls (every struct is copied through mem
 
 What was still slow before that round, in order of likely payoff: every checked operation and bounds check is a compare and branch, the calling convention goes through memory for every
 float, small `MemCopy` uses `rep movsb`, and no value is split between a register and memory (a value too rarely used for a register still pays a load and a store per use).
+
+### Floats in SSE registers (A-11 W11)
+
+Floats go through the same allocator as integers, in a second bank: `xmm2` to `xmm15` (`gen::XMM_REGS`). `xmm0` and `xmm1` stay the templates' scratch registers and `xmm0` carries a
+float result and the first float argument. Our convention has no callee-saved SSE register, so the whole bank is caller-saved: a float that lives across a call, an `alloc`, a `free`
+or a `print` is stored in its frame slot before and loaded after, exactly like the caller-saved general registers (a `memcopy` with `rep movsb` leaves them alone). The cost model is
+the same: a register is taken when the splits around calls cost no more than the loads and stores of memory.
+
+In `gen.rs` a float is `Where::Xmm(x)` or `Where::Mem(off)` (still the home of a float nothing reads and of the frame-only build). `ldf`, `stf`, `fsrc` and `fdst` hide the
+difference. Arithmetic is two-address in the result's register (a commutative operation whose result register is the right operand swaps; `-` and `/` build in `xmm0`). `Neg`
+flips the sign with `xorps` against a mask built in `xmm1`; `0.0` is `xorps x, x`; `IntToFloat` clears its destination first to avoid the false dependency on the old value. Float
+`<`, `<=`, `>` and `>=` fuse with the branch that ends their block (`ucomis` then `ja` or `jae`, operands swapped for `<` and `<=` so unordered gives false); `==` and `!=` need the
+parity flag as well and are not fused. The x87 remainder still reads memory: its operands wait in 16 bytes of frame scratch (`Gen::fscratch`). Arguments, parameters and block
+parameters are copied by the same parallel move as integers (`Gen::moves`), a cycle of SSE registers parks one on the stack with `sub rsp, 8; movsd`.
+
+Measured (best of 7, this container): `floatloop` 0.357 s to 0.133 s; C `-O2` is 0.150 s (it keeps the float order, so does not vectorise either), C `-O0` 0.229 s.

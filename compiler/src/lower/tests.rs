@@ -1631,6 +1631,145 @@ fn main() {
     }
 }
 
+/// Floats in SSE registers (A-11 W11): arithmetic in place, compares fused into branches, values kept
+/// across calls, swaps through block parameters, arguments in `xmm0..7` and on the stack.
+#[test]
+fn float_registers_stress() {
+    let programs = [
+        // Swaps and rotations through loop parameters (a cycle of moves between SSE registers).
+        r#"fn main() {
+    var a = 1.0
+    var b = 2.0
+    var c = 3.5
+    var d = 0.25
+    for i in 0..10 {
+        const t = a
+        a = b
+        b = c
+        c = d + t
+        d = t * 0.5
+    }
+    print(a, b, c, d)
+}
+"#,
+        // Many floats live across calls, with both widths.
+        r#"fn sq(x: float) -> float = x * x
+fn half(x: float32) -> float32 = x * 0.5
+fn id(a: int) -> int = a + 1
+fn main() {
+    var s = 0.0
+    var t: float32 = 1.0
+    var n = 0
+    for i in 0..20 {
+        const x = i to float
+        const y = x * 1.5
+        const z = y - 3.0
+        const w: float32 = (i to float32) + 0.25
+        s += sq(x) + y + z * 0.125
+        t = half(t) + w
+        n = id(n)
+        s += x + y + z
+    }
+    print(s, t, n)
+}
+"#,
+        // All orderings with ordinary values and NaN, as branches and as values.
+        r#"fn main() {
+    const zero = 0.0
+    const nan = zero / zero
+    const xs = [1.0, 2.0, nan, -1.0, 2.0]
+    var lt = 0
+    var le = 0
+    var gt = 0
+    var ge = 0
+    var eq = 0
+    var ne = 0
+    var bits = 0
+    for i in 0..5 {
+        for j in 0..5 {
+            const a = xs[i]
+            const b = xs[j]
+            if a < b { lt += 1 }
+            if a <= b { le += 1 }
+            if a > b { gt += 1 }
+            if a >= b { ge += 1 }
+            if a == b { eq += 1 }
+            if a != b { ne += 1 }
+            const v = a < b
+            const w = a >= b
+            const u = a == b
+            if v { bits += 1 }
+            if w { bits += 10 }
+            if u { bits += 100 }
+        }
+    }
+    print(lt, le, gt, ge, eq, ne, bits)
+}
+"#,
+        // Negation, remainder, conversions and constants in registers.
+        r#"fn main() {
+    var x = 7.5
+    var y = -2.0
+    var acc = 0.0
+    for i in 0..8 {
+        const a = -x
+        const b = a % y
+        const c = (i to float) * 0.5 - b
+        acc += c + ((rt_to_int(c)) to float) + ((i to float32) to float)
+        x = x * 1.25 + 0.0
+        y = -y * 0.5
+    }
+    print(acc, x, y)
+}
+"#,
+        // Floats in memory: loads, stores, struct fields and arrays.
+        r#"struct p { x: float, y: float, z: float32 }
+fn len2(a: p) -> float = a.x * a.x + a.y * a.y + (a.z to float)
+fn main() {
+    var v = [0.5; 12]
+    for i in 0..12 { v[i] = (i to float) * 0.75 - 1.0 }
+    var s = 0.0
+    var q = p { x: 1.0, y: 2.0, z: 3.0 }
+    for i in 0..12 {
+        s += v[i] * v[11 - i]
+        q.x = q.x + v[i]
+        q.y = q.y - v[11 - i] * 0.5
+        q.z = q.z + 0.5
+    }
+    print(s, len2(q), q.x, q.y, q.z)
+}
+"#,
+        // Float arguments in registers and on the stack, and results used at once.
+        r#"fn f(a: float, b: float, c: float, d: float, e: float, g: float, h: float, i: float, j: float, k: float) -> float = a - b * 2.0 + c * 3.0 - d * 4.0 + e * 5.0 - g * 6.0 + h * 7.0 - i * 8.0 + j * 9.0 - k * 10.0
+fn rot(a: float, b: float, c: float) -> float = a + b * 10.0 + c * 100.0
+fn main() {
+    var t = 0.0
+    for n in 0..6 {
+        const x = n to float
+        t += f(x, x + 1.0, x + 2.0, x + 3.0, x + 4.0, x + 5.0, x + 6.0, x + 7.0, x + 8.0, x + 9.0)
+        t += rot(x, t, 1.0) + rot(t, 1.0, x) + rot(1.0, x, t)
+    }
+    print(t)
+}
+"#,
+        // A float recursion and a loop that mixes integers and floats.
+        r#"fn p(x: float, n: int) -> float { if n == 0 { x } else { p(x * 1.01 + 0.5, n - 1) * 0.99 + x } }
+fn main() {
+    var s = 0.0
+    var k = 1.0
+    for i in 1..30 {
+        s += p(k, i % 7) / (i to float)
+        k = k + 1.0 / (i to float)
+    }
+    print(s, k)
+}
+"#,
+    ];
+    for p in programs {
+        agree(p);
+    }
+}
+
 /// Memory operations (A-11 W5): addresses folded into the load or store, copies as plain moves.
 #[test]
 fn memory_operations_stress() {
