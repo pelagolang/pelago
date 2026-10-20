@@ -5,15 +5,19 @@
 # The goal is a "vs -O2" ratio of 1.00x or less; those rows are marked `<= C`, and the last lines give the geometric means.
 #   --json     also print one JSON line per program (name, pelago, c0, c2, rust seconds, ratios) after the table
 #   --runs N   best of N runs per executable (default 7)
+#   --checked  also time C with `-O2 -ftrapv` and Rust with `-O -C overflow-checks=on`, which stop on overflow like
+#              Pelago does, and print a second table against them (C and Rust without checks are the "goal" rows)
 #   name ...   only these programs (file names in benches/ without `.pel`)
 # Each program must print the same output as its C twin; a mismatch is reported and the exit status is 1.
 set -e
 json=0
+checked=0
 runs=7
 names=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --json) json=1 ;;
+        --checked) checked=1 ;;
         --runs) shift; runs="$1" ;;
         *) names="$names $1" ;;
     esac
@@ -37,11 +41,17 @@ for name in $names; do
     if [ "$have_rust" = 1 ] && [ -f "compiler/benches/rs/$name.rs" ]; then
         rustc -O -C overflow-checks=off -o "$out/$name.rs" "compiler/benches/rs/$name.rs"
     fi
+    if [ "$checked" = 1 ]; then
+        gcc -O2 -ftrapv -o "$out/$name.ct" "compiler/benches/c/$name.c"
+        if [ "$have_rust" = 1 ] && [ -f "compiler/benches/rs/$name.rs" ]; then
+            rustc -O -C overflow-checks=on -o "$out/$name.rc" "compiler/benches/rs/$name.rs"
+        fi
+    fi
 done
-python3 - "$json" "$runs" "$out" $names <<'PY'
+python3 - "$json" "$runs" "$out" "$checked" $names <<'PY'
 import json, subprocess, sys, time
 
-as_json, runs, out, names = sys.argv[1] == "1", int(sys.argv[2]), sys.argv[3], sys.argv[4:]
+as_json, runs, out, checked, names = sys.argv[1] == "1", int(sys.argv[2]), sys.argv[3], sys.argv[4] == "1", sys.argv[5:]
 
 def best(exe):
     # Returns (best seconds of `runs`, stdout of the last run).
@@ -98,6 +108,15 @@ if rr:
     print(f"geometric mean vs Rust: {geomean([r[1] / r[4] for r in rr]):.2f}x over {len(rr)} programs")
 elif with_rust is False:
     print("Rust columns skipped (no rustc or no benches/rs twins)")
+if checked:
+    print()
+    print(f"{'program':12s} {'pelago':>8s} {'C trapv':>8s} {'Rust chk':>8s} {'vs C':>7s} {'vs Rust':>7s}   (same overflow checking; best of {runs}, seconds)")
+    for name, p, c0, c2, rs in rows:
+        ct, _ = best(f"{out}/{name}.ct")
+        rc = best(f"{out}/{name}.rc")[0] if os.path.exists(f"{out}/{name}.rc") else None
+        line = f"{name:12s} {p:8.3f} {ct:8.3f} " + (f"{rc:8.3f}" if rc is not None else f"{'-':>8s}")
+        line += f" {ratio(p, ct)} " + (ratio(p, rc) if rc is not None else "      -")
+        print(line)
 if as_json:
     for name, p, c0, c2, rs in rows:
         d = {"name": name, "pelago": round(p, 4), "c_o0": round(c0, 4), "c_o2": round(c2, 4), "ratio_o2": round(p / c2, 2)}
