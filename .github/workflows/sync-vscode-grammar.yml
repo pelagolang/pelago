@@ -1,0 +1,43 @@
+# Keeps pelagolang/vscode-pelago in step with the TextMate grammar here.
+# When the generated grammar changes on main, open (or update) a PR in vscode-pelago with the new copy.
+# Needs the secret VSCODE_PELAGO_TOKEN: a fine-grained token with read/write on "Contents" and
+# "Pull requests" for pelagolang/vscode-pelago only.
+name: sync-vscode-grammar
+on:
+  push:
+    branches: [main]
+    paths: [editors/textmate/pelago.tmLanguage.json]
+  workflow_dispatch:
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open a PR in vscode-pelago when its grammar copy is stale
+        env:
+          GH_TOKEN: ${{ secrets.VSCODE_PELAGO_TOKEN }}
+          SRC: ${{ github.sha }}
+        run: |
+          set -eu
+          if [ -z "$GH_TOKEN" ]; then echo "VSCODE_PELAGO_TOKEN is not set"; exit 1; fi
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/pelagolang/vscode-pelago" ext
+          cd ext
+          cp ../editors/textmate/pelago.tmLanguage.json syntaxes/pelago.tmLanguage.json
+          if git diff --quiet; then echo "grammar copy already current"; exit 0; fi
+          # bump the patch version so the new grammar ships as a new .vsix
+          node -e '
+            const fs = require("fs");
+            const p = JSON.parse(fs.readFileSync("package.json"));
+            const v = p.version.split("."); v[2] = String(Number(v[2]) + 1); p.version = v.join(".");
+            fs.writeFileSync("package.json", JSON.stringify(p, null, 2) + "\n");'
+          branch=github-actions/chore/sync-grammar
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git commit -qam "Sync the grammar from pelagolang/pelago@${SRC}"
+          git push -f origin "$branch"
+          if [ -z "$(gh pr list --repo pelagolang/vscode-pelago --head "$branch" --json number --jq '.[0].number')" ]; then
+            gh pr create --repo pelagolang/vscode-pelago --head "$branch" --base main \
+              --title "Sync the grammar from pelago" \
+              --body "Automatic copy of \`editors/textmate/pelago.tmLanguage.json\` from pelagolang/pelago@${SRC}, with the patch version bumped."
+          fi

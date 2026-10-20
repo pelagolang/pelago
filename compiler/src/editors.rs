@@ -142,12 +142,9 @@ pub fn keywords_json() -> String {
 mod tests {
     use super::*;
 
-    fn committed() -> [std::path::PathBuf; 2] {
+    fn committed() -> [std::path::PathBuf; 1] {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../editors");
-        [
-            root.join("textmate/pelago.tmLanguage.json"),
-            root.join("vscode/syntaxes/pelago.tmLanguage.json"),
-        ]
+        [root.join("textmate/pelago.tmLanguage.json")]
     }
 
     #[test]
@@ -164,47 +161,6 @@ mod tests {
                 "{} is out of date; run `BLESS=1 cargo test editors` to regenerate it",
                 path.display()
             );
-        }
-    }
-
-    /// The extension must never restyle anything outside `.pel` files: no themes, no workbench
-    /// colours, and every colour rule is anchored to the `source.pelago` scope.
-    #[test]
-    fn the_vscode_extension_only_colours_pelago() {
-        use crate::lsp::json::Json;
-        let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../editors/vscode/package.json");
-        let pkg = Json::parse(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let contributes = pkg.get("contributes").unwrap();
-        assert!(
-            contributes.get("themes").is_none(),
-            "the extension must not contribute themes"
-        );
-        assert!(contributes.get("iconThemes").is_none());
-        let defaults = contributes.get("configurationDefaults").unwrap();
-        let Json::Obj(keys) = defaults else {
-            panic!("configurationDefaults is not an object")
-        };
-        for (key, _) in keys {
-            assert_eq!(
-                key, "editor.tokenColorCustomizations",
-                "only token colours may be defaulted (never workbench colours or the theme)"
-            );
-        }
-        let rules = defaults
-            .get("editor.tokenColorCustomizations")
-            .and_then(|t| t.get("textMateRules"))
-            .and_then(|r| r.arr())
-            .unwrap();
-        assert!(!rules.is_empty());
-        for rule in rules {
-            for scope in rule.get("scope").and_then(|s| s.arr()).unwrap() {
-                let scope = scope.str().unwrap();
-                assert!(
-                    scope.starts_with("source.pelago "),
-                    "unscoped colour rule `{scope}`"
-                );
-            }
         }
     }
 

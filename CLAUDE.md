@@ -28,7 +28,7 @@ cargo run -- build [-o out] <path>   # native executable, optimised by default (
 cargo run -- highlight <file>    # colour a `.pel` file (`--ansi`, `--html`, `--html-page`, `--plain`, `--theme dark|light`)
 cargo run -- lsp                  # the language server (stdio); see docs/plans/cards/S-06-language-server.md
 cargo run -- grammar             # print the generated TextMate grammar; `keywords --json` prints the word lists
-BLESS=1 cargo test editors       # regenerate editors/textmate and editors/vscode/syntaxes after a keyword change
+BLESS=1 cargo test editors       # regenerate editors/textmate after a keyword change
 BLESS=1 cargo test               # rewrite compiler/tests/golden/*.ast after an intended syntax change
 ```
 
@@ -40,7 +40,7 @@ CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pus
 - `compiler/tests/`: integration tests. Every file in `examples/*.pel` must lex and parse without errors and match its golden tree.
 - `examples/`: sample source files. Keep `tour.pel` in step with the syntax decisions. `examples/programs/` holds real programs that must type check cleanly.
 - `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `lexer`, `parser`, `modules`, `checker`, `ir`, `memory`, `samples`).
-- `editors/`: the TextMate grammar (generated, with a test that keeps it in step with `keyword.rs`) and the VS Code extension.
+- `editors/`: the TextMate grammar (generated, with a test that keeps it in step with `keyword.rs`) (the VS Code extension lives in `pelagolang/vscode-pelago`).
 - `docs/plans/`: the task board (Kanban) and one plan card per piece of work; start at `docs/plans/README.md`.
 - `ROADMAP.md`: the decisions table and the phases. `NAMES.md`: name brainstorm.
 
