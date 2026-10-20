@@ -1650,8 +1650,8 @@ fn rt_task_run(s: ptr) {
     /// 0: waiting, 3: waiting and detached (the task frees itself when done); anything else already ran.
     if state != 0 && state != 3 { return }
     if state == 0 { rt_store_int(s, 1) }
-    const g = rt_read<fn()>(rt_offset(s, 8))
-    g()
+    const g = rt_read<once fn()>(rt_offset(s, 8))
+    g!!()
 }
 
 //~ Runs every task that has not run yet.
@@ -1675,8 +1675,8 @@ pub fn rt_run_one_pending() -> bool {
 //~ Can a receive on this channel finish now: a value is queued, or no sender is left?
 pub fn rt_chan_ready(ch: ptr) -> bool = rt_hdr_len(ch) > 0 || rt_load_int(rt_offset(ch, 24)) == 0
 
-fn rt_task_body<T>(s: ptr, f: fn() -> T) {
-    rt_write<T>(rt_offset(s, 40), f())
+fn rt_task_body<T>(s: ptr, sink f: once fn() -> T) {
+    rt_write<T>(rt_offset(s, 40), f!!())
     if rt_load_int(s) == 3 {
         rt_drop_at<T>(rt_offset(s, 40))
         rt_free(s)
@@ -1709,11 +1709,11 @@ fn rt_forget_task<T>(sink t: task<T>) {
 }
 
 //~ Starts `f` on a new thread. What the closure uses must be copied or moved in (`sink x ~> ...`).
-pub fn spawn<T>(sink f: fn() -> T) -> task<T> {
+pub fn spawn<T>(sink f: once fn() -> T) -> task<T> {
     const s = rt_alloc(48 + rt_size_of<T>())
     rt_store_int(s, 0)
-    const runner = [sink f, sink s] () ~> rt_task_body<T>(s, f)
-    rt_write<fn()>(rt_offset(s, 8), sink runner)
+    const runner = [sink f, sink s] () ~> rt_task_body<T>(s, sink f)
+    rt_write<once fn()>(rt_offset(s, 8), sink runner)
     rt_pending.push!(rt_addr_int(s))
     task<T> { state: s }
 }
@@ -1724,7 +1724,7 @@ pub struct scope_handle {
 }
 
 impl scope_handle {
-    fn spawn<T>(self, sink f: fn() -> T) -> task<T> = spawn(sink f)
+    fn spawn<T>(self, sink f: once fn() -> T) -> task<T> = spawn(sink f)
 }
 
 /// A channel block: [queue: list 24 bytes][senders: int][receiver alive: int].

@@ -128,7 +128,8 @@ pub enum TyKind {
     Range(Ty),
     Iter(Ty),
     Box(Ty),
-    Fn(Vec<ParamTy>, Ty),
+    /// parameters, return type, `once` (callable once; calling consumes it)
+    Fn(Vec<ParamTy>, Ty, bool),
     /// `ptr`: a raw address, used by the library (`unsafe`).
     Ptr,
     /// `any iface`
@@ -311,7 +312,7 @@ impl TypeTable {
             TyKind::Result(a, b) | TyKind::Map(a, b) | TyKind::ConstOp(_, a, b) => {
                 self.occurs(v, *a) || self.occurs(v, *b)
             }
-            TyKind::Fn(ps, r) => ps.iter().any(|p| self.occurs(v, p.ty)) || self.occurs(v, *r),
+            TyKind::Fn(ps, r, _) => ps.iter().any(|p| self.occurs(v, p.ty)) || self.occurs(v, *r),
             _ => false,
         }
     }
@@ -403,8 +404,9 @@ impl TypeTable {
             | (TyKind::Map(t1, e1), TyKind::Map(t2, e2)) => {
                 self.unify_inner(*t1, *t2) && self.unify_inner(*e1, *e2)
             }
-            (TyKind::Fn(p1, r1), TyKind::Fn(p2, r2)) => {
-                p1.len() == p2.len()
+            (TyKind::Fn(p1, r1, o1), TyKind::Fn(p2, r2, o2)) => {
+                o1 == o2
+                    && p1.len() == p2.len()
                     && p1
                         .iter()
                         .zip(p2.iter())
@@ -527,7 +529,7 @@ impl TypeTable {
             TyKind::Box(a) => TyKind::Box(self.zonk(a)),
             TyKind::Result(a, b) => TyKind::Result(self.zonk(a), self.zonk(b)),
             TyKind::Map(a, b) => TyKind::Map(self.zonk(a), self.zonk(b)),
-            TyKind::Fn(ps, r) => TyKind::Fn(
+            TyKind::Fn(ps, r, once) => TyKind::Fn(
                 ps.into_iter()
                     .map(|p| ParamTy {
                         mode: p.mode,
@@ -535,6 +537,7 @@ impl TypeTable {
                     })
                     .collect(),
                 self.zonk(r),
+                once,
             ),
             _ => return t,
         };
@@ -580,7 +583,7 @@ impl TypeTable {
             TyKind::Box(a) => TyKind::Box(self.subst(a, map)),
             TyKind::Result(a, b) => TyKind::Result(self.subst(a, map), self.subst(b, map)),
             TyKind::Map(a, b) => TyKind::Map(self.subst(a, map), self.subst(b, map)),
-            TyKind::Fn(ps, r) => TyKind::Fn(
+            TyKind::Fn(ps, r, once) => TyKind::Fn(
                 ps.into_iter()
                     .map(|p| ParamTy {
                         mode: p.mode,
@@ -588,6 +591,7 @@ impl TypeTable {
                     })
                     .collect(),
                 self.subst(r, map),
+                once,
             ),
             _ => return t,
         };
@@ -614,7 +618,7 @@ impl TypeTable {
             TyKind::Result(a, b) | TyKind::Map(a, b) | TyKind::ConstOp(_, a, b) => {
                 self.has_vars(*a) || self.has_vars(*b)
             }
-            TyKind::Fn(ps, r) => ps.iter().any(|p| self.has_vars(p.ty)) || self.has_vars(*r),
+            TyKind::Fn(ps, r, _) => ps.iter().any(|p| self.has_vars(p.ty)) || self.has_vars(*r),
             _ => false,
         }
     }
@@ -729,7 +733,8 @@ impl TypeTable {
             TyKind::Range(e) => format!("range<{}>", d(*e)),
             TyKind::Iter(e) => format!("iter<{}>", d(*e)),
             TyKind::Box(e) => format!("box<{}>", d(*e)),
-            TyKind::Fn(ps, r) => {
+            TyKind::Fn(ps, r, once) => {
+                let kw = if *once { "once fn" } else { "fn" };
                 let params: Vec<String> = ps
                     .iter()
                     .map(|p| match p.mode {
@@ -738,9 +743,9 @@ impl TypeTable {
                     })
                     .collect();
                 if self.kind_of(*r) == &TyKind::Void {
-                    format!("fn({})", params.join(", "))
+                    format!("{kw}({})", params.join(", "))
                 } else {
-                    format!("fn({}) -> {}", params.join(", "), d(*r))
+                    format!("{kw}({}) -> {}", params.join(", "), d(*r))
                 }
             }
             TyKind::Any(def) => format!("any {}", name_of(*def)),

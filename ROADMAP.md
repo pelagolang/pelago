@@ -44,6 +44,7 @@ A serious, self-hosting systems language:
 | Imports | Imports are bindings: `import std.io`, `import fmt = std.io`, `import { a, b: c, ... } = path`; cycles allowed, top-level only, `pub pkg` middle visibility, orphan rule (`docs/design/modules.md`). A file is a module named after the file; relative paths with leading dots stay | decided |
 | Maps | `map { "a": 1 }`, empty map `{:}` | decided |
 | Closures | `x ~> x * 2` and `~> it * 2` | decided |
+| One-shot closures | A closure that consumes a `[sink]` capture has the type `once fn(...)` (inferred, never written on the closure); calling it is `f!!()` and uses it up; `fn` may stand where `once fn` is wanted; `spawn` takes `once fn` (`functions.md` section 19) | decided, built |
 | Null | None. Absence is `none` in `option<T>` | decided |
 | Ternary | Included, chains right, spaces around `?` and `:`; error-propagation `?` is attached | decided |
 | `++` / `--` | Included as statements only; `+= 1` stays | decided |

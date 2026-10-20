@@ -1009,6 +1009,32 @@ fn any_compares_and_downcasts_within_its_interface() {
 }
 
 #[test]
+fn once_fn_closures_are_called_once() {
+    let defs = "fn eat(sink s: string) -> int = s.len()\nfn run(sink f: once fn() -> int) -> int = f!!()\n";
+    clean(&format!(
+        "{defs}fn t() -> int {{ const s = \"hi\"\n run(sink [sink s] () ~> eat(sink s)) }}"
+    ));
+    // a closure that only reads is an ordinary `fn`, and may stand where a `once fn` is wanted
+    clean(&format!(
+        "{defs}fn t() -> int {{ const s = \"hi\"\n const k = [sink s] () ~> s.len()\n k() + k() + run(sink k) }}"
+    ));
+    flagged(
+        &format!("{defs}fn t() -> int {{ const s = \"hi\"\n const g = [sink s] () ~> eat(sink s)\n g() }}"),
+        "can be called only once",
+    );
+    flagged(
+        &format!("{defs}fn t(f: fn() -> int) -> int = f!!()"),
+        "remove the `!!`",
+    );
+    flagged(
+        &format!(
+            "{defs}fn t(sink f: once fn() -> int) -> int {{ const g: fn() -> int = f\n g() }}"
+        ),
+        "but `fn() -> int` is expected",
+    );
+}
+
+#[test]
 fn any_needs_the_interface() {
     let defs = "interface shape { fn area(self) -> float }\nstruct sq { s: float }\nimpl shape for sq { fn area(self) -> float = 1.0 }\nstruct blob { n: int }\n";
     clean(&format!(

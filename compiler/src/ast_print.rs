@@ -137,7 +137,7 @@ impl Printer<'_> {
             }
             TypeKind::Option(e) => list("option", vec![self.ty(e)]),
             TypeKind::Result(a, b) => list("result", vec![self.ty(a), self.ty(b)]),
-            TypeKind::Fn { params, ret } => {
+            TypeKind::Fn { once, params, ret } => {
                 let ps = params
                     .iter()
                     .map(|p| match p.mode {
@@ -150,7 +150,7 @@ impl Printer<'_> {
                     v.push(atom("->"));
                     v.push(self.ty(r));
                 }
-                list("fn", v)
+                list(if *once { "once-fn" } else { "fn" }, v)
             }
             TypeKind::Any(e) => list("any", vec![self.ty(e)]),
             TypeKind::Error => atom("<error>"),

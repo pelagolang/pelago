@@ -383,7 +383,7 @@ impl<'a> Lowerer<'a> {
             | TyKind::Iter(e) => self.has_params(*e),
             TyKind::Result(a, b) | TyKind::Map(a, b) => self.has_params(*a) || self.has_params(*b),
             TyKind::Array(e, _) => self.has_params(*e),
-            TyKind::Fn(ps, r) => ps.iter().any(|p| self.has_params(p.ty)) || self.has_params(*r),
+            TyKind::Fn(ps, r, _) => ps.iter().any(|p| self.has_params(p.ty)) || self.has_params(*r),
             _ => false,
         }
     }

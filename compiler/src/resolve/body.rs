@@ -447,7 +447,7 @@ impl<'p> Resolver<'p> {
                 self.resolve_type(b);
                 None
             }
-            TypeKind::Fn { params, ret } => {
+            TypeKind::Fn { params, ret, .. } => {
                 for p in params {
                     self.resolve_type(&p.ty);
                 }

@@ -238,6 +238,7 @@
               (. s spawn)
               (~> (capture (inout right)) () (= right (call sum (index xs (.. mid _)))))))))
       (tail (+ left right))))
+  (fn run_once ((sink f : (once-fn () -> int))) -> int = (call!! f))
   (fn
     pipeline
     ()

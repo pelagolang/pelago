@@ -511,6 +511,8 @@ fn types() {
     assert_eq!(t("[int]?"), "(option (list int))");
     assert_eq!(t("map<string, [int]>"), "(map string (list int))");
     assert_eq!(t("fn(int, string) -> bool"), "(fn (int string) -> bool)");
+    assert_eq!(t("once fn() -> int"), "(once-fn () -> int)");
+    assert_eq!(t("once"), "once");
     assert_eq!(t("any shape_like"), "(any shape_like)");
     assert_eq!(t("soa<point, 8>"), "(soa point 8)");
     assert_eq!(t("std.io.file"), "std.io.file");

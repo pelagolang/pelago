@@ -392,8 +392,12 @@ impl<'p> Checker<'p> {
     }
 
     pub(crate) fn closure(&mut self, e: &'p Expr, c: &'p Closure, exp: Exp) -> Ty {
+        let mut want_once = false;
         let want = exp.ty().and_then(|t| match self.kind_of(t) {
-            TyKind::Fn(ps, r) => Some((ps, r)),
+            TyKind::Fn(ps, r, once) => {
+                want_once = once;
+                Some((ps, r))
+            }
             _ => None,
         });
         let mut params: Vec<ParamTy> = Vec::new();
@@ -476,6 +480,7 @@ impl<'p> Checker<'p> {
         }
         self.fn_ctx.pop();
         self.loops = saved_loops;
-        self.tt.mk(TyKind::Fn(params, ret))
+        let once = want_once || self.closure_consumes(c);
+        self.tt.mk(TyKind::Fn(params, ret, once))
     }
 }
