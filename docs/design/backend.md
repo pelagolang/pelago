@@ -149,3 +149,10 @@ parity flag as well and are not fused. The x87 remainder still reads memory: its
 parameters are copied by the same parallel move as integers (`Gen::moves`), a cycle of SSE registers parks one on the stack with `sub rsp, 8; movsd`.
 
 Measured (best of 7, this container): `floatloop` 0.357 s to 0.133 s; C `-O2` is 0.150 s (it keeps the float order, so does not vectorise either), C `-O0` 0.229 s.
+
+### Alignment and jump padding (A-11)
+
+Functions start on 16 bytes and loop heads (the target of a jump back) on 16 bytes when that costs at most 8 bytes of no-ops (`Asm::align`). Every jump, and the compare or checked
+`add`/`sub` that fuses with a conditional jump, is kept from crossing or ending on a 32-byte boundary by no-ops placed in front of the pair (`Asm::guard_jump`; the JCC erratum of
+Skylake-derived Intel cores, which the 8th-generation laptop of the owner has). Measured on this container, shifting a function by 0 to 31 bytes moves collatz by 0.092 to 0.102 s with
+or without the padding, so the erratum does not show here; the padding is there for the cores that have it and costs a few bytes of code.
