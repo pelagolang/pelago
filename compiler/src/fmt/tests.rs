@@ -189,3 +189,25 @@ fn import_names_are_sorted_with_the_glob_last() {
     let commented = "import {\n    b, /// why\n    a,\n} = std.x\n";
     assert_eq!(fmt(commented), commented);
 }
+
+#[test]
+fn a_long_condition_breaks_after_the_loosest_operator() {
+    let src = "fn main() {\n    if first_condition && second_condition || third_condition && fourth_condition {\n        go()\n    }\n}\n";
+    let out = super::format_with(src, &narrow(60)).expect("formats");
+    assert_eq!(
+        out,
+        "fn main() {\n    if first_condition && second_condition ||\n        third_condition && fourth_condition {\n        go()\n    }\n}\n"
+    );
+    assert_eq!(super::format_with(&out, &narrow(60)).unwrap(), out);
+}
+
+#[test]
+fn a_long_sum_breaks_after_the_plus_but_not_after_a_unary_minus() {
+    let src = "fn main() {\n    const total = alpha_value + beta_value + gamma_value\n    const neg = -alpha_value\n}\n";
+    let out = super::format_with(src, &narrow(40)).expect("formats");
+    assert_eq!(
+        out,
+        "fn main() {\n    const total = alpha_value +\n        beta_value +\n        gamma_value\n    const neg = -alpha_value\n}\n"
+    );
+    assert_eq!(super::format_with(&out, &narrow(40)).unwrap(), out);
+}
