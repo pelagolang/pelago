@@ -22,13 +22,13 @@
       "include": "#numbers"
     },
     {
+      "include": "#declarations"
+    },
+    {
       "include": "#keywords"
     },
     {
       "include": "#soft"
-    },
-    {
-      "include": "#declarations"
     },
     {
       "include": "#types"
@@ -314,10 +314,34 @@
           }
         },
         {
-          "name": "keyword.other.soft.pelago",
-          "match": "\\.\\.=?[^\\n]*?\\s(step)\\b",
+          "match": "(\\.\\.=?)([^\\n]*?)\\s(step)\\b",
           "captures": {
             "1": {
+              "name": "keyword.operator.range.pelago"
+            },
+            "2": {
+              "patterns": [
+                {
+                  "include": "#comments"
+                },
+                {
+                  "include": "#strings"
+                },
+                {
+                  "include": "#chars"
+                },
+                {
+                  "include": "#numbers"
+                },
+                {
+                  "include": "#calls"
+                },
+                {
+                  "include": "#operators"
+                }
+              ]
+            },
+            "3": {
               "name": "keyword.other.soft.pelago"
             }
           }
@@ -331,8 +355,34 @@
           "match": "^\\s*init(?=\\s*[({])"
         },
         {
-          "name": "keyword.other.soft.pelago",
-          "match": "(?<=~>)[^\\n]*?(?<![.\\w])it\\b"
+          "match": "(?<=~>)([^\\n]*?)(?<![.\\w])(it)\\b",
+          "captures": {
+            "1": {
+              "patterns": [
+                {
+                  "include": "#comments"
+                },
+                {
+                  "include": "#strings"
+                },
+                {
+                  "include": "#chars"
+                },
+                {
+                  "include": "#numbers"
+                },
+                {
+                  "include": "#calls"
+                },
+                {
+                  "include": "#operators"
+                }
+              ]
+            },
+            "2": {
+              "name": "keyword.other.soft.pelago"
+            }
+          }
         },
         {
           "name": "keyword.other.soft.pelago",

@@ -1,6 +1,6 @@
 Id: S-05
 Title: Tree-sitter grammar and the Zed extension
-Column: Review (grammar and extension built; not yet tried inside Zed)
+Column: Review (built and tested as far as a sandbox allows, publishing material prepared; waits for the owner's try-out in VS Code, a licence, and the publish)
 Order: -
 Depends on: nothing in the compiler (the syntax is settled); the owner's approval of the tools below
 Size: M for the grammar, S for the extension
@@ -10,10 +10,27 @@ Revisit when: the owner wants Zed (or Neovim, Helix) support, or before the firs
 
 Built on the branch `claude/programming-language-design-psjufd-3` of both repositories: the grammar (`grammar.js`, an external scanner in C, queries, 71 corpus tests; all examples
 and `core.pel` parse with no error nodes; commit `05899d4`) and the Zed extension (`extension.toml` pinning that commit, the language config, the queries, a Rust crate that starts
-`pelago lsp`; it builds for `wasm32-wasip1`). **Not done:** trying it inside Zed itself (nobody has opened it in the editor yet), publishing to the Zed extensions registry,
-and a licence for both repositories (the owner's choice). Known: the generated `parser.c` is about 17 MB (9,300 states); the compiled parser is a few MB. Differences from the
+`pelago lsp`; it builds for `wasm32-wasip1`). **Not done:** trying it inside Zed itself (the owner has since tried it; see the checklist below), publishing to the Zed extensions registry,
+and a licence for the repositories (the owner's choice). Known: the generated `parser.c` is about 17 MB (9,300 states); the compiled parser is a few MB. Differences from the
 compiler's parser are listed in the grammar's README (`break name` is always a label, a touching `<` is generic only if `>` and `(`, `{` or `.` follow on the line, the
 grammar is more forgiving than the compiler and does not run `check.rs`).
+
+# Check and publishing preparation (2026-10-20)
+
+Done from the cloud sandbox (Linux), in `tree-sitter-pelago`, `zed-pelago`, `vscode-pelago` and this repository:
+
+- Grammar: `tree-sitter test` 71 of 71, `script/check-corpus.sh` 19 of 19 files, `tree-sitter build --wasm` gives a 2.5 MB parser, all four query files compile. CI now builds the wasm too and uses `npm ci`.
+- Zed extension: builds for `wasm32-wasip1` and `wasm32-wasip2` (Zed's docs now name `wasip2`), `cargo fmt` and `clippy -D warnings` clean, queries identical to the pinned grammar commit. CI (`ci.yml`, `script/check-queries.sh`) checks all of it and builds the pinned grammar to wasm.
+- Language server: `pelago lsp` driven over stdio the way Zed starts it (initialize, didOpen, diagnostics, shutdown): it answers, advertises hover, definition, references, completion, symbols and semantic tokens, and reports `expected an expression, found `let`` for a bad line.
+- VS Code: the grammar tokenized all 19 `.pel` files (18,800 tokens) with the real engine (`vscode-textmate` and Oniguruma), no failures; `vsce package` builds a valid `.vsix` (icon, banner, repository, keywords, changelog). Found and fixed three highlighting bugs in the generated TextMate grammar: function and type names after `fn` / `obj` / `struct` were never scoped as declarations (the keyword rule won), and the `step` and `it` soft-keyword rules coloured the text before the word as a keyword.
+- Publishing material: `PUBLISHING.md` in `zed-pelago` (registry PR contents) and in `vscode-pelago` (Marketplace and Open VSX steps), an icon (placeholder), licence notes. Neither extension ships or changes a theme (guard: `scripts/check.js`).
+
+Not doable in the sandbox, for the owner to check by hand on Windows (PowerShell):
+
+1. Zed: the owner already tried the extension in Zed (2026-10-20), so no hands-on check is listed here. The registry asks for a test at the exact commit submitted; reinstall the dev extension once after the final pin.
+2. VS Code: `npm ci` then `npm run package` in `vscode-pelago`, install `dist/pelago-<version>.vsix` (Extensions, `...`, Install from VSIX). Open a `.pel` file: language mode shows `Pelago`, `fn`/`obj` names, `step`, `it`, strings and interpolation are coloured; switch between a light and a dark theme (colours must stay readable, and `.rs` / `.ts` files must look exactly as before); snippets appear when typing `fn` and `for`.
+3. Decisions: the licence (the root `Cargo.toml` says `MIT OR Apache-2.0`; Zed accepts either; this roadmap item is still open), the logo (`vscode-pelago/images/icon.svg` is a placeholder), the first public version number, and creating the publisher accounts (Marketplace publisher `pelagolang`, Open VSX namespace `pelagolang`).
+4. Then publish, in this order: licence files into all three repositories, pin the final `tree-sitter-pelago` commit in `zed-pelago` (`script/check-queries.sh`), open the registry PR from `PUBLISHING.md`, `vsce publish` and `ovsx publish`. Nothing is published or submitted yet.
 
 # Original shelving note (kept for the history)
 
