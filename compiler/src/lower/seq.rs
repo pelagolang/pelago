@@ -351,11 +351,8 @@ impl<'a> Lowerer<'a> {
         if !matches!(self.kind(lt), TyKind::String) {
             return None;
         }
-        let ExprKind::Name(id) = &strip_parens(lhs).kind else {
-            return None;
-        };
-        let def = self.res.use_at(self.f.file, id.span.start)?;
-        if !matches!(self.f.locals.get(&def), Some(Local::Slot { .. })) {
+        let (def, path) = self.place_path(lhs)?;
+        if !self.f.locals.contains_key(&def) {
             return None;
         }
         // Flatten `((s + a) + b)` into the operands `a`, `b`.
@@ -370,16 +367,13 @@ impl<'a> Lowerer<'a> {
             ops.push(r);
             cur = strip_parens(l);
         }
-        let ExprKind::Name(first) = &cur.kind else {
-            return None;
-        };
-        if ops.is_empty() || self.res.use_at(self.f.file, first.span.start) != Some(def) {
+        if ops.is_empty() || self.place_path(cur) != Some((def, path.clone())) {
             return None;
         }
         ops.reverse();
         for o in &ops {
             let ot = self.ty_of(o)?;
-            if !self.is_text(ot) || !self.simple_operand(o, def) {
+            if !self.is_text(ot) || !self.simple_operand(o, def, &path) {
                 return None;
             }
         }
@@ -394,26 +388,64 @@ impl<'a> Lowerer<'a> {
         Some(Res::Unit)
     }
 
-    /// Does `e` avoid the variable `def` and any call, closure or assignment?
-    fn simple_operand(&self, e: &Expr, def: DefId) -> bool {
+    /// The variable and the field names `e` spells out, for `s` and `s.a.b`.
+    fn place_path(&self, e: &Expr) -> Option<(DefId, Vec<String>)> {
         use super::expr::strip_parens;
         match &strip_parens(e).kind {
+            ExprKind::Name(id) => Some((self.res.use_at(self.f.file, id.span.start)?, Vec::new())),
+            ExprKind::Field {
+                base,
+                name,
+                optional: false,
+            } => {
+                let (d, mut p) = self.place_path(base)?;
+                p.push(self.src_text(name.span).to_string());
+                Some((d, p))
+            }
+            _ => None,
+        }
+    }
+
+    /// Does `e` avoid the place `def.path` (and anything inside or around it), and any closure or
+    /// assignment? Calls are allowed when they name a plain function and pass plain values.
+    fn simple_operand(&self, e: &Expr, def: DefId, path: &[String]) -> bool {
+        use super::expr::strip_parens;
+        if let Some((d, p)) = self.place_path(e) {
+            let n = p.len().min(path.len());
+            return d != def || p[..n] != path[..n];
+        }
+        match &strip_parens(e).kind {
             ExprKind::Int | ExprKind::Float | ExprKind::Char | ExprKind::Bool(_) => true,
-            ExprKind::Name(id) => self.res.use_at(self.f.file, id.span.start) != Some(def),
             ExprKind::Str(parts) => parts.iter().all(|part| match part {
                 StrPart::Text(_) => true,
-                StrPart::Interp(x) => self.simple_operand(x, def),
+                StrPart::Interp(x) => self.simple_operand(x, def, path),
             }),
             ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => {
-                self.simple_operand(base, def)
+                self.simple_operand(base, def, path)
             }
             ExprKind::Index { base, index } => {
-                self.simple_operand(base, def) && self.simple_operand(index, def)
+                self.simple_operand(base, def, path) && self.simple_operand(index, def, path)
             }
             ExprKind::Binary { lhs, rhs, .. } => {
-                self.simple_operand(lhs, def) && self.simple_operand(rhs, def)
+                self.simple_operand(lhs, def, path) && self.simple_operand(rhs, def, path)
             }
-            ExprKind::Unary { operand, .. } => self.simple_operand(operand, def),
+            ExprKind::Unary { operand, .. } => self.simple_operand(operand, def, path),
+            ExprKind::Call {
+                callee,
+                args,
+                mark: CallMark::None,
+            } => {
+                let ExprKind::Name(id) = &strip_parens(callee).kind else {
+                    return false;
+                };
+                let Some(d) = self.res.use_at(self.f.file, id.span.start) else {
+                    return false;
+                };
+                !self.f.locals.contains_key(&d)
+                    && args.iter().all(|a| {
+                        a.mode.is_none() && !a.spread && self.simple_operand(&a.value, def, path)
+                    })
+            }
             _ => false,
         }
     }
