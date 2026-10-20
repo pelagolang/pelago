@@ -16,6 +16,10 @@ The formatter is on the roadmap ("Formatter, language server, editor syntax high
 
 **Why the first stage needs no parser change (F1):** the formatter lexes the file itself, so comments are already there; the parser does not have to keep them. F1 is dropped.
 
+**Known limit of stage 1:** a line indented one level too far, on purpose or by mistake, is kept, because without the tree it cannot be told from a `case` body. Stage 2 derives indentation from the tree and fixes this; until then `fmt --check examples` in CI keeps our own files right, and `--check` reports only lines the layout would change.
+
+**Configuration (owner: yes):** a `[fmt]` section in `pelago.toml`, found by walking up from the file; `indent` and `width` first.
+
 **Stage 2 (not built):** line breaking from the tree (questions 1, 5 to 8): wrap at the width, trailing commas when a list breaks, sorting names in import lists (10).
 
 # What it needs
