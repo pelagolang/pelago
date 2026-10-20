@@ -17,6 +17,9 @@ use super::loops::{self, Loop};
 use crate::ir::*;
 use std::collections::{HashMap, HashSet};
 
+/// The counters of a formula with their coefficients.
+type Terms = Vec<(Value, u64)>;
+
 /// `k + sum(c * p)` over counters `p`, with wrapping coefficients.
 #[derive(Clone, Debug)]
 struct Aff {
@@ -94,13 +97,6 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
     };
     let back = back.clone();
     let defs = f.defs();
-    let mut block_of = vec![u32::MAX; f.insts.len()];
-    for (bi, b) in f.blocks.iter().enumerate() {
-        for &i in &b.insts {
-            block_of[i] = bi as u32;
-        }
-    }
-    let in_loop = |i: usize| block_of[i] != u32::MAX && lp.body[block_of[i] as usize];
     let const_of = |v: Value| -> Option<u64> {
         match defs[v.0 as usize].map(|i| &f.insts[i].op) {
             Some(Op::Const(IrTy::Int(64), Const::Int(c))) => Some(*c as u64),
@@ -108,45 +104,17 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
         }
     };
 
-    // The counters: header parameters sent back as themselves plus a constant.
+    // Header parameters are the atoms of the formulas; the counters among them are found below.
     let params = f.blocks[h.0 as usize].params.clone();
+    let atoms: HashSet<Value> = params
+        .iter()
+        .copied()
+        .filter(|p| f.ty(*p) == IrTy::Int(64))
+        .collect();
     let mut step: HashMap<Value, u64> = HashMap::new();
-    for (idx, &p) in params.iter().enumerate() {
-        if f.ty(p) != IrTy::Int(64) {
-            continue;
-        }
-        let Some(i) = defs[back.args[idx].0 as usize] else {
-            continue;
-        };
-        if !in_loop(i) {
-            continue;
-        }
-        match &f.insts[i].op {
-            Op::Bin(BinOp::Add, a, c) if *a == p => {
-                if let Some(k) = const_of(*c) {
-                    step.insert(p, k);
-                }
-            }
-            Op::Bin(BinOp::Add, c, a) if *a == p => {
-                if let Some(k) = const_of(*c) {
-                    step.insert(p, k);
-                }
-            }
-            Op::Bin(BinOp::Sub, a, c) if *a == p => {
-                if let Some(k) = const_of(*c) {
-                    step.insert(p, k.wrapping_neg());
-                }
-            }
-            _ => {}
-        }
-    }
-    if step.len() < 2 {
-        return false;
-    }
 
     // Every value in the loop made from counters, as a formula.
     let mut aff: HashMap<Value, Option<Aff>> = HashMap::new();
-    let mut cone: HashMap<Value, Vec<usize>> = HashMap::new();
     for &b in &Dom::new(f).rpo {
         if !lp.contains(b) {
             continue;
@@ -158,7 +126,7 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
                 continue;
             }
             let get = |v: Value, aff: &HashMap<Value, Option<Aff>>| -> Option<Aff> {
-                if step.contains_key(&v) {
+                if atoms.contains(&v) {
                     return Some(Aff {
                         k: 0,
                         terms: vec![(v, 1)],
@@ -190,25 +158,31 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
                 Op::Neg(x) => get(*x, &aff).map(|x| x.scale(u64::MAX)),
                 _ => None,
             };
-            if a.is_some() {
-                let mut c = vec![i];
-                if let Op::Bin(_, x, y) = &inst.op {
-                    for v in [x, y] {
-                        if let Some(sub) = cone.get(v) {
-                            c.extend(sub.iter().copied());
-                        }
-                    }
-                } else if let Op::Neg(x) = &inst.op {
-                    if let Some(sub) = cone.get(x) {
-                        c.extend(sub.iter().copied());
-                    }
-                }
-                cone.insert(r, c);
-            }
             aff.insert(r, a);
         }
     }
 
+    // A counter is an atom that the loop sends back as itself plus a constant, however many `add`s
+    // that takes.
+    for (idx, &p) in params.iter().enumerate() {
+        if !atoms.contains(&p) {
+            continue;
+        }
+        let sent = back.args[idx];
+        let a = match aff.get(&sent) {
+            Some(Some(a)) => Some(a.clone()),
+            _ if sent == p => Some(Aff {
+                k: 0,
+                terms: vec![(p, 1)],
+            }),
+            _ => None,
+        };
+        if let Some(a) = a {
+            if a.terms.len() == 1 && a.terms[0] == (p, 1) {
+                step.insert(p, a.k);
+            }
+        }
+    }
     // How each value is read, by instruction and by terminator.
     let mut inst_uses: HashMap<Value, Vec<usize>> = HashMap::new();
     let mut term_uses: HashMap<Value, usize> = HashMap::new();
@@ -223,6 +197,8 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
         }
     }
 
+    // Values with the same counters and coefficients differ by a constant, so they share one counter.
+    let mut groups: Vec<(Terms, Vec<(Value, u64)>)> = Vec::new();
     for &b in &Dom::new(f).rpo {
         if !lp.contains(b) {
             continue;
@@ -231,85 +207,65 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
             let Some(v) = f.insts[i].result else { continue };
             let Some(Some(a)) = aff.get(&v) else { continue };
             let used = inst_uses.contains_key(&v) || term_uses.contains_key(&v);
-            if a.terms.len() < 2 || !used {
+            let counters = a.terms.len() >= 2 && a.terms.iter().all(|t| step.contains_key(&t.0));
+            let offset = a.terms.len() == 1 && a.terms[0].1 == 1;
+            if !used || !(counters || offset) {
                 continue;
             }
-            let insts: HashSet<usize> = cone[&v].iter().copied().collect();
-            if profitable(f, &back, &insts, v, a, &inst_uses, &term_uses) {
-                let a = a.clone();
-                return rewrite(f, lp, latch, v, &a, &step);
+            let mut key = a.terms.clone();
+            key.sort();
+            match groups.iter_mut().find(|g| g.0 == key) {
+                Some(g) => g.1.push((v, a.k)),
+                None => groups.push((key, vec![(v, a.k)])),
             }
+        }
+    }
+    // Keep a group only when the loop ends up with fewer instructions.
+    let before = weight(f, lp);
+    for (terms, members) in groups {
+        let mut g = f.clone();
+        let mut level = false;
+        if let [(p, 1)] = terms.as_slice() {
+            level = offsets(&mut g, *p, &members);
+        } else {
+            rewrite(&mut g, lp, latch, &terms, &members, &step);
+        }
+        super::dce::run(&mut g);
+        let after = weight(&g, lp);
+        if after < before || (level && after == before) {
+            *f = g;
+            return true;
         }
     }
     false
 }
 
-/// True when replacing `v` by a counter leaves the old counters and the formula unused.
-#[allow(clippy::too_many_arguments)]
-fn profitable(
-    f: &Func,
-    back: &Target,
-    cone: &HashSet<usize>,
-    v: Value,
-    a: &Aff,
-    inst_uses: &HashMap<Value, Vec<usize>>,
-    term_uses: &HashMap<Value, usize>,
-) -> bool {
-    let involved: HashSet<Value> = a.terms.iter().map(|t| t.0).collect();
-    // Each involved counter is read only by the formula, and its next value only by the formula
-    // and the jump back.
-    for p in &involved {
-        let outside = inst_uses
-            .get(p)
-            .is_some_and(|us| us.iter().any(|u| !cone.contains(u)));
-        if outside || term_uses.contains_key(p) {
-            return false;
-        }
-    }
-    // Everything the formula makes, except `v` itself, is read only by the formula, or sent back as
-    // the next value of an involved counter.
-    for &ci in cone {
-        let Some(r) = f.insts[ci].result else {
-            continue;
-        };
-        if r == v {
-            continue;
-        }
-        if inst_uses
-            .get(&r)
-            .is_some_and(|us| us.iter().any(|u| !cone.contains(u)))
-        {
-            return false;
-        }
-        let sent = term_uses.get(&r).copied().unwrap_or(0);
-        let ok_sent = back.args.iter().filter(|x| **x == r).count();
-        if sent != ok_sent {
-            return false;
-        }
-        if sent > 0 {
-            // It may only be the next value of a counter that the formula uses.
-            let idx = back.args.iter().position(|x| *x == r).unwrap_or(0);
-            let p = f.blocks[back.block.0 as usize].params[idx];
-            if !involved.contains(&p) {
-                return false;
-            }
-        }
-    }
-    true
+/// Instructions that run in the loop count much more than those that run once.
+fn weight(f: &Func, lp: &Loop) -> usize {
+    let mut base = f.clone();
+    super::dce::run(&mut base);
+    base.blocks
+        .iter()
+        .enumerate()
+        .map(|(bi, b)| {
+            let inside = bi < lp.body.len() && lp.body[bi];
+            b.insts.len() * if inside { 16 } else { 1 }
+        })
+        .sum()
 }
 
 fn rewrite(
     f: &mut Func,
     lp: &Loop,
     latch: BlockId,
-    v: Value,
-    a: &Aff,
+    terms: &[(Value, u64)],
+    members: &[(Value, u64)],
     step: &HashMap<Value, u64>,
-) -> bool {
+) {
     let h = lp.header;
     let pre = preheader(f, lp);
     let Some(Term::Jump(entry)) = f.blocks[pre.0 as usize].term.clone() else {
-        return false;
+        return;
     };
     let params = f.blocks[h.0 as usize].params.clone();
     let init_of = |p: Value| {
@@ -319,26 +275,27 @@ fn rewrite(
     let i64t = IrTy::Int(64);
     let konst = |f: &mut Func, b: BlockId, c: u64| {
         f.emit(b, Op::Const(i64t, Const::Int(c as i64 as i128)), Some(i64t))
-            .unwrap_or(v)
+            .expect("a constant makes a value")
     };
-    // The start: the formula on the values the loop is entered with.
-    let mut start = konst(f, pre, a.k);
-    for (p, c) in &a.terms {
+    // The start: the formula on the values the loop is entered with, for the first member.
+    let (first, base_k) = members[0];
+    let mut start = konst(f, pre, base_k);
+    for (p, c) in terms {
         let init = init_of(*p);
         let term = if *c == 1 {
             init
         } else {
             let cv = konst(f, pre, *c);
             f.emit(pre, Op::Bin(BinOp::Mul, init, cv), Some(i64t))
-                .unwrap_or(v)
+                .expect("a product makes a value")
         };
         start = f
             .emit(pre, Op::Bin(BinOp::Add, start, term), Some(i64t))
-            .unwrap_or(v);
+            .expect("a sum makes a value");
     }
     // The step: the formula's coefficients on the counters' steps.
     let mut by = 0u64;
-    for (p, c) in &a.terms {
+    for (p, c) in terms {
         by = by.wrapping_add(c.wrapping_mul(step[p]));
     }
     let z = f.new_value(i64t);
@@ -346,15 +303,85 @@ fn rewrite(
     let by = konst(f, latch, by);
     let next = f
         .emit(latch, Op::Bin(BinOp::Add, z, by), Some(i64t))
-        .unwrap_or(v);
+        .expect("a sum makes a value");
     if let Some(Term::Jump(t)) = &mut f.blocks[pre.0 as usize].term {
         t.args.push(start);
     }
     if let Some(Term::Jump(t)) = &mut f.blocks[latch.0 as usize].term {
         t.args.push(next);
     }
+    // Each member is the counter plus the constant that separates it from the first.
     let mut rep = HashMap::new();
-    rep.insert(v, z);
+    for &(m, k) in members {
+        if m == first || k == base_k {
+            rep.insert(m, z);
+            continue;
+        }
+        let delta = k.wrapping_sub(base_k);
+        if let Some(r) = add_after(f, m, z, delta) {
+            rep.insert(m, r);
+        }
+    }
     f.replace_uses(&rep);
-    true
+}
+
+/// Values that are a counter plus a constant are made from the counter itself, not from each other,
+/// so a chain of additions (what an unrolled loop leaves) does not depend on its own earlier links.
+fn offsets(f: &mut Func, p: Value, members: &[(Value, u64)]) -> bool {
+    let defs = f.defs();
+    let mut rep = HashMap::new();
+    for &(m, k) in members {
+        // Already `p + constant`: nothing to shorten.
+        if let Some(Op::Bin(BinOp::Add, a, c)) = defs[m.0 as usize].map(|i| &f.insts[i].op) {
+            if *a == p
+                && matches!(
+                    defs[c.0 as usize].map(|i| &f.insts[i].op),
+                    Some(Op::Const(..))
+                )
+            {
+                continue;
+            }
+        }
+        if let Some(r) = add_after(f, m, p, k) {
+            rep.insert(m, r);
+        }
+    }
+    let any = !rep.is_empty();
+    f.replace_uses(&rep);
+    any
+}
+
+/// `base + delta`, made right after the instruction that makes `m`.
+fn add_after(f: &mut Func, m: Value, base: Value, delta: u64) -> Option<Value> {
+    let (bi, pos) = locate(f, m)?;
+    let i64t = IrTy::Int(64);
+    let c = f.new_value(i64t);
+    f.insts.push(Inst {
+        result: Some(c),
+        op: Op::Const(i64t, Const::Int(delta as i64 as i128)),
+        span: Span::new(0, 0),
+    });
+    let cid = f.insts.len() - 1;
+    let r = f.new_value(i64t);
+    f.insts.push(Inst {
+        result: Some(r),
+        op: Op::Bin(BinOp::Add, base, c),
+        span: Span::new(0, 0),
+    });
+    let rid = f.insts.len() - 1;
+    f.blocks[bi].insts.insert(pos + 1, cid);
+    f.blocks[bi].insts.insert(pos + 2, rid);
+    Some(r)
+}
+
+/// The block and position of the instruction that makes `v`.
+fn locate(f: &Func, v: Value) -> Option<(usize, usize)> {
+    for (bi, b) in f.blocks.iter().enumerate() {
+        for (pos, &i) in b.insts.iter().enumerate() {
+            if f.insts[i].result == Some(v) {
+                return Some((bi, pos));
+            }
+        }
+    }
+    None
 }

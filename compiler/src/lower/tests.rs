@@ -2043,6 +2043,43 @@ fn counters_that_the_loop_also_reads_keep_their_own_value() {
     agree(src);
 }
 
+#[test]
+fn a_long_counted_loop_is_unrolled_and_keeps_its_results_and_its_stops() {
+    // The bound is a constant, so the loop is unrolled; the start moves the number of passes around
+    // every multiple of the factor, and `top` ends at the largest integer.
+    let src = "fn sum(from: int) -> int { var s = 0\n for i in from..1003 { s += (i + 3) & 255 }\n s }\nfn grow(from: int) -> int { var s = 1\n for i in from..1003 { s *= 3 }\n s }\nfn top(from: int) -> int { var s = 0\n for i in from..9223372036854775807 { s += i & 7 }\n s }\nfn main() { print(sum(0), grow(1000), top(9223372036854775800)) }";
+    let l = lowered(src);
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let text = crate::ir::print_func(m.funcs.iter().find(|f| f.name == "sum").unwrap(), None);
+    assert!(text.matches(" = lt ").count() >= 2, "{text}");
+    let starts = [
+        0i64, 1, 2, 3, 7, 8, 9, 995, 996, 999, 1000, 1001, 1002, 1003, 1004, -5,
+    ];
+    for name in ["sum", "grow"] {
+        for n in starts {
+            let args = [Val::int(n)];
+            let plain = run_full(&l.module, name, &args).result.map(|v| v.as_i64());
+            let fast = run_full(&m, name, &args).result.map(|v| v.as_i64());
+            assert_eq!(plain, fast, "{name}({n})");
+        }
+    }
+    for n in [
+        i64::MAX - 20,
+        i64::MAX - 8,
+        i64::MAX - 7,
+        i64::MAX - 1,
+        i64::MAX,
+    ] {
+        let args = [Val::int(n)];
+        let plain = run_full(&l.module, "top", &args).result.map(|v| v.as_i64());
+        let fast = run_full(&m, "top", &args).result.map(|v| v.as_i64());
+        assert_eq!(plain, fast, "top({n})");
+    }
+    agree("fn sum(from: int) -> int { var s = 0\n for i in from..1003 { s += (i + 3) & 255 }\n s }\nfn main() { var t = 0\n for k in 0..40 { t += sum(k * 25) }\n print(t, sum(0)) }");
+    agree("fn grow(from: int) -> int { var s = 1\n for i in from..1003 { s *= 3 }\n s }\nfn main() { print(grow(970)) }");
+}
+
 // ---- Float semantics: single precision rounding and saturating float to int -------------------------------
 
 #[test]
