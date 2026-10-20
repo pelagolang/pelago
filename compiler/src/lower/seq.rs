@@ -333,6 +333,91 @@ impl<'a> Lowerer<'a> {
         Res::Unit
     }
 
+    /// `s = s + a + b`, where `s` is a local string and the operands are simple, is `s += a; s += b`:
+    /// appending in place keeps the buffer's spare capacity, where a fresh copy per round makes a loop
+    /// quadratic (and, for big strings, one `mmap` and `munmap` per round). `None` when the pattern
+    /// does not apply and the ordinary assignment should run.
+    ///
+    /// The operands must not read `s` and must not run code that could change it, so each is limited to
+    /// literals, other names, fields, indexing, operators and `#(...)` parts made of the same.
+    pub(crate) fn append_chain(
+        &mut self,
+        p: Value,
+        lhs: &'a Expr,
+        rhs: &'a Expr,
+        lt: Ty,
+    ) -> Option<Res> {
+        use super::expr::strip_parens;
+        if !matches!(self.kind(lt), TyKind::String) {
+            return None;
+        }
+        let ExprKind::Name(id) = &strip_parens(lhs).kind else {
+            return None;
+        };
+        let def = self.res.use_at(self.f.file, id.span.start)?;
+        if !matches!(self.f.locals.get(&def), Some(Local::Slot { .. })) {
+            return None;
+        }
+        // Flatten `((s + a) + b)` into the operands `a`, `b`.
+        let mut ops: Vec<&'a Expr> = Vec::new();
+        let mut cur = strip_parens(rhs);
+        while let ExprKind::Binary {
+            op: Punct::Plus,
+            lhs: l,
+            rhs: r,
+        } = &cur.kind
+        {
+            ops.push(r);
+            cur = strip_parens(l);
+        }
+        let ExprKind::Name(first) = &cur.kind else {
+            return None;
+        };
+        if ops.is_empty() || self.res.use_at(self.f.file, first.span.start) != Some(def) {
+            return None;
+        }
+        ops.reverse();
+        for o in &ops {
+            let ot = self.ty_of(o)?;
+            if !self.is_text(ot) || !self.simple_operand(o, def) {
+                return None;
+            }
+        }
+        for o in ops {
+            let Res::Val(b) = self.expr(o) else {
+                return Some(Res::Never);
+            };
+            let d = self.load_at(b, 0, IrTy::Ptr);
+            let n = self.load_at(b, 8, IrTy::I64);
+            self.call_core("rt_str_push", vec![p, d, n]);
+        }
+        Some(Res::Unit)
+    }
+
+    /// Does `e` avoid the variable `def` and any call, closure or assignment?
+    fn simple_operand(&self, e: &Expr, def: DefId) -> bool {
+        use super::expr::strip_parens;
+        match &strip_parens(e).kind {
+            ExprKind::Int | ExprKind::Float | ExprKind::Char | ExprKind::Bool(_) => true,
+            ExprKind::Name(id) => self.res.use_at(self.f.file, id.span.start) != Some(def),
+            ExprKind::Str(parts) => parts.iter().all(|part| match part {
+                StrPart::Text(_) => true,
+                StrPart::Interp(x) => self.simple_operand(x, def),
+            }),
+            ExprKind::Field { base, .. } | ExprKind::TupleIndex { base, .. } => {
+                self.simple_operand(base, def)
+            }
+            ExprKind::Index { base, index } => {
+                self.simple_operand(base, def) && self.simple_operand(index, def)
+            }
+            ExprKind::Binary { lhs, rhs, .. } => {
+                self.simple_operand(lhs, def) && self.simple_operand(rhs, def)
+            }
+            ExprKind::Unary { operand, .. } => self.simple_operand(operand, def),
+            _ => false,
+        }
+    }
+
     /// `s += text`
     pub(crate) fn append_assign(
         &mut self,
