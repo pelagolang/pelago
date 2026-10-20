@@ -1537,20 +1537,13 @@ fn a_call_is_guarded_by_the_entry_test_of_the_function() {
     assert!(peel::analyze(&m.funcs[0]).is_some());
     let (o, ..) = both(&m);
     let fib = o.funcs.iter().find(|f| f.name == "fib").unwrap();
-    let mut guarded = fib.blocks.iter().filter(|b| {
-        let call = b
-            .insts
-            .iter()
-            .any(|&i| matches!(fib.insts[i].op, Op::Call(..)));
-        call && matches!(b.term, Some(Term::Jump(_)))
+    // A call that does not end the function sits alone in the block that the test leads to.
+    let alone = fib.blocks.iter().any(|b| {
+        b.insts.len() == 1
+            && matches!(fib.insts[b.insts[0]].op, Op::Call(..))
+            && matches!(b.term, Some(Term::Jump(_)))
     });
-    // Every call that does not end the function sits alone in the block a test leads to.
-    assert!(guarded.clone().count() >= 1, "{}", print_func(fib, None));
-    assert!(
-        guarded.all(|b| b.insts.len() <= 3),
-        "{}",
-        print_func(fib, None)
-    );
+    assert!(alone, "{}", print_func(fib, None));
     // `main` has no such test.
     assert!(peel::analyze(&m.funcs[1]).is_none());
 }

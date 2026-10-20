@@ -27,7 +27,9 @@ struct Site {
 
 /// Regrouping `x1 + (x2 + (.. + r))` into `((0 + x1) + x2) + ..` could move where a signed overflow
 /// shows when the terms have different signs, so a signed sum is guarded. The collected sum starts
-/// at 0 and only takes terms that are not negative while no partial sum overflows. With such a
+/// at 0 and only takes terms that are not negative while no partial sum overflows (it is kept as
+/// the room left, `MAX - sum`, so a term fits when it is not above the room as an unsigned number:
+/// one compare, one subtraction). With such a
 /// prefix, `prefix + t` stops exactly when the original order does, whatever the value `t` of the
 /// rest is: a non-negative `t` makes every partial sum grow, so some overflow iff the total does,
 /// and a negative `t` keeps every partial sum between `t` and the prefix. The base case therefore
@@ -52,9 +54,15 @@ pub fn run(f: &mut Func, me: FuncId) -> bool {
     let mut entry_args = fresh.clone();
     if let Some(a) = acc {
         // The accumulator starts at zero, the identity of the sum; it is a parameter of the header.
+        // A signed checked sum carries the room left instead (`MAX - sum`), which starts at `MAX`.
         f.blocks[header.0 as usize].params.push(a);
+        let start = if kind == Some(Sum::Checked(true)) {
+            signed_max(f.ret)
+        } else {
+            0
+        };
         let zero = f
-            .emit(BlockId(0), Op::Const(f.ret, Const::Int(0)), Some(f.ret))
+            .emit(BlockId(0), Op::Const(f.ret, Const::Int(start)), Some(f.ret))
             .unwrap();
         entry_args.push(zero);
     }
@@ -103,11 +111,17 @@ pub fn run(f: &mut Func, me: FuncId) -> bool {
                 continue;
             }
             if let Some(Term::Return(Some(v))) = f.blocks[bi].term {
+                let at = BlockId(bi as u32);
+                let a = if kind == Sum::Checked(true) {
+                    sum_of_room(f, at, a)
+                } else {
+                    a
+                };
                 let op = match kind {
                     Sum::Wrapping => Op::Bin(BinOp::Add, a, v),
                     Sum::Checked(signed) => Op::Checked(BinOp::Add, signed, a, v),
                 };
-                let total = f.emit(BlockId(bi as u32), op, Some(f.ret)).unwrap();
+                let total = f.emit(at, op, Some(f.ret)).unwrap();
                 f.blocks[bi].term = Some(Term::Return(Some(total)));
             }
         }
@@ -118,7 +132,7 @@ pub fn run(f: &mut Func, me: FuncId) -> bool {
 /// `acc + x` for a site in block `at`, where the call with `args` was. For a signed checked sum the
 /// addition is guarded (see `run`): when `x` is negative or the sum would overflow, control goes to
 /// a block that makes the call and adds in the original order. Gives the block to go on in and the
-/// sum.
+/// new accumulator (for a signed checked sum, the new room).
 fn add(
     f: &mut Func,
     at: BlockId,
@@ -144,28 +158,47 @@ fn add(
                 .unwrap(),
         ),
         Sum::Checked(true) => {
-            // The collected sum is never negative, so with a non-negative `x` the wrapped sum has
-            // its sign bit set exactly when the addition overflowed; a negative `x` has it set too.
-            let total = f.emit(at, Op::Bin(BinOp::Add, acc, x), Some(ty)).unwrap();
-            let bits = f.emit(at, Op::Bin(BinOp::Or, x, total), Some(ty)).unwrap();
-            let zero = f.emit(at, Op::Const(ty, Const::Int(0)), Some(ty)).unwrap();
+            // `acc` is the room left, `MAX - sum`, never negative. A term fits when it is not
+            // above the room as an unsigned number, which also rules out a negative term.
             let bad = f
-                .emit(at, Op::Cmp(CmpOp::Lt, bits, zero), Some(IrTy::Bool))
+                .emit(at, Op::Cmp(CmpOp::UGt, x, acc), Some(IrTy::Bool))
                 .unwrap();
             let slow = f.new_block(&[]);
+            let sum = sum_of_room(f, slow, acc);
             let r = f.emit(slow, Op::Call(me, args.to_vec()), Some(ty)).unwrap();
             let t = f
                 .emit(slow, Op::Checked(BinOp::Add, true, x, r), Some(ty))
                 .unwrap();
             let all = f
-                .emit(slow, Op::Checked(BinOp::Add, true, acc, t), Some(ty))
+                .emit(slow, Op::Checked(BinOp::Add, true, sum, t), Some(ty))
                 .unwrap();
             f.terminate(slow, Term::Return(Some(all)));
             let go = f.new_block(&[]);
             f.terminate(at, Term::Branch(bad, to(slow), to(go)));
-            (go, total)
+            (
+                go,
+                f.emit(go, Op::Bin(BinOp::Sub, acc, x), Some(ty)).unwrap(),
+            )
         }
     }
+}
+
+/// The largest signed number of the integer type.
+fn signed_max(ty: IrTy) -> i128 {
+    match ty {
+        IrTy::Int(bits) => (1i128 << (bits - 1)) - 1,
+        _ => unreachable!("a sum is of an integer type"),
+    }
+}
+
+/// `MAX - room`: the sum collected so far, made in block `at`.
+fn sum_of_room(f: &mut Func, at: BlockId, room: Value) -> Value {
+    let ty = f.ret;
+    let max = f
+        .emit(at, Op::Const(ty, Const::Int(signed_max(ty))), Some(ty))
+        .unwrap();
+    f.emit(at, Op::Bin(BinOp::Sub, max, room), Some(ty))
+        .unwrap()
 }
 
 /// The blocks that end in `return f(args)`, or in `return x + f(args)`, for the function itself.
