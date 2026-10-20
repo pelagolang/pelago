@@ -29,8 +29,8 @@ Not doable in the sandbox, for the owner to check by hand on Windows (PowerShell
 
 1. Zed: the owner already tried the extension in Zed (2026-10-20), so no hands-on check is listed here. The registry asks for a test at the exact commit submitted; reinstall the dev extension once after the final pin.
 2. VS Code: `npm ci` then `npm run package` in `vscode-pelago`, install `dist/pelago-<version>.vsix` (Extensions, `...`, Install from VSIX). Open a `.pel` file: language mode shows `Pelago`, `fn`/`obj` names, `step`, `it`, strings and interpolation are coloured; switch between a light and a dark theme (colours must stay readable, and `.rs` / `.ts` files must look exactly as before); snippets appear when typing `fn` and `for`.
-3. Decisions: the licence (the root `Cargo.toml` says `MIT OR Apache-2.0`; Zed accepts either; this roadmap item is still open), the logo (`vscode-pelago/images/icon.svg` is a placeholder), the first public version number, and creating the publisher accounts (Marketplace publisher `pelagolang`, Open VSX namespace `pelagolang`).
-4. Then publish, in this order: licence files into all three repositories, pin the final `tree-sitter-pelago` commit in `zed-pelago` (`script/check-queries.sh`), open the registry PR from `PUBLISHING.md`, `vsce publish` and `ovsx publish`. Nothing is published or submitted yet.
+3. Decisions: the licence is chosen (`MIT OR Apache-2.0`, files in every repository); still open: making the repositories public (they are private; the registry needs the grammar and extension public), the logo (`vscode-pelago/images/icon.svg` is a placeholder), the first public version number, and creating the publisher accounts (Marketplace publisher `pelagolang`, Open VSX namespace `pelagolang`).
+4. Then publish, in this order: make the repositories public, pin the final `tree-sitter-pelago` commit in `zed-pelago` (`script/check-queries.sh`), open the registry PR from `PUBLISHING.md`, `vsce publish` and `ovsx publish`. Nothing is published or submitted yet.
 
 # Original shelving note (kept for the history)
 

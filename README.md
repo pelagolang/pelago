@@ -20,3 +20,7 @@ cargo run -- lex examples/tour.pel
 cargo run -- parse examples/tour.pel
 cargo run -- check <file or directory>
 ```
+
+## Licence
+
+MIT OR Apache-2.0, at your option: see `LICENSE-MIT` and `LICENSE-APACHE`.
