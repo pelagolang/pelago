@@ -1,0 +1,9 @@
+fn main() {
+    var s = ""
+    var t = 0
+    for i in 0..20000 {
+        s = s + "ab"
+        t += s.len() & 7
+    }
+    print(s.len(), t)
+}
