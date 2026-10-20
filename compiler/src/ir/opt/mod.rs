@@ -25,6 +25,7 @@ mod fill;
 mod ifconv;
 mod inline;
 mod ivopt;
+mod ivtest;
 pub use inline::COLD_SUFFIX;
 mod layout;
 mod licm;
@@ -123,6 +124,10 @@ fn passes(f: &mut Func, divs: bool) {
     rounds(f, divs);
     // After inlining, once: the copies it makes must not be unrolled again.
     if divs && step(f, "unroll", unroll::run) {
+        rounds(f, divs);
+    }
+    // After the unrolling, which needs the counter the loop test reads.
+    if divs && step(f, "ivtest", ivtest::run) {
         rounds(f, divs);
     }
     // Last, because every pass above is free to renumber and reorder blocks.
