@@ -15,6 +15,7 @@ rewrites the files under `assets/brand/` in place. The SVGs come out byte-identi
 differ in a few bytes between browser versions, so judge them by eye, not by `git diff`.
 """
 import argparse
+import base64
 import glob
 import json
 import os
@@ -403,7 +404,7 @@ def write_icns(path, png_for_size):
 INK = "#0B2239"
 GUIDE = "#e0457b"   # construction lines
 GRID = "#c9d6df"
-FONT = "Outfit, 'Segoe UI', Helvetica, Arial, sans-serif"
+FONT = "Outfit, sans-serif"
 
 
 def label(x, y, text, size=13, anchor="start", fill=INK, weight=400):
@@ -440,9 +441,19 @@ def grid(ox, oy, S, n=128, step=8):
     return out
 
 
+def font_face():
+    """Outfit, embedded so the spec sheets look the same on every machine (SIL OFL, assets/brand/fonts)."""
+    data = base64.b64encode((BRAND / "fonts/Outfit-VariableFont_wght.ttf").read_bytes()).decode()
+    return (
+        "<style>@font-face{font-family:Outfit;font-weight:100 900;"
+        f"src:url(data:font/ttf;base64,{data}) format('truetype')}}</style>"
+    )
+
+
 def spec_head(width, title, sub, height=900):
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}">'
+        + font_face() +
         f'<rect width="{width}" height="{height}" fill="#ffffff"/>'
         + label(48, 62, title, 30, weight=700)
         + label(48, 90, sub, 15, fill="#58708a")
