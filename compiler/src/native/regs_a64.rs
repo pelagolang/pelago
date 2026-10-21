@@ -253,6 +253,8 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
     let mut open = vec![u32::MAX; nc];
     let mut last = vec![0u32; nc];
     let mut touched: Vec<usize> = Vec::new();
+    // The position of the call that makes a value (its result arrives in `x0` / `d0` after the call).
+    let mut made_by_call = vec![u32::MAX; nc];
     for (bi, b) in f.blocks.iter().enumerate() {
         let w = weight_of(bi);
         touched.clear();
@@ -293,8 +295,16 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
             // of the check still reads its own operands then, so that one keeps them.
             let after_check = prev_check;
             prev_check = matches!(f.insts[i].op, Op::CheckedIf(..));
+            if let (Op::Call(..) | Op::CallPtr(..), Some(r)) = (&f.insts[i].op, f.insts[i].result) {
+                let c = cand_of[r.0 as usize];
+                if c != usize::MAX {
+                    made_by_call[c] = inst_pos[i];
+                }
+            }
             let alias = match &f.insts[i].op {
                 Op::Select(..) | Op::Cmp(..) => true,
+                // The arguments are read before the call and the result written after it.
+                Op::Call(..) | Op::CallPtr(..) => true,
                 Op::Bin(op, ..) => *op != BinOp::Mul && !after_check,
                 Op::Checked(op, ..) => matches!(op, BinOp::Add | BinOp::Sub),
                 _ => false,
@@ -400,8 +410,10 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
         }
     }
     calls.sort_unstable();
+    // (The result of a call starts at the call but does not live through it.)
     let crosses_call = |c: usize| {
         segs[c].iter().any(|&(l, h)| {
+            let l = if made_by_call[c] == l { l + 1 } else { l };
             let k = calls.partition_point(|&p| p < l);
             calls.get(k).is_some_and(|&p| p <= h)
         })
