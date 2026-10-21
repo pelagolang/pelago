@@ -99,6 +99,17 @@ Size is S (hours), M (a day), L (several days). "Collides with" means the same f
 - **Touches:** `native/regs.rs`, `native/gen.rs` (`bin`, `cmp`, `cast`, `call`), `native/x86.rs`.
 - **Depends on:** W3 (the allocator must handle two register classes). **Size:** M to L. **Collides with:** the `gen.rs` group.
 
+### W12. Gaps found by the wider suite (measured, not started)
+Best of 5, seconds. Five programs added in `claude/perf/more-benchmarks`; the first four rows are above both C `-O2` and Rust `-O`.
+| Program | Pelago | C -O2 | Rust -O | vs -O2 | Likely cause |
+|---|---|---|---|---|---|
+| resultpath | 0.055 | 0.014 | 0.016 | 4.0x | `result` values are built in memory and `?` goes through calls; C and Rust inline `step` and keep the pair in registers |
+| structlist | 0.019 | 0.008 | 0.008 | 2.4x | `list<struct>` field update: per-element address recomputed, two `add_checked`, no vectorisation (the checked C build is 3.3x faster too) |
+| strsplit | 0.039 | 0.018 | 0.012 | 2.2x | `split` builds an `iter<str>` list and `parse_int` returns a `result`; the twins parse in place |
+| switchwork | 0.048 | 0.045 | 0.035 | 1.08x | enum payload loads and the jump table; Rust is 1.4x faster here |
+| sortwork | 0.156 | 0.163 | 0.040 | 0.96x | at C (glibc `qsort`), 3.9x behind Rust's `sort`; `rt_sort` is a byte-wise merge sort with an indirect compare |
+- **Size:** each M to L. `resultpath` (return small `result`/`option` in registers, inline across `?`) and `sortwork` (monomorphic compare, typed element moves) look like the best first targets.
+
 ### W10. AArch64 (card A-10)
 - Starts after W4. Not part of A-11; listed so nobody starts it early.
 
