@@ -191,6 +191,18 @@ struct EdgeStub {
     to: usize,
 }
 
+/// An `add` or `sub` immediate for the constant `n`: whether the instruction is the opposite one (the
+/// constant was negative) and the 12-bit value (possibly shifted by 12).
+fn addsub_imm(n: i64) -> Option<(bool, u32)> {
+    if Asm::fits_addsub(n as u64) {
+        Some((false, n as u32))
+    } else if n < 0 && Asm::fits_addsub(n.unsigned_abs()) {
+        Some((true, n.unsigned_abs() as u32))
+    } else {
+        None
+    }
+}
+
 /// A test that decides whether an overflow stops the program (`CheckedIf`), out of line.
 struct CondStub {
     label: Label,
@@ -566,9 +578,7 @@ impl<'m> Gen<'m> {
         let entry = f.entry();
         let params: Vec<Value> = f.block_params(entry).to_vec();
         let tys: Vec<IrTy> = params.iter().map(|p| f.ty(*p)).collect();
-        for (k, r) in self.saved_g.clone().into_iter().enumerate() {
-            self.a.str(r, SP, self.save_off + 8 * k as i32, 8);
-        }
+        self.saved_pairs(false);
         for (k, x) in self.saved_f.clone().into_iter().enumerate() {
             let at = self.save_off + 8 * (self.saved_g.len() + k) as i32;
             self.a.str_f(x, SP, at, 8);
@@ -598,9 +608,21 @@ impl<'m> Gen<'m> {
                     fused = Some((last, *op, *x, *y));
                 }
             }
-            for &i in &b.insts {
+            let mut k = 0;
+            while k < b.insts.len() {
+                let i = b.insts[k];
+                k += 1;
                 if fused.is_some_and(|(l, ..)| l == i) {
                     continue;
+                }
+                // A check whose value nobody reads, right before the plain operation it guards (what
+                // if-conversion leaves), is one instruction: the operation with the check.
+                if let Some(&n) = b.insts.get(k) {
+                    if let Some(r) = self.guarded_by(f, &uses, i, n) {
+                        self.checked_inst(f, &f.insts[i].op, r);
+                        k += 1;
+                        continue;
+                    }
                 }
                 self.inst(f, i, &f.insts[i])?;
             }
@@ -663,10 +685,34 @@ impl<'m> Gen<'m> {
             || self.freg[v.0 as usize].is_some()
     }
 
-    fn epilogue(&mut self) {
-        for (k, r) in self.saved_g.clone().into_iter().enumerate() {
-            self.a.ldr(r, SP, self.save_off + 8 * k as i32, 8);
+    /// Saves (or, with `load`, restores) the callee-saved general registers this function uses, two at
+    /// a time while the offsets fit a pair instruction.
+    fn saved_pairs(&mut self, load: bool) {
+        let g = self.saved_g.clone();
+        let pairs = self.save_off + 8 * g.len() as i32 <= 504;
+        let mut k = 0;
+        while k < g.len() {
+            let off = self.save_off + 8 * k as i32;
+            if pairs && k + 1 < g.len() {
+                if load {
+                    self.a.ldp(g[k], g[k + 1], SP, off);
+                } else {
+                    self.a.stp(g[k], g[k + 1], SP, off);
+                }
+                k += 2;
+            } else {
+                if load {
+                    self.a.ldr(g[k], SP, off, 8);
+                } else {
+                    self.a.str(g[k], SP, off, 8);
+                }
+                k += 1;
+            }
         }
+    }
+
+    fn epilogue(&mut self) {
+        self.saved_pairs(true);
         for (k, x) in self.saved_f.clone().into_iter().enumerate() {
             let at = self.save_off + 8 * (self.saved_g.len() + k) as i32;
             self.a.ldr_f(x, SP, at, 8);
@@ -856,12 +902,14 @@ impl<'m> Gen<'m> {
             self.stf(to, V(0), f);
             return;
         }
+        // Straight into the target's register when it has one.
+        let dst = self.reg[to.0 as usize].unwrap_or(X9);
         match c.from {
-            Src::Val(v) => self.ld(X9, v),
-            Src::Imm(n) => self.a.mov_ri(X9, n),
-            Src::Temp => self.a.mov_rr(X9, X13),
+            Src::Val(v) => self.ld(dst, v),
+            Src::Imm(n) => self.a.mov_ri(dst, n),
+            Src::Temp => self.a.mov_rr(dst, X13),
         }
-        self.st(to, X9);
+        self.fin(to, dst);
     }
 
     // ---- Instructions --------------------------------------------------------------------------------
@@ -877,38 +925,28 @@ impl<'m> Gen<'m> {
                     (Const::Float(x), IrTy::F32) => (*x as f32).to_bits() as i64,
                     (Const::Float(x), _) => x.to_bits() as i64,
                 };
-                self.a.mov_ri(X9, bits_v);
                 let r = res.unwrap();
                 if is_float(*t) {
+                    self.a.mov_ri(X9, bits_v);
                     let x = self.wrf(r, V(0));
                     self.a.fmov_from_gp(*t == IrTy::F64, x, X9);
                     self.finf(r, x, f);
                 } else {
-                    self.st(r, X9);
+                    let d = self.wr(r, X9);
+                    self.a.mov_ri(d, bits_v);
+                    self.fin(r, d);
                 }
             }
             Op::Bin(op, a, b) => self.bin(f, *op, *a, *b, res.unwrap())?,
-            Op::Checked(op, signed, a, b) => {
-                let ov = self.stop_label(Stop::Overflow);
-                self.checked_to(f, *op, *signed, *a, *b, res.unwrap(), ov);
-            }
-            Op::CheckedIf(op, signed, test, a, b) => {
-                let (label, resume) = (self.a.new_label(), self.a.new_label());
-                self.resume = Some(resume);
-                self.checked_to(f, *op, *signed, *a, *b, res.unwrap(), label);
-                self.cond_stubs.push(CondStub {
-                    label,
-                    resume,
-                    test: *test,
-                });
-            }
+            Op::Checked(..) | Op::CheckedIf(..) => self.checked_inst(f, &inst.op, res.unwrap()),
             Op::Select(c, a, b) => {
-                self.ld(X9, *a);
-                self.ld(X10, *b);
-                self.ld(X11, *c);
-                self.a.cmp_ri(X11, 0);
-                self.a.csel(X9, X9, X10, Cond::Ne);
-                self.st(res.unwrap(), X9);
+                let ra = self.rd(*a, X9);
+                let rb = self.rd(*b, X10);
+                let rc = self.rd(*c, X11);
+                let rd = self.wr(res.unwrap(), X9);
+                self.a.cmp_ri(rc, 0);
+                self.a.csel(rd, ra, rb, Cond::Ne);
+                self.fin(res.unwrap(), rd);
             }
             Op::Cmp(op, a, b) => self.cmp(f, *op, *a, *b, res.unwrap()),
             Op::Neg(a) => {
@@ -1166,6 +1204,46 @@ impl<'m> Gen<'m> {
 
     // ---- Arithmetic ----------------------------------------------------------------------------------
 
+    /// A `Checked` or `CheckedIf` whose value nobody reads, followed by the wrapping `Bin` of the same
+    /// operation on the same operands: the result value of that `Bin`.
+    fn guarded_by(&self, f: &Func, uses: &[u32], check: usize, next: usize) -> Option<Value> {
+        let c = &f.insts[check];
+        if c.result.is_some_and(|r| uses[r.0 as usize] > 0) {
+            return None;
+        }
+        let (op, a, b) = match &c.op {
+            Op::Checked(op, _, a, b) | Op::CheckedIf(op, _, _, a, b) => (*op, *a, *b),
+            _ => return None,
+        };
+        match (&f.insts[next].op, f.insts[next].result) {
+            (Op::Bin(op2, a2, b2), Some(r)) if *op2 == op && *a2 == a && *b2 == b => {
+                // The value is one the plain operation would have made; floats are never checked.
+                (!is_float(f.ty(r))).then_some(r)
+            }
+            _ => None,
+        }
+    }
+
+    fn checked_inst(&mut self, f: &Func, op: &Op, r: Value) {
+        match op {
+            Op::Checked(op, signed, a, b) => {
+                let ov = self.stop_label(Stop::Overflow);
+                self.checked_to(f, *op, *signed, *a, *b, r, ov);
+            }
+            Op::CheckedIf(op, signed, test, a, b) => {
+                let (label, resume) = (self.a.new_label(), self.a.new_label());
+                self.resume = Some(resume);
+                self.checked_to(f, *op, *signed, *a, *b, r, label);
+                self.cond_stubs.push(CondStub {
+                    label,
+                    resume,
+                    test: *test,
+                });
+            }
+            _ => unreachable!("not a checked operation"),
+        }
+    }
+
     fn bin(&mut self, f: &Func, op: BinOp, a: Value, b: Value, r: Value) -> Result<(), String> {
         let t = f.ty(a);
         if is_float(t) {
@@ -1205,26 +1283,47 @@ impl<'m> Gen<'m> {
         let w = bits(t);
         match op {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor => {
+                // A constant on the left of a commutative operation goes to the right.
+                let (a, b) = if op != BinOp::Sub
+                    && self.imm[a.0 as usize].is_some()
+                    && self.imm[b.0 as usize].is_none()
+                {
+                    (b, a)
+                } else {
+                    (a, b)
+                };
                 let ra = self.rd(a, X9);
                 let rd = self.wr(r, X9);
-                match (self.imm[b.0 as usize], op) {
-                    (Some(n), BinOp::Add | BinOp::Sub) if Asm::fits_addsub(n as u64) => {
-                        if op == BinOp::Add {
-                            self.a.add_ri(rd, ra, n as u32);
-                        } else {
-                            self.a.sub_ri(rd, ra, n as u32);
+                let done = match (self.imm[b.0 as usize], op) {
+                    (Some(n), BinOp::Add | BinOp::Sub) => match addsub_imm(n) {
+                        Some((flip, v)) => {
+                            if (op == BinOp::Add) != flip {
+                                self.a.add_ri(rd, ra, v);
+                            } else {
+                                self.a.sub_ri(rd, ra, v);
+                            }
+                            true
                         }
+                        None => false,
+                    },
+                    (Some(n), BinOp::And) => self.a.and_ri(rd, ra, n as u64),
+                    (Some(n), BinOp::Or) => self.a.orr_ri(rd, ra, n as u64),
+                    (Some(n), BinOp::Xor) => self.a.eor_ri(rd, ra, n as u64),
+                    (Some(n), BinOp::Mul) if n > 1 && n & (n - 1) == 0 => {
+                        self.a.lsl_ri(rd, ra, n.trailing_zeros());
+                        true
                     }
-                    _ => {
-                        let rb = self.rd(b, X10);
-                        match op {
-                            BinOp::Add => self.a.add_rr(rd, ra, rb),
-                            BinOp::Sub => self.a.sub_rr(rd, ra, rb),
-                            BinOp::Mul => self.a.mul(rd, ra, rb),
-                            BinOp::And => self.a.and_rr(rd, ra, rb),
-                            BinOp::Or => self.a.orr_rr(rd, ra, rb),
-                            _ => self.a.eor_rr(rd, ra, rb),
-                        }
+                    _ => false,
+                };
+                if !done {
+                    let rb = self.rd(b, X10);
+                    match op {
+                        BinOp::Add => self.a.add_rr(rd, ra, rb),
+                        BinOp::Sub => self.a.sub_rr(rd, ra, rb),
+                        BinOp::Mul => self.a.mul(rd, ra, rb),
+                        BinOp::And => self.a.and_rr(rd, ra, rb),
+                        BinOp::Or => self.a.orr_rr(rd, ra, rb),
+                        _ => self.a.eor_rr(rd, ra, rb),
                     }
                 }
                 if !matches!(op, BinOp::And | BinOp::Or | BinOp::Xor) {
@@ -1315,8 +1414,35 @@ impl<'m> Gen<'m> {
     ) {
         let w = bits(f.ty(a));
         let ra = self.rd_ext(a, X9, f, signed);
-        let rb = self.rd_ext(b, X10, f, signed);
         let rd = self.wr(r, X11);
+        if w == 64 {
+            // A constant that fits an immediate: one instruction, no register for it.
+            if let (Some(n), BinOp::Add | BinOp::Sub) = (self.imm[b.0 as usize], op) {
+                let imm = match addsub_imm(n) {
+                    Some((false, v)) => Some((false, v)),
+                    // `a + -k` is `a - k` for the signed overflow flag, not for the carry.
+                    Some((true, v)) if signed => Some((true, v)),
+                    _ => None,
+                };
+                if let Some((flip, v)) = imm {
+                    let sub = (op == BinOp::Sub) != flip;
+                    if sub {
+                        self.a.subs_ri(rd, ra, v);
+                    } else {
+                        self.a.adds_ri(rd, ra, v);
+                    }
+                    let cc = match (sub, signed) {
+                        (_, true) => Cond::Vs,
+                        (false, false) => Cond::Hs,
+                        (true, false) => Cond::Lo,
+                    };
+                    self.ov_jump(cc, ov);
+                    self.fin(r, rd);
+                    return;
+                }
+            }
+        }
+        let rb = self.rd_ext(b, X10, f, signed);
         if w == 64 {
             match (op, signed) {
                 (BinOp::Add, true) => {
