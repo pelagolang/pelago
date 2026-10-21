@@ -923,12 +923,14 @@ impl<'m> Gen<'m> {
             return;
         }
         if is_float(f.ty(to)) {
+            // Straight into the target's register when it has one.
+            let dst = self.wrf(to, V(0));
             match c.from {
-                Src::Val(v) => self.ldf(V(0), v, f),
-                Src::Temp => self.a.vmov(V(0), V(1)),
+                Src::Val(v) => self.ldf(dst, v, f),
+                Src::Temp => self.a.vmov(dst, V(1)),
                 Src::Imm(_) => unreachable!("a float constant is a `Const` instruction"),
             }
-            self.stf(to, V(0), f);
+            self.finf(to, dst, f);
             return;
         }
         // Straight into the target's register when it has one.
