@@ -126,7 +126,10 @@ fn candidates(f: &Func, dom: &Dom, lp: &Loop) -> Vec<usize> {
         }
     }
     out.retain(|&ii| match (&f.insts[ii].op, f.insts[ii].result) {
-        (Op::Const(IrTy::F32 | IrTy::F64, Const::Float(x)), _) => x.to_bits() != 0,
+        // (A zero stays in the loop unless something that moves out reads it.)
+        (Op::Const(IrTy::F32 | IrTy::F64, Const::Float(x)), Some(r)) => {
+            x.to_bits() != 0 || needed[r.0 as usize]
+        }
         (Op::Const(..), Some(r)) => needed[r.0 as usize],
         _ => true,
     });
