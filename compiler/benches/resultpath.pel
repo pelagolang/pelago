@@ -1,0 +1,30 @@
+enum bad { odd, big }
+
+fn halve(x: int) -> int ! bad {
+    if x & 1 == 1 { return err(bad.odd) }
+    ok(x >> 1)
+}
+
+fn bound(x: int) -> int ! bad {
+    if x > 1000000000 { return err(bad.big) }
+    ok(x)
+}
+
+fn step(x: int) -> int ! bad {
+    const h = halve(x)?
+    const b = bound(h * 3)?
+    ok(b + 1)
+}
+
+fn main() {
+    var ok_count = 0
+    var bad_count = 0
+    var t = 0
+    for i in 0..20000000 {
+        switch step(i) {
+            case ok(v): { ok_count += 1; t += v & 255 }
+            case err(_): bad_count += 1
+        }
+    }
+    print(ok_count, bad_count, t)
+}

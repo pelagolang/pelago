@@ -1456,6 +1456,20 @@ fn native_agrees_on_fused_multiply_add() {
     );
 }
 
+/// A zero float constant that a hoisted instruction reads stays where the loop can see it.
+#[test]
+fn licm_keeps_a_zero_constant_a_hoisted_op_reads() {
+    agree(
+        "fn g(a: float, b: float) -> float { a + b }
+        fn main() {
+            var acc = 0.0
+            var i = 0
+            while i < 10 { acc = acc + g(1.0 + (i to float), 0.0 - 1.0); i += 1 }
+            print(acc)
+        }",
+    );
+}
+
 /// Division and remainder by constants that are not powers of two run as a high multiply (card A-11,
 /// W1); the loops give the optimiser values it cannot fold, spread over the whole range.
 #[test]

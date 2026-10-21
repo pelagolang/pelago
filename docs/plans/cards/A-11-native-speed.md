@@ -127,3 +127,25 @@ PRs: #7 (S1, powers of two), #8 (S2 and S3, first rounds). The open work, with f
 **Float loops: constants and negation.** floatloop's chain (`a = -x * c1; v += a * c2; x += v * c3`) is latency-bound, so only the dependent operations count. (1) `licm.rs` now hoists nonzero float constants out of loops (each cost a `movabs` and a `movq` per use, every iteration, and now lives in an xmm register). (2) New `opt/fneg.rs`: `(-x) * c`, `c * (-x)` and `(-x) / c` become `x * (-c)` / `x / (-c)`, which is exact (a product's sign is the exclusive or of the signs; negating a constant changes no digit, zeros and infinities included), and takes the sign flip out of the chain. floatloop 0.140 s to 0.132 s (best of 15; C -O2 0.143 s, Rust -O 0.131 s); the rest of the suite is unchanged. loop_sum is the same chain length as gcc's (`and`, `xor`, `add`, 3 cycles) and its 1.02x is layout noise, not code.
 
 **Mapwork: page faults, and where functions start.** After the library work mapwork executes ten times the instructions of its C twin (a real insertion-ordered growing map against a fixed open-addressing table) but the CPU time was level, because half of it is the kernel faulting in 2,400 pages. Blocks of 2 MiB or more are now mapped in whole 2 MiB pages (`rt.rs`, Linux; the block header keeps the rounded length, so reuse and free are unchanged) and ask for huge pages from 2 MiB instead of 4 MiB: mapwork 0.0079 s to 0.0072 s of CPU time (min of 60; C -O2 0.0083 s), `compare.sh` best of 25: 0.008 s against C 0.009 s and Rust 0.016 s, also under `--checked` (C -ftrapv 0.009 s, Rust 0.015 s). The change made the runtime a few bytes bigger and so moved `fib` by 32 bytes, which made it 23 percent slower with identical code: where a function falls in its 64-byte lines changes `fib` by up to 25 percent (measured at four offsets, 0.099 s to 0.124 s) and `tak` by 4 percent. Functions now start 48 bytes into a line (`gen.rs`), so the result no longer depends on the size of what is in front of them; that was the best of the four for both. Cost: an average of about 56 bytes of padding per function (a small program's executable is one page larger).
+
+**Full table, 2026-10-21 (`compare.sh --runs 25 --checked --json`, quiet machine).** Intel Xeon @ 2.10 GHz, 4 cores, Linux, gcc 13.3.0, rustc 1.97.0, commit `b266beb`. Best of 25, seconds. Run twice: the plain run before the checked one, and the plain table inside the checked run; they agree except for C's sieve (0.097 s then 0.059 s, a noisy C row), so the second is shown.
+
+| program | Pelago | C -O2 | Rust -O | vs -O2 | vs Rust |
+|---|---|---|---|---|---|
+| collatz | 0.060 | 0.082 | 0.055 | 0.73x | 1.10x |
+| divmod | 0.026 | 0.028 | 0.030 | 0.95x | 0.86x |
+| fib38 | 0.106 | 0.076 | 0.143 | 1.39x | 0.75x |
+| floatloop | 0.146 | 0.153 | 0.141 | 0.95x | 1.04x |
+| list_sum | 0.021 | 0.029 | 0.029 | 0.74x | 0.74x |
+| loop_sum | 0.332 | 0.340 | 0.328 | 0.98x | 1.01x |
+| mapwork | 0.008 | 0.009 | 0.018 | 0.87x | 0.45x |
+| sieve | 0.047 | 0.059 | 0.062 | 0.80x | 0.76x |
+| strbuild | 0.004 | 0.004 | 0.008 | 0.96x | 0.44x |
+| structloop | 0.003 | 0.009 | 0.005 | 0.33x | 0.57x |
+| tak | 0.096 | 0.168 | 0.194 | 0.57x | 0.49x |
+
+Geometric mean 0.80x vs C -O2 (0.77x in the first run), 0.71x vs Rust. At or below C -O2 on 10 of 11 (9 of 11 in the first run, where loop_sum read 1.00x and sieve's C twin was slow); above Rust on collatz, floatloop and loop_sum.
+
+With the same overflow checks (`-ftrapv`, `-C overflow-checks=on`), Pelago against C / Rust: collatz 0.44x / 0.71x, divmod 0.38x / 0.69x, fib38 0.50x / 0.48x, floatloop 0.94x / 1.09x, list_sum 0.68x / 0.70x, loop_sum 0.41x / 1.00x, mapwork 0.79x / 0.46x, sieve 0.45x / 0.64x, strbuild 0.39x / 0.45x, structloop 0.04x / 0.55x, tak 0.31x / 0.49x. Only floatloop is above Rust.
+
+At 1 ms resolution: mapwork holds (0.76x to 0.87x of C in both runs, 0.45x to 0.49x of Rust). loop_sum is a tie with both (0.98x to 1.00x of C, 0.99x to 1.01x of Rust; the program is 0.33 s, so 3 ms is noise). floatloop is below C (0.92x to 0.95x) but 1 to 4 percent above Rust in both runs. Still above target: fib38 (1.38x of C), collatz and floatloop against Rust, and loop_sum if "at or below" must hold in every run.

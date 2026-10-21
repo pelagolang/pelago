@@ -1,0 +1,41 @@
+enum op {
+    add(n: int)
+    mul(n: int)
+    xor(n: int)
+    shl(n: int)
+    neg
+    skip
+}
+
+fn apply(acc: int, o: op) -> int {
+    switch o {
+        case .add(n): (acc + n) & 1048575
+        case .mul(n): (acc * n) & 1048575
+        case .xor(n): acc ^ n
+        case .shl(n): (acc << n) & 1048575
+        case .neg: 1048575 - acc
+        case .skip: acc
+    }
+}
+
+fn main() {
+    var prog: [op] = []
+    var s = 7
+    for i in 0..1024 {
+        s = (s * 1103515245 + 12345) & 2147483647
+        const k = (s >> 8) & 255
+        switch (s >> 20) % 6 {
+            case 0: prog.push!(op.add(n: k))
+            case 1: prog.push!(op.mul(n: k + 1))
+            case 2: prog.push!(op.xor(n: k))
+            case 3: prog.push!(op.shl(n: k & 7))
+            case 4: prog.push!(op.neg)
+            default: prog.push!(op.skip)
+        }
+    }
+    var acc = 1
+    for pass in 0..20000 {
+        for i in 0..prog.len() { acc = apply(acc, prog[i]) }
+    }
+    print(acc)
+}
