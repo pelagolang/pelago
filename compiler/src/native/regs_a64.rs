@@ -19,11 +19,14 @@
 //!   register whose assigned intervals do not meet theirs. A value must weigh at least [`MIN_WEIGHT`]
 //!   to be worth the save and restore of its register.
 
-use crate::ir::{Func, IrTy, Term, Value};
+use crate::ir::{BinOp, Func, IrTy, Op, Term, Value};
 use crate::native::a64::{Reg, V};
 
 /// The least weight that pays for a callee-saved register (one save and one restore per call).
 const MIN_WEIGHT: u64 = 3;
+
+/// The least weight for a value to get any register: a caller-saved one costs nothing to save.
+const MIN_FREE_WEIGHT: u64 = 2;
 
 /// The result of the assignment for one function.
 pub struct Alloc {
@@ -291,10 +294,67 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
         }
     }
 
-    let mut order: Vec<usize> = (0..nc).filter(|&c| weight[c] >= MIN_WEIGHT).collect();
+    // Positions where the generator calls (the runtime or another function): the argument registers
+    // and every scratch register die there, so a value that touches one needs a callee-saved home.
+    let mut calls: Vec<u32> = Vec::new();
+    for b in &f.blocks {
+        for &i in &b.insts {
+            let call = match &f.insts[i].op {
+                Op::Call(..)
+                | Op::CallPtr(..)
+                | Op::MemCopy(..)
+                | Op::Print(..)
+                | Op::Alloc(..)
+                | Op::Free(..)
+                | Op::Realloc(..) => true,
+                Op::Bin(BinOp::Rem, a, _) => matches!(f.ty(*a), IrTy::F32 | IrTy::F64),
+                _ => false,
+            };
+            if call {
+                calls.push(inst_pos[i]);
+            }
+        }
+    }
+    calls.sort_unstable();
+    let crosses_call = |l: u32, h: u32| {
+        let k = calls.partition_point(|&p| p < l);
+        calls.get(k).is_some_and(|&p| p <= h)
+    };
+    // The parameters of the function arrive in the argument registers (the first eight of each kind) and
+    // are moved out first, so one may stay where it arrives but takes no other caller-saved home.
+    let mut arrival: Vec<Option<u8>> = vec![None; nc];
+    let mut entry_param = vec![false; nc];
+    let (mut ni, mut nf) = (0u8, 0u8);
+    for p in f.block_params(f.entry()) {
+        let c = cand_of[p.0 as usize];
+        let n = if class(f.values[p.0 as usize]) == Some(Class::Fpr) {
+            &mut nf
+        } else {
+            &mut ni
+        };
+        if c != usize::MAX {
+            entry_param[c] = true;
+            if *n < 8 {
+                arrival[c] = Some(*n);
+            }
+        }
+        *n += 1;
+    }
+
+    let mut order: Vec<usize> = (0..nc).filter(|&c| weight[c] >= MIN_FREE_WEIGHT).collect();
     order.sort_by(|a, b| weight[*b].cmp(&weight[*a]).then(a.cmp(b)));
-    let gprs: Vec<Reg> = (19..=28).take(limit).map(|r| Reg(r as u8)).collect();
-    let fprs: Vec<V> = (8..=15).take(limit).map(|r| V(r as u8)).collect();
+    // Caller-saved homes come first in the lists: `x0` to `x8` (the templates only use `x9` and up
+    // outside calls) and `d2` to `d7` (the templates use `v0` and `v1`).
+    let gprs: Vec<(Reg, bool)> = (0..=8)
+        .take(limit)
+        .map(|r| (Reg(r as u8), false))
+        .chain((19..=28).take(limit).map(|r| (Reg(r as u8), true)))
+        .collect();
+    let fprs: Vec<(V, bool)> = (2..=7)
+        .take(limit)
+        .map(|r| (V(r as u8), false))
+        .chain((8..=15).take(limit).map(|r| (V(r as u8), true)))
+        .collect();
     // Per register, the intervals already given to it, with their owners.
     let mut taken_g: Vec<Vec<(u32, u32, usize)>> = vec![Vec::new(); gprs.len()];
     let mut taken_f: Vec<Vec<(u32, u32, usize)>> = vec![Vec::new(); fprs.len()];
@@ -309,33 +369,45 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
                 .get(&(c, o))
                 .is_some_and(|&e| hi[c] == e && lo[o] == e && h == e && a == e)
     };
-    for c in order {
-        let (l, h) = (lo[c], hi[c]);
-        let v = cands[c];
-        let free = |taken: &Vec<(u32, u32, usize)>| taken.iter().all(|t| fits(c, (l, h), t));
-        // A register held by a partner of the copy comes first: sharing it removes the copy.
-        let partner = |taken: &Vec<(u32, u32, usize)>| {
-            taken
-                .iter()
-                .any(|t| pairs.contains_key(&(t.2, c)) || pairs.contains_key(&(c, t.2)))
+    // The register for `c` among `homes` (with their taken intervals): one held by a partner of a copy
+    // first, since sharing it removes the copy, then the first that is free.
+    let pick =
+        |c: usize, homes: &[(bool, u8)], taken: &[Vec<(u32, u32, usize)>]| -> Option<usize> {
+            let (l, h) = (lo[c], hi[c]);
+            let crossing = crosses_call(l, h);
+            let ok = |k: usize| {
+                let (callee, id) = homes[k];
+                let allowed = if callee {
+                    weight[c] >= MIN_WEIGHT
+                } else {
+                    !crossing && (!entry_param[c] || arrival[c] == Some(id))
+                };
+                allowed && taken[k].iter().all(|t| fits(c, (l, h), t))
+            };
+            let partner = |k: usize| {
+                taken[k]
+                    .iter()
+                    .any(|t| pairs.contains_key(&(t.2, c)) || pairs.contains_key(&(c, t.2)))
+            };
+            (0..homes.len())
+                .find(|&k| ok(k) && partner(k))
+                .or_else(|| (0..homes.len()).find(|&k| ok(k)))
         };
+    let kinds_g: Vec<(bool, u8)> = gprs.iter().map(|g| (g.1, g.0 .0)).collect();
+    let kinds_f: Vec<(bool, u8)> = fprs.iter().map(|g| (g.1, g.0 .0)).collect();
+    for c in order {
+        let v = cands[c];
         match class(f.values[v.0 as usize]).unwrap() {
             Class::Gpr => {
-                if let Some(k) = (0..gprs.len())
-                    .find(|&k| free(&taken_g[k]) && partner(&taken_g[k]))
-                    .or_else(|| (0..gprs.len()).find(|&k| free(&taken_g[k])))
-                {
-                    taken_g[k].push((l, h, c));
-                    out.reg[v.0 as usize] = Some(gprs[k]);
+                if let Some(k) = pick(c, &kinds_g, &taken_g) {
+                    taken_g[k].push((lo[c], hi[c], c));
+                    out.reg[v.0 as usize] = Some(gprs[k].0);
                 }
             }
             Class::Fpr => {
-                if let Some(k) = (0..fprs.len())
-                    .find(|&k| free(&taken_f[k]) && partner(&taken_f[k]))
-                    .or_else(|| (0..fprs.len()).find(|&k| free(&taken_f[k])))
-                {
-                    taken_f[k].push((l, h, c));
-                    out.freg[v.0 as usize] = Some(fprs[k]);
+                if let Some(k) = pick(c, &kinds_f, &taken_f) {
+                    taken_f[k].push((lo[c], hi[c], c));
+                    out.freg[v.0 as usize] = Some(fprs[k].0);
                 }
             }
         }
