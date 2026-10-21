@@ -446,8 +446,11 @@ fn native_build(
     let os = match flags.iter().find_map(|f| f.strip_prefix("--target=")) {
         Some("windows") => pelago::native::Os::Windows,
         Some("linux") => pelago::native::Os::Linux,
+        Some("macos") => pelago::native::Os::MacOs,
         Some(other) => {
-            eprintln!("unknown target `{other}` (use --target=linux or --target=windows)");
+            eprintln!(
+                "unknown target `{other}` (use --target=linux, --target=windows or --target=macos)"
+            );
             std::process::exit(2);
         }
         None => pelago::native::Os::host().unwrap_or(pelago::native::Os::Linux),

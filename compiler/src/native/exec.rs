@@ -57,6 +57,8 @@ pub fn can_run(os: Os) -> bool {
             cfg!(all(target_os = "windows", target_arch = "x86_64"))
                 || (cfg!(all(target_os = "linux", target_arch = "x86_64")) && wine().is_some())
         }
+        // macOS programs are AArch64 only.
+        Os::MacOs => false,
     }
 }
 
@@ -87,6 +89,7 @@ pub fn can_run_a64_on(os: Os) -> bool {
                 || (cfg!(all(target_os = "linux", target_arch = "x86_64")) && qemu_a64().is_some())
         }
         Os::Windows => cfg!(all(target_os = "windows", target_arch = "aarch64")),
+        Os::MacOs => cfg!(all(target_os = "macos", target_arch = "aarch64")),
     }
 }
 

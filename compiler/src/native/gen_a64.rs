@@ -72,6 +72,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
     match opts.target {
         Os::Linux => elf::write_a64(&g.a, &g.ro, &g.data, 0, &syms),
         Os::Windows => super::pe::write_a64(&g.a, &g.ro, &g.data, 0),
+        Os::MacOs => super::macho::write_a64(&g.a, &g.ro, &g.data, 0),
     }
 }
 

@@ -600,7 +600,12 @@ impl Asm {
     }
 
     pub fn svc(&mut self) {
-        self.word(0xD400_0001);
+        self.svc_imm(0);
+    }
+
+    /// `svc #imm` (macOS system calls are `svc #0x80`).
+    pub fn svc_imm(&mut self, imm: u32) {
+        self.word(0xD400_0001 | (imm & 0xFFFF) << 5);
     }
 
     /// A breakpoint: the instruction code that must never run.
