@@ -117,7 +117,9 @@ pub mod exec;
 pub mod gen;
 pub mod gen_a64;
 pub mod macho;
+pub mod mir;
 pub mod pe;
+pub mod ralloc;
 pub mod regs;
 pub mod regs_a64;
 pub mod rt;
@@ -126,6 +128,8 @@ pub mod x86;
 
 #[cfg(test)]
 mod a64_golden;
+#[cfg(test)]
+mod ralloc_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
