@@ -103,6 +103,12 @@ fn class(t: IrTy) -> Option<Class> {
     }
 }
 
+/// The instructions `mov_ri` needs for a constant.
+fn mov_len(n: i64) -> u32 {
+    let pieces = |x: u64| (0..4).filter(|i| (x >> (16 * i)) & 0xFFFF != 0).count() as u32;
+    pieces(n as u64).min(pieces(!(n as u64))).max(1)
+}
+
 /// Assigns registers. `imms` are the constants (no home at all), `uses` the use counts and `fused` the
 /// compares that only feed their branch (never stored).
 pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> Alloc {
@@ -120,7 +126,10 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
     let mut cand_of = vec![usize::MAX; n];
     let mut cands: Vec<Value> = Vec::new();
     for v in 0..n {
-        if imms[v].is_none() && uses[v] > 0 && !fused[v] && class(f.values[v]).is_some() {
+        // A constant that takes several instructions to build is worth a register when it is read in a loop.
+        let wide =
+            imms[v].is_some_and(|n| mov_len(n) >= 2) && class(f.values[v]) == Some(Class::Gpr);
+        if (imms[v].is_none() || wide) && uses[v] > 0 && !fused[v] && class(f.values[v]).is_some() {
             cand_of[v] = cands.len();
             cands.push(Value(v as u32));
         }
@@ -130,6 +139,7 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
     }
     let nb = f.blocks.len();
     let nc = cands.len();
+    let is_imm: Vec<bool> = cands.iter().map(|v| imms[v.0 as usize].is_some()).collect();
 
     // Reads and writes of each block, for the dataflow.
     let mut gen_ = vec![Bits::new(nc); nb];
@@ -293,7 +303,12 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
                 let cr = cand_of[r.0 as usize];
                 for v in &reads {
                     let co = cand_of[v.0 as usize];
-                    if cr != usize::MAX && co != usize::MAX && co != cr {
+                    if cr != usize::MAX
+                        && co != usize::MAX
+                        && co != cr
+                        && !is_imm[co]
+                        && !is_imm[cr]
+                    {
                         pairs.entry((co, cr)).or_default().push(inst_pos[i]);
                     }
                 }
@@ -318,7 +333,7 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
             for tg in targets {
                 for (p, a) in f.block_params(tg.block).iter().zip(&tg.args) {
                     let (cs, cd) = (cand_of[a.0 as usize], cand_of[p.0 as usize]);
-                    if cs != usize::MAX && cd != usize::MAX {
+                    if cs != usize::MAX && cd != usize::MAX && !is_imm[cs] {
                         pairs.entry((cs, cd)).or_default().push(end[bi]);
                     }
                 }
@@ -340,6 +355,14 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
             };
             segs[c].push((open[c], close));
             open[c] = u32::MAX;
+        }
+    }
+    // A hoisted constant is loaded once at the entry and keeps its register for the whole function.
+    for c in 0..nc {
+        if is_imm[c] {
+            segs[c] = vec![(0, at)];
+            let k = imms[cands[c].0 as usize].map_or(1, |n| mov_len(n) as u64 - 1);
+            weight[c] *= k;
         }
     }
     // Runs that overlap are one (runs that only follow each other stay apart: a jump may write a value there).
