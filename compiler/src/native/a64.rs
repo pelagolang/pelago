@@ -784,6 +784,19 @@ impl Asm {
         self.fp3(0x1E20_0800, d, vd, vn, vm);
     }
 
+    /// `vd = va + vn * vm` with one rounding.
+    pub fn fmadd(&mut self, d: bool, vd: V, vn: V, vm: V, va: V) {
+        let t = if d { 0x0040_0000 } else { 0 };
+        self.word(
+            0x1F00_0000
+                | t
+                | (vm.0 as u32) << 16
+                | (va.0 as u32) << 10
+                | (vn.0 as u32) << 5
+                | vd.0 as u32,
+        );
+    }
+
     pub fn fdiv(&mut self, d: bool, vd: V, vn: V, vm: V) {
         self.fp3(0x1E20_1800, d, vd, vn, vm);
     }

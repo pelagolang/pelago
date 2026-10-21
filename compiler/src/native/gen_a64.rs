@@ -1055,6 +1055,17 @@ impl<'m> Gen<'m> {
                     self.fin(r, d);
                 }
             }
+            Op::Fma(a, b, c) => {
+                let dbl = f.ty(*a) == IrTy::F64;
+                let (xa, xb, xc) = (
+                    self.rdf(*a, V(0), f),
+                    self.rdf(*b, V(1), f),
+                    self.rdf(*c, V(31), f),
+                );
+                let xd = self.wrf(res.unwrap(), V(0));
+                self.a.fmadd(dbl, xd, xa, xb, xc);
+                self.finf(res.unwrap(), xd, f);
+            }
             Op::Bin(..) if self.madd.contains_key(&id) => {
                 let (add, a, b, x) = self.madd[&id];
                 let (ra, rb, rx) = (self.rd(a, X9), self.rd(b, X10), self.rd(x, X11));

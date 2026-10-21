@@ -318,7 +318,7 @@ pub(super) fn inst_uses(op: &Op, out: &mut Vec<Value>) {
             test.for_each_value(|v| out.push(v));
             out.extend([*a, *b]);
         }
-        Op::Select(a, b, c) | Op::MemCopy(a, b, c) => out.extend([*a, *b, *c]),
+        Op::Select(a, b, c) | Op::Fma(a, b, c) | Op::MemCopy(a, b, c) => out.extend([*a, *b, *c]),
         Op::Call(_, args) => out.extend(args.iter().copied()),
         Op::CallPtr(_, _, p, args) => {
             out.push(*p);

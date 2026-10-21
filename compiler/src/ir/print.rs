@@ -92,6 +92,7 @@ fn inst_text(f: &Func, i: &Inst, m: Option<&Module>) -> String {
             let u = if *signed { "" } else { "u" };
             format!("{u}{}_checked {}, {}", op.name(), v(*a), v(*b))
         }
+        Op::Fma(a, b, c) => format!("fma {}, {}, {}", v(*a), v(*b), v(*c)),
         Op::Select(c, a, b) => format!("select {}, {}, {}", v(*c), v(*a), v(*b)),
         Op::CheckedIf(op, signed, test, a, b) => {
             let u = if *signed { "" } else { "u" };

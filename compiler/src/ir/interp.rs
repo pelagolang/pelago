@@ -444,6 +444,16 @@ impl Machine<'_> {
                 _ => get(b),
             },
             Op::Cmp(o, a, b) => Val::Bool(cmp(*o, get(a), get(b), bits_of(ty(a)))),
+            Op::Fma(a, b, c) => match (get(a), get(b), get(c)) {
+                (Val::Float(x), Val::Float(y), Val::Float(z)) => {
+                    Val::Float(if ty(a) == IrTy::F32 {
+                        (x as f32).mul_add(y as f32, z as f32) as f64
+                    } else {
+                        x.mul_add(y, z)
+                    })
+                }
+                (other, ..) => other,
+            },
             Op::Neg(a) => match get(a) {
                 Val::Float(x) => Val::Float(-x),
                 Val::Int(n) => Val::Int(mask(0u128.wrapping_sub(n), bits_of(ty(a)))),

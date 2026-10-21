@@ -215,6 +215,16 @@ impl<'a> Lowerer<'a> {
                     Res::Never
                 }
             }
+            "rt_fma" => {
+                let (Some(a), Some(b), Some(c)) = (
+                    self.arg_scalar(args, 0),
+                    self.arg_scalar(args, 1),
+                    self.arg_scalar(args, 2),
+                ) else {
+                    return Res::Never;
+                };
+                self.wrap(Op::Fma(a, b, c), IrTy::F64, sp)
+            }
             "rt_to_int" => {
                 let Some(x) = self.arg_scalar(args, 0) else {
                     return Res::Never;

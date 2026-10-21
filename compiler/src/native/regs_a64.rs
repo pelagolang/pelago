@@ -10,7 +10,7 @@
 //! `x0` to `x8` (the templates only use `x9` and up outside calls) and `d2` to `d7`. A parameter of the
 //! function may stay in the register it arrives in but takes no other caller-saved one.
 //!
-//! The two-lane vectors have homes in `v16` to `v31`, caller-saved, for values that touch no call.
+//! The two-lane vectors have homes in `v16` to `v30`, caller-saved, for values that touch no call.
 //!
 //! * Liveness is the usual backward dataflow over the blocks (a block's parameters are defined at its
 //!   start, the arguments of a jump are read by the jump).
@@ -38,7 +38,7 @@ const MIN_FREE_WEIGHT: u64 = 2;
 pub struct Alloc {
     pub reg: Vec<Option<Reg>>,
     pub freg: Vec<Option<V>>,
-    /// Homes of the two-lane vectors: `v16` to `v31`, caller-saved, never across a call.
+    /// Homes of the two-lane vectors: `v16` to `v30`, caller-saved, never across a call.
     pub vreg: Vec<Option<V>>,
 }
 
@@ -456,8 +456,8 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
     // Per register, the values already given to it.
     let mut taken_g: Vec<Vec<usize>> = vec![Vec::new(); gprs.len()];
     let mut taken_f: Vec<Vec<usize>> = vec![Vec::new(); fprs.len()];
-    // Vectors: `v16` to `v31` (the templates use `v0` and `v1`), no callee-saved pool.
-    let vprs: Vec<(V, bool)> = (16..=31).take(limit).map(|r| (V(r as u8), false)).collect();
+    // Vectors: `v16` to `v30` (the templates use `v0`, `v1` and, for `fma`, `v31`), no callee-saved pool.
+    let vprs: Vec<(V, bool)> = (16..=30).take(limit).map(|r| (V(r as u8), false)).collect();
     let mut taken_v: Vec<Vec<usize>> = vec![Vec::new(); vprs.len()];
     // Whether `c` may share a register with `o`: their runs are apart, or they meet only at a jump that
     // hands one to the other (the argument dies there, the parameter starts there).

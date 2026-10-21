@@ -8,6 +8,22 @@ type Case = (&'static str, &'static str, fn(&mut Asm));
 pub fn golden() -> Vec<Case> {
     vec![
         ("mov rax, rbx", "48 89 d8", |a| a.mov_rr(RAX, RBX, 8)),
+        ("vfmadd231sd xmm0, xmm1, xmm2", "c4 e2 f1 b9 c2", |a| {
+            a.vfmadd231(Xmm(0), Xmm(1), Fp::Reg(Xmm(2)), true)
+        }),
+        (
+            "vfmadd231sd xmm0, xmm1, QWORD PTR [rbp-24]",
+            "c4 e2 f1 b9 45 e8",
+            |a| a.vfmadd231(Xmm(0), Xmm(1), Fp::Mem(mem(RBP, -24)), true),
+        ),
+        (
+            "vfmadd231ss xmm9, xmm10, DWORD PTR [r11+8]",
+            "c4 42 29 b9 4b 08",
+            |a| a.vfmadd231(Xmm(9), Xmm(10), Fp::Mem(mem(R11, 8)), false),
+        ),
+        ("vfmadd231sd xmm3, xmm14, xmm15", "c4 c2 89 b9 df", |a| {
+            a.vfmadd231(Xmm(3), Xmm(14), Fp::Reg(Xmm(15)), true)
+        }),
         ("mov r8, r15", "4d 89 f8", |a| a.mov_rr(R8, R15, 8)),
         ("mov eax, ecx", "89 c8", |a| a.mov_rr(RAX, RCX, 4)),
         ("mov ax, cx", "66 89 c8", |a| a.mov_rr(RAX, RCX, 2)),

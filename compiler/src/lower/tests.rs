@@ -1435,6 +1435,27 @@ fn agree(src: &str) {
     }
 }
 
+/// `fma` rounds once: it agrees with the interpreter on every back end, and with the exact value
+/// where `a * b + c` would lose the low bits (card A-10).
+#[test]
+fn native_agrees_on_fused_multiply_add() {
+    agree(
+        "fn main() {
+            const x = 0.1
+            print(x.fma(10.0, 0.0 - 1.0) * 1.0e17)
+            print((x * 10.0 + (0.0 - 1.0)) * 1.0e17)
+            var i = 0
+            var acc = 0.0
+            while i < 4 {
+                const t = 1.0 + 1.0e-8 * (i to float)
+                acc = acc + t.fma(t, 0.0 - 1.0 - 2.0e-8 * (i to float)) * 1.0e16
+                i += 1
+            }
+            print(acc)
+        }",
+    );
+}
+
 /// Division and remainder by constants that are not powers of two run as a high multiply (card A-11,
 /// W1); the loops give the optimiser values it cannot fold, spread over the whole range.
 #[test]

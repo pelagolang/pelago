@@ -139,6 +139,8 @@ pub fn golden() -> Vec<Case> {
         ("fadd s0, s1, s2", "2028221e", |a| { a.fadd(false, V(0), V(1), V(2)) }),
         ("fsub d3, d4, d5", "8338651e", |a| { a.fsub(true, V(3), V(4), V(5)) }),
         ("fmul s3, s4, s5", "8308251e", |a| { a.fmul(false, V(3), V(4), V(5)) }),
+        ("fmadd d0, d1, d2, d3", "200c421f", |a| { a.fmadd(true, V(0), V(1), V(2), V(3)) }),
+        ("fmadd s4, s5, s6, s7", "a41c061f", |a| { a.fmadd(false, V(4), V(5), V(6), V(7)) }),
         ("fdiv d6, d7, d8", "e618681e", |a| { a.fdiv(true, V(6), V(7), V(8)) }),
         ("fneg d0, d1", "2040611e", |a| { a.fneg(true, V(0), V(1)) }),
         ("fneg s0, s1", "2040211e", |a| { a.fneg(false, V(0), V(1)) }),

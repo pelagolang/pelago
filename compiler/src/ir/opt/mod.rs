@@ -232,7 +232,7 @@ impl Op {
                 f(*a);
                 f(*b);
             }
-            Op::Select(a, b, c) | Op::MemCopy(a, b, c) => {
+            Op::Select(a, b, c) | Op::Fma(a, b, c) | Op::MemCopy(a, b, c) => {
                 f(*a);
                 f(*b);
                 f(*c);
@@ -272,7 +272,7 @@ impl Op {
                 *a = f(*a);
                 *b = f(*b);
             }
-            Op::Select(a, b, c) | Op::MemCopy(a, b, c) => {
+            Op::Select(a, b, c) | Op::Fma(a, b, c) | Op::MemCopy(a, b, c) => {
                 *a = f(*a);
                 *b = f(*b);
                 *c = f(*c);
@@ -291,6 +291,7 @@ impl Op {
             Op::Const(..)
             | Op::Cmp(..)
             | Op::Select(..)
+            | Op::Fma(..)
             | Op::Neg(_)
             | Op::Not(_)
             | Op::VUn(..)

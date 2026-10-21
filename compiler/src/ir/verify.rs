@@ -241,7 +241,7 @@ fn inputs(op: &Op) -> Vec<Value> {
             v.extend([*a, *b]);
             v
         }
-        Op::Select(a, b, c) | Op::MemCopy(a, b, c) => vec![*a, *b, *c],
+        Op::Select(a, b, c) | Op::Fma(a, b, c) | Op::MemCopy(a, b, c) => vec![*a, *b, *c],
         Op::CallPtr(_, _, f, args) => {
             let mut v = vec![*f];
             v.extend(args.iter().copied());
@@ -336,6 +336,15 @@ fn check_inst(f: &Func, m: Option<&Module>, inst: &Inst) -> Vec<String> {
             }
             if t(*a) != t(*b) || result_ty != t(*a) {
                 e.push("`select` needs two values of the result's type".to_string());
+            }
+        }
+        Op::Fma(a, b, c) => {
+            if t(*a) != t(*b)
+                || t(*a) != t(*c)
+                || result_ty != t(*a)
+                || !t(*a).is_some_and(|x| x.is_float())
+            {
+                e.push("`fma` needs three floats of the result's type".to_string());
             }
         }
         Op::Cmp(_, a, b) => {
