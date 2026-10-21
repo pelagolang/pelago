@@ -2405,6 +2405,23 @@ fn accumulators_of_counted_loops_keep_their_traps() {
     );
 }
 
+/// `(-x) * c` is computed as `x * (-c)`; the results, signs of zero included, must not change.
+#[test]
+fn a_negation_before_a_constant_product_changes_no_result() {
+    agree(
+        "fn main() {
+            var x = 0.5
+            for i in 0..6 {
+                const a = -x * 0.001
+                const b = 0.25 * -x
+                const c = -x / 4.0
+                print(a, b, c, 1.0 / a)
+                x = x - 0.25
+            }
+        }",
+    );
+}
+
 /// A loop limit that is not a constant but has a known range bounds the trip count too; a limit
 /// that can be huge still traps.
 #[test]

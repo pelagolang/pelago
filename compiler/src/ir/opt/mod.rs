@@ -23,6 +23,7 @@ mod devirt;
 mod divconst;
 mod dom;
 mod fill;
+mod fneg;
 mod ifconv;
 mod inline;
 mod ivopt;
@@ -161,6 +162,7 @@ fn rounds(f: &mut Func, divs: bool) {
         if divs {
             changed |= step(f, "divconst", divconst::run);
         }
+        changed |= step(f, "fneg", fneg::run);
         changed |= step(f, "cse", cse::run);
         changed |= step(f, "licm", licm::run);
         changed |= step(f, "ivopt", ivopt::run);
