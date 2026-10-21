@@ -239,6 +239,7 @@ struct Gen<'m> {
     /// The register a value lives in instead (its `off` is then [`NONE`]).
     reg: Vec<Option<Reg>>,
     freg: Vec<Option<V>>,
+    vreg: Vec<Option<V>>,
     /// The callee-saved registers this function uses, and the frame offset of their save area.
     saved_g: Vec<Reg>,
     saved_f: Vec<V>,
@@ -275,6 +276,7 @@ impl<'m> Gen<'m> {
             off: Vec::new(),
             reg: Vec::new(),
             freg: Vec::new(),
+            vreg: Vec::new(),
             saved_g: Vec::new(),
             saved_f: Vec::new(),
             save_off: 0,
@@ -356,10 +358,12 @@ impl<'m> Gen<'m> {
             regs_a64::Alloc {
                 reg: vec![None; n],
                 freg: vec![None; n],
+                vreg: vec![None; n],
             }
         };
         self.reg = alloc.reg;
         self.freg = alloc.freg;
+        self.vreg = alloc.vreg;
         let mut used_g = [false; 32];
         let mut used_f = [false; 32];
         for r in self.reg.iter().flatten() {
@@ -385,6 +389,7 @@ impl<'m> Gen<'m> {
                     || uses[v] == 0
                     || self.reg[v].is_some()
                     || self.freg[v].is_some()
+                    || self.vreg[v].is_some()
                 {
                     NONE
                 } else if ty == IrTy::V2I64 {
@@ -540,13 +545,50 @@ impl<'m> Gen<'m> {
         }
     }
 
+    /// The vector `v` in `x`.
     fn ldv(&mut self, x: V, v: Value) {
-        let off = self.off[v.0 as usize];
-        debug_assert!(off != NONE);
-        self.a.ldr_f(x, SP, off, 16);
+        match self.vreg[v.0 as usize] {
+            Some(h) => {
+                if h != x {
+                    self.a.vmov(x, h);
+                }
+            }
+            None => {
+                let off = self.off[v.0 as usize];
+                debug_assert!(off != NONE);
+                self.a.ldr_f(x, SP, off, 16);
+            }
+        }
+    }
+
+    /// The register to read the vector `v` from: its home, or `scratch` after a load.
+    fn rdv(&mut self, v: Value, scratch: V) -> V {
+        match self.vreg[v.0 as usize] {
+            Some(h) => h,
+            None => {
+                self.ldv(scratch, v);
+                scratch
+            }
+        }
+    }
+
+    /// The register to build the vector `v` in: its home, or `scratch`.
+    fn wrv(&self, v: Value, scratch: V) -> V {
+        self.vreg[v.0 as usize].unwrap_or(scratch)
+    }
+
+    /// Completes a vector result built in `x` (a no-op in its home).
+    fn finv(&mut self, v: Value, x: V) {
+        self.stv(v, x);
     }
 
     fn stv(&mut self, v: Value, x: V) {
+        if let Some(h) = self.vreg[v.0 as usize] {
+            if h != x {
+                self.a.vmov(h, x);
+            }
+            return;
+        }
         let off = self.off[v.0 as usize];
         if off != NONE {
             self.a.str_f(x, SP, off, 16);
@@ -712,6 +754,7 @@ impl<'m> Gen<'m> {
         self.off[v.0 as usize] != NONE
             || self.reg[v.0 as usize].is_some()
             || self.freg[v.0 as usize].is_some()
+            || self.vreg[v.0 as usize].is_some()
     }
 
     /// Saves (or, with `load`, restores) the callee-saved general registers this function uses, two at
@@ -914,12 +957,13 @@ impl<'m> Gen<'m> {
     fn copy(&mut self, f: &Func, c: Move) {
         let to = c.to;
         if f.ty(to) == IrTy::V2I64 {
+            let dst = self.wrv(to, V(0));
             match c.from {
-                Src::Val(v) => self.ldv(V(0), v),
-                Src::Temp => self.a.vmov(V(0), V(1)),
+                Src::Val(v) => self.ldv(dst, v),
+                Src::Temp => self.a.vmov(dst, V(1)),
                 Src::Imm(_) => unreachable!("a vector constant"),
             }
-            self.stv(to, V(0));
+            self.finv(to, dst);
             return;
         }
         if is_float(f.ty(to)) {
@@ -1068,54 +1112,58 @@ impl<'m> Gen<'m> {
                 let r = res.unwrap();
                 match o {
                     VUn::ReduceAdd => {
-                        self.ldv(V(0), *a);
-                        self.a.vaddp(V(0), V(0));
+                        let a = self.rdv(*a, V(0));
+                        self.a.vaddp(V(0), a);
                         self.a.fmov_to_gp(true, X9, V(0));
                         self.st(r, X9);
                     }
                     VUn::Splat => {
                         self.ld(X9, *a);
-                        self.a.vdup(V(0), X9);
-                        self.stv(r, V(0));
+                        let d = self.wrv(r, V(0));
+                        self.a.vdup(d, X9);
+                        self.finv(r, d);
                     }
                     VUn::Shl(k) | VUn::UShr(k) => {
-                        self.ldv(V(0), *a);
+                        let a = self.rdv(*a, V(0));
+                        let d = self.wrv(r, V(0));
                         if matches!(o, VUn::Shl(_)) {
-                            self.a.vshl(V(0), V(0), *k as u32);
+                            self.a.vshl(d, a, *k as u32);
                         } else {
-                            self.a.vushr(V(0), V(0), *k as u32);
+                            self.a.vushr(d, a, *k as u32);
                         }
-                        self.stv(r, V(0));
+                        self.finv(r, d);
                     }
                 }
             }
             Op::VBin(o, a, b) => {
                 let r = res.unwrap();
+                let d = self.wrv(r, V(0));
                 if *o == VBin::Build {
                     self.ld(X9, *a);
                     self.ld(X10, *b);
-                    self.a.vins(V(0), 0, X9);
-                    self.a.vins(V(0), 1, X10);
+                    self.a.vins(d, 0, X9);
+                    self.a.vins(d, 1, X10);
                 } else {
-                    self.ldv(V(0), *a);
-                    self.ldv(V(1), *b);
+                    let a = self.rdv(*a, V(0));
+                    let b = self.rdv(*b, V(1));
                     match o {
-                        VBin::Add => self.a.vadd(V(0), V(0), V(1)),
-                        VBin::Sub => self.a.vsub(V(0), V(0), V(1)),
-                        VBin::And => self.a.vand(V(0), V(0), V(1)),
-                        VBin::Or => self.a.vorr(V(0), V(0), V(1)),
-                        _ => self.a.veor(V(0), V(0), V(1)),
+                        VBin::Add => self.a.vadd(d, a, b),
+                        VBin::Sub => self.a.vsub(d, a, b),
+                        VBin::And => self.a.vand(d, a, b),
+                        VBin::Or => self.a.vorr(d, a, b),
+                        _ => self.a.veor(d, a, b),
                     }
                 }
-                self.stv(r, V(0));
+                self.finv(r, d);
             }
             Op::Load(t, p) => {
                 let pr = self.rd(*p, X9);
                 let r = res.unwrap();
                 match t {
                     IrTy::V2I64 => {
-                        self.a.ldr_f(V(0), pr, 0, 16);
-                        self.stv(r, V(0));
+                        let d = self.wrv(r, V(0));
+                        self.a.ldr_f(d, pr, 0, 16);
+                        self.finv(r, d);
                     }
                     IrTy::F32 | IrTy::F64 => {
                         let xd = self.wrf(r, V(0));
@@ -1133,8 +1181,8 @@ impl<'m> Gen<'m> {
                 let t = f.ty(*x);
                 let pr = self.rd(*p, X9);
                 if t == IrTy::V2I64 {
-                    self.ldv(V(0), *x);
-                    self.a.str_f(V(0), pr, 0, 16);
+                    let xr = self.rdv(*x, V(0));
+                    self.a.str_f(xr, pr, 0, 16);
                 } else if is_float(t) {
                     let xr = self.rdf(*x, V(0), f);
                     self.a.str_f(xr, pr, 0, mem_size(t));
