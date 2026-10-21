@@ -43,7 +43,7 @@ Symbol ids are the file names without the extension: `pelago-mark`, `pelago-hori
 
 - Name: lowercase `pelago` in the logo, `Pelago` in prose.
 - Colours: Pelago Teal `#0E7C86`, Lagoon `#5FD0C8`, Deep Sea `#0B2239`, Foam `#F4F6F8`. Use Deep Sea, not teal, for small text on white.
-- Clear space: one dot diameter on every side. Minimum size: mark 24px (use the badge icon below that), horizontal lockup 96px wide.
+- Clear space: x = 28 units of the 128-unit mark (two strokes, 22 % of the mark's height) on every side. Minimum size: mark 24px (use the badge icon below that), horizontal lockup 140px wide. `spec/lockup-clear-space.png` draws both.
 - Do not stretch, rotate, recolour, outline, add effects to, or put the logo on a low-contrast background.
 - Fonts: wordmark in Comfortaa Bold, text in Outfit (both SIL Open Font License). Outfit is bundled in `fonts/` (OFL), Comfortaa is not; the outlines in `build/wordmark.json` are what the build uses. The wordmark is kerned (the `l` and `a` pair is pulled in by 30/1000 em), checked against the live font at 2000px.
 - Editor extensions use the icons only. They never change the user's theme or workbench colours.
