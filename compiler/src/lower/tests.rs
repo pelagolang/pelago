@@ -2132,6 +2132,50 @@ fn counted_loops_of_plain_arithmetic_run_in_vectors_with_the_same_results() {
 }
 
 #[test]
+fn lists_are_summed_and_mapped_in_vectors_with_the_same_results_and_stops() {
+    // `go` builds a list of `n` numbers from `base`, maps it in place and sums it. The lengths fall on
+    // every remainder of the four elements a pass covers; a `base` above 2^29 makes the guard of the
+    // checked sum fail and the loop run again scalar; a `base` near the top overflows the sum, which
+    // must stop at the same element.
+    let src = "fn go(n: int, base: int) -> int { var xs: [int] = []\n for i in 0..n { xs.push!(base + i) }\n var t = 0\n for i in 0..xs.len() { t += xs[i] }\n for i in 0..xs.len() { xs[i] = (xs[i] ^ 12345) & 65535 }\n for i in 0..xs.len() { t += xs[i] }\n t }\nfn main() { print(go(7, 1), go(1000, 5), go(5, 1099511627776)) }";
+    let l = lowered(src);
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let text = crate::ir::print_func(m.funcs.iter().find(|f| f.name == "go").unwrap(), None);
+    assert!(
+        text.contains("vreduce_add"),
+        "the sum is not vectorised:\n{text}"
+    );
+    assert!(text.contains("vxor"), "the map is not vectorised:\n{text}");
+    let bases = [
+        0i64,
+        1,
+        536870911,
+        536870912,
+        -536870912,
+        -536870913,
+        1099511627776,
+        9223372036854775800,
+        -9223372036854775800,
+    ];
+    for base in bases {
+        for n in (0..14).chain([100, 101, 102, 103, 1000]) {
+            let args = [Val::int(n), Val::int(base)];
+            let plain = run_full(&l.module, "go", &args);
+            let fast = run_full(&m, "go", &args);
+            assert_eq!(
+                plain.result.map(|v| v.as_i64()),
+                fast.result.map(|v| v.as_i64()),
+                "go({n}, {base})"
+            );
+            // A stop leaves what it holds, in both.
+            assert_eq!(plain.leaked, fast.leaked, "go({n}, {base}) leaked");
+        }
+    }
+    agree(src);
+}
+
+#[test]
 fn a_checked_sum_is_not_vectorised_and_still_stops_in_the_same_pass() {
     // The product can overflow, so the loop stays scalar and the stop comes from the same iteration.
     let src = "fn g(from: int) -> int { var s = 0\n for i in from..1003 { s += i * 4611686018427387 }\n s }\nfn main() { print(g(0)) }";
