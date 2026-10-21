@@ -550,9 +550,12 @@ impl Machine<'_> {
             Op::MemCopy(d, s, n) => {
                 let (d, s) = (addr(&get(d))?, addr(&get(s))?);
                 let n = get(n).signed(64) as usize;
-                self.check(d, n)?;
-                self.check(s, n)?;
-                self.mem.copy_within(s..s + n, d);
+                // Copying nothing touches nothing: cloning an empty list copies from and to null.
+                if n > 0 {
+                    self.check(d, n)?;
+                    self.check(s, n)?;
+                    self.mem.copy_within(s..s + n, d);
+                }
                 Val::Unit
             }
             Op::Alloc(n) => {

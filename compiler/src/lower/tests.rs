@@ -2590,3 +2590,14 @@ fn maps_find_keys_that_collide_in_the_first_slot() {
         }",
     );
 }
+
+#[test]
+fn cloning_and_sorting_an_empty_list() {
+    // Cloning copies zero bytes between two null addresses; the interpreter must accept that.
+    assert_eq!(
+        output_of(
+            "fn main() { var xs: [int] = []\n xs.sort!()\n const ys = xs.sorted()\n var zs: [string] = []\n const ws = zs.to_list()\n print(xs.len(), ys.len(), ws.len()) }"
+        ),
+        "0 0 0\n"
+    );
+}
