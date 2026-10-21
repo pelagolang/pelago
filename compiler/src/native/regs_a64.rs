@@ -12,6 +12,9 @@
 //!   written at each jump that leads to its block. Two values may share a register only when their
 //!   intervals are apart, and an instruction counts as one position, so a result never takes the
 //!   register of an operand of the same instruction (the generator does not have to care about that).
+//! * Copies are coalesced where the intervals allow it: a value passed to a block parameter at a jump may
+//!   share its register with that parameter when it dies at the jump and the parameter starts there, so the
+//!   copy of the edge disappears.
 //! * Values are taken heaviest first (reads and writes weighted by `10^loop depth`) and get the first
 //!   register whose assigned intervals do not meet theirs. A value must weigh at least [`MIN_WEIGHT`]
 //!   to be worth the save and restore of its register.
@@ -217,6 +220,9 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
     let mut lo = vec![u32::MAX; nc];
     let mut hi = vec![0u32; nc];
     let mut weight = vec![0u64; nc];
+    // (argument, parameter) of a jump, with the position of the jump.
+    let mut pairs: std::collections::HashMap<(usize, usize), u32> =
+        std::collections::HashMap::new();
     let mut touch = |c: usize, pos: u32| {
         lo[c] = lo[c].min(pos);
         hi[c] = hi[c].max(pos);
@@ -268,6 +274,12 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
                 _ => Vec::new(),
             };
             for tg in targets {
+                for (p, a) in f.block_params(tg.block).iter().zip(&tg.args) {
+                    let (cs, cd) = (cand_of[a.0 as usize], cand_of[p.0 as usize]);
+                    if cs != usize::MAX && cd != usize::MAX {
+                        pairs.insert((cs, cd), end[bi]);
+                    }
+                }
                 for p in f.block_params(tg.block) {
                     let c = cand_of[p.0 as usize];
                     if c != usize::MAX {
@@ -283,23 +295,46 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
     order.sort_by(|a, b| weight[*b].cmp(&weight[*a]).then(a.cmp(b)));
     let gprs: Vec<Reg> = (19..=28).take(limit).map(|r| Reg(r as u8)).collect();
     let fprs: Vec<V> = (8..=15).take(limit).map(|r| V(r as u8)).collect();
-    // Per register, the intervals already given to it.
-    let mut taken_g: Vec<Vec<(u32, u32)>> = vec![Vec::new(); gprs.len()];
-    let mut taken_f: Vec<Vec<(u32, u32)>> = vec![Vec::new(); fprs.len()];
+    // Per register, the intervals already given to it, with their owners.
+    let mut taken_g: Vec<Vec<(u32, u32, usize)>> = vec![Vec::new(); gprs.len()];
+    let mut taken_f: Vec<Vec<(u32, u32, usize)>> = vec![Vec::new(); fprs.len()];
+    // Whether `c` (living in `l..=h`) may share a register with an interval `a..=b` of `o`.
+    let fits = |c: usize, (l, h): (u32, u32), &(a, b, o): &(u32, u32, usize)| {
+        h < a
+            || b < l
+            || pairs
+                .get(&(o, c))
+                .is_some_and(|&e| hi[o] == e && lo[c] == e && b == e && l == e)
+            || pairs
+                .get(&(c, o))
+                .is_some_and(|&e| hi[c] == e && lo[o] == e && h == e && a == e)
+    };
     for c in order {
         let (l, h) = (lo[c], hi[c]);
         let v = cands[c];
-        let free = |taken: &Vec<(u32, u32)>| taken.iter().all(|&(a, b)| h < a || b < l);
+        let free = |taken: &Vec<(u32, u32, usize)>| taken.iter().all(|t| fits(c, (l, h), t));
+        // A register held by a partner of the copy comes first: sharing it removes the copy.
+        let partner = |taken: &Vec<(u32, u32, usize)>| {
+            taken
+                .iter()
+                .any(|t| pairs.contains_key(&(t.2, c)) || pairs.contains_key(&(c, t.2)))
+        };
         match class(f.values[v.0 as usize]).unwrap() {
             Class::Gpr => {
-                if let Some(k) = (0..gprs.len()).find(|&k| free(&taken_g[k])) {
-                    taken_g[k].push((l, h));
+                if let Some(k) = (0..gprs.len())
+                    .find(|&k| free(&taken_g[k]) && partner(&taken_g[k]))
+                    .or_else(|| (0..gprs.len()).find(|&k| free(&taken_g[k])))
+                {
+                    taken_g[k].push((l, h, c));
                     out.reg[v.0 as usize] = Some(gprs[k]);
                 }
             }
             Class::Fpr => {
-                if let Some(k) = (0..fprs.len()).find(|&k| free(&taken_f[k])) {
-                    taken_f[k].push((l, h));
+                if let Some(k) = (0..fprs.len())
+                    .find(|&k| free(&taken_f[k]) && partner(&taken_f[k]))
+                    .or_else(|| (0..fprs.len()).find(|&k| free(&taken_f[k])))
+                {
+                    taken_f[k].push((l, h, c));
                     out.freg[v.0 as usize] = Some(fprs[k]);
                 }
             }
