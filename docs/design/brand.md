@@ -18,8 +18,14 @@ Status: decided with the owner, 2026-10-21. Assets live in `assets/brand/` (see 
 - The wordmark in logo SVGs is outlined; do not retype it in a font.
 - Teal `#0E7C86` on `#0B2239` is 3.3:1 (graphics only); use Lagoon on dark backgrounds.
 
+- **Tagline:** "A self-hosting systems language." No domain appears in any asset.
+- **Wordmark kerning:** the outlines carry the font's one kerning pair that matters here (`l` then `a`, 30/1000 em tighter). We checked the outlined lockup against the live font at 2000px and they overlap exactly.
+
+## Build
+
+`assets/brand/build/build.py` regenerates every SVG, the sprite, the PNGs, the ICO and ICNS files and the social images (see `assets/brand/README.md`). The SVGs are the source of truth.
+
 ## Open items
 
-- A domain, tagline and slide copy are placeholders (the social images say "A self-hosting systems language.").
-- The macOS `.icns` holds only the 128 to 1024 sizes.
-- `vscode-pelago`, `zed-pelago` and `tree-sitter-pelago` do not use these files yet; wiring the icons in is separate work in those repositories.
+- A shorter, capability-showing tagline is an open idea (for example "Native code. No GC. No runtime."); the current one stays until the owner picks.
+- `vscode-pelago`, `zed-pelago` and `tree-sitter-pelago` take the icons from this directory (copied in, with the source named in each repo).
