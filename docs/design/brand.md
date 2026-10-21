@@ -23,7 +23,7 @@ Status: decided with the owner, 2026-10-21. Assets live in `assets/brand/` (see 
 
 ## Build
 
-`assets/brand/build/build.py` regenerates every SVG, the sprite, the PNGs, the ICO and ICNS files and the social images (see `assets/brand/README.md`). The SVGs are the source of truth.
+`assets/brand/build/build.py` regenerates every SVG, the sprite, the PNGs, the ICO and ICNS files and the social images (see `assets/brand/README.md`). The SVGs are the source of truth. `assets/brand/spec/` holds the design spec sheets (construction grid, icon radius and safe areas, clear space and minimum sizes). The `brand` workflow rebuilds everything on Linux, Windows and macOS and fails if the SVGs change.
 
 ## Open items
 

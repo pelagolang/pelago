@@ -385,6 +385,190 @@ def write_icns(path, png_for_size):
     Path(path).write_bytes(b"icns" + struct.pack(">I", len(parts) + 8) + parts)
 
 
+# ---------------------------------------------------------------- design specs
+
+INK = "#0B2239"
+GUIDE = "#e0457b"   # construction lines
+GRID = "#c9d6df"
+FONT = "Outfit, 'Segoe UI', Helvetica, Arial, sans-serif"
+
+
+def label(x, y, text, size=13, anchor="start", fill=INK, weight=400):
+    return (
+        f'<text x="{x:.1f}" y="{y:.1f}" font-family="{FONT}" font-size="{size}" font-weight="{weight}" '
+        f'text-anchor="{anchor}" fill="{fill}">{text}</text>'
+    )
+
+
+def line(x1, y1, x2, y2, colour=GUIDE, w=1.5, dash=None):
+    d = f' stroke-dasharray="{dash}"' if dash else ""
+    return f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{colour}" stroke-width="{w}"{d}/>'
+
+
+def dim(x1, y1, x2, y2, text, side=1, size=13):
+    """A dimension line with end ticks and a label (pixel coordinates). side picks the label side."""
+    horizontal = abs(y1 - y2) < 0.01
+    out = line(x1, y1, x2, y2, GUIDE, 1.5)
+    if horizontal:
+        out += line(x1, y1 - 5, x1, y1 + 5) + line(x2, y2 - 5, x2, y2 + 5)
+        out += label((x1 + x2) / 2, y1 + side * 18, text, size, "middle", GUIDE, 600)
+    else:
+        out += line(x1 - 5, y1, x1 + 5, y1) + line(x2 - 5, y2, x2 + 5, y2)
+        out += label(x1 + side * 10, (y1 + y2) / 2 + 5, text, size, "start" if side > 0 else "end", GUIDE, 600)
+    return out
+
+
+def grid(ox, oy, S, n=128, step=8):
+    out = ""
+    for i in range(0, n + 1, step):
+        major = i % 32 == 0
+        c, w = ("#9fb3c1", 1.2) if major else (GRID, 0.8)
+        out += line(ox + i * S, oy, ox + i * S, oy + n * S, c, w) + line(ox, oy + i * S, ox + n * S, oy + i * S, c, w)
+    return out
+
+
+def spec_head(width, title, sub, height=900):
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {width} {height}">'
+        f'<rect width="{width}" height="{height}" fill="#ffffff"/>'
+        + label(48, 62, title, 30, weight=700)
+        + label(48, 90, sub, 15, fill="#58708a")
+    )
+
+
+def spec_construction():
+    S, ox, oy = 5.6, 70, 150
+    px = lambda u: ox + u * S
+    py = lambda u: oy + u * S
+    body = grid(ox, oy, S)
+    # the mark, drawn translucent so the guides show through
+    body += f'<g transform="translate({ox} {oy}) scale({S})" opacity="0.88">{mark_body(TEAL, 0.55)}</g>'
+    # centre lines of the P stroke and the baseline / cap line
+    body += line(px(32), py(10), px(32), py(100), GUIDE, 1.2, "5 4")
+    body += line(px(10), py(25), px(100), py(25), GUIDE, 1.2, "5 4")
+    body += line(px(10), py(85), px(116), py(85), GUIDE, 1.2, "5 4")
+    body += line(px(10), py(67), px(100), py(67), GUIDE, 1.2, "5 4")
+    # the bowl: centre-line circle, outer and inner edges
+    cx, cy = px(60), py(46)
+    for r, d in ((21, None), (28, "2 4"), (14, "2 4")):
+        body += f'<circle cx="{cx}" cy="{cy}" r="{r * S}" fill="none" stroke="{GUIDE}" stroke-width="1.2"' + (f' stroke-dasharray="{d}"' if d else "") + "/>"
+    body += f'<circle cx="{cx}" cy="{cy}" r="3" fill="{GUIDE}"/>'
+    body += f'<circle cx="{px(102)}" cy="{py(85)}" r="{8 * S}" fill="none" stroke="{GUIDE}" stroke-width="1.2" stroke-dasharray="2 4"/>'
+    # measurements
+    body += dim(px(25), py(104), px(39), py(104), "14 stem", -1)
+    body += dim(px(94), py(100), px(110), py(100), "16 dot", 1)
+    body += dim(px(28), py(122), px(92), py(122), "wave 64 = 4 half-waves of 16", 1)
+    body += dim(px(25), py(5), px(88), py(5), "63 wide", -1)
+    body += dim(px(118), py(18), px(118), py(92), "74 tall", 1)
+    body += label(px(60), py(46) - 6, "r 21", 13, "middle", GUIDE, 700) 
+    body += label(px(60) + 28 * S + 8, py(46) - 28 * S + 4, "outer 28", 12, "start", GUIDE)
+    right = 70 + 128 * S + 120
+    notes = [
+        ("Unit", "The mark is built on a 128 x 128 grid. One stroke is 14 units."),
+        ("P", "A monoline capital: stem 14, bowl centre-line radius 21 (1.5 strokes), round caps and joins."),
+        ("Dot", "Radius 8 (a little more than half a stroke), sits on the baseline at x = 102."),
+        ("Wave", "Four half-waves, 7 thick (half a stroke), 16 long, 55 % opacity, 31 below the baseline."),
+        ("Colour", "Teal #0E7C86 on light. Lagoon #5FD0C8 on dark. White or black in one colour."),
+    ]
+    y = 190
+    for head, text in notes:
+        body += label(right, y, head, 15, weight=700, fill=TEAL)
+        words, line_, ly = text.split(), "", y + 22
+        for w in words:
+            if len(line_ + w) > 38:
+                body += label(right, ly, line_, 14, fill=INK)
+                line_, ly = "", ly + 20
+            line_ += w + " "
+        body += label(right, ly, line_, 14, fill=INK)
+        y = ly + 44
+    width = right + 360
+    return spec_head(width, "Mark construction", "Grid of 128 units. Pink lines are construction lines; the mark is drawn over them.") + body + "</svg>"
+
+
+def spec_icon():
+    S, ox, oy = 5.6, 70, 150
+    px = lambda u: ox + u * S
+    py = lambda u: oy + u * S
+    body = f'<g transform="translate({ox} {oy}) scale({S})">{badge(TEAL, WHITE, 0.6)}</g>'
+    body += grid(ox, oy, S, step=16)
+    # corner radius: the circle that makes the corner
+    body += f'<circle cx="{px(28)}" cy="{py(28)}" r="{28 * S}" fill="none" stroke="{GUIDE}" stroke-width="1.5" stroke-dasharray="4 4"/>'
+    body += line(px(28), py(0), px(28), py(28), GUIDE, 1.5) + line(px(0), py(28), px(28), py(28), GUIDE, 1.5)
+    body += label(px(28) + 8, py(14) + 5, "28", 14, "start", GUIDE, 700)
+    # content box: the mark at 80 %
+    body += f'<rect x="{px(12.8)}" y="{py(12.8)}" width="{102.4 * S}" height="{102.4 * S}" fill="none" stroke="{LAGOON}" stroke-width="1.8" stroke-dasharray="6 4"/>'
+    body += dim(px(0), py(135), px(12.8), py(135), "12.8", 1, 12)
+    body += dim(px(12.8), py(135), px(115.2), py(135), "mark at 80 % = 102.4", 1, 12)
+    # inscribed circle and centre cross
+    body += f'<circle cx="{px(64)}" cy="{py(64)}" r="{64 * S}" fill="none" stroke="{GUIDE}" stroke-width="1" stroke-dasharray="2 5"/>'
+    body += line(px(64), py(0), px(64), py(128), GUIDE, 1, "3 5") + line(px(0), py(64), px(128), py(64), GUIDE, 1, "3 5")
+    right = 70 + 128 * S + 90
+    body += label(right, 190, "App icon", 18, weight=700, fill=TEAL)
+    for i, t in enumerate(("Rounded square, corner radius 28 of 128 (21.9 %).",
+                           "The mark fills 80 %, nudged half a unit right",
+                           "and two down so the wave sits in the optical centre.",
+                           "Teal tile, white mark, wave at 60 %.",
+                           "Dark: Deep Sea tile, Lagoon mark.")):
+        body += label(right, 218 + i * 22, t, 13)
+    # variants
+    variants = (
+        ("Apple touch", badge(TEAL, WHITE, 0.6, flat=True, scale=0.74), "square, mark 74 %, the OS rounds it", False),
+        ("Maskable", badge(TEAL, WHITE, 0.6, flat=True, scale=0.6), "mark 60 %, inside the 80 % safe circle", True),
+        ("Avatar", '<clipPath id="spec-av"><circle cx="64" cy="64" r="64"/></clipPath><g clip-path="url(#spec-av)">' + badge(TEAL, WHITE, 0.6, flat=True, scale=0.7) + "</g>", "circle crop, mark 70 %", False),
+    )
+    t, vs = 150, 160
+    for i, (name, art, note, safe) in enumerate(variants):
+        x, y = right + i * (vs + 60), 400
+        body += f'<g transform="translate({x} {y}) scale({vs / 128})">{art}</g>'
+        if safe:
+            body += f'<circle cx="{x + vs / 2}" cy="{y + vs / 2}" r="{vs * 0.4}" fill="none" stroke="{LAGOON}" stroke-width="1.8" stroke-dasharray="5 4"/>'
+        body += label(x, y + vs + 26, name, 14, weight=700)
+        for j, part in enumerate(note.split(", ")):
+            body += label(x, y + vs + 46 + j * 16, part, 11, fill="#58708a")
+    width = right + 3 * (vs + 60)
+    return spec_head(width, "App icon construction", "Corner radius, safe area and the three variants. Pink: construction. Dashed lagoon: safe area.", 960) + body + "</svg>"
+
+
+def spec_lockup():
+    k = 3.4
+    ox, oy = 150, 300
+    name, adv = text_path("pelago", TEAL, NAME_X, NAME_BASE, NAME_SIZE)
+    width_u = NAME_X + adv + 6
+    x = 28  # clear space: two strokes, also the icon's corner radius
+    px = lambda u: ox + u * k
+    py = lambda u: oy + u * k
+    body = f'<g transform="translate({ox} {oy}) scale({k})">{mark_body(INK, 0.55)}{name.replace(TEAL, INK)}</g>'
+    # art box and clear-space box
+    body += f'<rect x="{px(0)}" y="{py(0)}" width="{width_u * k}" height="{128 * k}" fill="none" stroke="{GUIDE}" stroke-width="1.2"/>'
+    body += f'<rect x="{px(-x)}" y="{py(-x)}" width="{(width_u + 2 * x) * k}" height="{(128 + 2 * x) * k}" fill="none" stroke="{LAGOON}" stroke-width="1.8" stroke-dasharray="7 5"/>'
+    for (a, b) in ((-x, -x), (width_u, -x), (-x, 128), (width_u, 128)):
+        body += f'<rect x="{px(a)}" y="{py(b)}" width="{x * k}" height="{x * k}" fill="{LAGOON}" opacity="0.25"/>'
+    body += dim(px(-x), py(-x) - 20, px(0), py(-x) - 20, "x", -1)
+    body += label(px(width_u / 2), py(-x) - 30, "x = 28 units: two strokes, the same as the icon corner radius", 13, "middle", GUIDE, 600)
+    # mark to name gap, name height
+    body += dim(px(110), py(104), px(NAME_X), py(104), "20", 1, 12)
+    body += dim(px(width_u) + 48 + x * k, py(0), px(width_u) + 48 + x * k, py(128), "128", 1)
+    # minimum sizes
+    y = oy + (128 + x) * k + 70
+    body += label(70, y - 18, "Smallest sizes", 18, weight=700, fill=TEAL)
+    sizes = ((16, "mark 16 px"), (24, "mark 24 px"), (32, "badge 32 px"), (64, "badge 64 px"))
+    cx = 70
+    for s, text in sizes:
+        art = mark_body(INK, 0.55) if "mark" in text else badge(TEAL, WHITE, 0.6)
+        body += f'<svg x="{cx}" y="{y}" width="{s}" height="{s}" viewBox="0 0 128 128">{art}</svg>'
+        body += label(cx, y + 64 + 24, text, 12, fill="#58708a")
+        cx += max(s, 80) + 40
+    lw = 140
+    body += f'<svg x="{cx + 20}" y="{y}" width="{lw}" height="{lw * 128 / width_u:.1f}" viewBox="0 0 {width_u:.0f} 128">{mark_body(INK, 0.55)}{name.replace(TEAL, INK)}</svg>'
+    body += label(cx + 20, y + 64 + 24, "lockup, 140 px wide is the minimum", 12, fill="#58708a")
+    body += label(70, y + 130, "The wave is the first thing to vanish at small sizes. Under 24 px prefer the badge to the bare mark.", 13)
+    return spec_head(int(px(width_u) + x * k + 140), "Lockup, clear space and minimum size", "Keep x clear on every side. Pink: artwork bounds. Dashed lagoon: clear space.", int(y + 190)) + body + "</svg>"
+
+
+def specs():
+    return {"spec/mark-construction.svg": spec_construction(), "spec/icon-construction.svg": spec_icon(), "spec/lockup-clear-space.svg": spec_lockup()}
+
+
 # ---------------------------------------------------------------- main
 
 def write_all(files):
@@ -400,7 +584,7 @@ def main():
     args = ap.parse_args()
 
     svgs = {}
-    for part in (lockups(), icons(), file_icons(), social()):
+    for part in (lockups(), icons(), file_icons(), social(), specs()):
         svgs.update(part)
     write_all(svgs)
     write_all({"icon/sprite.svg": sprite(svgs)})
@@ -435,6 +619,8 @@ def main():
         job(rel, rel[:-4] + "-128.png", 128)
     for n, w, h, d, t in SOCIAL:
         job(f"social/{n}.svg", f"social/{n}.png", w, transparent=False)
+    for f in sorted(glob.glob(str(BRAND / "spec/*.svg"))):
+        job(os.path.relpath(f, BRAND).replace(os.sep, "/"), os.path.relpath(f, BRAND).replace(os.sep, "/")[:-4] + ".png", 1600, transparent=False)
 
     with ThreadPoolExecutor(4) as pool:
         for _ in pool.map(lambda a: export_png(chrome, *a), jobs):
