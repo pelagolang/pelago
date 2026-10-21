@@ -1,4 +1,4 @@
-//! Writes a static ELF64 executable for Linux x86-64.
+//! Writes a static ELF64 executable for Linux x86-64 or AArch64.
 //!
 //! Layout (one file, two loadable segments, page aligned):
 //!
@@ -11,9 +11,12 @@
 //! ```
 
 use super::x86::{Asm, SectAddrs};
+use super::Arch;
 
 pub const BASE: u64 = 0x40_0000;
 const PAGE: u64 = 0x1000;
+/// AArch64 kernels run with 4, 16 or 64 KiB pages: segments are aligned to the largest.
+const PAGE_A64: u64 = 0x1_0000;
 const EHDR: u64 = 64;
 const PHDR: u64 = 56;
 /// Where the code starts in the file: after the header and three program headers.
@@ -64,10 +67,21 @@ fn align_up(v: u64, a: u64) -> u64 {
 
 /// The addresses of the sections for the given sizes.
 pub fn layout(text_len: usize, rodata_len: usize, data_len: usize) -> Layout {
+    layout_for(Arch::X86_64, text_len, rodata_len, data_len)
+}
+
+fn page(arch: Arch) -> u64 {
+    match arch {
+        Arch::X86_64 => PAGE,
+        Arch::Aarch64 => PAGE_A64,
+    }
+}
+
+pub fn layout_for(arch: Arch, text_len: usize, rodata_len: usize, data_len: usize) -> Layout {
     let text = BASE + TEXT_OFF;
     let rodata = align_up(text + text_len as u64, 16);
     let seg1_end = rodata + rodata_len as u64;
-    let data = align_up(seg1_end, PAGE);
+    let data = align_up(seg1_end, page(arch));
     Layout {
         text,
         rodata,
@@ -104,8 +118,49 @@ pub fn write(
     bss: usize,
     syms: &[Symbol],
 ) -> Result<Vec<u8>, String> {
-    let lay = layout(asm.code.len(), rodata.bytes.len(), data.bytes.len());
-    let text = asm.finish(SectAddrs {
+    write_with(
+        Arch::X86_64,
+        asm.code.len(),
+        |a| asm.finish(a),
+        rodata,
+        data,
+        bss,
+        syms,
+    )
+}
+
+/// The same for AArch64 code.
+pub fn write_a64(
+    asm: &super::a64::Asm,
+    rodata: &Blob,
+    data: &Blob,
+    bss: usize,
+    syms: &[Symbol],
+) -> Result<Vec<u8>, String> {
+    write_with(
+        Arch::Aarch64,
+        asm.code.len(),
+        |a| asm.finish(a),
+        rodata,
+        data,
+        bss,
+        syms,
+    )
+}
+
+/// `finish` turns the code into its final bytes once the addresses of the sections are known.
+fn write_with(
+    arch: Arch,
+    code_len: usize,
+    finish: impl FnOnce(SectAddrs) -> Result<Vec<u8>, String>,
+    rodata: &Blob,
+    data: &Blob,
+    bss: usize,
+    syms: &[Symbol],
+) -> Result<Vec<u8>, String> {
+    let align = page(arch);
+    let lay = layout_for(arch, code_len, rodata.bytes.len(), data.bytes.len());
+    let text = finish(SectAddrs {
         text: lay.text,
         rodata: lay.rodata,
         data: lay.data,
@@ -120,7 +175,10 @@ pub fn write(
     w.0.extend_from_slice(&[0x7F, b'E', b'L', b'F', 2, 1, 1, 0]);
     w.0.extend_from_slice(&[0; 8]);
     w.u16(2); // executable
-    w.u16(62); // x86-64
+    w.u16(match arch {
+        Arch::X86_64 => 62,
+        Arch::Aarch64 => 183,
+    });
     w.u32(1);
     w.u64(lay.text); // entry
     w.u64(EHDR); // program headers
@@ -146,7 +204,7 @@ pub fn write(
             w.u64(memsz);
             w.u64(align);
         };
-    phdr(&mut w, 5, 0, BASE, seg1_size, seg1_size, PAGE);
+    phdr(&mut w, 5, 0, BASE, seg1_size, seg1_size, align);
     phdr(
         &mut w,
         6,
@@ -154,7 +212,7 @@ pub fn write(
         lay.data,
         data.bytes.len() as u64,
         data.bytes.len() as u64 + bss as u64,
-        PAGE,
+        align,
     );
     // PT_GNU_STACK with flags 6 (read, write; no execute)
     w.u32(0x6474_E551);

@@ -690,7 +690,6 @@ fn vectors_agree_with_integers_in_the_interpreter() {
     assert_eq!((r.result, r.leaked), (Ok(Val::int(0)), 0));
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn vectors_agree_with_integers_natively() {
     use crate::native::{exec, gen, Os};
@@ -703,6 +702,9 @@ fn vectors_agree_with_integers_natively() {
         (true, 2),
         (true, 4),
     ] {
+        if !exec::can_run(Os::Linux) {
+            break;
+        }
         gen::REG_LIMIT.with(|l| l.set(limit));
         let opts = gen::Options {
             leak_check: true,
@@ -717,5 +719,8 @@ fn vectors_agree_with_integers_natively() {
         };
         let r = exec::run_image(Os::Linux, &image).unwrap();
         assert_eq!((r.err.as_str(), r.code), ("", 0), "({regalloc}, {limit})");
+    }
+    if let Some(r) = exec::build_and_run_a64(&m, true) {
+        assert_eq!((r.err.as_str(), r.code), ("", 0), "AArch64");
     }
 }

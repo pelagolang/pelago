@@ -452,7 +452,18 @@ fn native_build(
         }
         None => pelago::native::Os::host().unwrap_or(pelago::native::Os::Linux),
     };
-    if !build && Some(os) != pelago::native::Os::host() {
+    let arch = match flags.iter().find_map(|f| f.strip_prefix("--arch=")) {
+        Some("x86_64") | Some("x86-64") => pelago::native::Arch::X86_64,
+        Some("aarch64") | Some("arm64") => pelago::native::Arch::Aarch64,
+        Some(other) => {
+            eprintln!("unknown architecture `{other}` (use --arch=x86_64 or --arch=aarch64)");
+            std::process::exit(2);
+        }
+        None => pelago::native::Arch::host().unwrap_or(pelago::native::Arch::X86_64),
+    };
+    if !build
+        && (Some(os) != pelago::native::Os::host() || Some(arch) != pelago::native::Arch::host())
+    {
         eprintln!("this program was built for another system; use `pelago build` and run it there");
         std::process::exit(2);
     }
@@ -461,7 +472,11 @@ fn native_build(
         target: os,
         regalloc: !flags.contains(&"--no-regalloc"),
     };
-    let image = match pelago::native::gen::compile(module, "main", &opts) {
+    let compile = match arch {
+        pelago::native::Arch::X86_64 => pelago::native::gen::compile,
+        pelago::native::Arch::Aarch64 => pelago::native::gen_a64::compile,
+    };
+    let image = match compile(module, "main", &opts) {
         Ok(i) => i,
         Err(e) => {
             eprintln!("native build failed: {e}");

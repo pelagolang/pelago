@@ -1,6 +1,6 @@
 Id: S-07
 Title: `pelago fmt` and LSP formatting
-Column: Doing (all stages built)
+Column: Done (all stages built and merged)
 Order: -
 Depends on: parser comment-keeping (step F1); S-06 for the editor side
 Size: L, in stages

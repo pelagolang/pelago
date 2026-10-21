@@ -19,8 +19,8 @@ fn every_encoding_matches_the_assembler() {
 }
 
 /// When `as` and `objcopy` are installed, ask them again (the golden bytes could be stale). Only on
-/// Linux: the tools that come with other systems may default to other settings.
-#[cfg(target_os = "linux")]
+/// Linux on x86-64: the tools that come with other systems may default to other settings.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn the_installed_assembler_agrees() {
     let have = |tool: &str| {
@@ -503,6 +503,498 @@ fn slots_read_as_zero_unless_overwritten() {
             (r.out.as_str(), r.err.as_str(), r.code),
             ("3:", "", 0),
             "regalloc {regalloc}"
+        );
+    }
+    if let Some(r) = super::exec::build_and_run_a64(&m, false) {
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("3:", "", 0),
+            "AArch64"
+        );
+    }
+}
+
+// ---- AArch64 encoder (card A-10, stage R1) ----------------------------------------------------------
+
+fn words(bytes: &[u8]) -> String {
+    bytes
+        .chunks(4)
+        .map(|w| w.iter().map(|b| format!("{b:02x}")).collect::<String>())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// `a.code` as the little-endian words in the golden file's notation (grouped by instruction word).
+fn a64_words(build: fn(&mut super::a64::Asm)) -> String {
+    let mut a = super::a64::Asm::new();
+    build(&mut a);
+    let code = a
+        .finish(super::a64::SectAddrs {
+            text: 0,
+            rodata: 0,
+            data: 0,
+            idata: 0,
+        })
+        .unwrap();
+    // The assembler prints the bytes of each word in memory order too.
+    words(&code)
+}
+
+#[test]
+fn every_a64_encoding_matches_the_assembler() {
+    for (text, want, build) in super::a64_golden::golden() {
+        let want = want.split(' ').collect::<Vec<_>>().join("");
+        let got = a64_words(build).split(' ').collect::<Vec<_>>().join("");
+        assert_eq!(got, want, "{text}");
+    }
+}
+
+/// When the AArch64 assembler is installed, ask it again (the golden words could be stale).
+#[cfg(target_os = "linux")]
+#[test]
+fn the_installed_a64_assembler_agrees() {
+    let have = |tool: &str| {
+        std::process::Command::new(tool)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    // On an ARM machine the ordinary tools are the AArch64 ones; elsewhere the cross tools are.
+    let (asm, objcopy) = if cfg!(target_arch = "aarch64") {
+        ("as", "objcopy")
+    } else {
+        ("aarch64-linux-gnu-as", "aarch64-linux-gnu-objcopy")
+    };
+    if !(have(asm) && have(objcopy)) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("pelago-a64as-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (i, (text, _, build)) in super::a64_golden::golden().into_iter().enumerate() {
+        let s = dir.join(format!("c{i}.s"));
+        let o = dir.join(format!("c{i}.o"));
+        let b = dir.join(format!("c{i}.bin"));
+        std::fs::write(&s, format!("{text}\n")).unwrap();
+        let ok = std::process::Command::new(asm)
+            .arg("-o")
+            .arg(&o)
+            .arg(&s)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "as failed on {text}");
+        let ok = std::process::Command::new(objcopy)
+            .args(["-O", "binary", "-j", ".text"])
+            .arg(&o)
+            .arg(&b)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        assert_eq!(
+            words(&std::fs::read(&b).unwrap()),
+            a64_words(build),
+            "{text}"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---- Running real AArch64 executables (natively on ARM, under qemu elsewhere) ------------------------
+
+mod a64_run {
+    pub use super::super::a64::*;
+    use super::super::elf::{self, Blob};
+    use super::super::exec::{self, Ran};
+    use super::super::rt_a64::{self, Runtime};
+    use super::super::{Arch, Os};
+
+    /// A program: the runtime, then `body` as `main` (which may use `x19` to `x22` and must end in
+    /// `ret`; its link register is saved for it).
+    pub fn program(
+        leak: bool,
+        body: impl FnOnce(&mut Asm, &mut Blob, &mut Blob, &Runtime),
+    ) -> Vec<u8> {
+        let (mut a, mut ro, mut data) = (Asm::new(), Blob::default(), Blob::default());
+        let main = a.new_label();
+        let rt = rt_a64::emit(&mut a, &mut ro, &mut data, main, leak);
+        a.bind(main);
+        a.stp_pre(FP, LR, SP, -16);
+        body(&mut a, &mut ro, &mut data, &rt);
+        a.ldp_post(FP, LR, SP, 16);
+        a.ret();
+        elf::write_a64(&a, &ro, &data, 0, &[]).unwrap()
+    }
+
+    /// Runs the image, or `None` where AArch64 programs cannot run.
+    pub fn run(image: &[u8]) -> Option<Ran> {
+        exec::can_run_a64().then(|| exec::run_image_arch(Arch::Aarch64, Os::Linux, image).unwrap())
+    }
+
+    /// Code that writes `text` to standard output.
+    pub fn say(a: &mut Asm, ro: &mut Blob, rt: &Runtime, text: &str) {
+        let off = ro.add(text.as_bytes(), 1);
+        a.mov_ri(X0, 1);
+        a.lea_sect(X1, Sect::Rodata, off);
+        a.mov_ri(X2, text.len() as i64);
+        a.bl(rt.write_fd);
+    }
+}
+
+#[test]
+fn a64_hello_world_is_a_real_executable() {
+    use a64_run::*;
+    let img = program(true, |a, ro, _, rt| say(a, ro, rt, "hello, arm world\n"));
+    assert_eq!(&img[..4], b"\x7fELF");
+    assert_eq!(&img[18..20], &[183, 0], "EM_AARCH64");
+    if let Some(r) = run(&img) {
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("hello, arm world\n", "", 0)
+        );
+    }
+}
+
+#[test]
+fn a64_stop_prints_a_message_and_exits_with_one() {
+    use a64_run::*;
+    let img = program(false, |a, ro, _, rt| {
+        say(a, ro, rt, "before\n");
+        let m = ro.add(b"boom", 1);
+        a.lea_sect(X0, Sect::Rodata, m);
+        a.mov_ri(X1, 4);
+        a.bl(rt.stop);
+    });
+    if let Some(r) = run(&img) {
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("before\n", "stopped: boom\n", 1)
+        );
+    }
+}
+
+#[test]
+fn a64_a_bad_address_is_a_stop_not_a_crash() {
+    use a64_run::*;
+    let img = program(false, |a, ro, _, rt| {
+        say(a, ro, rt, "before\n");
+        a.mov_ri(X0, 8);
+        a.ldr(X1, X0, 0, 8);
+        say(a, ro, rt, "not reached\n");
+    });
+    if let Some(r) = run(&img) {
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("before\n", "stopped: invalid memory access\n", 1)
+        );
+    }
+}
+
+#[test]
+fn a64_running_out_of_stack_is_a_stop() {
+    use a64_run::*;
+    let img = program(false, |a, ro, _, rt| {
+        // Every call pushes a frame record; nothing ever returns.
+        let f = a.new_label();
+        let go = a.new_label();
+        a.b(go);
+        a.bind(f);
+        a.stp_pre(FP, LR, SP, -16);
+        a.bl(f);
+        a.bind(go);
+        a.bl(f);
+        say(a, ro, rt, "not reached\n");
+    });
+    if let Some(r) = run(&img) {
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("", "stopped: stack overflow\n", 1)
+        );
+    }
+}
+
+#[test]
+fn a64_buffered_output_comes_out_before_the_stop_message() {
+    use a64_run::*;
+    let img = program(false, |a, ro, _, rt| {
+        let m = ro.add(b"printed\n", 1);
+        a.lea_sect(X0, Sect::Rodata, m);
+        a.mov_ri(X1, 8);
+        a.bl(rt.print);
+        let m = ro.add(b"boom", 1);
+        a.lea_sect(X0, Sect::Rodata, m);
+        a.mov_ri(X1, 4);
+        a.bl(rt.stop);
+    });
+    if let Some(r) = run(&img) {
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("printed\n", "stopped: boom\n", 1)
+        );
+    }
+}
+
+#[test]
+fn a64_the_allocator_reuses_clears_and_counts() {
+    use a64_run::*;
+    let img = program(true, |a, ro, _, rt| {
+        let (bad, end) = (a.new_label(), a.new_label());
+        // A freed block of the same class comes back, zeroed.
+        a.mov_ri(X0, 100);
+        a.bl(rt.alloc);
+        a.mov_rr(X19, X0);
+        a.mov_ri(X9, 0x55);
+        a.str(X9, X19, 0, 1);
+        a.str(X9, X19, 99, 1);
+        a.mov_rr(X0, X19);
+        a.bl(rt.free);
+        a.mov_ri(X0, 100);
+        a.bl(rt.alloc);
+        a.cmp_rr(X0, X19);
+        a.b_cond(Cond::Ne, bad);
+        a.ldr(X9, X0, 0, 1);
+        a.cbnz(X9, bad);
+        a.ldr(X9, X0, 99, 1);
+        a.cbnz(X9, bad);
+        a.tst_ri(X0, 15);
+        a.b_cond(Cond::Ne, bad);
+        a.bl(rt.free);
+        say(a, ro, rt, "reused\n");
+        // Free of null is fine.
+        a.mov_ri(X0, 0);
+        a.bl(rt.free);
+        // 100,000 small blocks across several chunks, all distinct, then all freed.
+        a.mov_ri(X0, 100_000 * 8);
+        a.bl(rt.alloc);
+        a.mov_rr(X20, X0);
+        a.mov_ri(X21, 0);
+        let (fill, fdone) = (a.new_label(), a.new_label());
+        a.bind(fill);
+        a.mov_ri(X9, 100_000);
+        a.cmp_rr(X21, X9);
+        a.b_cond(Cond::Hs, fdone);
+        a.mov_ri(X0, 40);
+        a.bl(rt.alloc);
+        a.str_idx(X0, X20, X21, 8, true);
+        a.add_ri(X21, X21, 1);
+        a.b(fill);
+        a.bind(fdone);
+        a.mov_ri(X21, 0);
+        let (rel, rdone) = (a.new_label(), a.new_label());
+        a.bind(rel);
+        a.mov_ri(X9, 100_000);
+        a.cmp_rr(X21, X9);
+        a.b_cond(Cond::Hs, rdone);
+        a.ldr_idx(X0, X20, X21, 8, true);
+        a.bl(rt.free);
+        a.add_ri(X21, X21, 1);
+        a.b(rel);
+        a.bind(rdone);
+        a.mov_rr(X0, X20);
+        a.bl(rt.free);
+        say(a, ro, rt, "many\n");
+        a.b(end);
+        a.bind(bad);
+        say(a, ro, rt, "bad\n");
+        a.bind(end);
+    });
+    if let Some(r) = run(&img) {
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("reused\nmany\n", "", 0)
+        );
+    }
+}
+
+#[test]
+fn a64_a_leak_is_reported_with_status_three() {
+    use a64_run::*;
+    let img = program(true, |a, _, _, rt| {
+        a.mov_ri(X0, 24);
+        a.bl(rt.alloc);
+    });
+    if let Some(r) = run(&img) {
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("", "leaked 1 allocation(s)\n", 3)
+        );
+    }
+}
+
+#[test]
+fn a64_large_blocks_grow_in_place_and_keep_their_contents() {
+    use a64_run::*;
+    let img = program(true, |a, ro, _, rt| {
+        let bad = a.new_label();
+        let end = a.new_label();
+        // 4 MiB, marked at both ends, grown to 64 MiB: the marks stay and the new tail is zero.
+        a.mov_ri(X0, 4 << 20);
+        a.bl(rt.alloc);
+        a.mov_rr(X19, X0);
+        a.mov_ri(X9, 0x7B);
+        a.str(X9, X19, 0, 1);
+        a.mov_ri(X10, (4 << 20) - 1);
+        a.str_idx(X9, X19, X10, 1, false);
+        a.mov_rr(X0, X19);
+        a.mov_ri(X1, 64 << 20);
+        a.bl(rt.realloc);
+        a.mov_rr(X19, X0);
+        a.ldr(X9, X19, 0, 1);
+        a.cmp_ri(X9, 0x7B);
+        a.b_cond(Cond::Ne, bad);
+        a.mov_ri(X10, (4 << 20) - 1);
+        a.ldr_idx(X9, X19, X10, 1, false);
+        a.cmp_ri(X9, 0x7B);
+        a.b_cond(Cond::Ne, bad);
+        a.mov_ri(X10, 40 << 20);
+        a.ldr_idx(X9, X19, X10, 1, false);
+        a.cbnz(X9, bad);
+        // A small block grown past its class keeps its bytes (the copying path).
+        a.mov_rr(X0, X19);
+        a.bl(rt.free);
+        a.mov_ri(X0, 40);
+        a.bl(rt.alloc);
+        a.mov_rr(X19, X0);
+        a.mov_ri(X9, 0x42);
+        a.str(X9, X19, 39, 1);
+        a.mov_rr(X0, X19);
+        a.mov_ri(X1, 5000);
+        a.bl(rt.realloc);
+        a.mov_rr(X19, X0);
+        a.ldr(X9, X19, 39, 1);
+        a.cmp_ri(X9, 0x42);
+        a.b_cond(Cond::Ne, bad);
+        a.ldr(X9, X19, 4000, 1);
+        a.cbnz(X9, bad);
+        a.mov_rr(X0, X19);
+        a.bl(rt.free);
+        // Realloc of null allocates.
+        a.mov_ri(X0, 0);
+        a.mov_ri(X1, 64);
+        a.bl(rt.realloc);
+        a.bl(rt.free);
+        say(a, ro, rt, "grown\n");
+        a.b(end);
+        a.bind(bad);
+        say(a, ro, rt, "bad\n");
+        a.bind(end);
+    });
+    if let Some(r) = run(&img) {
+        assert_eq!((r.out.as_str(), r.err.as_str(), r.code), ("grown\n", "", 0));
+    }
+}
+
+/// `fmod` bit by bit against Rust's `%` for the edge cases and 30,000 random pairs.
+#[test]
+fn a64_fmod_is_exact() {
+    use a64_run::*;
+    let mut cases: Vec<(f64, f64)> = Vec::new();
+    let edges = [
+        0.0,
+        -0.0,
+        1.0,
+        -1.0,
+        0.5,
+        2.0,
+        3.0,
+        7.5,
+        -7.5,
+        0.1,
+        0.03,
+        1e300,
+        -1e300,
+        1e-300,
+        5e-324,
+        -5e-324,
+        2.2250738585072014e-308,
+        1.7976931348623157e308,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+        4.9e-320,
+        3e-310,
+        123456789.123,
+        1e15,
+        1e-15,
+    ];
+    for &x in &edges {
+        for &y in &edges {
+            cases.push((x, y));
+        }
+    }
+    let mut s = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = || {
+        s ^= s << 13;
+        s ^= s >> 7;
+        s ^= s << 17;
+        s
+    };
+    for i in 0..30_000 {
+        let (x, y) = (next(), next());
+        // Mix whole random bit patterns with close exponents (the interesting loops) and small ones.
+        let (x, y) = match i % 3 {
+            0 => (f64::from_bits(x), f64::from_bits(y)),
+            1 => (
+                f64::from_bits(x),
+                f64::from_bits((y & 0x800F_FFFF_FFFF_FFFF) | (x & 0x7FF0_0000_0000_0000)),
+            ),
+            _ => (
+                (x % 1_000_000) as f64 / 64.0,
+                (y % 1000) as f64 / 8.0 + 0.125,
+            ),
+        };
+        cases.push((x, y));
+    }
+    let n = cases.len();
+    let img = program(false, |a, ro, _, rt| {
+        // Each entry: x, y and the answer Rust gives; the guest compares bits (any NaN is a NaN).
+        let mut table = Vec::new();
+        for (x, y) in &cases {
+            for v in [*x, *y, *x % *y] {
+                table.extend_from_slice(&v.to_bits().to_le_bytes());
+            }
+        }
+        let t = ro.add(&table, 16);
+        a.lea_sect(X19, Sect::Rodata, t);
+        a.mov_ri(X20, 0);
+        let (top, ok, bad, done) = (a.new_label(), a.new_label(), a.new_label(), a.new_label());
+        a.bind(top);
+        a.mov_ri(X9, n as i64);
+        a.cmp_rr(X20, X9);
+        a.b_cond(Cond::Hs, done);
+        a.ldr_f(V(0), X19, 0, 8);
+        a.ldr_f(V(1), X19, 8, 8);
+        a.bl(rt.fmod);
+        a.ldr(X10, X19, 16, 8);
+        a.fmov_to_gp(true, X9, V(0));
+        a.cmp_rr(X9, X10);
+        a.b_cond(Cond::Eq, ok);
+        // Different bits are fine when both are NaNs.
+        a.fcmp(true, V(0), V(0));
+        a.b_cond(Cond::Vc, bad);
+        a.fmov_from_gp(true, V(1), X10);
+        a.fcmp(true, V(1), V(1));
+        a.b_cond(Cond::Vc, bad);
+        a.bind(ok);
+        a.add_ri(X19, X19, 24);
+        a.add_ri(X20, X20, 1);
+        a.b(top);
+        a.bind(bad);
+        // Say which pair was wrong.
+        a.mov_ri(X0, 1);
+        a.mov_rr(X1, X20);
+        a.bl(rt.write_u64);
+        a.mov_ri(X0, 1);
+        a.bl(rt.exit);
+        a.bind(done);
+        say(a, ro, rt, "exact\n");
+    });
+    if let Some(r) = a64_run::run(&img) {
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("exact\n", "", 0),
+            "the first pair that differs is {:?}",
+            r.out.trim().parse::<usize>().ok().map(|i| cases[i])
         );
     }
 }

@@ -1,6 +1,6 @@
 Id: S-05
 Title: Tree-sitter grammar and the Zed extension
-Column: Review (built and tested as far as a sandbox allows, publishing material prepared; waits for the owner's try-out in VS Code, a licence, and the publish)
+Column: Done (owner)
 Order: -
 Depends on: nothing in the compiler (the syntax is settled); the owner's approval of the tools below
 Size: M for the grammar, S for the extension

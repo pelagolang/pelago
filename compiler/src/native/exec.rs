@@ -5,7 +5,7 @@
 //! `/usr/lib/wine/wine64`) and only when `PELAGO_WINE=1` is set. Tests use [`can_run`] to skip what
 //! this machine cannot do.
 
-use super::Os;
+use super::{Arch, Os};
 use std::path::PathBuf;
 
 pub struct Ran {
@@ -60,10 +60,38 @@ pub fn can_run(os: Os) -> bool {
     }
 }
 
+/// The user-mode emulator for AArch64 programs, when this is not an ARM machine and it is installed
+/// (`apt install qemu-user`).
+fn qemu_a64() -> Option<PathBuf> {
+    if cfg!(target_arch = "aarch64") {
+        return None;
+    }
+    let ok = std::process::Command::new("qemu-aarch64")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success());
+    ok.then(|| PathBuf::from("qemu-aarch64"))
+}
+
+/// Can this machine run AArch64 Linux programs: directly on an ARM Linux machine, or through
+/// `qemu-aarch64` where that is installed?
+pub fn can_run_a64() -> bool {
+    cfg!(all(target_os = "linux", target_arch = "aarch64"))
+        || (cfg!(all(target_os = "linux", target_arch = "x86_64")) && qemu_a64().is_some())
+}
+
 /// Starts the program and waits for it, collecting its output.
 pub fn run_image(os: Os, image: &[u8]) -> Result<Ran, String> {
-    if !can_run(os) {
-        return Err(format!("cannot run {os:?} programs on this machine"));
+    run_image_arch(Arch::X86_64, os, image)
+}
+
+/// The same for an executable of the given processor.
+pub fn run_image_arch(arch: Arch, os: Os, image: &[u8]) -> Result<Ran, String> {
+    let a64 = arch == Arch::Aarch64;
+    if (a64 && (os != Os::Linux || !can_run_a64())) || (!a64 && !can_run(os)) {
+        return Err(format!(
+            "cannot run {arch:?} {os:?} programs on this machine"
+        ));
     }
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -77,7 +105,11 @@ pub fn run_image(os: Os, image: &[u8]) -> Result<Ran, String> {
             .map_err(|e| e.to_string())?;
     }
     let make = || {
-        if os == Os::Windows && !cfg!(windows) {
+        if a64 && qemu_a64().is_some() {
+            let mut c = std::process::Command::new("qemu-aarch64");
+            c.arg(&path);
+            c
+        } else if os == Os::Windows && !cfg!(windows) {
             wine_prefix_ready();
             let mut c = std::process::Command::new(wine().expect("checked by can_run"));
             c.arg(&path)
@@ -118,4 +150,20 @@ pub fn run_image(os: Os, image: &[u8]) -> Result<Ran, String> {
         err,
         code: o.status.code().unwrap_or(-1),
     })
+}
+
+/// Builds the module for AArch64 Linux and runs it (tests): `None` when this machine cannot run such
+/// programs. `PELAGO_SKIP_A64=1` turns the AArch64 column of the tests off (qemu is slow).
+pub fn build_and_run_a64(m: &crate::ir::Module, leak_check: bool) -> Option<Ran> {
+    if std::env::var_os("PELAGO_SKIP_A64").is_some() || !can_run_a64() {
+        return None;
+    }
+    let opts = super::gen::Options {
+        leak_check,
+        target: Os::Linux,
+        regalloc: true,
+    };
+    let image = super::gen_a64::compile(m, "main", &opts)
+        .unwrap_or_else(|e| panic!("the AArch64 build failed: {e}"));
+    Some(run_image_arch(Arch::Aarch64, Os::Linux, &image).unwrap())
 }
