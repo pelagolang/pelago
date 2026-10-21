@@ -223,12 +223,30 @@ pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
     for bi in (0..nb).rev() {
         let (bs, be) = (start[bi], end[bi]);
         let w = block_weight(bi);
-        let mut now = live.live_out[bi].clone();
-        for id in live.live_out[bi].iter() {
+        let mut now = live.live_end[bi].clone();
+        for id in live.live_end[bi].iter() {
             add_range(&mut ranges[id], bs, be);
         }
         for (k, inst) in f.blocks[bi].insts.iter().enumerate().rev() {
             let p = bs + 2 * k as u32;
+            // A branch: what its targets need is live up to here.
+            if inst.flags.has(IFlags::BRANCH) {
+                if inst.flags.has(IFlags::NOFALL) {
+                    now = Bits::new(nphys + nv);
+                }
+                for o in &inst.ops {
+                    if let Operand::Block(t) = o {
+                        for id in live.live_in[*t as usize].iter() {
+                            if !now.contains(id) {
+                                add_range(&mut ranges[id], bs, p + 1);
+                                now.insert(id);
+                            }
+                        }
+                    }
+                }
+            } else if inst.flags.has(IFlags::NOFALL) {
+                now = Bits::new(nphys + nv);
+            }
             let (mut defs, mut uses) = (Vec::new(), Vec::new());
             visit_regs(inst, |r, a| {
                 let id = reg_id(r, nphys);

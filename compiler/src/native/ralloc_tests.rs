@@ -888,3 +888,48 @@ fn the_printer_shows_roles_memory_and_clobbers() {
         "mfunc show:\n  frame0: 16 bytes align 8 Slot\nb0:\n  li %0, #-2\n  add2 %0!, #1\n  load %f1, [frame0+%0*8+4]\n  call @3, a0, a1, r0  ; clobbers r0 r1 a0 a1 t0 r8 f0 f1 f2 f3 f4 f6\n  ret r0\n"
     );
 }
+
+#[test]
+fn a_branch_in_the_middle_of_a_block_keeps_what_its_target_needs() {
+    // b0: x = 7; a = A; b = B; blt a, b -> b2; d = 55; (falls into b1)
+    // b1: r0 = d; ret            b2: r0 = x; ret
+    // x is read only on the taken path, d is made only on the other one: they must not share a register.
+    let t = toy();
+    for (va, vb, want) in [(1, 2, 7), (2, 1, 55)] {
+        let mut f = MFunc {
+            name: "mid".into(),
+            ..MFunc::default()
+        };
+        let (x, a, b, d) = (
+            f.new_vreg(Class::Int),
+            f.new_vreg(Class::Int),
+            f.new_vreg(Class::Int),
+            f.new_vreg(Class::Int),
+        );
+        let (b0, b1, b2) = (f.new_block(), f.new_block(), f.new_block());
+        f.push(b0, MInst::new(LI, vec![Operand::def(x), Operand::Imm(7)]));
+        f.push(b0, MInst::new(LI, vec![Operand::def(a), Operand::Imm(va)]));
+        f.push(b0, MInst::new(LI, vec![Operand::def(b), Operand::Imm(vb)]));
+        f.push(
+            b0,
+            MInst::new(BLT, vec![v(a), v(b), Operand::Block(b2)]).branch(),
+        );
+        f.push(b0, MInst::new(LI, vec![Operand::def(d), Operand::Imm(55)]));
+        f.push(b1, MInst::copy(p(R0), v(d)));
+        f.push(b1, MInst::new(RET, vec![Operand::use_(p(R0))]).nofall());
+        f.push(b2, MInst::copy(p(R0), v(x)));
+        f.push(b2, MInst::new(RET, vec![Operand::use_(p(R0))]).nofall());
+        verify(&f, &t).unwrap();
+        assert_eq!(run(&f, false).unwrap().ret, want);
+        for limit in [usize::MAX, 3, 2, 1, 0] {
+            let mut g = f.clone();
+            allocate(&mut g, &t, limit);
+            assert_eq!(
+                run(&g, true).unwrap().ret,
+                want,
+                "limit {limit}\n{}",
+                g.print(&t)
+            );
+        }
+    }
+}

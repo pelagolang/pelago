@@ -12,9 +12,11 @@
 //!   [`Role::EarlyDef`] is written before the instruction has read everything, so it must not share a
 //!   register with a use. Rule 1 of `a11-work-items.md` is the default: a `Def` may take the register
 //!   of a `Use` that dies in the same instruction, so an emitter must read every operand before it writes.
-//! * **Control flow.** Branch instructions ([`IFlags::BRANCH`]) sit at the end of a block and name their
-//!   targets as [`Operand::Block`]; an instruction with [`IFlags::NOFALL`] (a jump, a return, a stop)
-//!   ends the block, and any other block falls into the next one in the list.
+//! * **Control flow.** Branch instructions ([`IFlags::BRANCH`]) name their targets as
+//!   [`Operand::Block`] and may sit anywhere in a block (a conditional branch, then the copies for the
+//!   edge that falls through); what is live at the branch is what the target needs. An instruction with
+//!   [`IFlags::NOFALL`] (a jump, a return, a stop) ends the block, and any other block falls into the
+//!   next one in the list.
 //! * **Fixed registers** are written with physical operands (`rdx:rax` for a division, `cl` for a
 //!   shift, the argument registers for a call). The allocator keeps every virtual register out of a
 //!   physical register while it is live; calls name the registers they destroy in `clobbers`.
@@ -63,6 +65,9 @@ pub struct FrameId(pub u32);
 pub enum FrameKind {
     Slot,
     Spill,
+    /// The arguments the caller left on the stack, above the frame: the emitter gives it an
+    /// address, nothing is reserved for it.
+    Incoming,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -224,6 +229,8 @@ impl MInst {
 #[derive(Clone, Default, Debug)]
 pub struct MBlock {
     pub insts: Vec<MInst>,
+    /// The block a jump back leads to: the emitter may align it.
+    pub loop_head: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -235,6 +242,8 @@ pub struct MFunc {
     pub frame: Vec<FrameObj>,
     /// Filled in by the allocator: the callee-saved registers the function writes.
     pub used_callee_saved: RegSet,
+    /// Texts the code refers to by number (the messages of `stop`).
+    pub strings: Vec<String>,
 }
 
 impl MFunc {
@@ -403,55 +412,72 @@ pub fn reg_id(r: Reg, nphys: usize) -> usize {
 }
 
 pub struct Liveness {
+    /// Registers live at the start of each block.
     pub live_in: Vec<Bits>,
-    pub live_out: Vec<Bits>,
+    /// Registers live at the end of each block: what the next block needs, when control falls into it.
+    pub live_end: Vec<Bits>,
+}
+
+/// The registers live before instruction `i` given those live after it (`now`); `live_in` holds the
+/// sets of the branch targets.
+pub fn step_back(i: &MInst, now: &mut Bits, live_in: &[Bits], nphys: usize) {
+    if i.flags.has(IFlags::NOFALL) && !i.flags.has(IFlags::BRANCH) {
+        // A return or a stop: nothing after it.
+        for w in now.0.iter_mut() {
+            *w = 0;
+        }
+    }
+    if i.flags.has(IFlags::BRANCH) {
+        if i.flags.has(IFlags::NOFALL) {
+            for w in now.0.iter_mut() {
+                *w = 0;
+            }
+        }
+        for o in &i.ops {
+            if let Operand::Block(t) = o {
+                now.union(&live_in[*t as usize]);
+            }
+        }
+    }
+    let (mut uses, mut defs) = (Vec::new(), Vec::new());
+    visit_regs(i, |r, a| match a {
+        Acc::Use => uses.push(reg_id(r, nphys)),
+        _ => defs.push(reg_id(r, nphys)),
+    });
+    for d in defs {
+        now.remove(d);
+    }
+    for u in uses {
+        now.insert(u);
+    }
 }
 
 /// Registers live at the start and the end of each block (ids as in [`reg_id`]).
 pub fn liveness(f: &MFunc, nphys: usize) -> Liveness {
     let n = nphys + f.vclass.len();
     let nb = f.blocks.len();
-    let mut gen: Vec<Bits> = (0..nb).map(|_| Bits::new(n)).collect();
-    let mut kill: Vec<Bits> = (0..nb).map(|_| Bits::new(n)).collect();
-    for (bi, b) in f.blocks.iter().enumerate() {
-        for inst in &b.insts {
-            let (mut uses, mut defs) = (Vec::new(), Vec::new());
-            visit_regs(inst, |r, a| match a {
-                Acc::Use => uses.push(reg_id(r, nphys)),
-                _ => defs.push(reg_id(r, nphys)),
-            });
-            for u in uses {
-                if !kill[bi].contains(u) {
-                    gen[bi].insert(u);
-                }
-            }
-            for d in defs {
-                kill[bi].insert(d);
-            }
-        }
-    }
-    let succ: Vec<Vec<usize>> = (0..nb).map(|b| successors(f, b)).collect();
     let mut live_in: Vec<Bits> = (0..nb).map(|_| Bits::new(n)).collect();
-    let mut live_out: Vec<Bits> = (0..nb).map(|_| Bits::new(n)).collect();
+    let mut live_end: Vec<Bits> = (0..nb).map(|_| Bits::new(n)).collect();
     loop {
         let mut changed = false;
         for bi in (0..nb).rev() {
-            for &s in &succ[bi] {
-                let (a, b) = (live_in[s].clone(), &mut live_out[bi]);
-                changed |= b.union(&a);
+            let b = &f.blocks[bi];
+            let falls = b.insts.last().is_none_or(|i| !i.flags.has(IFlags::NOFALL));
+            let mut now = Bits::new(n);
+            if falls && bi + 1 < nb {
+                now.union(&live_in[bi + 1]);
             }
-            let mut li = live_out[bi].clone();
-            for (w, k) in li.0.iter_mut().zip(&kill[bi].0) {
-                *w &= !k;
+            live_end[bi] = now.clone();
+            for i in b.insts.iter().rev() {
+                step_back(i, &mut now, &live_in, nphys);
             }
-            li.union(&gen[bi]);
-            if li != live_in[bi] {
-                live_in[bi] = li;
+            if now != live_in[bi] {
+                live_in[bi] = now;
                 changed = true;
             }
         }
         if !changed {
-            return Liveness { live_in, live_out };
+            return Liveness { live_in, live_end };
         }
     }
 }
@@ -473,18 +499,11 @@ pub fn verify(f: &MFunc, t: &dyn Target) -> Result<(), String> {
         Reg::Phys(p) => t.regs().get(p.0 as usize).map(|i| i.class),
     };
     for (bi, b) in f.blocks.iter().enumerate() {
-        let mut tail = false;
         for (k, i) in b.insts.iter().enumerate() {
             if i.op >= 2 && i.op < FIRST_TARGET_OP {
                 return err(bi, k, "an opcode below 16 that is not COPY or PARCOPY");
             }
             let is_branch = i.flags.has(IFlags::BRANCH);
-            if tail && !is_branch {
-                return err(bi, k, "an instruction after a branch");
-            }
-            if is_branch {
-                tail = true;
-            }
             if i.flags.has(IFlags::NOFALL) && k + 1 != b.insts.len() {
                 return err(bi, k, "an instruction after one that never falls through");
             }
