@@ -62,6 +62,7 @@ pub mod gen;
 pub mod gen_a64;
 pub mod pe;
 pub mod regs;
+pub mod regs_a64;
 pub mod rt;
 pub mod rt_a64;
 pub mod x86;
