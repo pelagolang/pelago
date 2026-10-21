@@ -53,6 +53,8 @@ The simple generator is about 700 lines of templates. Two ways to support a seco
 - `pelago build --arch=aarch64 [-o out] <path>` builds it (`--arch=x86_64` is the other choice; the default is the machine the compiler runs on).
 - Tests: every differential test that ran the x86-64 build now also runs the AArch64 one (plain and optimised IR) and compares the output, the stop messages and the exit status with the interpreter; nine runtime tests in `native/tests.rs`. They run natively on ARM and under `qemu-aarch64` elsewhere (`apt install qemu-user binutils-aarch64-linux-gnu`); `PELAGO_SKIP_A64=1` turns that column off. CI: the `check` job installs both, and the new `arm` job runs the suite on `ubuntu-24.04-arm`.
 
+**Measured (2026-10-21, GitHub ARM runners, `bench-arm` workflow).** Geometric mean of Pelago against C -O2 over 11 programs: Linux 1.52x, macOS 1.72x, Windows 1.44x (against Rust -O: 1.44x, 1.50x, 1.33x). `tak` is at or below C everywhere; `collatz` is the worst (2.4x to 3.1x). A large block grows by copying on macOS and Windows: `list_sum` (a 40 MB list) is 3.75x of C on macOS against 1.24x on Linux, which has `mremap`. Full table: the run of `bench-arm`.
+
 **Open.** The numbers against C on real ARM hardware (R3 is built; the weekly benchmark runs on x86 only); nothing else for R4. A function bigger than 1 MiB of code is refused (conditional branches reach 1 MiB).
 
 # Questions for the owner (answered)
