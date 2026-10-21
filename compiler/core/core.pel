@@ -103,6 +103,7 @@ pub ext fn rt_to_char(n: int) -> char
 pub ext fn rt_show_to<T>(src: ptr, out: ptr)
 pub ext fn rt_show_item_to<T>(src: ptr, out: ptr)
 pub ext fn rt_size_of<T>() -> int
+pub ext fn rt_is_int<T>() -> bool
 pub ext fn rt_addr_of<T>(x: T) -> ptr
 pub ext fn rt_write<T>(dst: ptr, sink value: T)
 pub ext fn rt_read<T>(src: ptr) -> T
@@ -206,6 +207,81 @@ fn rt_sort(base: ptr, n: int, size: int, cmp: ptr) {
     rt_free(tmp)
 }
 
+//~ Sorts `n` integers at `base`: insertion sort when short, else a radix sort on the eight bytes (the
+//~ order of equal integers cannot be seen, so the result is the same as for any stable sort).
+fn rt_sort_int(base: ptr, n: int) {
+    if n < 2 { return }
+    if n <= 48 {
+        var i = 1
+        while i < n {
+            const x = rt_load_int(rt_offset(base, i * 8))
+            var j = i
+            while j > 0 && rt_load_int(rt_offset(base, (j - 1) * 8)) > x {
+                rt_store_int(rt_offset(base, j * 8), rt_load_int(rt_offset(base, (j - 1) * 8)))
+                j -= 1
+            }
+            rt_store_int(rt_offset(base, j * 8), x)
+            i += 1
+        }
+        return
+    }
+    const tmp = rt_alloc(n * 8)
+    const counts = rt_alloc(16384)
+    var z = 0
+    while z < 2048 { rt_store_int(rt_offset(counts, z * 8), 0); z += 1 }
+    /// One pass over the data counts every byte position.
+    var i = 0
+    while i < n {
+        const x = rt_load_int(rt_offset(base, i * 8))
+        var p = 0
+        while p < 8 {
+            var d = (x >> (p * 8)) & 255
+            if p == 7 { d = d ^ 128 }
+            const c = rt_offset(counts, (p * 256 + d) * 8)
+            rt_store_int(c, rt_load_int(c) +% 1)
+            p += 1
+        }
+        i += 1
+    }
+    var from = base
+    var to = tmp
+    var p = 0
+    while p < 8 {
+        const row = rt_offset(counts, p * 2048)
+        /// A byte position where every integer has the same byte needs no pass.
+        var busy = 0
+        var d = 0
+        var sum = 0
+        while d < 256 {
+            const c = rt_load_int(rt_offset(row, d * 8))
+            if c > 0 { busy += 1 }
+            rt_store_int(rt_offset(row, d * 8), sum)
+            sum = sum +% c
+            d += 1
+        }
+        if busy > 1 {
+            var k = 0
+            while k < n {
+                const x = rt_load_int(rt_offset(from, k * 8))
+                var e = (x >> (p * 8)) & 255
+                if p == 7 { e = e ^ 128 }
+                const c = rt_offset(row, e * 8)
+                const at = rt_load_int(c)
+                rt_store_int(rt_offset(to, at * 8), x)
+                rt_store_int(c, at +% 1)
+                k += 1
+            }
+            const swapped = from
+            from = to
+            to = swapped
+        }
+        p += 1
+    }
+    if rt_addr_int(from) != rt_addr_int(base) { rt_copy(base, from, n * 8) }
+    rt_free(counts)
+    rt_free(tmp)
+}
+
 //~ Is the value at `probe` equal to one of the `size`-byte elements of the list at `h`?
 fn rt_list_contains(h: ptr, probe: ptr, size: int, eq: ptr) -> bool {
     var i = 0
@@ -248,7 +324,11 @@ impl<T: eq> list<T> {
 impl<T: order> list<T> {
     fn sort(inout self) {
         const h = rt_addr_of(self)
-        rt_sort(rt_hdr_data(h), rt_hdr_len(h), rt_size_of<T>(), rt_cmp_fn<T>())
+        if rt_is_int<T>() {
+            rt_sort_int(rt_hdr_data(h), rt_hdr_len(h))
+        } else {
+            rt_sort(rt_hdr_data(h), rt_hdr_len(h), rt_size_of<T>(), rt_cmp_fn<T>())
+        }
     }
 
     fn sorted(self) -> list<T> {
