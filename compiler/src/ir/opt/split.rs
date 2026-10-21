@@ -6,6 +6,9 @@
 use crate::ir::*;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+/// A slot and an offset in it.
+type At = (Value, u32);
+
 struct Info {
     size: u32,
     /// Offset to type of each piece touched.
@@ -13,6 +16,10 @@ struct Info {
     bad: bool,
     /// Whole-slot copies: (instruction, this slot is the destination, the other address, length).
     copies: Vec<(usize, bool, Value, u32)>,
+    /// Copies with another slot: (offset in this slot, length).
+    ranges: Vec<(u32, u32)>,
+    /// Offsets whose piece was widened to hold a wider integer than some access.
+    wide: HashSet<u32>,
 }
 
 pub fn run(f: &mut Func) -> bool {
@@ -35,6 +42,8 @@ pub fn run(f: &mut Func) -> bool {
                             pieces: BTreeMap::new(),
                             bad: false,
                             copies: Vec::new(),
+                            ranges: Vec::new(),
+                            wide: HashSet::new(),
                         },
                     );
                     slot_inst.insert(r, i);
@@ -48,19 +57,31 @@ pub fn run(f: &mut Func) -> bool {
     }
     // Addresses derived from a slot at a constant offset.
     let mut base: HashMap<Value, (Value, u32)> = info.keys().map(|s| (*s, (*s, 0))).collect();
-    for b in &f.blocks {
-        for &i in &b.insts {
-            if let (Op::PtrAdd(a, k), Some(r)) = (&f.insts[i].op, f.insts[i].result) {
-                if let (Some((s, 0)), Some(k)) = (base.get(a).copied(), consts.get(k)) {
-                    if (0..=u32::MAX as i128).contains(k) && info.contains_key(&s) && *a == s {
-                        base.insert(r, (s, *k as u32));
+    // An address derived from a derived address is followed too; the blocks are not in dominance order,
+    // so repeat until nothing is added.
+    loop {
+        let mut grew = false;
+        for b in &f.blocks {
+            for &i in &b.insts {
+                if let (Op::PtrAdd(a, k), Some(r)) = (&f.insts[i].op, f.insts[i].result) {
+                    if let (Some((s, off)), Some(k), false) =
+                        (base.get(a).copied(), consts.get(k), base.contains_key(&r))
+                    {
+                        if let Some(at) = u32::try_from(*k).ok().and_then(|k| off.checked_add(k)) {
+                            base.insert(r, (s, at));
+                            grew = true;
+                        }
                     }
                 }
             }
         }
+        if !grew {
+            break;
+        }
     }
-    // Whole-slot copies between two slots: (the instruction, destination, source, length).
-    let mut slot_copies: Vec<(usize, Value, Value, u32)> = Vec::new();
+    // Copies between two slots: the instruction, then destination slot and offset, source slot and
+    // offset, and the length.
+    let mut slot_copies: Vec<(usize, At, At, u32)> = Vec::new();
     // Every use of those addresses.
     for b in &f.blocks {
         for &i in &b.insts {
@@ -81,7 +102,7 @@ pub fn run(f: &mut Func) -> bool {
                 Op::PtrAdd(a, _) if base.contains_key(a) => {
                     // The derived address itself is fine when it was recognised above.
                     let r = f.insts[i].result;
-                    if !(r.is_some_and(|r| base.contains_key(&r) && base[&r].0 == *a)) {
+                    if !(r.is_some_and(|r| base.contains_key(&r) && base[&r].0 == base[a].0)) {
                         mark_bad(&mut info, base[a].0);
                     }
                 }
@@ -91,16 +112,16 @@ pub fn run(f: &mut Func) -> bool {
                         .copied()
                         .filter(|n| *n >= 0 && *n <= u32::MAX as i128);
                     let (bd, bs) = (base.get(d).copied(), base.get(s).copied());
-                    // Two different slots copied whole: both are split with the same pieces, and the
-                    // copy becomes a load and a store per piece.
-                    if let (Some((sd, 0)), Some((ss, 0)), Some(n)) = (bd, bs, len_c) {
-                        if sd != ss && *d == sd && *s == ss {
-                            slot_copies.push((i, sd, ss, n as u32));
+                    // Two different slots copied: both are split with the same pieces, and the copy
+                    // becomes a load and a store per piece.
+                    if let (Some((sd, od)), Some((ss, os)), Some(n)) = (bd, bs, len_c) {
+                        if sd != ss {
+                            slot_copies.push((i, (sd, od), (ss, os), n as u32));
                             if let Some(inf) = info.get_mut(&sd) {
-                                inf.copies.push((i, true, *s, n as u32));
+                                inf.ranges.push((od, n as u32));
                             }
                             if let Some(inf) = info.get_mut(&ss) {
-                                inf.copies.push((i, false, *d, n as u32));
+                                inf.ranges.push((os, n as u32));
                             }
                             continue;
                         }
@@ -163,19 +184,18 @@ pub fn run(f: &mut Func) -> bool {
     // The two sides of a slot-to-slot copy get each other's pieces.
     loop {
         let mut changed = false;
-        for &(_, d, s, n) in &slot_copies {
-            for (from, to) in [(d, s), (s, d)] {
+        for &(_, (sd, od), (ss, os), n) in &slot_copies {
+            for (from, from_off, to, to_off) in [(sd, od, ss, os), (ss, os, sd, od)] {
                 let pieces: Vec<(u32, IrTy)> = info[&from]
                     .pieces
                     .iter()
-                    .filter(|(o, _)| **o < n)
-                    .map(|(o, t)| (*o, *t))
+                    .filter(|(o, _)| (from_off..from_off + n).contains(*o))
+                    .map(|(o, t)| (*o - from_off + to_off, *t))
                     .collect();
                 for (off, ty) in pieces {
-                    if !info[&to].pieces.contains_key(&off) {
-                        changed = true;
-                    }
+                    let before = info[&to].pieces.get(&off).copied();
                     touch(&mut info, to, off, ty);
+                    changed |= before != info[&to].pieces.get(&off).copied();
                 }
             }
         }
@@ -216,6 +236,21 @@ pub fn run(f: &mut Func) -> bool {
                 ok = false;
             }
         }
+        // Each copy with another slot is tiled by pieces, the last one possibly widened past its end.
+        for &(from, len) in &inf.ranges {
+            let mut at = from;
+            for (off, ty) in inf.pieces.range(from..from + len) {
+                let past = off + ty.size() > from + len;
+                if *off != at || (past && !inf.wide.contains(off)) {
+                    ok = false;
+                    break;
+                }
+                at = off + ty.size();
+            }
+            if at < from + len {
+                ok = false;
+            }
+        }
         // A single piece the size of the slot is no gain unless it is promotable later; still fine.
         if ok {
             todo.push(*s);
@@ -245,6 +280,10 @@ pub fn run(f: &mut Func) -> bool {
         }
         new_insts.insert(at, made);
     }
+    let range_of: HashMap<usize, (At, At, u32)> = slot_copies
+        .iter()
+        .map(|&(i, d, s, n)| (i, (d, s, n)))
+        .collect();
     // Rewrite every block.
     let sp = crate::span::Span::new(0, 0);
     for bi in 0..f.blocks.len() {
@@ -261,7 +300,20 @@ pub fn run(f: &mut Func) -> bool {
                 Op::Load(ty, a) => {
                     if let Some(&(s, off)) = base.get(&a) {
                         if todo_set.contains(&s) {
-                            f.insts[i].op = Op::Load(ty, piece_slot[&(s, off)]);
+                            let pt = info[&s].pieces[&off];
+                            if pt == ty {
+                                f.insts[i].op = Op::Load(ty, piece_slot[&(s, off)]);
+                            } else {
+                                // A narrower integer out of a widened piece.
+                                let wide = f.new_value(pt);
+                                f.insts.push(Inst {
+                                    result: Some(wide),
+                                    op: Op::Load(pt, piece_slot[&(s, off)]),
+                                    span: f.insts[i].span,
+                                });
+                                out.push(f.insts.len() - 1);
+                                f.insts[i].op = Op::Cast(CastKind::Trunc, wide, ty);
+                            }
                         }
                     }
                     out.push(i);
@@ -269,10 +321,95 @@ pub fn run(f: &mut Func) -> bool {
                 Op::Store(a, v) => {
                     if let Some(&(s, off)) = base.get(&a) {
                         if todo_set.contains(&s) {
+                            let pt = info[&s].pieces[&off];
+                            let mut v = v;
+                            if pt != f.ty(v) {
+                                // A narrower integer into a widened piece.
+                                let w = f.new_value(pt);
+                                f.insts.push(Inst {
+                                    result: Some(w),
+                                    op: Op::Cast(CastKind::ZExt, v, pt),
+                                    span: f.insts[i].span,
+                                });
+                                out.push(f.insts.len() - 1);
+                                v = w;
+                            }
                             f.insts[i].op = Op::Store(piece_slot[&(s, off)], v);
                         }
                     }
                     out.push(i);
+                }
+                Op::MemCopy(d, s, _) if range_of.contains_key(&i) => {
+                    let (dst, src, n) = range_of[&i];
+                    let (dst_in, src_in) = (todo_set.contains(&dst.0), todo_set.contains(&src.0));
+                    if !dst_in && !src_in {
+                        out.push(i);
+                        continue;
+                    }
+                    // The pieces of whichever side is split say what to copy.
+                    let (ps, from) = if dst_in {
+                        (dst.0, dst.1)
+                    } else {
+                        (src.0, src.1)
+                    };
+                    let pieces: Vec<(u32, IrTy)> = info[&ps]
+                        .pieces
+                        .range(from..from + n)
+                        .map(|(o, t)| (*o - from, *t))
+                        .collect();
+                    for (rel, ty) in pieces {
+                        let v = f.new_value(ty);
+                        let load = if src_in {
+                            Op::Load(ty, piece_slot[&(src.0, src.1 + rel)])
+                        } else {
+                            let k = f.new_value(IrTy::I64);
+                            f.insts.push(Inst {
+                                result: Some(k),
+                                op: Op::Const(IrTy::I64, Const::Int(rel as i128)),
+                                span: sp,
+                            });
+                            out.push(f.insts.len() - 1);
+                            let p = f.new_value(IrTy::Ptr);
+                            f.insts.push(Inst {
+                                result: Some(p),
+                                op: Op::PtrAdd(s, k),
+                                span: sp,
+                            });
+                            out.push(f.insts.len() - 1);
+                            Op::Load(ty, p)
+                        };
+                        f.insts.push(Inst {
+                            result: Some(v),
+                            op: load,
+                            span: sp,
+                        });
+                        out.push(f.insts.len() - 1);
+                        let store = if dst_in {
+                            Op::Store(piece_slot[&(dst.0, dst.1 + rel)], v)
+                        } else {
+                            let k = f.new_value(IrTy::I64);
+                            f.insts.push(Inst {
+                                result: Some(k),
+                                op: Op::Const(IrTy::I64, Const::Int(rel as i128)),
+                                span: sp,
+                            });
+                            out.push(f.insts.len() - 1);
+                            let p = f.new_value(IrTy::Ptr);
+                            f.insts.push(Inst {
+                                result: Some(p),
+                                op: Op::PtrAdd(d, k),
+                                span: sp,
+                            });
+                            out.push(f.insts.len() - 1);
+                            Op::Store(p, v)
+                        };
+                        f.insts.push(Inst {
+                            result: None,
+                            op: store,
+                            span: sp,
+                        });
+                        out.push(f.insts.len() - 1);
+                    }
                 }
                 Op::MemCopy(d, s, len) => {
                     let dst_slot = base
@@ -334,23 +471,8 @@ pub fn run(f: &mut Func) -> bool {
                                 out.push(f.insts.len() - 1);
                             }
                         }
-                        (Some(ds), Some(ss)) => {
-                            for (off, ty) in info[&ds].pieces.iter().filter(|(o, _)| **o < n) {
-                                let v = f.new_value(*ty);
-                                f.insts.push(Inst {
-                                    result: Some(v),
-                                    op: Op::Load(*ty, piece_slot[&(ss, *off)]),
-                                    span: sp,
-                                });
-                                out.push(f.insts.len() - 1);
-                                f.insts.push(Inst {
-                                    result: None,
-                                    op: Op::Store(piece_slot[&(ds, *off)], v),
-                                    span: sp,
-                                });
-                                out.push(f.insts.len() - 1);
-                            }
-                        }
+                        // Two slots are range copies, handled above.
+                        (Some(_), Some(_)) => out.push(i),
                     }
                 }
                 _ => out.push(i),
@@ -368,6 +490,13 @@ fn touch(info: &mut HashMap<Value, Info>, s: Value, off: u32, ty: IrTy) {
                 inf.pieces.insert(off, ty);
             }
             Some(old) if *old == ty => {}
+            Some(IrTy::Int(a)) if matches!(ty, IrTy::Int(_)) => {
+                // Integers of different widths at one offset: the piece keeps the widest.
+                let IrTy::Int(b) = ty else { unreachable!() };
+                let a = *a;
+                inf.pieces.insert(off, IrTy::Int(a.max(b)));
+                inf.wide.insert(off);
+            }
             Some(_) => inf.bad = true,
         }
     }

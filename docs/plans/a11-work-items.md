@@ -103,7 +103,7 @@ Size is S (hours), M (a day), L (several days). "Collides with" means the same f
 Best of 5, seconds. Five programs added in `claude/perf/more-benchmarks`; the first four rows are above both C `-O2` and Rust `-O`.
 | Program | Pelago | C -O2 | Rust -O | vs -O2 | Likely cause |
 |---|---|---|---|---|---|
-| resultpath | 0.055 | 0.014 | 0.016 | 4.0x | `result` values are built in memory and `?` goes through calls; C and Rust inline `step` and keep the pair in registers |
+| resultpath | 0.048 | 0.013 | 0.015 | 3.7x | `result` slots are now split into registers (was 0.055); what is left is the tag: if-conversion turns it into chains of `select`s and the branch on it is not threaded, so every `?` still computes and compares a tag; C and Rust fold the whole thing |
 | structlist | 0.019 | 0.008 | 0.008 | 2.4x | `list<struct>` field update: per-element address recomputed, two `add_checked`, no vectorisation (the checked C build is 3.3x faster too) |
 | strsplit | 0.039 | 0.018 | 0.012 | 2.2x | `split` builds an `iter<str>` list and `parse_int` returns a `result`; the twins parse in place |
 | switchwork | 0.048 | 0.045 | 0.035 | 1.08x | enum payload loads and the jump table; Rust is 1.4x faster here |
