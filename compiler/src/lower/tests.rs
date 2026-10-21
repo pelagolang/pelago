@@ -2361,6 +2361,34 @@ fn accumulators_of_counted_loops_keep_their_traps() {
     );
 }
 
+/// A loop limit that is not a constant but has a known range bounds the trip count too; a limit
+/// that can be huge still traps.
+#[test]
+fn a_limit_with_a_known_range_bounds_the_trips() {
+    agree(
+        "fn main() {
+            var t = 0
+            for k in 0..50 {
+                const n = (k * 37) & 1023
+                var s = 0
+                for i in 0..n { s += i }
+                t += s
+            }
+            print(t)
+        }",
+    );
+    agree(
+        "fn main() {
+            var t = 9223372036854775000
+            for k in 0..50 {
+                const n = (k * 37) & 1023
+                for i in 0..n { t += i }
+            }
+            print(t)
+        }",
+    );
+}
+
 /// The loop test moves onto a counter that moves with the loop's own (`len` grows by 2 per trip);
 /// the loop must run as often as before, also with an offset start and a step above one.
 #[test]
