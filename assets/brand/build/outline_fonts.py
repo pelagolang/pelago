@@ -3,7 +3,7 @@
 
 The logo SVGs must not depend on an installed font, so `build.py` reads the glyph outlines from
 `wordmark.json` instead of from a font. Run this script only when the wordmark, the `pel` file-icon
-label or the tagline changes. It needs `pip install fonttools` and the two font files (both SIL Open
+label or either tagline changes. It needs `pip install fonttools` and the two font files (both SIL Open
 Font License, from https://github.com/google/fonts):
 
     python outline_fonts.py --comfortaa Comfortaa[wght].ttf --outfit Outfit[wght].ttf
@@ -21,7 +21,8 @@ from fontTools.ttLib import TTFont
 from fontTools.varLib import instancer
 
 KERN = {("l", "a"): -30}
-TAGLINE = "A self-hosting systems language."
+TAGLINE = "A self-hosting systems language."  # what it is
+TAGLINE2 = "Native code. No GC. No runtime."  # what it gives you
 
 
 def outline(path, weight, text, kern=None):
@@ -53,6 +54,7 @@ def main():
         "pelago": outline(args.comfortaa, 700, "pelago", KERN),
         "pel": outline(args.outfit, 700, "pel"),
         "tagline": dict(outline(args.outfit, 400, TAGLINE), text=TAGLINE),
+        "tagline2": dict(outline(args.outfit, 400, TAGLINE2), text=TAGLINE2),
     }
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "wordmark.json")
     with open(out, "w") as f:

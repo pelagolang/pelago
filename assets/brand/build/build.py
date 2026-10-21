@@ -202,7 +202,8 @@ def file_icons():
     return out
 
 
-def social_svg(width, height, dark, tagline=True):
+def social_svg(width, height, dark, tagline=None):
+    """`tagline` is a key of wordmark.json (`tagline` or `tagline2`), or None for no tagline."""
     bg = DEEP if dark else WHITE
     fg = LAGOON if dark else TEAL
     name_colour = WHITE if dark else DEEP
@@ -223,7 +224,7 @@ def social_svg(width, height, dark, tagline=True):
         f'viewBox="0 0 {NAME_X + adv + 6:.0f} 128">{mark_body(fg)}{name}</svg>'
     )
     if tagline:
-        tag, tw = text_path("tagline", sub, 0, 0, tag_size)
+        tag, tw = text_path(tagline, sub, 0, 0, tag_size)
         x = (width - tw) / 2
         tag = tag.replace('translate(0.00 0.00)', f"translate({x:.2f} {top + m + gap + tag_size * 0.78:.2f})")
         body += tag
@@ -235,17 +236,29 @@ def social_svg(width, height, dark, tagline=True):
     )
 
 
-SOCIAL = (  # name, width, height, dark, tagline
+SOCIAL = (  # name, width, height, dark, has a tagline
     ("github-social-1280x640", 1280, 640, True, True),
     ("og-1200x630", 1200, 630, False, True),
     ("x-header-1500x500", 1500, 500, True, True),
     ("linkedin-1584x396", 1584, 396, False, True),
     ("readme-banner-1280x320", 1280, 320, True, False),
 )
+# Both taglines are kept, each on its own set of images: the plain name carries "A self-hosting systems
+# language.", the `-native` file carries "Native code. No GC. No runtime."
+TAGLINES = (("", "tagline"), ("-native", "tagline2"))
+
+
+def social_files():
+    """(file stem, width, height, dark, tagline key) for every social image."""
+    out = []
+    for n, w, h, d, t in SOCIAL:
+        for suffix, key in TAGLINES if t else (("", None),):
+            out.append((n + suffix, w, h, d, key))
+    return out
 
 
 def social():
-    return {f"social/{n}.svg": social_svg(w, h, d, t) for n, w, h, d, t in SOCIAL}
+    return {f"social/{n}.svg": social_svg(w, h, d, key) for n, w, h, d, key in social_files()}
 
 
 def sprite(svgs):
@@ -617,7 +630,7 @@ def main():
     for f in sorted(glob.glob(str(BRAND / "editor/file-icons/*.svg"))):
         rel = os.path.relpath(f, BRAND).replace(os.sep, "/")
         job(rel, rel[:-4] + "-128.png", 128)
-    for n, w, h, d, t in SOCIAL:
+    for n, w, h, d, key in social_files():
         job(f"social/{n}.svg", f"social/{n}.png", w, transparent=False)
     for f in sorted(glob.glob(str(BRAND / "spec/*.svg"))):
         job(os.path.relpath(f, BRAND).replace(os.sep, "/"), os.path.relpath(f, BRAND).replace(os.sep, "/")[:-4] + ".png", 1600, transparent=False)
