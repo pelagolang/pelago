@@ -122,7 +122,12 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
     g.stop_stubs();
     let mut syms = Vec::new();
     for (i, f) in m.funcs.iter().enumerate() {
-        g.a.align(16, 15);
+        // A function starts 16 bytes before a cache line: where the hot code of a function falls
+        // in its lines (and so what a call and return cost) must not depend on how big the runtime
+        // in front of it is. Measured on `fib` and `tak`, a start 48 bytes into a line is the best
+        // of the four (the worst of them is 25 percent slower on `fib`).
+        g.a.align(64, 63);
+        g.a.nops(48);
         let start = g.a.here();
         g.function(i, f)?;
         syms.push(Symbol {

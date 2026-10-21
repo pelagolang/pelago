@@ -2422,6 +2422,23 @@ fn a_negation_before_a_constant_product_changes_no_result() {
     );
 }
 
+/// Blocks from 2 MiB up are mapped in whole 2 MiB pages: growing, reusing and freeing them must work
+/// at sizes around the edge (a 2 MiB block holds 262,144 ints less the header).
+#[test]
+fn big_blocks_grow_and_are_reused() {
+    agree(
+        "fn main() {
+            var total = 0
+            for round in 0..3 {
+                var xs: list<int> = []
+                for i in 0..(262000 + round * 300) { xs.push!(i) }
+                for x in xs { total += x & 255 }
+            }
+            print(total)
+        }",
+    );
+}
+
 /// A loop limit that is not a constant but has a known range bounds the trip count too; a limit
 /// that can be huge still traps.
 #[test]
