@@ -5,6 +5,11 @@
 //! callee-saved in our convention (the runtime keeps them too), so calls leave them alone and no value
 //! is ever split: the allocator only has to decide who gets a register and who shares one.
 //!
+//! A value whose interval touches no call (a function call, an `alloc`, a `memcpy`, a float remainder:
+//! see `calls` below) may instead live in a caller-saved register, which costs no save and restore:
+//! `x0` to `x8` (the templates only use `x9` and up outside calls) and `d2` to `d7`. A parameter of the
+//! function may stay in the register it arrives in but takes no other caller-saved one.
+//!
 //! * Liveness is the usual backward dataflow over the blocks (a block's parameters are defined at its
 //!   start, the arguments of a jump are read by the jump).
 //! * Each value gets one **interval**, the smallest range of positions in the linear order of the
