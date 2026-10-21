@@ -1,6 +1,6 @@
 Id: A-10
 Title: AArch64 (64-bit ARM) backend
-Column: Doing (R1 and R2 built: AArch64 Linux works; R3 and R4 open)
+Column: Doing (R1, R2 and R3 built: AArch64 Linux works with registers; R4 open)
 Order: after A-09 N6 (track A)
 Depends on: A-09 (the IR-to-machine-code design, the runtime, the tests)
 Size: L, in stages (R1 to R4)
@@ -24,7 +24,7 @@ Touches: new `compiler/src/native/a64.rs` (encoder), `native/gen_a64.rs` (code g
 |---|---|---|
 | **R1** | `a64.rs`: the encoder for the forms the generator needs (`mov`/`movz`/`movk`, `ldr`/`str` in all widths, `add`/`sub`/`and`/`orr`/`eor`, `mul`, `sdiv`/`udiv`/`msub`, shifts, `cmp`, `cset`, `b`/`b.cond`/`bl`/`blr`/`ret`, `adr`/`adrp`, scalar float `fadd`/`fsub`/`fmul`/`fdiv`/`fcmp`/`scvtf`/`fcvtzs`/`fcvt`, `svc`). Golden bytes checked against `aarch64-linux-gnu-as` (apt `binutils-aarch64-linux-gnu`). | every form matches the assembler |
 | **R2** | Linux ELF (`EM_AARCH64`), the runtime over syscalls (`svc #0`: `write` 64, `exit_group` 94, `mmap` 222, `munmap` 215), the simple generator `gen_a64.rs`. Calling convention: AAPCS64 (`x0` to `x7`, `d0` to `d7`, callee-saved `x19` to `x28`). | all tests green under `qemu-aarch64` and on the `ubuntu-24.04-arm` runner |
-| **R3** | Registers for the heaviest values (`x19` to `x28`), same scheme as `regs.rs` (the analysis is shared; only the register list differs). | all tests green; benches recorded |
+| **R3** | Registers for the heaviest values (`x19` to `x28`, `d8` to `d15`), its own allocator in `regs_a64.rs` (liveness hulls, loop-depth weights; only `successors` and `fused_cmp` are shared with `regs.rs`). | all tests green; benches recorded |
 | **R4** | Windows on ARM (PE machine `0xAA64`, `kernel32` imports, Microsoft ARM64 conventions) and macOS (Mach-O). | each its own card; see risks |
 
 # Design choice: how to share code with x86-64
@@ -53,7 +53,7 @@ The simple generator is about 700 lines of templates. Two ways to support a seco
 - `pelago build --arch=aarch64 [-o out] <path>` builds it (`--arch=x86_64` is the other choice; the default is the machine the compiler runs on).
 - Tests: every differential test that ran the x86-64 build now also runs the AArch64 one (plain and optimised IR) and compares the output, the stop messages and the exit status with the interpreter; nine runtime tests in `native/tests.rs`. They run natively on ARM and under `qemu-aarch64` elsewhere (`apt install qemu-user binutils-aarch64-linux-gnu`); `PELAGO_SKIP_A64=1` turns that column off. CI: the `check` job installs both, and the new `arm` job runs the suite on `ubuntu-24.04-arm`.
 
-**Open.** R3 (registers: `x19` to `x28` for the hottest values, same weights as `regs.rs`) and the numbers against C on real ARM hardware; R4 (Windows on ARM, macOS). A function bigger than 1 MiB of code is refused (conditional branches reach 1 MiB).
+**Open.** The numbers against C on real ARM hardware (R3 is built; the weekly benchmark runs on x86 only); R4 (Windows on ARM, macOS). A function bigger than 1 MiB of code is refused (conditional branches reach 1 MiB).
 
 # Questions for the owner (answered)
 

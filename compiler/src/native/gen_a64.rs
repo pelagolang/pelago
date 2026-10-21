@@ -10,14 +10,16 @@
 //! arguments go to the outgoing area at the bottom of the caller's frame (`[sp + 8k]`, which the callee
 //! sees at `[x29 + 16 + 8k]`). Templates use `x9` to `x13` and `v0`, `v1`; `x14` and `x15` belong to the
 //! out-of-line tests of `CheckedIf`; `x16` and `x17` are the assembler's own scratch (`a64.rs`).
-//! `x29` is the frame pointer; `x19` to `x28` are kept for the register allocator (stage R3).
+//! `x29` is the frame pointer; `x19` to `x28` and `d8` to `d15` are the callee-saved homes the register
+//! allocator (`regs_a64.rs`, stage R3) gives to the busiest values, for their whole life.
 //!
-//! The frame, from `sp` up: the outgoing argument area, the value slots, the `Slot` objects, the saved
-//! callee-saved registers, then `x29` and `x30` (pushed first, so `x29` points at them).
+//! The frame, from `sp` up: the outgoing argument area, the saved callee-saved registers, the value
+//! slots, the `Slot` objects, then `x29` and `x30` (pushed first, so `x29` points at them).
 
 use super::a64::*;
 use super::elf::{self, Blob, Symbol};
 use super::gen::Options;
+use super::regs_a64;
 use super::rt_a64::{self, Runtime};
 use super::Os;
 use crate::ir::{
@@ -44,6 +46,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         .position(|f| f.name == entry)
         .ok_or_else(|| format!("no function `{entry}`"))?;
     let mut g = Gen::new(m);
+    g.regalloc = opts.regalloc;
     let main_label = g.funcs[main_fn];
     let rt = rt_a64::emit(
         &mut g.a,
@@ -219,6 +222,14 @@ struct Gen<'m> {
     // ---- per function ----
     /// Frame offset (from `sp`) of each value's slot, or [`NONE`].
     off: Vec<i32>,
+    /// The register a value lives in instead (its `off` is then [`NONE`]).
+    reg: Vec<Option<Reg>>,
+    freg: Vec<Option<V>>,
+    /// The callee-saved registers this function uses, and the frame offset of their save area.
+    saved_g: Vec<Reg>,
+    saved_f: Vec<V>,
+    save_off: i32,
+    regalloc: bool,
     imm: Vec<Option<i64>>,
     slot_off: HashMap<usize, i32>,
     frame: i32,
@@ -243,6 +254,12 @@ impl<'m> Gen<'m> {
             data_off: Vec::new(),
             rt: None,
             off: Vec::new(),
+            reg: Vec::new(),
+            freg: Vec::new(),
+            saved_g: Vec::new(),
+            saved_f: Vec::new(),
+            save_off: 0,
+            regalloc: true,
             imm: Vec::new(),
             slot_off: HashMap::new(),
             frame: 0,
@@ -281,18 +298,61 @@ impl<'m> Gen<'m> {
             }
         }
         let mut at = (stack_args as i32 * 8 + 15) / 16 * 16;
+        let n = f.values.len();
+        let alloc = if self.regalloc {
+            let mut fused = vec![false; n];
+            for bi in 0..f.blocks.len() {
+                if let Some(last) = super::regs::fused_cmp(f, bi, &uses) {
+                    if let Some(r) = f.insts[last].result {
+                        fused[r.0 as usize] = true;
+                    }
+                }
+            }
+            regs_a64::assign(f, &self.imm, &uses, &fused)
+        } else {
+            regs_a64::Alloc {
+                reg: vec![None; n],
+                freg: vec![None; n],
+            }
+        };
+        self.reg = alloc.reg;
+        self.freg = alloc.freg;
+        let mut used_g = [false; 32];
+        let mut used_f = [false; 32];
+        for r in self.reg.iter().flatten() {
+            used_g[r.0 as usize] = true;
+        }
+        for x in self.freg.iter().flatten() {
+            used_f[x.0 as usize] = true;
+        }
+        self.saved_g = (19..=28)
+            .filter(|&k| used_g[k])
+            .map(|k| Reg(k as u8))
+            .collect();
+        self.saved_f = (8..=15)
+            .filter(|&k| used_f[k])
+            .map(|k| V(k as u8))
+            .collect();
+        self.save_off = at;
+        at += 8 * (self.saved_g.len() + self.saved_f.len()) as i32;
         self.off.clear();
         for (v, &ty) in f.values.iter().enumerate() {
-            self.off.push(if self.imm[v].is_some() || uses[v] == 0 {
-                NONE
-            } else if ty == IrTy::V2I64 {
-                at = (at + 15) / 16 * 16;
-                at += 16;
-                at - 16
-            } else {
-                at += 8;
-                at - 8
-            });
+            self.off.push(
+                if self.imm[v].is_some()
+                    || uses[v] == 0
+                    || self.reg[v].is_some()
+                    || self.freg[v].is_some()
+                {
+                    NONE
+                } else if ty == IrTy::V2I64 {
+                    at = (at + 15) / 16 * 16;
+                    at += 16;
+                    at - 16
+                } else {
+                    at += 8;
+                    at - 8
+                },
+            );
         }
         // Parameters nothing reads still arrive in registers: they need no slot, the entry code drops them.
         self.slot_off.clear();
@@ -315,10 +375,70 @@ impl<'m> Gen<'m> {
         match self.imm[v.0 as usize] {
             Some(n) => self.a.mov_ri(r, n),
             None => {
+                if let Some(h) = self.reg[v.0 as usize] {
+                    if h != r {
+                        self.a.mov_rr(r, h);
+                    }
+                    return;
+                }
                 let off = self.off[v.0 as usize];
                 debug_assert!(off != NONE, "value {} is read but has no slot", v.0);
                 self.a.ldr(r, SP, off, 8);
             }
+        }
+    }
+
+    /// The register to read `v` from: its home, or `scratch` after loading it there.
+    fn rd(&mut self, v: Value, scratch: Reg) -> Reg {
+        match (self.imm[v.0 as usize], self.reg[v.0 as usize]) {
+            (None, Some(h)) => h,
+            _ => {
+                self.ld(scratch, v);
+                scratch
+            }
+        }
+    }
+
+    /// Like [`Gen::rd`] for a read that extends from the value's width.
+    fn rd_ext(&mut self, v: Value, scratch: Reg, f: &Func, signed: bool) -> Reg {
+        let narrow_signed = signed && matches!(f.ty(v), IrTy::Int(b) if b < 64);
+        match (self.imm[v.0 as usize], self.reg[v.0 as usize]) {
+            (None, Some(h)) if !narrow_signed => h,
+            _ => {
+                self.ld_ext(scratch, v, f, signed);
+                scratch
+            }
+        }
+    }
+
+    /// The register a result is built in: its home, or `scratch` (then [`Gen::fin`] stores it).
+    fn wr(&self, v: Value, scratch: Reg) -> Reg {
+        self.reg[v.0 as usize].unwrap_or(scratch)
+    }
+
+    fn fin(&mut self, v: Value, r: Reg) {
+        if self.reg[v.0 as usize] != Some(r) {
+            self.st(v, r);
+        }
+    }
+
+    fn rdf(&mut self, v: Value, scratch: V, f: &Func) -> V {
+        match self.freg[v.0 as usize] {
+            Some(h) => h,
+            None => {
+                self.ldf(scratch, v, f);
+                scratch
+            }
+        }
+    }
+
+    fn wrf(&self, v: Value, scratch: V) -> V {
+        self.freg[v.0 as usize].unwrap_or(scratch)
+    }
+
+    fn finf(&mut self, v: Value, x: V, f: &Func) {
+        if self.freg[v.0 as usize] != Some(x) {
+            self.stf(v, x, f);
         }
     }
 
@@ -337,6 +457,12 @@ impl<'m> Gen<'m> {
     }
 
     fn st(&mut self, v: Value, r: Reg) {
+        if let Some(h) = self.reg[v.0 as usize] {
+            if h != r {
+                self.a.mov_rr(h, r);
+            }
+            return;
+        }
         let off = self.off[v.0 as usize];
         if off != NONE {
             self.a.str(r, SP, off, 8);
@@ -345,6 +471,12 @@ impl<'m> Gen<'m> {
 
     /// Loads a float into `x` (a 4- or 8-byte value).
     fn ldf(&mut self, x: V, v: Value, f: &Func) {
+        if let Some(h) = self.freg[v.0 as usize] {
+            if h != x {
+                self.a.vmov(x, h);
+            }
+            return;
+        }
         let off = self.off[v.0 as usize];
         debug_assert!(off != NONE, "float {} is read but has no slot", v.0);
         self.a
@@ -352,6 +484,12 @@ impl<'m> Gen<'m> {
     }
 
     fn stf(&mut self, v: Value, x: V, f: &Func) {
+        if let Some(h) = self.freg[v.0 as usize] {
+            if h != x {
+                self.a.vmov(h, x);
+            }
+            return;
+        }
         let off = self.off[v.0 as usize];
         if off != NONE {
             self.a
@@ -426,20 +564,23 @@ impl<'m> Gen<'m> {
         let entry = f.entry();
         let params: Vec<Value> = f.block_params(entry).to_vec();
         let tys: Vec<IrTy> = params.iter().map(|p| f.ty(*p)).collect();
+        for (k, r) in self.saved_g.clone().into_iter().enumerate() {
+            self.a.str(r, SP, self.save_off + 8 * k as i32, 8);
+        }
+        for (k, x) in self.saved_f.clone().into_iter().enumerate() {
+            let at = self.save_off + 8 * (self.saved_g.len() + k) as i32;
+            self.a.str_f(x, SP, at, 8);
+        }
         for (p, loc) in params.iter().zip(classify(&tys)) {
-            let off = self.off[p.0 as usize];
-            if off == NONE {
+            if !self.has_home(*p) {
                 continue;
             }
             match loc {
-                Loc::Int(i) => self.a.str(INT_REGS[i], SP, off, 8),
-                Loc::Float(i) => {
-                    let size = if f.ty(*p) == IrTy::F32 { 4 } else { 8 };
-                    self.a.str_f(V(i as u8), SP, off, size);
-                }
+                Loc::Int(i) => self.st(*p, INT_REGS[i]),
+                Loc::Float(i) => self.stf(*p, V(i as u8), f),
                 Loc::Stack(k) => {
                     self.a.ldr(X9, FP, 16 + 8 * k as i32, 8);
-                    self.a.str(X9, SP, off, 8);
+                    self.st(*p, X9);
                 }
             }
         }
@@ -513,7 +654,21 @@ impl<'m> Gen<'m> {
         Ok(())
     }
 
+    /// Whether a value is kept anywhere (a register or a slot).
+    fn has_home(&self, v: Value) -> bool {
+        self.off[v.0 as usize] != NONE
+            || self.reg[v.0 as usize].is_some()
+            || self.freg[v.0 as usize].is_some()
+    }
+
     fn epilogue(&mut self) {
+        for (k, r) in self.saved_g.clone().into_iter().enumerate() {
+            self.a.ldr(r, SP, self.save_off + 8 * k as i32, 8);
+        }
+        for (k, x) in self.saved_f.clone().into_iter().enumerate() {
+            let at = self.save_off + 8 * (self.saved_g.len() + k) as i32;
+            self.a.ldr_f(x, SP, at, 8);
+        }
         if self.frame > 0 {
             self.a.mov_to_sp(FP);
         }
@@ -548,8 +703,8 @@ impl<'m> Gen<'m> {
                     }
                     Some((_, op, x, y)) => Br::Flags(self.int_cmp(f, op, x, y)),
                     None => {
-                        self.ld(X9, *c);
-                        Br::NonZero(X9)
+                        let r = self.rd(*c, X9);
+                        Br::NonZero(r)
                     }
                 };
                 let (mt, me) = (self.edge_copies(f, t), self.edge_copies(f, e));
@@ -622,7 +777,7 @@ impl<'m> Gen<'m> {
         f.block_params(tg.block)
             .iter()
             .zip(&tg.args)
-            .filter(|(p, a)| p != a && self.off[p.0 as usize] != NONE)
+            .filter(|(p, a)| p != a && self.has_home(**p))
             .map(|(p, a)| Move {
                 to: *p,
                 from: match self.imm[a.0 as usize] {
@@ -664,6 +819,8 @@ impl<'m> Gen<'m> {
                     let victim = pending[0].to;
                     if f.ty(victim) == IrTy::V2I64 {
                         self.ldv(V(1), victim);
+                    } else if is_float(f.ty(victim)) {
+                        self.ldf(V(1), victim, f);
                     } else {
                         self.ld(X13, victim);
                     }
@@ -688,6 +845,15 @@ impl<'m> Gen<'m> {
             self.stv(to, V(0));
             return;
         }
+        if is_float(f.ty(to)) {
+            match c.from {
+                Src::Val(v) => self.ldf(V(0), v, f),
+                Src::Temp => self.a.vmov(V(0), V(1)),
+                Src::Imm(_) => unreachable!("a float constant is a `Const` instruction"),
+            }
+            self.stf(to, V(0), f);
+            return;
+        }
         match c.from {
             Src::Val(v) => self.ld(X9, v),
             Src::Imm(n) => self.a.mov_ri(X9, n),
@@ -710,7 +876,14 @@ impl<'m> Gen<'m> {
                     (Const::Float(x), _) => x.to_bits() as i64,
                 };
                 self.a.mov_ri(X9, bits_v);
-                self.st(res.unwrap(), X9);
+                let r = res.unwrap();
+                if is_float(*t) {
+                    let x = self.wrf(r, V(0));
+                    self.a.fmov_from_gp(*t == IrTy::F64, x, X9);
+                    self.finf(r, x, f);
+                } else {
+                    self.st(r, X9);
+                }
             }
             Op::Bin(op, a, b) => self.bin(f, *op, *a, *b, res.unwrap())?,
             Op::Checked(op, signed, a, b) => {
@@ -857,37 +1030,39 @@ impl<'m> Gen<'m> {
                 self.stv(r, V(0));
             }
             Op::Load(t, p) => {
-                self.ld(X9, *p);
+                let pr = self.rd(*p, X9);
                 let r = res.unwrap();
                 match t {
                     IrTy::V2I64 => {
-                        self.a.ldr_f(V(0), X9, 0, 16);
+                        self.a.ldr_f(V(0), pr, 0, 16);
                         self.stv(r, V(0));
                     }
                     IrTy::F32 | IrTy::F64 => {
-                        self.a.ldr_f(V(0), X9, 0, mem_size(*t));
-                        self.stf(r, V(0), f);
+                        let xd = self.wrf(r, V(0));
+                        self.a.ldr_f(xd, pr, 0, mem_size(*t));
+                        self.finf(r, xd, f);
                     }
                     _ => {
-                        self.a.ldr(X10, X9, 0, mem_size(*t));
-                        self.st(r, X10);
+                        let rd = self.wr(r, X10);
+                        self.a.ldr(rd, pr, 0, mem_size(*t));
+                        self.fin(r, rd);
                     }
                 }
             }
             Op::Store(p, x) => {
                 let t = f.ty(*x);
-                self.ld(X9, *p);
+                let pr = self.rd(*p, X9);
                 if t == IrTy::V2I64 {
                     self.ldv(V(0), *x);
-                    self.a.str_f(V(0), X9, 0, 16);
+                    self.a.str_f(V(0), pr, 0, 16);
                 } else if is_float(t) {
-                    self.ldf(V(0), *x, f);
-                    self.a.str_f(V(0), X9, 0, mem_size(t));
+                    let xr = self.rdf(*x, V(0), f);
+                    self.a.str_f(xr, pr, 0, mem_size(t));
                 } else if self.imm[x.0 as usize] == Some(0) {
-                    self.a.str(XZR, X9, 0, mem_size(t));
+                    self.a.str(XZR, pr, 0, mem_size(t));
                 } else {
-                    self.ld(X10, *x);
-                    self.a.str(X10, X9, 0, mem_size(t));
+                    let xr = self.rd(*x, X10);
+                    self.a.str(xr, pr, 0, mem_size(t));
                 }
             }
             Op::Alloc(n) => {
@@ -993,13 +1168,21 @@ impl<'m> Gen<'m> {
         let t = f.ty(a);
         if is_float(t) {
             let dbl = t == IrTy::F64;
+            if matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div) {
+                let (xa, xb) = (self.rdf(a, V(0), f), self.rdf(b, V(1), f));
+                let xd = self.wrf(r, V(0));
+                match op {
+                    BinOp::Add => self.a.fadd(dbl, xd, xa, xb),
+                    BinOp::Sub => self.a.fsub(dbl, xd, xa, xb),
+                    BinOp::Mul => self.a.fmul(dbl, xd, xa, xb),
+                    _ => self.a.fdiv(dbl, xd, xa, xb),
+                }
+                self.finf(r, xd, f);
+                return Ok(());
+            }
             self.ldf(V(0), a, f);
             self.ldf(V(1), b, f);
             match op {
-                BinOp::Add => self.a.fadd(dbl, V(0), V(0), V(1)),
-                BinOp::Sub => self.a.fsub(dbl, V(0), V(0), V(1)),
-                BinOp::Mul => self.a.fmul(dbl, V(0), V(0), V(1)),
-                BinOp::Div => self.a.fdiv(dbl, V(0), V(0), V(1)),
                 BinOp::Rem => {
                     // The routine works on doubles: a float is widened and rounded back, both exactly.
                     if !dbl {
@@ -1020,31 +1203,32 @@ impl<'m> Gen<'m> {
         let w = bits(t);
         match op {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::And | BinOp::Or | BinOp::Xor => {
-                self.ld(X9, a);
+                let ra = self.rd(a, X9);
+                let rd = self.wr(r, X9);
                 match (self.imm[b.0 as usize], op) {
                     (Some(n), BinOp::Add | BinOp::Sub) if Asm::fits_addsub(n as u64) => {
                         if op == BinOp::Add {
-                            self.a.add_ri(X9, X9, n as u32);
+                            self.a.add_ri(rd, ra, n as u32);
                         } else {
-                            self.a.sub_ri(X9, X9, n as u32);
+                            self.a.sub_ri(rd, ra, n as u32);
                         }
                     }
                     _ => {
-                        self.ld(X10, b);
+                        let rb = self.rd(b, X10);
                         match op {
-                            BinOp::Add => self.a.add_rr(X9, X9, X10),
-                            BinOp::Sub => self.a.sub_rr(X9, X9, X10),
-                            BinOp::Mul => self.a.mul(X9, X9, X10),
-                            BinOp::And => self.a.and_rr(X9, X9, X10),
-                            BinOp::Or => self.a.orr_rr(X9, X9, X10),
-                            _ => self.a.eor_rr(X9, X9, X10),
+                            BinOp::Add => self.a.add_rr(rd, ra, rb),
+                            BinOp::Sub => self.a.sub_rr(rd, ra, rb),
+                            BinOp::Mul => self.a.mul(rd, ra, rb),
+                            BinOp::And => self.a.and_rr(rd, ra, rb),
+                            BinOp::Or => self.a.orr_rr(rd, ra, rb),
+                            _ => self.a.eor_rr(rd, ra, rb),
                         }
                     }
                 }
                 if !matches!(op, BinOp::And | BinOp::Or | BinOp::Xor) {
-                    self.mask(X9, w);
+                    self.mask(rd, w);
                 }
-                self.st(r, X9);
+                self.fin(r, rd);
             }
             BinOp::Div | BinOp::Rem | BinOp::UDiv | BinOp::URem => {
                 let signed = matches!(op, BinOp::Div | BinOp::Rem);
@@ -1128,37 +1312,38 @@ impl<'m> Gen<'m> {
         ov: Label,
     ) {
         let w = bits(f.ty(a));
-        self.ld_ext(X9, a, f, signed);
-        self.ld_ext(X10, b, f, signed);
+        let ra = self.rd_ext(a, X9, f, signed);
+        let rb = self.rd_ext(b, X10, f, signed);
+        let rd = self.wr(r, X11);
         if w == 64 {
             match (op, signed) {
                 (BinOp::Add, true) => {
-                    self.a.adds_rr(X11, X9, X10);
+                    self.a.adds_rr(rd, ra, rb);
                     self.ov_jump(Cond::Vs, ov);
                 }
                 (BinOp::Sub, true) => {
-                    self.a.subs_rr(X11, X9, X10);
+                    self.a.subs_rr(rd, ra, rb);
                     self.ov_jump(Cond::Vs, ov);
                 }
                 (BinOp::Add, false) => {
-                    self.a.adds_rr(X11, X9, X10);
+                    self.a.adds_rr(rd, ra, rb);
                     self.ov_jump(Cond::Hs, ov);
                 }
                 (BinOp::Sub, false) => {
-                    self.a.subs_rr(X11, X9, X10);
+                    self.a.subs_rr(rd, ra, rb);
                     // Borrow: the carry is clear.
                     self.ov_jump(Cond::Lo, ov);
                 }
                 (_, true) => {
                     // The product fits when the high half is the sign extension of the low half.
-                    self.a.mul(X11, X9, X10);
-                    self.a.smulh(X12, X9, X10);
-                    self.a.cmp_rr_sh(X12, X11, Shift::Asr, 63);
+                    self.a.mul(rd, ra, rb);
+                    self.a.smulh(X12, ra, rb);
+                    self.a.cmp_rr_sh(X12, rd, Shift::Asr, 63);
                     self.ov_jump(Cond::Ne, ov);
                 }
                 (_, false) => {
-                    self.a.mul(X11, X9, X10);
-                    self.a.umulh(X12, X9, X10);
+                    self.a.mul(rd, ra, rb);
+                    self.a.umulh(X12, ra, rb);
                     self.a.cmp_ri(X12, 0);
                     self.ov_jump(Cond::Ne, ov);
                 }
@@ -1166,20 +1351,20 @@ impl<'m> Gen<'m> {
         } else {
             // Narrow: no overflow in 64 bits; the result must survive the trip through the width.
             match op {
-                BinOp::Add => self.a.add_rr(X11, X9, X10),
-                BinOp::Sub => self.a.sub_rr(X11, X9, X10),
-                _ => self.a.mul(X11, X9, X10),
+                BinOp::Add => self.a.add_rr(rd, ra, rb),
+                BinOp::Sub => self.a.sub_rr(rd, ra, rb),
+                _ => self.a.mul(rd, ra, rb),
             }
             if signed {
-                self.a.sxt(X12, X11, w);
+                self.a.sxt(X12, rd, w);
             } else {
-                self.a.uxt(X12, X11, w);
+                self.a.uxt(X12, rd, w);
             }
-            self.a.cmp_rr(X12, X11);
+            self.a.cmp_rr(X12, rd);
             self.ov_jump(Cond::Ne, ov);
-            self.mask(X11, w);
+            self.mask(rd, w);
         }
-        self.st(r, X11);
+        self.fin(r, rd);
     }
 
     fn ov_jump(&mut self, cc: Cond, ov: Label) {
@@ -1195,17 +1380,17 @@ impl<'m> Gen<'m> {
         } else {
             self.int_cmp(f, op, a, b)
         };
-        self.a.cset(X9, cc);
-        self.st(r, X9);
+        let rd = self.wr(r, X9);
+        self.a.cset(rd, cc);
+        self.fin(r, rd);
     }
 
     /// Compares two floats; gives the condition that holds when `op` is true. Unordered operands (a
     /// NaN) make every condition here false, except `!=`.
     fn float_cmp(&mut self, f: &Func, op: CmpOp, a: Value, b: Value) -> Cond {
         let d = f.ty(a) == IrTy::F64;
-        self.ldf(V(0), a, f);
-        self.ldf(V(1), b, f);
-        self.a.fcmp(d, V(0), V(1));
+        let (xa, xb) = (self.rdf(a, V(0), f), self.rdf(b, V(1), f));
+        self.a.fcmp(d, xa, xb);
         match op {
             CmpOp::Eq => Cond::Eq,
             CmpOp::Ne => Cond::Ne,
@@ -1224,11 +1409,11 @@ impl<'m> Gen<'m> {
     fn int_cmp_in(&mut self, f: &Func, op: CmpOp, a: Value, b: Value, ra: Reg, rb: Reg) -> Cond {
         let signed = matches!(f.ty(a), IrTy::Int(_))
             && matches!(op, CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge);
-        self.ld_ext(ra, a, f, signed);
+        let ra = self.rd_ext(a, ra, f, signed);
         match self.imm[b.0 as usize].map(|n| widen(n, f.ty(b), signed)) {
             Some(n) if (0..4096).contains(&n) => self.a.cmp_ri(ra, n as u32),
             _ => {
-                self.ld_ext(rb, b, f, signed);
+                let rb = self.rd_ext(b, rb, f, signed);
                 self.a.cmp_rr(ra, rb);
             }
         }
