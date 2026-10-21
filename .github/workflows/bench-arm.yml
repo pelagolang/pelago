@@ -1,0 +1,60 @@
+name: bench-arm
+
+# The benchmark suite on ARM hardware: the AArch64 backend of Pelago against C -O2 and Rust -O on the
+# same machine, for Linux, Windows and macOS runners. Manual, because it takes a while.
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/perf/arm-timings]
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-arm
+            os: ubuntu-24.04-arm
+            flags: --arch=aarch64
+            cc: gcc
+          - name: macos-arm
+            os: macos-14
+            flags: --arch=aarch64 --target=macos
+            cc: clang
+          - name: windows-arm
+            os: windows-11-arm
+            flags: --arch=aarch64 --target=windows
+            cc: clang
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tool versions
+        shell: bash
+        run: |
+          ${{ matrix.cc }} --version | head -2
+          rustc --version
+          python3 --version || python --version
+          uname -m || true
+      - name: Run the suite
+        shell: bash
+        timeout-minutes: 35
+        env:
+          BENCH_TIMEOUT: "90"
+          CC: ${{ matrix.cc }}
+          PELAGO_BUILD_FLAGS: ${{ matrix.flags }}
+        run: |
+          status=0
+          sh compiler/benches/compare.sh --json --checked --runs 5 > bench.txt 2> bench.log || status=$?
+          tail -30 bench.log
+          cat bench.txt
+          { echo '```'; grep -v '^{' bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-${{ matrix.name }}
+          path: |
+            bench.txt
+            bench.log
