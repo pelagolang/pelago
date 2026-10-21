@@ -2011,3 +2011,43 @@ fn integers_of_two_widths_at_one_offset_share_a_piece() {
         );
     }
 }
+
+#[test]
+fn a_signed_comparison_of_small_values_is_decided() {
+    // main(x): a = (x & 255) + 1 (checked); return a < 1000 ? a : 0
+    let mut f = Func::new("main", &[IrTy::I64], IrTy::I64);
+    let e = f.entry();
+    let x = f.block_params(e)[0];
+    let mask = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(255)), Some(IrTy::I64))
+        .unwrap();
+    let small = f
+        .emit(e, Op::Bin(BinOp::And, x, mask), Some(IrTy::I64))
+        .unwrap();
+    let one = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(1)), Some(IrTy::I64))
+        .unwrap();
+    let a = f
+        .emit(
+            e,
+            Op::Checked(BinOp::Add, true, small, one),
+            Some(IrTy::I64),
+        )
+        .unwrap();
+    let limit = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(1000)), Some(IrTy::I64))
+        .unwrap();
+    let c = f
+        .emit(e, Op::Cmp(CmpOp::Lt, a, limit), Some(IrTy::Bool))
+        .unwrap();
+    let zero = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(0)), Some(IrTy::I64))
+        .unwrap();
+    let r = f.emit(e, Op::Select(c, a, zero), Some(IrTy::I64)).unwrap();
+    f.terminate(e, Term::Return(Some(r)));
+    assert!(ranges::run(&mut f));
+    assert!(f
+        .insts
+        .iter()
+        .any(|i| matches!(i.op, Op::Const(IrTy::Bool, Const::Bool(true)))));
+}

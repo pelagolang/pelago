@@ -646,11 +646,19 @@ fn is_bounds_test(op: &Op) -> bool {
 /// The answer of `x op y` for every pair in the two ranges, if it is the same for all of them.
 fn decide(op: CmpOp, x: Range, y: Range) -> Option<bool> {
     let (always, never) = match op {
-        CmpOp::ULt => (x.1 < y.0, x.0 >= y.1),
-        CmpOp::ULe => (x.1 <= y.0, x.0 > y.1),
-        CmpOp::UGt => (x.0 > y.1, x.1 <= y.0),
-        CmpOp::UGe => (x.0 >= y.1, x.1 < y.0),
-        _ => return None,
+        // Both ranges are non-negative, so the signed and the unsigned orderings agree.
+        CmpOp::ULt | CmpOp::Lt => (x.1 < y.0, x.0 >= y.1),
+        CmpOp::ULe | CmpOp::Le => (x.1 <= y.0, x.0 > y.1),
+        CmpOp::UGt | CmpOp::Gt => (x.0 > y.1, x.1 <= y.0),
+        CmpOp::UGe | CmpOp::Ge => (x.0 >= y.1, x.1 < y.0),
+        CmpOp::Eq => (
+            x.0 == x.1 && y.0 == y.1 && x.0 == y.0,
+            x.1 < y.0 || y.1 < x.0,
+        ),
+        CmpOp::Ne => (
+            x.1 < y.0 || y.1 < x.0,
+            x.0 == x.1 && y.0 == y.1 && x.0 == y.0,
+        ),
     };
     if always {
         Some(true)
@@ -700,11 +708,12 @@ pub fn run(f: &mut Func) -> bool {
     for ii in 0..f.insts.len() {
         if let Op::Cmp(o, a, b) = f.insts[ii].op {
             let blk = cx.block_of[ii];
-            if is_bounds_test(&f.insts[ii].op) && blk != u32::MAX {
+            if blk != u32::MAX && f.ty(a).is_int() {
                 let blk = BlockId(blk);
                 // `i <u n` right after the guard `i < n` (signed) holds when `i` is not negative: this
                 // is the bounds check of `for i in 0..xs.len() { xs[i] }`.
-                let guarded = matches!(o, CmpOp::ULt | CmpOp::UGe)
+                let guarded = is_bounds_test(&f.insts[ii].op)
+                    && matches!(o, CmpOp::ULt | CmpOp::UGe)
                     && matches!(cx.range_at(a, blk), L::R(_))
                     && cx.facts[blk.0 as usize].iter().any(|r| {
                         (r.kind == Kind::Lt && r.a == a && r.b == b)

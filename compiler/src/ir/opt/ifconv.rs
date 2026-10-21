@@ -138,6 +138,12 @@ fn try_block(f: &mut Func, h: usize, preds: &[usize]) -> bool {
             return false;
         }
     }
+    // A side that hands a known value to a join that tests it is better threaded than selected.
+    for s in [&st, &se].into_iter().flatten() {
+        if super::thread::threadable(f, &s.jump) {
+            return false;
+        }
+    }
     let span = Span::new(0, 0);
     let add = |f: &mut Func, op: Op, ty: IrTy| -> Value {
         let r = f.new_value(ty);
