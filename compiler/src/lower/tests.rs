@@ -1532,6 +1532,11 @@ fn native_agrees_on_the_edge_cases() {
         "fn main() { const a: uint = 0\n print(a - 1) }",
         "fn main() { const a: uint = 4294967296\n print(a * a) }",
         "fn main() { const a: int8 = 100\n const b: int8 = 27\n print(a + b, a - b, b * 4) }",
+        // A product by 3 at the edge of the range, and where the product wraps back into it.
+        "fn t(n: int) -> int { 3 * n }\nfn main() { print(t(3074457345618258602), t(-3074457345618258602), t(0), t(-1)) }",
+        "fn t(n: int) -> int { n * 3 }\nfn main() { print(t(3074457345618258603)) }",
+        "fn t(n: int) -> int { 3 * n }\nfn main() { print(t(-3074457345618258603)) }",
+        "fn t(n: int) -> int { n * 3 }\nfn main() { print(t(6148914691236517206)) }",
         // Wrapping arithmetic.
         "fn main() { const a: int8 = 127\n print(a +% 1) }",
         "fn main() { const a: uint8 = 255\n print(a +% 1, a *% 2, a -% 255 -% 1) }",

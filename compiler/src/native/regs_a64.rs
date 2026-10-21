@@ -5,23 +5,22 @@
 //! callee-saved in our convention (the runtime keeps them too), so calls leave them alone and no value
 //! is ever split: the allocator only has to decide who gets a register and who shares one.
 //!
-//! A value whose interval touches no call (a function call, an `alloc`, a `memcpy`, a float remainder:
+//! A value whose live range touches no call (a function call, an `alloc`, a `memcpy`, a float remainder:
 //! see `calls` below) may instead live in a caller-saved register, which costs no save and restore:
 //! `x0` to `x8` (the templates only use `x9` and up outside calls) and `d2` to `d7`. A parameter of the
 //! function may stay in the register it arrives in but takes no other caller-saved one.
 //!
 //! * Liveness is the usual backward dataflow over the blocks (a block's parameters are defined at its
 //!   start, the arguments of a jump are read by the jump).
-//! * Each value gets one **interval**, the smallest range of positions in the linear order of the
-//!   function that holds every position where it is live, read or written. A block parameter is also
-//!   written at each jump that leads to its block. Two values may share a register only when their
-//!   intervals are apart, and an instruction counts as one position, so a result never takes the
-//!   register of an operand of the same instruction (the generator does not have to care about that).
-//! * Copies are coalesced where the intervals allow it: a value passed to a block parameter at a jump may
-//!   share its register with that parameter when it dies at the jump and the parameter starts there, so the
-//!   copy of the edge disappears.
+//! * Each value gets its **live range**: the runs of positions (in the linear order of the function)
+//!   from a definition to the last read on each path, with holes where it holds nothing. A block
+//!   parameter is a run of one position at each jump that writes it. Two values may share a register
+//!   only when their runs are apart, with two exceptions that meet at one position: the argument of a
+//!   jump and the parameter it is written to (the copy of the edge disappears), and an operand that dies
+//!   in an instruction and its result, for the templates that read everything before they write (a
+//!   product and the out-of-line tests of `CheckedIf` are not among them).
 //! * Values are taken heaviest first (reads and writes weighted by `10^loop depth`) and get the first
-//!   register whose assigned intervals do not meet theirs. A value must weigh at least [`MIN_WEIGHT`]
+//!   register whose assigned values do not meet its ranges. A value must weigh at least [`MIN_WEIGHT`]
 //!   to be worth the save and restore of its register.
 
 use crate::ir::{BinOp, Func, IrTy, Op, Term, Value};
@@ -225,43 +224,71 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
     }
     let weight_of = |bi: usize| 10u64.pow(depth[bi].min(4));
 
-    let mut lo = vec![u32::MAX; nc];
-    let mut hi = vec![0u32; nc];
     let mut weight = vec![0u64; nc];
-    // (argument, parameter) of a jump, with the position of the jump.
-    let mut pairs: std::collections::HashMap<(usize, usize), u32> =
+    // (argument, parameter) of a jump, with the positions of the jumps.
+    let mut pairs: std::collections::HashMap<(usize, usize), Vec<u32>> =
         std::collections::HashMap::new();
-    let mut touch = |c: usize, pos: u32| {
-        lo[c] = lo[c].min(pos);
-        hi[c] = hi[c].max(pos);
-    };
-    for bi in 0..nb {
-        for c in 0..nc {
-            if live_in[bi].get(c) {
-                touch(c, start[bi]);
-            }
-            if live_out[bi].get(c) {
-                touch(c, end[bi]);
-            }
-        }
-    }
+    // The live ranges: per value, the runs of positions (inclusive) where it holds a value somebody may
+    // still read. Built block by block from the liveness sets: a run opens at the block start (live in),
+    // at a definition or at a jump that writes a parameter, and closes at its last use, or at the end of
+    // the block when the value lives on.
+    let mut segs: Vec<Vec<(u32, u32)>> = vec![Vec::new(); nc];
+    let mut open = vec![u32::MAX; nc];
+    let mut last = vec![0u32; nc];
+    let mut touched: Vec<usize> = Vec::new();
     for (bi, b) in f.blocks.iter().enumerate() {
         let w = weight_of(bi);
+        touched.clear();
+        let mut touch = |c: usize, pos: u32, touched: &mut Vec<usize>| {
+            if open[c] == u32::MAX {
+                open[c] = pos;
+                touched.push(c);
+            }
+            last[c] = pos;
+        };
+        for c in 0..nc {
+            if live_in[bi].get(c) {
+                touch(c, start[bi], &mut touched);
+            }
+        }
         for p in &b.params {
             let c = cand_of[p.0 as usize];
             if c != usize::MAX {
-                touch(c, start[bi]);
+                touch(c, start[bi], &mut touched);
                 weight[c] += w;
             }
         }
+        let mut prev_check = false;
         for &i in &b.insts {
             reads.clear();
             f.insts[i].op.for_each_value(|v| reads.push(v));
             for v in reads.iter().chain(f.insts[i].result.iter()) {
                 let c = cand_of[v.0 as usize];
                 if c != usize::MAX {
-                    touch(c, inst_pos[i]);
+                    touch(c, inst_pos[i], &mut touched);
                     weight[c] += w;
+                }
+            }
+            // These templates read every operand before they write the result, so a result may take the
+            // register of an operand that dies there. (Not a product: the checked one needs both operands
+            // after the low half is written.)
+            // A plain operation right after a `CheckedIf` may be fused with it, and the out-of-line test
+            // of the check still reads its own operands then, so that one keeps them.
+            let after_check = prev_check;
+            prev_check = matches!(f.insts[i].op, Op::CheckedIf(..));
+            let alias = match &f.insts[i].op {
+                Op::Select(..) | Op::Cmp(..) => true,
+                Op::Bin(op, ..) => *op != BinOp::Mul && !after_check,
+                Op::Checked(op, ..) => matches!(op, BinOp::Add | BinOp::Sub),
+                _ => false,
+            };
+            if let (true, Some(r)) = (alias, f.insts[i].result) {
+                let cr = cand_of[r.0 as usize];
+                for v in &reads {
+                    let co = cand_of[v.0 as usize];
+                    if cr != usize::MAX && co != usize::MAX && co != cr {
+                        pairs.entry((co, cr)).or_default().push(inst_pos[i]);
+                    }
                 }
             }
         }
@@ -271,7 +298,7 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
             for v in &reads {
                 let c = cand_of[v.0 as usize];
                 if c != usize::MAX {
-                    touch(c, end[bi]);
+                    touch(c, end[bi], &mut touched);
                     weight[c] += w;
                 }
             }
@@ -285,18 +312,40 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
                 for (p, a) in f.block_params(tg.block).iter().zip(&tg.args) {
                     let (cs, cd) = (cand_of[a.0 as usize], cand_of[p.0 as usize]);
                     if cs != usize::MAX && cd != usize::MAX {
-                        pairs.insert((cs, cd), end[bi]);
+                        pairs.entry((cs, cd)).or_default().push(end[bi]);
                     }
                 }
                 for p in f.block_params(tg.block) {
                     let c = cand_of[p.0 as usize];
                     if c != usize::MAX {
-                        touch(c, end[bi]);
+                        // A run of its own: the parameter holds nothing in between.
+                        segs[c].push((end[bi], end[bi]));
                         weight[c] += w;
                     }
                 }
             }
         }
+        for &c in &touched {
+            let close = if live_out[bi].get(c) {
+                end[bi]
+            } else {
+                last[c]
+            };
+            segs[c].push((open[c], close));
+            open[c] = u32::MAX;
+        }
+    }
+    // Runs that overlap are one (runs that only follow each other stay apart: a jump may write a value there).
+    for sg in &mut segs {
+        sg.sort_unstable();
+        let mut merged: Vec<(u32, u32)> = Vec::with_capacity(sg.len());
+        for &(a, b) in sg.iter() {
+            match merged.last_mut() {
+                Some(m) if a <= m.1 => m.1 = m.1.max(b),
+                _ => merged.push((a, b)),
+            }
+        }
+        *sg = merged;
     }
 
     // Positions where the generator calls (the runtime or another function): the argument registers
@@ -321,9 +370,11 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
         }
     }
     calls.sort_unstable();
-    let crosses_call = |l: u32, h: u32| {
-        let k = calls.partition_point(|&p| p < l);
-        calls.get(k).is_some_and(|&p| p <= h)
+    let crosses_call = |c: usize| {
+        segs[c].iter().any(|&(l, h)| {
+            let k = calls.partition_point(|&p| p < l);
+            calls.get(k).is_some_and(|&p| p <= h)
+        })
     };
     // The parameters of the function arrive in the argument registers (the first eight of each kind) and
     // are moved out first, so one may stay where it arrives but takes no other caller-saved home.
@@ -360,44 +411,54 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
         .map(|r| (V(r as u8), false))
         .chain((8..=15).take(limit).map(|r| (V(r as u8), true)))
         .collect();
-    // Per register, the intervals already given to it, with their owners.
-    let mut taken_g: Vec<Vec<(u32, u32, usize)>> = vec![Vec::new(); gprs.len()];
-    let mut taken_f: Vec<Vec<(u32, u32, usize)>> = vec![Vec::new(); fprs.len()];
-    // Whether `c` (living in `l..=h`) may share a register with an interval `a..=b` of `o`.
-    let fits = |c: usize, (l, h): (u32, u32), &(a, b, o): &(u32, u32, usize)| {
-        h < a
-            || b < l
-            || pairs
-                .get(&(o, c))
-                .is_some_and(|&e| hi[o] == e && lo[c] == e && b == e && l == e)
-            || pairs
-                .get(&(c, o))
-                .is_some_and(|&e| hi[c] == e && lo[o] == e && h == e && a == e)
-    };
-    // The register for `c` among `homes` (with their taken intervals): one held by a partner of a copy
-    // first, since sharing it removes the copy, then the first that is free.
-    let pick =
-        |c: usize, homes: &[(bool, u8)], taken: &[Vec<(u32, u32, usize)>]| -> Option<usize> {
-            let (l, h) = (lo[c], hi[c]);
-            let crossing = crosses_call(l, h);
-            let ok = |k: usize| {
-                let (callee, id) = homes[k];
-                let allowed = if callee {
-                    weight[c] >= MIN_WEIGHT
-                } else {
-                    !crossing && (!entry_param[c] || arrival[c] == Some(id))
+    // Per register, the values already given to it.
+    let mut taken_g: Vec<Vec<usize>> = vec![Vec::new(); gprs.len()];
+    let mut taken_f: Vec<Vec<usize>> = vec![Vec::new(); fprs.len()];
+    // Whether `c` may share a register with `o`: their runs are apart, or they meet only at a jump that
+    // hands one to the other (the argument dies there, the parameter starts there).
+    let fits = |c: usize, o: usize| {
+        let (sc, so) = (&segs[c], &segs[o]);
+        let (mut i, mut j) = (0, 0);
+        while i < sc.len() && j < so.len() {
+            let (lo_, hi_) = (sc[i].0.max(so[j].0), sc[i].1.min(so[j].1));
+            if lo_ <= hi_ {
+                let coupled = |s: usize, d: usize| {
+                    lo_ == hi_ && pairs.get(&(s, d)).is_some_and(|v| v.contains(&lo_))
                 };
-                allowed && taken[k].iter().all(|t| fits(c, (l, h), t))
+                if !(coupled(o, c) || coupled(c, o)) {
+                    return false;
+                }
+            }
+            if sc[i].1 < so[j].1 {
+                i += 1;
+            } else {
+                j += 1;
+            }
+        }
+        true
+    };
+    // The register for `c` among `homes` (with the values already in them): one held by a partner of a
+    // copy first, since sharing it removes the copy, then the first that is free.
+    let pick = |c: usize, homes: &[(bool, u8)], taken: &[Vec<usize>]| -> Option<usize> {
+        let crossing = crosses_call(c);
+        let ok = |k: usize| {
+            let (callee, id) = homes[k];
+            let allowed = if callee {
+                weight[c] >= MIN_WEIGHT
+            } else {
+                !crossing && (!entry_param[c] || arrival[c] == Some(id))
             };
-            let partner = |k: usize| {
-                taken[k]
-                    .iter()
-                    .any(|t| pairs.contains_key(&(t.2, c)) || pairs.contains_key(&(c, t.2)))
-            };
-            (0..homes.len())
-                .find(|&k| ok(k) && partner(k))
-                .or_else(|| (0..homes.len()).find(|&k| ok(k)))
+            allowed && taken[k].iter().all(|&o| fits(c, o))
         };
+        let partner = |k: usize| {
+            taken[k]
+                .iter()
+                .any(|&o| pairs.contains_key(&(o, c)) || pairs.contains_key(&(c, o)))
+        };
+        (0..homes.len())
+            .find(|&k| ok(k) && partner(k))
+            .or_else(|| (0..homes.len()).find(|&k| ok(k)))
+    };
     let kinds_g: Vec<(bool, u8)> = gprs.iter().map(|g| (g.1, g.0 .0)).collect();
     let kinds_f: Vec<(bool, u8)> = fprs.iter().map(|g| (g.1, g.0 .0)).collect();
     for c in order {
@@ -405,13 +466,13 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
         match class(f.values[v.0 as usize]).unwrap() {
             Class::Gpr => {
                 if let Some(k) = pick(c, &kinds_g, &taken_g) {
-                    taken_g[k].push((lo[c], hi[c], c));
+                    taken_g[k].push(c);
                     out.reg[v.0 as usize] = Some(gprs[k].0);
                 }
             }
             Class::Fpr => {
                 if let Some(k) = pick(c, &kinds_f, &taken_f) {
-                    taken_f[k].push((lo[c], hi[c], c));
+                    taken_f[k].push(c);
                     out.freg[v.0 as usize] = Some(fprs[k].0);
                 }
             }
