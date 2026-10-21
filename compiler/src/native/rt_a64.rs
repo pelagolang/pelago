@@ -10,9 +10,10 @@
 //!
 //! On Windows the same routines call `kernel32` through the import table (`win_call`). Those calls
 //! may change `x0` to `x17`, `v0` to `v7` and the flags and keep `x19` and up, which is what this
-//! runtime promises already; `x18` is the system's and is never touched. Windows has no `mremap`, so
-//! a large block always grows by copying, and its stack is reserved and committed at once (it is
-//! only touched as it is used) with a guard page 256 KiB above its base.
+//! runtime promises already; `x18` is the system's and is never touched. Windows and macOS have no
+//! `mremap`, so a large block reserves address space for eight times its length and grows inside it
+//! (Windows commits the pages as they are needed); Windows also reserves and commits its stack at once
+//! (it is only touched as it is used) with a guard page 256 KiB above its base.
 //!
 //! State words (see `rt.rs`): 144 the base of our stack (0: the system's), 152 the top of the stack
 //! the Windows fault handler runs on (0: none), 160 scratch for `VirtualProtect` and `GetConsoleMode`.
@@ -220,6 +221,10 @@ pub fn emit(
 ) -> Runtime {
     let win = os == Os::Windows;
     let mac = os == Os::MacOs;
+    // Windows and macOS have no `mremap`: a large block reserves eight times its length of address space
+    // (a power of two) and grows inside it; the header word 1 holds the used length with the base-2
+    // logarithm of the reservation in its low six bits.
+    let rsv = win || mac;
     let state_at = data.add_zero(STATE_SIZE, 16);
     assert_eq!(state_at, 0, "the runtime state must come first in .data");
     let rt = Runtime {
@@ -797,6 +802,9 @@ pub fn emit(
     a.ldr(X11, X10, 0, 8);
     a.cbz(X11, mapnew);
     a.ldr(X12, X11, 8, 8);
+    if rsv {
+        a.and_ri(X12, X12, !4095);
+    }
     a.cmp_rr(X12, X21);
     a.b_cond(Cond::Lo, mapnew);
     a.add_rr(X13, X21, X21);
@@ -809,16 +817,52 @@ pub fn emit(
     zero_range(a, X13, X14);
     a.b(out);
     a.bind(mapnew);
-    a.mov_rr(X1, X21);
-    map_x1(a, os, 0x22);
-    failed(a, os, X0, oom);
-    a.mov_rr(X22, X0);
-    if os == Os::Linux {
+    if rsv {
+        // x20 the logarithm of the reservation: the length rounded up to a power of two, times eight.
+        a.sub_ri(X13, X21, 1);
+        a.clz(X13, X13);
+        a.mov_ri(X9, 64);
+        a.sub_rr(X13, X9, X13);
+        a.add_ri(X20, X13, 3);
+        a.cmp_ri(X20, 60);
+        a.b_cond(Cond::Hi, oom);
+        a.mov_ri(X9, 1);
+        a.lslv(X12, X9, X20);
+        if win {
+            // Reserve it all, commit the part in use.
+            a.mov_ri(X0, 0);
+            a.mov_rr(X1, X12);
+            a.mov_ri(X2, 0x2000);
+            a.mov_ri(X3, 1);
+            win_call(a, IMP_VIRTUAL_ALLOC);
+            a.cbz(X0, oom);
+            a.mov_rr(X22, X0);
+            a.mov_rr(X1, X21);
+            a.mov_ri(X2, 0x1000);
+            a.mov_ri(X3, 4);
+            win_call(a, IMP_VIRTUAL_ALLOC);
+            a.cbz(X0, oom);
+        } else {
+            // Untouched pages cost nothing, so the whole reservation is mapped read-write.
+            a.mov_rr(X1, X12);
+            map_x1(a, os, 0x4022);
+            failed(a, os, X0, oom);
+            a.mov_rr(X22, X0);
+        }
+        a.mov_ri(X9, LARGE_CLASS);
+        a.str(X9, X22, 0, 8);
+        a.orr_rr(X9, X21, X20);
+        a.str(X9, X22, 8, 8);
+    } else {
+        a.mov_rr(X1, X21);
+        map_x1(a, os, 0x22);
+        failed(a, os, X0, oom);
+        a.mov_rr(X22, X0);
         advise_huge(a, os, X22, X21);
+        a.mov_ri(X9, LARGE_CLASS);
+        a.str(X9, X22, 0, 8);
+        a.str(X21, X22, 8, 8);
     }
-    a.mov_ri(X9, LARGE_CLASS);
-    a.str(X9, X22, 0, 8);
-    a.str(X21, X22, 8, 8);
     a.bind(out);
     a.add_ri(X0, X22, 16);
     state(a, X10, 112);
@@ -866,6 +910,12 @@ pub fn emit(
             a.ldp_post(FP, LR, SP, 16);
         } else {
             a.ldr(X1, X10, 8, 8);
+            if mac {
+                // The length is the reservation: 1 << (the logarithm in the low six bits).
+                a.and_ri(X3, X1, 63);
+                a.mov_ri(X1, 1);
+                a.lslv(X1, X1, X3);
+            }
             a.mov_rr(X0, X10);
             sys(a, os, Sys::Munmap);
         }
@@ -893,9 +943,33 @@ pub fn emit(
         a.ldr(X11, X10, 0, 8);
         a.cmp_ri(X11, LARGE_CLASS as u32);
         a.b_cond(Cond::Ne, generic);
-        if os != Os::Linux {
-            // No `mremap` here: a large block moves by copying.
-            a.b(generic);
+        if rsv {
+            // Growth inside the reservation: the pages are already there (macOS) or are committed now
+            // (Windows), and the new tail is still zero. Shrinking and outgrowing the reservation copy.
+            a.add_imm(X12, X20, 16 + 4095);
+            a.and_ri(X12, X12, !4095);
+            a.ldr(X13, X10, 8, 8);
+            a.and_ri(X14, X13, !4095); // used length
+            a.cmp_rr(X12, X14);
+            a.b_cond(Cond::Eq, rdone);
+            a.b_cond(Cond::Lo, generic);
+            a.and_ri(X15, X13, 63);
+            a.mov_ri(X9, 1);
+            a.lslv(X9, X9, X15); // reservation
+            a.cmp_rr(X12, X9);
+            a.b_cond(Cond::Hi, generic);
+            a.orr_rr(X21, X12, X15); // the new header word
+            a.mov_rr(X22, X10);
+            if win {
+                a.add_rr(X0, X10, X14);
+                a.sub_rr(X1, X12, X14);
+                a.mov_ri(X2, 0x1000);
+                a.mov_ri(X3, 4);
+                win_call(a, IMP_VIRTUAL_ALLOC);
+                a.cbz(X0, oom);
+            }
+            a.str(X21, X22, 8, 8);
+            a.b(rdone);
         } else {
             // New mapping length: header plus payload, whole pages.
             a.add_imm(X12, X20, 16 + 4095);
@@ -927,6 +1001,9 @@ pub fn emit(
         a.cmp_ri(X11, LARGE_CLASS as u32);
         a.b_cond(Cond::Ne, rclass);
         a.ldr(X12, X19, -8, 8);
+        if rsv {
+            a.and_ri(X12, X12, !4095);
+        }
         a.b(rcopy);
         a.bind(rclass);
         a.mov_ri(X12, 32);

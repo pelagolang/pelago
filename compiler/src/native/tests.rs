@@ -909,6 +909,82 @@ fn a64_large_blocks_grow_in_place_and_keep_their_contents() {
     }
 }
 
+/// A large block grown in several steps (inside its reservation where the runtime keeps one), shrunk
+/// and grown again: the bytes stay and every new tail is zero.
+#[test]
+fn a64_large_blocks_grow_in_steps_and_shrink() {
+    use a64_run::*;
+    let img = program(true, |a, ro, _, rt| {
+        let bad = a.new_label();
+        let end = a.new_label();
+        a.mov_ri(X0, 1 << 20);
+        a.bl(rt.alloc);
+        a.mov_rr(X19, X0);
+        a.mov_ri(X9, 0x5A);
+        a.str(X9, X19, 0, 1);
+        a.mov_ri(X10, (1 << 20) - 1);
+        a.str_idx(X9, X19, X10, 1, false);
+        // 1 MiB, then 2, 4, 6 and 7 MiB (inside eight times its length), then 40 MiB (outside it).
+        for mib in [2i64, 4, 6, 7, 40] {
+            a.mov_rr(X0, X19);
+            a.mov_ri(X1, mib << 20);
+            a.bl(rt.realloc);
+            a.mov_rr(X19, X0);
+            a.ldr(X9, X19, 0, 1);
+            a.cmp_ri(X9, 0x5A);
+            a.b_cond(Cond::Ne, bad);
+            a.mov_ri(X10, (1 << 20) - 1);
+            a.ldr_idx(X9, X19, X10, 1, false);
+            a.cmp_ri(X9, 0x5A);
+            a.b_cond(Cond::Ne, bad);
+            // The byte just past the old end, and the last byte, are zero.
+            a.mov_ri(X10, 1 << 20);
+            a.ldr_idx(X9, X19, X10, 1, false);
+            a.cbnz(X9, bad);
+            a.mov_ri(X10, (mib << 20) - 1);
+            a.ldr_idx(X9, X19, X10, 1, false);
+            a.cbnz(X9, bad);
+            // Dirty the end, so a later growth that reuses the pages would show it.
+            a.mov_ri(X9, 0x77);
+            a.str_idx(X9, X19, X10, 1, false);
+            a.mov_ri(X10, (mib << 20) - 4096);
+            a.str_idx(X9, X19, X10, 1, false);
+        }
+        // Back to 2 MiB (the tail is gone), then to 3 MiB: the tail is zero again.
+        a.mov_rr(X0, X19);
+        a.mov_ri(X1, 2 << 20);
+        a.bl(rt.realloc);
+        a.mov_rr(X19, X0);
+        a.mov_rr(X0, X19);
+        a.mov_ri(X1, 3 << 20);
+        a.bl(rt.realloc);
+        a.mov_rr(X19, X0);
+        a.mov_ri(X10, (3 << 20) - 4096);
+        a.ldr_idx(X9, X19, X10, 1, false);
+        a.cbnz(X9, bad);
+        a.mov_ri(X10, (2 << 20) + 100);
+        a.ldr_idx(X9, X19, X10, 1, false);
+        a.cbnz(X9, bad);
+        a.mov_ri(X10, (1 << 20) - 1);
+        a.ldr_idx(X9, X19, X10, 1, false);
+        a.cmp_ri(X9, 0x5A);
+        a.b_cond(Cond::Ne, bad);
+        a.mov_rr(X0, X19);
+        a.bl(rt.free);
+        say(a, ro, rt, "stepped\n");
+        a.b(end);
+        a.bind(bad);
+        say(a, ro, rt, "bad\n");
+        a.bind(end);
+    });
+    if let Some(r) = run(&img) {
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            ("stepped\n", "", 0)
+        );
+    }
+}
+
 /// `fmod` bit by bit against Rust's `%` for the edge cases and 30,000 random pairs.
 #[test]
 fn a64_fmod_is_exact() {
