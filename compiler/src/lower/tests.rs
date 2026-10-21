@@ -404,6 +404,15 @@ fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
             );
         }
     }
+    // The AArch64 build (run under qemu on other machines) must print the same and leak nothing.
+    if let Some(r) = exec::build_and_run_a64(m, true) {
+        assert_eq!(r.out, want, "AArch64 output ({what}) differs in {src}");
+        assert_eq!(
+            (r.err.as_str(), r.code),
+            ("", 0),
+            "AArch64 run ({what}) in {src}"
+        );
+    }
 }
 
 #[test]
@@ -1410,6 +1419,20 @@ fn agree(src: &str) {
             ),
         }
     }
+    for (what, m) in [("plain", &l.module), ("optimised", &optimised)] {
+        let Some(r) = exec::build_and_run_a64(m, false) else {
+            continue;
+        };
+        assert_eq!(r.out, o.output, "{what} AArch64: output differs in {src}");
+        match &o.result {
+            Ok(_) => assert_eq!((r.err.as_str(), r.code), ("", 0), "{what} AArch64: {src}"),
+            Err(msg) => assert_eq!(
+                (r.err.as_str(), r.code),
+                (format!("stopped: {msg}\n").as_str(), 1),
+                "{what} AArch64: {src}"
+            ),
+        }
+    }
 }
 
 /// Division and remainder by constants that are not powers of two run as a high multiply (card A-11,
@@ -2251,6 +2274,13 @@ fn native_runaway_recursion_stops_cleanly() {
                 (r.out.trim_end(), r.err.trim_end(), r.code),
                 ("before", "stopped: stack overflow", 1),
                 "{os:?} in {src}"
+            );
+        }
+        if let Some(r) = exec::build_and_run_a64(&l.module, false) {
+            assert_eq!(
+                (r.out.trim_end(), r.err.trim_end(), r.code),
+                ("before", "stopped: stack overflow", 1),
+                "AArch64 in {src}"
             );
         }
     }
