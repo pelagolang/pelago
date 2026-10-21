@@ -371,7 +371,12 @@ def export_png(chrome, svg, out, width, transparent=True):
             "--default-background-color=" + ("00000000" if transparent else "ffffffff"),
             f"--screenshot={out}", f"--window-size={width},{height + 150}", page.resolve().as_uri(),
         ]
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+        for attempt in range(3):  # headless Chrome occasionally dies on a busy machine; try again
+            r = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            if r.returncode == 0 and os.path.exists(out):
+                break
+            if attempt == 2:
+                sys.exit(f"{chrome} failed (exit {r.returncode}) on {svg}:\n{r.stderr[-1500:]}")
     crop_png(out, width, height)
 
 
@@ -646,7 +651,7 @@ def main():
     for f in sorted(glob.glob(str(BRAND / "spec/*.svg"))):
         job(os.path.relpath(f, BRAND).replace(os.sep, "/"), os.path.relpath(f, BRAND).replace(os.sep, "/")[:-4] + ".png", 1600, transparent=False)
 
-    with ThreadPoolExecutor(4) as pool:
+    with ThreadPoolExecutor(1 if sys.platform == "darwin" else 4) as pool:  # parallel headless Chrome is flaky on macOS
         for _ in pool.map(lambda a: export_png(chrome, *a), jobs):
             pass
     print(f"{len(jobs)} PNG files written")
