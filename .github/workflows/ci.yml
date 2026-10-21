@@ -36,3 +36,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get update && sudo apt-get install -y binutils
       - run: cargo test --all
+
+  # The AArch64 Windows programs run for real on a Windows ARM machine (the x86-64 ones are skipped there).
+  windows-arm:
+    runs-on: windows-11-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --all

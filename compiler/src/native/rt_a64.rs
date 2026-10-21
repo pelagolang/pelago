@@ -1,4 +1,4 @@
-//! The runtime for AArch64 Linux (card A-10), written as machine code like `rt.rs` is for x86-64:
+//! The runtime for AArch64 (card A-10), written as machine code like `rt.rs` is for x86-64:
 //! process start, output, the stop routine, the allocator and the routines the generator calls
 //! (`memcpy`, `fmod`). The behaviour is the same as the x86-64 runtime's; see `rt.rs` for the
 //! state layout (`STATE_SIZE` bytes at the start of `.data`) and `docs/design/backend.md`.
@@ -7,15 +7,33 @@
 //! routine may change `x0` to `x17` and the flags; it keeps `x19` to `x28`, `x29` and the stack
 //! pointer. The system call numbers are the generic Linux ones (`write` 64, `exit_group` 94,
 //! `mmap` 222, ...), not the x86-64 ones.
+//!
+//! On Windows the same routines call `kernel32` through the import table (`win_call`). Those calls
+//! may change `x0` to `x17`, `v0` to `v7` and the flags and keep `x19` and up, which is what this
+//! runtime promises already; `x18` is the system's and is never touched. Windows has no `mremap`, so
+//! a large block always grows by copying, and its stack is reserved and committed at once (it is
+//! only touched as it is used) with an inaccessible zone at the bottom.
+//!
+//! State words (see `rt.rs`): 144 the base of our stack (0: the system's), 152 the top of the stack
+//! the Windows fault handler runs on (0: none), 160 scratch for `VirtualProtect` and `GetConsoleMode`.
 
 use super::a64::*;
 use super::elf::Blob;
+use super::rt::{
+    IMP_ADD_VEH, IMP_EXIT_PROCESS, IMP_GET_CONSOLE_MODE, IMP_GET_STD_HANDLE, IMP_VIRTUAL_ALLOC,
+    IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT, IMP_WRITE_FILE,
+};
+use super::Os;
 
 pub use super::rt::STATE_SIZE;
 
 const PRINT_BUF: i64 = 64 * 1024;
 const CHUNK: i64 = 1 << 20;
 const STACK: i64 = 1 << 30;
+/// The stack on Windows: reserved and committed in one go, 256 MiB.
+const STACK_WIN: i64 = 1 << 28;
+/// The stack the Windows fault handler runs on.
+const HANDLER_STACK_WIN: i64 = 64 * 1024;
 /// The lowest 1 MiB of our stack is mapped inaccessible, so running into it is a fault.
 const GUARD: i64 = 1 << 20;
 /// Faults this far below the base count as stack overflow too (a frame can step over a guard).
@@ -70,10 +88,26 @@ fn sys(a: &mut Asm, nr: i64) {
     a.svc();
 }
 
-/// `mmap(0, len, PROT_READ | PROT_WRITE, flags, -1, 0)`; the address (or an error value) in `x0`.
-fn mmap(a: &mut Asm, len: i64, flags: i64) {
+/// Calls the imported Windows function `import` (an index into `rt::IMPORTS`) with the arguments in
+/// `x0` to `x7`. The link register is lost: the caller keeps its own.
+fn win_call(a: &mut Asm, import: usize) {
+    a.lea_sect(X16, Sect::Idata, super::pe::iat_slot(import));
+    a.ldr(X16, X16, 0, 8);
+    a.blr(X16);
+}
+
+/// Fresh zeroed read-write memory (`mmap(0, len, PROT_READ | PROT_WRITE, flags, -1, 0)` on Linux,
+/// `VirtualAlloc` on Windows) of the length in `x1`; the address, or an error value that [`failed`]
+/// recognises, in `x0`.
+fn map_x1(a: &mut Asm, os: Os, flags: i64) {
+    if os == Os::Windows {
+        a.mov_ri(X0, 0);
+        a.mov_ri(X2, 0x3000); // commit and reserve
+        a.mov_ri(X3, 4); // read and write
+        win_call(a, IMP_VIRTUAL_ALLOC);
+        return;
+    }
     a.mov_ri(X0, 0);
-    a.mov_ri(X1, len);
     a.mov_ri(X2, 3);
     a.mov_ri(X3, flags);
     a.mov_ri(X4, -1);
@@ -81,8 +115,18 @@ fn mmap(a: &mut Asm, len: i64, flags: i64) {
     sys(a, SYS_MMAP);
 }
 
-/// Jumps to `to` when `r` holds an error value of a system call (-4095 to -1).
-fn failed(a: &mut Asm, r: Reg, to: Label) {
+fn mmap(a: &mut Asm, os: Os, len: i64, flags: i64) {
+    a.mov_ri(X1, len);
+    map_x1(a, os, flags);
+}
+
+/// Jumps to `to` when `r` holds the failure of a mapping call: an error value of a system call
+/// (-4095 to -1), or null on Windows.
+fn failed(a: &mut Asm, os: Os, r: Reg, to: Label) {
+    if os == Os::Windows {
+        a.cbz(r, to);
+        return;
+    }
     a.mov_ri(X15, -4095);
     a.cmp_rr(r, X15);
     a.b_cond(Cond::Hs, to);
@@ -117,7 +161,15 @@ fn leave(a: &mut Asm) {
 /// Emits `_start` (at offset 0 of the code) and the routines. `main` is called with no arguments;
 /// its result is ignored. With `leak_check`, the live-block count is checked after `main` returns:
 /// a leak prints `leaked N allocation(s)` to standard error and exits with status 3.
-pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check: bool) -> Runtime {
+pub fn emit(
+    a: &mut Asm,
+    ro: &mut Blob,
+    data: &mut Blob,
+    main: Label,
+    leak_check: bool,
+    os: Os,
+) -> Runtime {
+    let win = os == Os::Windows;
     let state_at = data.add_zero(STATE_SIZE, 16);
     assert_eq!(state_at, 0, "the runtime state must come first in .data");
     let rt = Runtime {
@@ -148,16 +200,19 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
     // A big stack of our own, taken lazily, so deep recursion works like it does in the
     // interpreter; if the mapping fails, the stack the system gave us stays.
     let keep = a.new_label();
-    mmap(a, STACK, 0x4022); // private, anonymous, no reservation
-    failed(a, X0, keep);
+    let stack = if win { STACK_WIN } else { STACK };
+    mmap(a, os, stack, 0x4022); // Linux: private, anonymous, no reservation
+    failed(a, os, X0, keep);
     a.mov_rr(X19, X0);
-    // Big frames (a 40 MB array in a local) fault in 2 MiB at a time when the kernel agrees.
-    a.mov_ri(X1, STACK);
-    a.mov_ri(X2, 14); // MADV_HUGEPAGE
-    sys(a, SYS_MADVISE);
+    if !win {
+        // Big frames (a 40 MB array in a local) fault in 2 MiB at a time when the kernel agrees.
+        a.mov_ri(X1, STACK);
+        a.mov_ri(X2, 14); // MADV_HUGEPAGE
+        sys(a, SYS_MADVISE);
+    }
     state(a, X9, 144);
     a.str(X19, X9, 0, 8);
-    a.mov_ri(X9, STACK);
+    a.mov_ri(X9, stack);
     a.add_rr(X9, X19, X9);
     a.mov_to_sp(X9);
     a.bind(keep);
@@ -165,22 +220,31 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
     a.and_ri(X9, X9, !15);
     a.mov_to_sp(X9);
     // The output buffer; without one, `print` writes straight through.
-    mmap(a, PRINT_BUF, 0x22);
+    mmap(a, os, PRINT_BUF, 0x22);
     let ok = a.new_label();
-    failed(a, X0, ok);
+    failed(a, os, X0, ok);
     a.mov_ri(X0, 0);
     a.bind(ok);
     state(a, X9, 128);
     a.str(X0, X9, 0, 8);
     // A person watching a terminal sees each print at once: no buffer there.
     let piped = a.new_label();
-    a.sub_ri(SP, SP, 64);
-    a.mov_ri(X0, 1);
-    a.mov_ri(X1, 0x5401); // TCGETS
-    a.mov_from_sp(X2);
-    sys(a, SYS_IOCTL);
-    a.add_ri(SP, SP, 64);
-    a.cbnz(X0, piped);
+    if win {
+        a.mov_ri(X0, -11);
+        win_call(a, IMP_GET_STD_HANDLE);
+        state(a, X1, 160);
+        win_call(a, IMP_GET_CONSOLE_MODE);
+        a.uxt(X0, X0, 32); // a BOOL
+        a.cbz(X0, piped);
+    } else {
+        a.sub_ri(SP, SP, 64);
+        a.mov_ri(X0, 1);
+        a.mov_ri(X1, 0x5401); // TCGETS
+        a.mov_from_sp(X2);
+        sys(a, SYS_IOCTL);
+        a.add_ri(SP, SP, 64);
+        a.cbnz(X0, piped);
+    }
     state(a, X9, 128);
     a.str(XZR, X9, 0, 8);
     a.bind(piped);
@@ -190,37 +254,57 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
     a.ldr(X0, X9, 0, 8);
     a.cbz(X0, noguard);
     a.mov_ri(X1, GUARD);
-    a.mov_ri(X2, 0);
-    sys(a, SYS_MPROTECT);
+    if win {
+        a.mov_ri(X2, 1); // PAGE_NOACCESS
+        state(a, X3, 160);
+        win_call(a, IMP_VIRTUAL_PROTECT);
+    } else {
+        a.mov_ri(X2, 0);
+        sys(a, SYS_MPROTECT);
+    }
     a.bind(noguard);
     // A stack of its own for the handler: the faulting one may be the one that ran out.
     let nosig = a.new_label();
-    mmap(a, ALT_STACK, 0x22);
-    failed(a, X0, nosig);
-    a.sub_ri(SP, SP, 64);
-    a.str(X0, SP, 0, 8); // stack_t { sp, flags, size }
-    a.str(XZR, SP, 8, 8);
-    a.mov_ri(X9, ALT_STACK);
-    a.str(X9, SP, 16, 8);
-    a.mov_from_sp(X0);
-    a.mov_ri(X1, 0);
-    sys(a, SYS_SIGALTSTACK);
-    // struct sigaction { handler, flags, (restorer,) mask }: on the alternate stack, with siginfo.
-    // The words after the flags stay zero, which suits the layout with and without a restorer.
-    a.lea_label(X9, fault);
-    a.str(X9, SP, 32, 8);
-    a.mov_ri(X9, 0x0800_0004); // SA_ONSTACK | SA_SIGINFO
-    a.str(X9, SP, 40, 8);
-    a.str(XZR, SP, 48, 8);
-    a.str(XZR, SP, 56, 8);
-    for sig in [11, 7] {
-        a.mov_ri(X0, sig);
-        a.add_ri(X1, SP, 32);
-        a.mov_ri(X2, 0);
-        a.mov_ri(X3, 8);
-        sys(a, SYS_RT_SIGACTION);
+    if win {
+        mmap(a, os, HANDLER_STACK_WIN, 0);
+        let none = a.new_label();
+        failed(a, os, X0, none);
+        a.mov_ri(X9, HANDLER_STACK_WIN);
+        a.add_rr(X0, X0, X9);
+        state(a, X9, 152);
+        a.str(X0, X9, 0, 8);
+        a.bind(none);
+        a.mov_ri(X0, 1); // call this handler first
+        a.lea_label(X1, fault);
+        win_call(a, IMP_ADD_VEH);
+    } else {
+        mmap(a, os, ALT_STACK, 0x22);
+        failed(a, os, X0, nosig);
+        a.sub_ri(SP, SP, 64);
+        a.str(X0, SP, 0, 8); // stack_t { sp, flags, size }
+        a.str(XZR, SP, 8, 8);
+        a.mov_ri(X9, ALT_STACK);
+        a.str(X9, SP, 16, 8);
+        a.mov_from_sp(X0);
+        a.mov_ri(X1, 0);
+        sys(a, SYS_SIGALTSTACK);
+        // struct sigaction { handler, flags, (restorer,) mask }: on the alternate stack, with siginfo.
+        // The words after the flags stay zero, which suits the layout with and without a restorer.
+        a.lea_label(X9, fault);
+        a.str(X9, SP, 32, 8);
+        a.mov_ri(X9, 0x0800_0004); // SA_ONSTACK | SA_SIGINFO
+        a.str(X9, SP, 40, 8);
+        a.str(XZR, SP, 48, 8);
+        a.str(XZR, SP, 56, 8);
+        for sig in [11, 7] {
+            a.mov_ri(X0, sig);
+            a.add_ri(X1, SP, 32);
+            a.mov_ri(X2, 0);
+            a.mov_ri(X3, 8);
+            sys(a, SYS_RT_SIGACTION);
+        }
+        a.add_ri(SP, SP, 64);
     }
-    a.add_ri(SP, SP, 64);
     a.bind(nosig);
     a.bl(main);
     let clean = a.new_label();
@@ -251,7 +335,11 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
     a.mov_rr(X19, X0);
     a.bl(flush);
     a.mov_rr(X0, X19);
-    sys(a, SYS_EXIT_GROUP);
+    if win {
+        win_call(a, IMP_EXIT_PROCESS);
+    } else {
+        sys(a, SYS_EXIT_GROUP);
+    }
     a.brk();
 
     // ---- rt_flush ----------------------------------------------------------------------------------
@@ -319,7 +407,44 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
 
     // ---- rt_write ----------------------------------------------------------------------------------
     a.bind(rt.write_fd);
-    {
+    if win {
+        // GetStdHandle once, then WriteFile until everything is written. x19 the handle, x20 the
+        // pointer, x21 the count; the count `WriteFile` reports goes to the word at `sp`.
+        let (wloop, wdone, std_out, have) =
+            (a.new_label(), a.new_label(), a.new_label(), a.new_label());
+        enter(a);
+        a.sub_ri(SP, SP, 16);
+        a.mov_rr(X20, X1);
+        a.mov_rr(X21, X2);
+        a.cmp_ri(X0, 1);
+        a.b_cond(Cond::Eq, std_out);
+        a.mov_ri(X0, -12); // standard error
+        a.b(have);
+        a.bind(std_out);
+        a.mov_ri(X0, -11); // standard output
+        a.bind(have);
+        win_call(a, IMP_GET_STD_HANDLE);
+        a.mov_rr(X19, X0);
+        a.bind(wloop);
+        a.cbz(X21, wdone);
+        a.mov_rr(X0, X19);
+        a.mov_rr(X1, X20);
+        a.mov_rr(X2, X21);
+        a.mov_from_sp(X3);
+        a.mov_ri(X4, 0); // no overlapped I/O
+        win_call(a, IMP_WRITE_FILE);
+        a.uxt(X0, X0, 32); // a BOOL
+        a.cbz(X0, wdone);
+        a.ldr(X9, SP, 0, 4);
+        a.cbz(X9, wdone);
+        a.add_rr(X20, X20, X9);
+        a.sub_rr(X21, X21, X9);
+        a.b(wloop);
+        a.bind(wdone);
+        a.add_ri(SP, SP, 16);
+        leave(a);
+        a.ret();
+    } else {
         let (wloop, wdone) = (a.new_label(), a.new_label());
         a.mov_rr(X9, X0);
         a.bind(wloop);
@@ -428,9 +553,28 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
     // ---- the fault handler -------------------------------------------------------------------------
     // `x0` is the signal, `x1` the siginfo (the faulting address at +16).
     {
-        let (overflow, invalid) = (a.new_label(), a.new_label());
+        let (overflow, invalid, check) = (a.new_label(), a.new_label(), a.new_label());
         a.bind(fault);
-        a.ldr(X9, X1, 16, 8);
+        if win {
+            // `x0` the exception pointers: the record's code, and for an access violation the
+            // address at +0x28. Anything else is passed on (CONTINUE_SEARCH, 0).
+            let pass = a.new_label();
+            a.ldr(X9, X0, 0, 8);
+            a.ldr(X10, X9, 0, 4);
+            a.mov_ri(X11, 0xC000_00FD); // stack overflow
+            a.cmp_rr(X10, X11);
+            a.b_cond(Cond::Eq, overflow);
+            a.mov_ri(X11, 0xC000_0005); // access violation
+            a.cmp_rr(X10, X11);
+            a.b_cond(Cond::Eq, check);
+            a.bind(pass);
+            a.mov_ri(X0, 0);
+            a.ret();
+            a.bind(check);
+            a.ldr(X9, X9, 0x28, 8);
+        } else {
+            a.ldr(X9, X1, 16, 8);
+        }
         state(a, X10, 144);
         a.ldr(X11, X10, 0, 8);
         a.cbz(X11, invalid);
@@ -440,10 +584,27 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
         a.cmp_rr(X9, X12);
         a.b_cond(Cond::Lo, overflow);
         a.bind(invalid);
+        if win {
+            // The fault may have come from the end of our stack: leave it.
+            let keep = a.new_label();
+            state(a, X10, 152);
+            a.ldr(X11, X10, 0, 8);
+            a.cbz(X11, keep);
+            a.mov_to_sp(X11);
+            a.bind(keep);
+        }
         a.lea_sect(X0, Sect::Rodata, msg_invalid);
         a.mov_ri(X1, 21);
         a.bl(rt.stop);
         a.bind(overflow);
+        if win {
+            let keep = a.new_label();
+            state(a, X10, 152);
+            a.ldr(X11, X10, 0, 8);
+            a.cbz(X11, keep);
+            a.mov_to_sp(X11);
+            a.bind(keep);
+        }
         a.lea_sect(X0, Sect::Rodata, msg_overflow);
         a.mov_ri(X1, 14);
         a.bl(rt.stop);
@@ -502,8 +663,8 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
     a.ldr(X13, X10, 8, 8);
     a.cmp_rr(X12, X13);
     a.b_cond(Cond::Ls, carve);
-    mmap(a, CHUNK, 0x22);
-    failed(a, X0, oom);
+    mmap(a, os, CHUNK, 0x22);
+    failed(a, os, X0, oom);
     state(a, X10, 96);
     a.str(X0, X10, 0, 8);
     a.mov_ri(X9, CHUNK);
@@ -537,16 +698,13 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
     zero_range(a, X13, X14);
     a.b(out);
     a.bind(mapnew);
-    a.mov_ri(X0, 0);
     a.mov_rr(X1, X21);
-    a.mov_ri(X2, 3);
-    a.mov_ri(X3, 0x22);
-    a.mov_ri(X4, -1);
-    a.mov_ri(X5, 0);
-    sys(a, SYS_MMAP);
-    failed(a, X0, oom);
+    map_x1(a, os, 0x22);
+    failed(a, os, X0, oom);
     a.mov_rr(X22, X0);
-    advise_huge(a, X22, X21);
+    if !win {
+        advise_huge(a, X22, X21);
+    }
     a.mov_ri(X9, LARGE_CLASS);
     a.str(X9, X22, 0, 8);
     a.str(X21, X22, 8, 8);
@@ -587,9 +745,19 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
         a.str(X10, X12, 0, 8);
         a.ret();
         a.bind(unmap);
-        a.ldr(X1, X10, 8, 8);
-        a.mov_rr(X0, X10);
-        sys(a, SYS_MUNMAP);
+        if win {
+            // VirtualFree(block, 0, MEM_RELEASE); the call loses the link register.
+            a.stp_pre(FP, LR, SP, -16);
+            a.mov_rr(X0, X10);
+            a.mov_ri(X1, 0);
+            a.mov_ri(X2, 0x8000);
+            win_call(a, IMP_VIRTUAL_FREE);
+            a.ldp_post(FP, LR, SP, 16);
+        } else {
+            a.ldr(X1, X10, 8, 8);
+            a.mov_rr(X0, X10);
+            sys(a, SYS_MUNMAP);
+        }
         a.ret();
     }
 
@@ -614,24 +782,29 @@ pub fn emit(a: &mut Asm, ro: &mut Blob, data: &mut Blob, main: Label, leak_check
         a.ldr(X11, X10, 0, 8);
         a.cmp_ri(X11, LARGE_CLASS as u32);
         a.b_cond(Cond::Ne, generic);
-        // New mapping length: header plus payload, whole pages.
-        a.add_imm(X12, X20, 16 + 4095);
-        a.and_ri(X12, X12, !4095);
-        a.ldr(X13, X10, 8, 8); // old length
-        a.cmp_rr(X12, X13);
-        a.b_cond(Cond::Eq, rdone); // same pages: the block stays
-        a.mov_rr(X21, X12);
-        a.mov_rr(X0, X10);
-        a.mov_rr(X1, X13);
-        a.mov_rr(X2, X12);
-        a.mov_ri(X3, 1); // may move
-        sys(a, SYS_MREMAP);
-        failed(a, X0, oom);
-        a.str(X21, X0, 8, 8);
-        a.mov_rr(X22, X0);
-        advise_huge(a, X22, X21);
-        a.add_ri(X19, X22, 16);
-        a.b(rdone);
+        if win {
+            // No `mremap` here: a large block moves by copying.
+            a.b(generic);
+        } else {
+            // New mapping length: header plus payload, whole pages.
+            a.add_imm(X12, X20, 16 + 4095);
+            a.and_ri(X12, X12, !4095);
+            a.ldr(X13, X10, 8, 8); // old length
+            a.cmp_rr(X12, X13);
+            a.b_cond(Cond::Eq, rdone); // same pages: the block stays
+            a.mov_rr(X21, X12);
+            a.mov_rr(X0, X10);
+            a.mov_rr(X1, X13);
+            a.mov_rr(X2, X12);
+            a.mov_ri(X3, 1); // may move
+            sys(a, SYS_MREMAP);
+            failed(a, os, X0, oom);
+            a.str(X21, X0, 8, 8);
+            a.mov_rr(X22, X0);
+            advise_huge(a, X22, X21);
+            a.add_ri(X19, X22, 16);
+            a.b(rdone);
+        }
         // Generic: allocate, copy what fits, free the old block.
         a.bind(generic);
         a.mov_rr(X0, X20);

@@ -43,14 +43,14 @@ pub const IMPORTS: [&str; 8] = [
     "VirtualProtect",
     "GetConsoleMode",
 ];
-const IMP_GET_STD_HANDLE: usize = 0;
-const IMP_WRITE_FILE: usize = 1;
-const IMP_EXIT_PROCESS: usize = 2;
-const IMP_VIRTUAL_ALLOC: usize = 3;
-const IMP_VIRTUAL_FREE: usize = 4;
-const IMP_ADD_VEH: usize = 5;
-const IMP_VIRTUAL_PROTECT: usize = 6;
-const IMP_GET_CONSOLE_MODE: usize = 7;
+pub(super) const IMP_GET_STD_HANDLE: usize = 0;
+pub(super) const IMP_WRITE_FILE: usize = 1;
+pub(super) const IMP_EXIT_PROCESS: usize = 2;
+pub(super) const IMP_VIRTUAL_ALLOC: usize = 3;
+pub(super) const IMP_VIRTUAL_FREE: usize = 4;
+pub(super) const IMP_ADD_VEH: usize = 5;
+pub(super) const IMP_VIRTUAL_PROTECT: usize = 6;
+pub(super) const IMP_GET_CONSOLE_MODE: usize = 7;
 
 /// Linux: the lowest 1 MiB of our stack is mapped inaccessible, so running into it is a fault.
 const GUARD_LINUX: i64 = 1 << 20;

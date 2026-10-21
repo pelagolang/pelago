@@ -1,5 +1,5 @@
-//! Writes a Windows x86-64 executable (PE32+, console subsystem) that imports a few functions from
-//! `kernel32.dll` and nothing else.
+//! Writes a Windows executable (PE32+, console subsystem) for x86-64 or ARM64 that imports a few
+//! functions from `kernel32.dll` and nothing else.
 //!
 //! Layout (file alignment 0x200, section alignment 0x1000, image base 0x1_4000_0000, no relocations:
 //! the image does not ask for address randomisation):
@@ -97,16 +97,55 @@ fn idata(rva: u32) -> Vec<u8> {
     w.0
 }
 
-/// Builds the executable.
+/// Builds the x86-64 executable.
 pub fn write(asm: &Asm, rodata: &Blob, data: &Blob, bss: usize) -> Result<Vec<u8>, String> {
+    write_with(
+        MACHINE_X86_64,
+        asm.code.len(),
+        |a| asm.finish(a),
+        rodata,
+        data,
+        bss,
+    )
+}
+
+/// The same for ARM64 code.
+pub fn write_a64(
+    asm: &super::a64::Asm,
+    rodata: &Blob,
+    data: &Blob,
+    bss: usize,
+) -> Result<Vec<u8>, String> {
+    write_with(
+        MACHINE_ARM64,
+        asm.code.len(),
+        |a| asm.finish(a),
+        rodata,
+        data,
+        bss,
+    )
+}
+
+const MACHINE_X86_64: u16 = 0x8664;
+const MACHINE_ARM64: u16 = 0xAA64;
+
+/// `finish` turns the code into its final bytes once the addresses of the sections are known.
+fn write_with(
+    machine: u16,
+    code_len: usize,
+    finish: impl FnOnce(SectAddrs) -> Result<Vec<u8>, String>,
+    rodata: &Blob,
+    data: &Blob,
+    bss: usize,
+) -> Result<Vec<u8>, String> {
     let text_rva = SECT_ALIGN;
-    let ro_rva = align_up(text_rva + asm.code.len() as u64, SECT_ALIGN);
+    let ro_rva = align_up(text_rva + code_len as u64, SECT_ALIGN);
     let data_rva = align_up(ro_rva + (rodata.bytes.len() as u64).max(1), SECT_ALIGN);
     let data_mem = data.bytes.len() as u64 + bss as u64;
     let id_rva = align_up(data_rva + data_mem.max(1), SECT_ALIGN);
     let id = idata(id_rva as u32);
     let image_size = align_up(id_rva + id.len() as u64, SECT_ALIGN);
-    let text = asm.finish(SectAddrs {
+    let text = finish(SectAddrs {
         text: IMAGE_BASE + text_rva,
         rodata: IMAGE_BASE + ro_rva,
         data: IMAGE_BASE + data_rva,
@@ -127,7 +166,7 @@ pub fn write(asm: &Asm, rodata: &Blob, data: &Blob, bss: usize) -> Result<Vec<u8
     w.pad_to(0x40);
     // PE signature and COFF header.
     w.0.extend_from_slice(b"PE\0\0");
-    w.u16(0x8664); // x86-64
+    w.u16(machine);
     w.u16(4); // sections
     w.u32(0); // time stamp
     w.u32(0);

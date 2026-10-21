@@ -606,8 +606,18 @@ mod a64_run {
     pub use super::super::a64::*;
     use super::super::elf::{self, Blob};
     use super::super::exec::{self, Ran};
+    use super::super::pe;
     use super::super::rt_a64::{self, Runtime};
     use super::super::{Arch, Os};
+
+    /// The system these programs are built for: Windows on a Windows ARM machine, Linux elsewhere.
+    pub fn os() -> Os {
+        if cfg!(windows) {
+            Os::Windows
+        } else {
+            Os::Linux
+        }
+    }
 
     /// A program: the runtime, then `body` as `main` (which may use `x19` to `x22` and must end in
     /// `ret`; its link register is saved for it).
@@ -617,18 +627,22 @@ mod a64_run {
     ) -> Vec<u8> {
         let (mut a, mut ro, mut data) = (Asm::new(), Blob::default(), Blob::default());
         let main = a.new_label();
-        let rt = rt_a64::emit(&mut a, &mut ro, &mut data, main, leak);
+        let rt = rt_a64::emit(&mut a, &mut ro, &mut data, main, leak, os());
         a.bind(main);
         a.stp_pre(FP, LR, SP, -16);
         body(&mut a, &mut ro, &mut data, &rt);
         a.ldp_post(FP, LR, SP, 16);
         a.ret();
-        elf::write_a64(&a, &ro, &data, 0, &[]).unwrap()
+        match os() {
+            Os::Linux => elf::write_a64(&a, &ro, &data, 0, &[]).unwrap(),
+            Os::Windows => pe::write_a64(&a, &ro, &data, 0).unwrap(),
+        }
     }
 
     /// Runs the image, or `None` where AArch64 programs cannot run.
     pub fn run(image: &[u8]) -> Option<Ran> {
-        exec::can_run_a64().then(|| exec::run_image_arch(Arch::Aarch64, Os::Linux, image).unwrap())
+        exec::can_run_a64_on(os())
+            .then(|| exec::run_image_arch(Arch::Aarch64, os(), image).unwrap())
     }
 
     /// Code that writes `text` to standard output.
@@ -645,8 +659,13 @@ mod a64_run {
 fn a64_hello_world_is_a_real_executable() {
     use a64_run::*;
     let img = program(true, |a, ro, _, rt| say(a, ro, rt, "hello, arm world\n"));
-    assert_eq!(&img[..4], b"\x7fELF");
-    assert_eq!(&img[18..20], &[183, 0], "EM_AARCH64");
+    if os() == super::Os::Linux {
+        assert_eq!(&img[..4], b"\x7fELF");
+        assert_eq!(&img[18..20], &[183, 0], "EM_AARCH64");
+    } else {
+        assert_eq!(&img[..2], b"MZ");
+        assert_eq!(&img[0x44..0x46], &[0x64, 0xAA], "IMAGE_FILE_MACHINE_ARM64");
+    }
     if let Some(r) = run(&img) {
         assert_eq!(
             (r.out.as_str(), r.err.as_str(), r.code),
