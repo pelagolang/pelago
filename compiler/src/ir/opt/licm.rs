@@ -114,7 +114,9 @@ fn candidates(f: &Func, dom: &Dom, lp: &Loop) -> Vec<usize> {
             }
         }
     }
-    // A constant is only worth moving for the instructions that need it.
+    // An integer constant is only worth moving for the instructions that need it (otherwise it is
+    // an immediate). A float constant costs a move through a general register and is worth a
+    // register of its own for the whole loop.
     let mut needed = vec![false; f.values.len()];
     for &ii in &out {
         if !matches!(f.insts[ii].op, Op::Const(..)) {
@@ -124,6 +126,7 @@ fn candidates(f: &Func, dom: &Dom, lp: &Loop) -> Vec<usize> {
         }
     }
     out.retain(|&ii| match (&f.insts[ii].op, f.insts[ii].result) {
+        (Op::Const(IrTy::F32 | IrTy::F64, Const::Float(x)), _) => x.to_bits() != 0,
         (Op::Const(..), Some(r)) => needed[r.0 as usize],
         _ => true,
     });
