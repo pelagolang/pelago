@@ -66,3 +66,5 @@ The simple generator is about 700 lines of templates. Two ways to support a seco
 1. AArch64 next after A-09's speed work (recommended), or before it?
 2. Option (1) for now, option (2) with A-11 (recommended)?
 3. Is macOS wanted at all in the first round, or only Linux and Windows on ARM?
+
+**Update 2026-10-21:** W4 (machine-level IR) has started; plan in `docs/design/mir.md`. Step M5 moves the AArch64 backend onto the shared allocator and selector and removes `gen_a64.rs` and `regs_a64.rs`.

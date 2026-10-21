@@ -59,12 +59,12 @@ Size is S (hours), M (a day), L (several days). "Collides with" means the same f
 - **Collides with:** W4, W5, W6, W11 (all in `gen.rs`) and W1 (small). Run W3, W5, W11, W4 in one thread, in that order.
 - **Check:** `--no-regalloc` still works; three-way tests green; `compare.sh`: fib(38) should drop clearly (today most of its time is call setup and spills).
 
-### W4. A machine-level IR between the IR and the bytes (needed by A-10 option 2)
-- **What:** virtual registers and two-address instructions with one instruction selector per CPU; the allocator of W3 then works on machine code.
-- **Touches:** new `native/mir.rs`, `native/gen.rs` (becomes the selector), `native/regs.rs`.
-- **Depends on:** W3 (do the allocator first against the current generator, then lift it). **Size:** L.
-- **Collides with:** every other `native/` item. Only start it when W3 and W5 are merged.
-- **Why:** card A-10 (AArch64) should share this layer rather than copy `gen.rs`; decision recorded in A-10.
+### W4. A machine-level IR between the IR and the bytes (needed by A-10 option 2) — in progress, plan in [docs/design/mir.md](../design/mir.md)
+- **What:** virtual registers and two-address instructions with one instruction selector per CPU; one shared allocator (the one of W3, generalised to a register file per target) works on machine code, then passes before and after allocation. Built beside `gen.rs`, taking over function by function (steps M0 to M6 in the design page); the old generators go when the new path matches them row by row.
+- **Touches:** new `native/mir.rs`, `native/ralloc.rs`, per-CPU selectors and emitters; `gen.rs`, `regs.rs`, `gen_a64.rs`, `regs_a64.rs` are removed at M4 and M5.
+- **Depends on:** W3, W5, W11 (all done). **Size:** L, six PRs. Thread: "Machine-level IR (W4)", branches `claude/refactor/mir-core`, `claude/perf/mir-x86-select`, ...
+- **Collides with:** every other `native/` item, but M1 and M2 only add files.
+- **Why:** card A-10 (AArch64) shares this layer instead of copying `gen.rs` (the ARM rows are 1.5x C `-O2` against 0.94x on x86-64 because `regs_a64.rs` never splits a value); passes on machine code remove what templates cannot see.
 
 ### W5. Cheaper memory operations — done (addressing modes, frame objects, small copies, slot clearing)
 - **What:** addressing modes (`[base + index*8 + disp]`) for `PtrAdd` + `Load`/`Store`; stop zeroing a `Slot` that the code writes before reading; constant-size `MemCopy` up to 64 bytes as plain moves; zero-fill without `rep stosb` for small slots.
