@@ -46,7 +46,7 @@ mod unroll;
 mod vectorise;
 
 pub use fill::{fill_loops, filled_slots, FillLoop};
-pub use inline::prune;
+pub use inline::{drop_idle_task_drain, prune};
 pub use stats::{stats_of, Stats};
 
 use super::*;
@@ -69,6 +69,7 @@ pub fn optimize(m: &mut Module, opts: Options) {
     if opts.level == 0 {
         return;
     }
+    drop_idle_task_drain(m);
     // Divisions by constants become multiplications only after inlining: a callee's `n / 10` may
     // turn out to have a dividend known to be non-negative, which makes a cheaper sequence.
     let inlining = opts.level >= 2;

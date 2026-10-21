@@ -5,6 +5,9 @@
 
 use super::*;
 
+/// The buffer `print` of one integer uses: the digits, a sign and a newline, right-aligned.
+const INT_LINE: u32 = 32;
+
 impl<'a> Lowerer<'a> {
     // ---- Calling the library by name --------------------------------------------------------------------------------
 
@@ -289,6 +292,11 @@ impl<'a> Lowerer<'a> {
     }
 
     pub(crate) fn print_call(&mut self, e: &'a Expr, args: &'a [Arg]) -> Res {
+        if let [a] = args {
+            if let Some(res) = self.print_int_line(e, &a.value) {
+                return res;
+            }
+        }
         // Each value is shown into one line.
         let line = self.slot_bytes(24, 8);
         let z = self.i64c(0);
@@ -319,6 +327,29 @@ impl<'a> Lowerer<'a> {
         let n = self.load_at(line, 8, IrTy::I64);
         self.emit(Op::Print(d, n), None, e.span);
         Res::Unit
+    }
+
+    /// `print(n)` of one integer: the digits are made in a buffer on the stack and printed, so the
+    /// program needs no heap for it (and no allocator in its executable). `None` for other values.
+    fn print_int_line(&mut self, e: &'a Expr, x: &'a Expr) -> Option<Res> {
+        let t = self.ty_of(x)?;
+        let k = match self.kind(t) {
+            TyKind::Int(k) => k,
+            _ => return None,
+        };
+        let Some(v) = self.scalar(x) else {
+            return Some(Res::Never);
+        };
+        let w = self.resize(v, IrTy::I64, k.signed(), Span::new(0, 0));
+        let buf = self.slot_bytes(INT_LINE, 8);
+        let at = self.call_core("rt_fmt_int_line", vec![buf, w])?;
+        let d = self
+            .emit(Op::PtrAdd(buf, at), Some(IrTy::Ptr), e.span)
+            .unwrap_or(buf);
+        let size = self.i64c(INT_LINE as i64);
+        let n = self.emit(Op::Bin(BinOp::Sub, size, at), Some(IrTy::I64), e.span)?;
+        self.emit(Op::Print(d, n), None, e.span);
+        Some(Res::Unit)
     }
 
     pub(crate) fn concat(&mut self, e: &'a Expr, l: &'a Expr, r: &'a Expr, dst: Value) -> Res {

@@ -433,6 +433,24 @@ fn printing_basic_values() {
 }
 
 #[test]
+fn printing_one_integer_needs_no_heap() {
+    let src = "fn main() {\n print(0)\n print(-9223372036854775807 - 1)\n print(9223372036854775807)\n print(-7)\n print(1234567890)\n const small: int8 = -128\n print(small)\n const big: uint8 = 255\n print(big)\n}\n";
+    assert_eq!(
+        output_of(src),
+        "0\n-9223372036854775808\n9223372036854775807\n-7\n1234567890\n-128\n255\n"
+    );
+    let mut m = lowered(src).module;
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    crate::ir::opt::prune(&mut m, &["main"]);
+    let u = crate::native::Uses::of(&m);
+    assert!(u.print && !u.alloc && !u.free && !u.realloc, "{u:?}");
+    // With a second value the line is built on the heap, as before.
+    let mut m = lowered("fn main() { print(1, 2) }").module;
+    crate::ir::opt::prune(&mut m, &["main"]);
+    assert!(crate::native::Uses::of(&m).alloc);
+}
+
+#[test]
 fn interpolation_and_joining() {
     assert_eq!(
         output_of("fn main() { const name = \"Ann\"\n print(\"hi #name, #(1 + 2)!\") }"),
