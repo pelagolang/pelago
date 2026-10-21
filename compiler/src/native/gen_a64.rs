@@ -45,13 +45,14 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
     let mut g = Gen::new(m);
     g.regalloc = opts.regalloc;
     let main_label = g.funcs[main_fn];
-    let rt = rt_a64::emit(
+    let rt = rt_a64::emit_for(
         &mut g.a,
         &mut g.ro,
         &mut g.data,
         main_label,
         opts.leak_check,
         opts.target,
+        super::Uses::of(m),
     );
     g.rt = Some(rt);
     for d in &m.data {

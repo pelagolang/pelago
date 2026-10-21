@@ -109,13 +109,14 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
     let mut g = Gen::new(m);
     g.regalloc = opts.regalloc;
     let main_label = g.funcs[main_fn];
-    let rt = rt::emit(
+    let rt = rt::emit_for(
         &mut g.a,
         &mut g.ro,
         &mut g.data,
         main_label,
         opts.leak_check,
         opts.target,
+        super::Uses::of(m),
     );
     g.rt = Some(rt);
     g.place_data();
@@ -786,9 +787,10 @@ impl<'m> Gen<'m> {
                 continue;
             }
             let lb = self.block_labels[bi];
-            // A loop starts on a 16-byte boundary (when that costs at most 8 bytes of no-ops).
+            // A loop starts on a 16-byte boundary (when that costs at most 15 bytes of no-ops: a loop whose head
+            // sat 9 to 15 bytes past a boundary ran 30 percent slower than the same loop aligned).
             if heads[bi] {
-                self.a.align(16, 8);
+                self.a.align(16, 15);
             }
             self.a.bind(lb);
             self.stored.clear();

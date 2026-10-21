@@ -270,6 +270,44 @@ fn inline_at(f: &mut Func, bi: usize, pos: usize, callee: &Func) {
     }));
 }
 
+/// A program that starts no task has none to finish when `main` ends: takes out the calls of
+/// `rt_run_pending` (the library function that runs the tasks nobody waited for) when no function
+/// reachable from `main` starts one, so the task queue, and what it needs of the heap, stay out of
+/// the program. Tasks start in `spawn`, whose instances call `rt_task_body`.
+pub fn drop_idle_task_drain(m: &mut Module) {
+    let id_of = |m: &Module, name: &str| m.funcs.iter().position(|f| f.name == name);
+    let (Some(main), Some(drain)) = (id_of(m, "main"), id_of(m, "rt_run_pending")) else {
+        return;
+    };
+    let mut seen = vec![false; m.funcs.len()];
+    seen[main] = true;
+    let mut stack = vec![main];
+    while let Some(x) = stack.pop() {
+        if m.funcs[x].name.starts_with("rt_task_body<") {
+            return;
+        }
+        for b in &m.funcs[x].blocks {
+            for &i in &b.insts {
+                let t = match &m.funcs[x].insts[i].op {
+                    Op::Call(c, _) | Op::FuncAddr(c) => c.0 as usize,
+                    _ => continue,
+                };
+                if t != drain && !seen[t] {
+                    seen[t] = true;
+                    stack.push(t);
+                }
+            }
+        }
+    }
+    for f in &mut m.funcs {
+        let insts = &f.insts;
+        for b in &mut f.blocks {
+            b.insts
+                .retain(|&i| !matches!(&insts[i].op, Op::Call(c, _) if c.0 as usize == drain));
+        }
+    }
+}
+
 /// Removes the functions that cannot be reached from the named roots (by a call or a function
 /// address) and renumbers the rest.
 pub fn prune(m: &mut Module, roots: &[&str]) {

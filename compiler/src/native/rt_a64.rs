@@ -24,7 +24,7 @@ use super::rt::{
     IMP_ADD_VEH, IMP_EXIT_PROCESS, IMP_GET_CONSOLE_MODE, IMP_GET_STD_HANDLE, IMP_VIRTUAL_ALLOC,
     IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT, IMP_WRITE_FILE,
 };
-use super::Os;
+use super::{Os, Uses};
 
 pub use super::rt::STATE_SIZE;
 
@@ -219,6 +219,24 @@ pub fn emit(
     leak_check: bool,
     os: Os,
 ) -> Runtime {
+    emit_for(a, ro, data, main, leak_check, os, Uses::ALL)
+}
+
+/// Like [`emit`], with only the routines `uses` names (the labels of the others are never bound, so
+/// nothing may call them).
+pub fn emit_for(
+    a: &mut Asm,
+    ro: &mut Blob,
+    data: &mut Blob,
+    main: Label,
+    leak_check: bool,
+    os: Os,
+    uses: Uses,
+) -> Runtime {
+    // `realloc` allocates and frees; `print` and `realloc` copy.
+    let alloc_used = uses.alloc || uses.realloc;
+    let free_used = uses.free || uses.realloc;
+    let copy_used = uses.memcpy || uses.print || uses.realloc;
     let win = os == Os::Windows;
     let mac = os == Os::MacOs;
     // Windows and macOS have no `mremap`: a large block reserves eight times its length of address space
@@ -247,9 +265,16 @@ pub fn emit(
     let msg_overflow = ro.add(b"stack overflow", 1);
     let msg_invalid = ro.add(b"invalid memory access", 1);
     let msg_nl = ro.add(b"\n", 1);
-    let msg_oom = ro.add(b"out of memory", 1);
-    let msg_leak1 = ro.add(b"leaked ", 1);
-    let msg_leak2 = ro.add(b" allocation(s)\n", 1);
+    let msg_oom = if alloc_used {
+        ro.add(b"out of memory", 1)
+    } else {
+        0
+    };
+    let (msg_leak1, msg_leak2) = if leak_check {
+        (ro.add(b"leaked ", 1), ro.add(b" allocation(s)\n", 1))
+    } else {
+        (0, 0)
+    };
 
     // ---- _start ------------------------------------------------------------------------------------
     a.mov_rr(FP, XZR);
@@ -275,35 +300,38 @@ pub fn emit(
     a.mov_from_sp(X9);
     a.and_ri(X9, X9, !15);
     a.mov_to_sp(X9);
-    // The output buffer; without one, `print` writes straight through.
-    mmap(a, os, PRINT_BUF, 0x22);
-    let ok = a.new_label();
-    failed(a, os, X0, ok);
-    a.mov_ri(X0, 0);
-    a.bind(ok);
-    state(a, X9, 128);
-    a.str(X0, X9, 0, 8);
-    // A person watching a terminal sees each print at once: no buffer there.
-    let piped = a.new_label();
-    if win {
-        a.mov_ri(X0, -11);
-        win_call(a, IMP_GET_STD_HANDLE);
-        state(a, X1, 160);
-        win_call(a, IMP_GET_CONSOLE_MODE);
-        a.uxt(X0, X0, 32); // a BOOL
-        a.cbz(X0, piped);
-    } else {
-        a.sub_ri(SP, SP, 80);
-        a.mov_ri(X0, 1);
-        a.mov_ri(X1, if mac { 0x4048_7413 } else { 0x5401 }); // TIOCGETA, TCGETS
-        a.mov_from_sp(X2);
-        sys(a, os, Sys::Ioctl);
-        a.add_ri(SP, SP, 80);
-        a.cbnz(X0, piped);
+    if uses.print {
+        // The output buffer; without one, `print` writes straight through.
+        mmap(a, os, PRINT_BUF, 0x22);
+        let ok = a.new_label();
+        failed(a, os, X0, ok);
+        a.mov_ri(X0, 0);
+        a.bind(ok);
+        state(a, X9, 128);
+        a.str(X0, X9, 0, 8);
+        // A person watching a terminal sees each print at once: no buffer there.
+        let piped = a.new_label();
+        if win {
+            a.mov_ri(X0, -11);
+            win_call(a, IMP_GET_STD_HANDLE);
+            state(a, X1, 160);
+            win_call(a, IMP_GET_CONSOLE_MODE);
+            a.uxt(X0, X0, 32); // a BOOL
+            a.cbz(X0, piped);
+        } else {
+            a.sub_ri(SP, SP, 80);
+            a.mov_ri(X0, 1);
+            a.mov_ri(X1, if mac { 0x4048_7413 } else { 0x5401 }); // TIOCGETA, TCGETS
+            a.mov_from_sp(X2);
+            sys(a, os, Sys::Ioctl);
+            a.add_ri(SP, SP, 80);
+            a.cbnz(X0, piped);
+        }
+        state(a, X9, 128);
+        a.str(XZR, X9, 0, 8);
+        a.bind(piped);
     }
-    state(a, X9, 128);
-    a.str(XZR, X9, 0, 8);
-    a.bind(piped);
+
     // Guard against running off the stack, and report stray addresses as stops.
     let noguard = a.new_label();
     state(a, X9, 144);
@@ -419,7 +447,9 @@ pub fn emit(
     // ---- rt_exit -----------------------------------------------------------------------------------
     a.bind(rt.exit);
     a.mov_rr(X19, X0);
-    a.bl(flush);
+    if uses.print {
+        a.bl(flush);
+    }
     a.mov_rr(X0, X19);
     if win {
         win_call(a, IMP_EXIT_PROCESS);
@@ -428,67 +458,69 @@ pub fn emit(
     }
     a.brk();
 
-    // ---- rt_flush ----------------------------------------------------------------------------------
-    // Writes what the output buffer holds. Ends in `rt_write` or a `ret`.
-    a.bind(flush);
-    {
-        let none = a.new_label();
-        state(a, X9, 128);
-        a.ldr(X1, X9, 0, 8);
-        a.ldr(X2, X9, 8, 8);
-        a.cbz(X1, none);
-        a.cbz(X2, none);
-        a.str(XZR, X9, 8, 8);
-        a.mov_ri(X0, 1);
-        a.b(rt.write_fd);
-        a.bind(none);
-        a.ret();
-    }
+    if uses.print {
+        // ---- rt_flush ----------------------------------------------------------------------------------
+        // Writes what the output buffer holds. Ends in `rt_write` or a `ret`.
+        a.bind(flush);
+        {
+            let none = a.new_label();
+            state(a, X9, 128);
+            a.ldr(X1, X9, 0, 8);
+            a.ldr(X2, X9, 8, 8);
+            a.cbz(X1, none);
+            a.cbz(X2, none);
+            a.str(XZR, X9, 8, 8);
+            a.mov_ri(X0, 1);
+            a.b(rt.write_fd);
+            a.bind(none);
+            a.ret();
+        }
 
-    // ---- rt_print ----------------------------------------------------------------------------------
-    // Buffered standard output: copy into the buffer; when it does not fit, write the buffer out
-    // first; text that is bigger than the whole buffer is written directly.
-    a.bind(rt.print);
-    {
-        let (direct, copy, big) = (a.new_label(), a.new_label(), a.new_label());
-        state(a, X9, 128);
-        a.ldr(X10, X9, 0, 8);
-        a.cbz(X10, direct);
-        a.ldr(X11, X9, 8, 8);
-        a.mov_ri(X12, PRINT_BUF);
-        a.sub_rr(X12, X12, X11);
-        a.cmp_rr(X1, X12);
-        a.b_cond(Cond::Ls, copy);
-        // Full: write out what is there, then start again.
-        a.stp_pre(X0, X1, SP, -32);
-        a.str(LR, SP, 16, 8);
-        a.mov_ri(X0, 1);
-        a.mov_rr(X1, X10);
-        a.mov_rr(X2, X11);
-        a.bl(rt.write_fd);
-        a.ldr(LR, SP, 16, 8);
-        a.ldp_post(X0, X1, SP, 32);
-        state(a, X9, 128);
-        a.str(XZR, X9, 8, 8);
-        a.ldr(X10, X9, 0, 8);
-        a.mov_ri(X11, 0);
-        a.mov_ri(X12, PRINT_BUF);
-        a.cmp_rr(X1, X12);
-        a.b_cond(Cond::Hi, big);
-        a.bind(copy);
-        a.add_rr(X13, X10, X11);
-        a.add_rr(X14, X11, X1);
-        a.str(X14, X9, 8, 8);
-        a.mov_rr(X2, X1);
-        a.mov_rr(X1, X0);
-        a.mov_rr(X0, X13);
-        a.b(rt.memcpy);
-        a.bind(direct);
-        a.bind(big);
-        a.mov_rr(X2, X1);
-        a.mov_rr(X1, X0);
-        a.mov_ri(X0, 1);
-        a.b(rt.write_fd);
+        // ---- rt_print ----------------------------------------------------------------------------------
+        // Buffered standard output: copy into the buffer; when it does not fit, write the buffer out
+        // first; text that is bigger than the whole buffer is written directly.
+        a.bind(rt.print);
+        {
+            let (direct, copy, big) = (a.new_label(), a.new_label(), a.new_label());
+            state(a, X9, 128);
+            a.ldr(X10, X9, 0, 8);
+            a.cbz(X10, direct);
+            a.ldr(X11, X9, 8, 8);
+            a.mov_ri(X12, PRINT_BUF);
+            a.sub_rr(X12, X12, X11);
+            a.cmp_rr(X1, X12);
+            a.b_cond(Cond::Ls, copy);
+            // Full: write out what is there, then start again.
+            a.stp_pre(X0, X1, SP, -32);
+            a.str(LR, SP, 16, 8);
+            a.mov_ri(X0, 1);
+            a.mov_rr(X1, X10);
+            a.mov_rr(X2, X11);
+            a.bl(rt.write_fd);
+            a.ldr(LR, SP, 16, 8);
+            a.ldp_post(X0, X1, SP, 32);
+            state(a, X9, 128);
+            a.str(XZR, X9, 8, 8);
+            a.ldr(X10, X9, 0, 8);
+            a.mov_ri(X11, 0);
+            a.mov_ri(X12, PRINT_BUF);
+            a.cmp_rr(X1, X12);
+            a.b_cond(Cond::Hi, big);
+            a.bind(copy);
+            a.add_rr(X13, X10, X11);
+            a.add_rr(X14, X11, X1);
+            a.str(X14, X9, 8, 8);
+            a.mov_rr(X2, X1);
+            a.mov_rr(X1, X0);
+            a.mov_rr(X0, X13);
+            a.b(rt.memcpy);
+            a.bind(direct);
+            a.bind(big);
+            a.mov_rr(X2, X1);
+            a.mov_rr(X1, X0);
+            a.mov_ri(X0, 1);
+            a.b(rt.write_fd);
+        }
     }
 
     // ---- rt_write ----------------------------------------------------------------------------------
@@ -550,79 +582,85 @@ pub fn emit(
         a.ret();
     }
 
-    // ---- rt_write_u64 ------------------------------------------------------------------------------
-    a.bind(rt.write_u64);
-    {
-        a.sub_ri(SP, SP, 48);
-        a.str(LR, SP, 32, 8);
-        a.mov_rr(X9, X1);
-        a.add_ri(X10, SP, 32);
-        a.mov_ri(X11, 10);
-        let digit = a.new_label();
-        a.bind(digit);
-        a.udiv(X12, X9, X11);
-        a.msub(X13, X12, X11, X9);
-        a.add_ri(X13, X13, 48);
-        a.sub_ri(X10, X10, 1);
-        a.str(X13, X10, 0, 1);
-        a.mov_rr(X9, X12);
-        a.cbnz(X9, digit);
-        a.mov_rr(X1, X10);
-        a.add_ri(X2, SP, 32);
-        a.sub_rr(X2, X2, X10);
-        a.bl(rt.write_fd);
-        a.ldr(LR, SP, 32, 8);
-        a.add_ri(SP, SP, 48);
-        a.ret();
+    if leak_check || uses.write_u64 {
+        // ---- rt_write_u64 ------------------------------------------------------------------------------
+        a.bind(rt.write_u64);
+        {
+            a.sub_ri(SP, SP, 48);
+            a.str(LR, SP, 32, 8);
+            a.mov_rr(X9, X1);
+            a.add_ri(X10, SP, 32);
+            a.mov_ri(X11, 10);
+            let digit = a.new_label();
+            a.bind(digit);
+            a.udiv(X12, X9, X11);
+            a.msub(X13, X12, X11, X9);
+            a.add_ri(X13, X13, 48);
+            a.sub_ri(X10, X10, 1);
+            a.str(X13, X10, 0, 1);
+            a.mov_rr(X9, X12);
+            a.cbnz(X9, digit);
+            a.mov_rr(X1, X10);
+            a.add_ri(X2, SP, 32);
+            a.sub_rr(X2, X2, X10);
+            a.bl(rt.write_fd);
+            a.ldr(LR, SP, 32, 8);
+            a.add_ri(SP, SP, 48);
+            a.ret();
+        }
     }
 
-    // ---- rt_memcpy ---------------------------------------------------------------------------------
-    a.bind(rt.memcpy);
-    {
-        let (blocks, pairs, bytes, done, tail) = (
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-        );
-        a.bind(blocks);
-        a.cmp_ri(X2, 32);
-        a.b_cond(Cond::Lo, pairs);
-        a.ldp(X3, X4, X1, 0);
-        a.ldp(X5, X6, X1, 16);
-        a.stp(X3, X4, X0, 0);
-        a.stp(X5, X6, X0, 16);
-        a.add_ri(X0, X0, 32);
-        a.add_ri(X1, X1, 32);
-        a.sub_ri(X2, X2, 32);
-        a.b(blocks);
-        a.bind(pairs);
-        a.cmp_ri(X2, 16);
-        a.b_cond(Cond::Lo, tail);
-        a.ldp(X3, X4, X1, 0);
-        a.stp(X3, X4, X0, 0);
-        a.add_ri(X0, X0, 16);
-        a.add_ri(X1, X1, 16);
-        a.sub_ri(X2, X2, 16);
-        a.bind(tail);
-        a.mov_ri(X5, 0);
-        a.bind(bytes);
-        a.cmp_rr(X5, X2);
-        a.b_cond(Cond::Hs, done);
-        a.ldr_idx(X3, X1, X5, 1, false);
-        a.str_idx(X3, X0, X5, 1, false);
-        a.add_ri(X5, X5, 1);
-        a.b(bytes);
-        a.bind(done);
-        a.ret();
+    if copy_used {
+        // ---- rt_memcpy ---------------------------------------------------------------------------------
+        a.bind(rt.memcpy);
+        {
+            let (blocks, pairs, bytes, done, tail) = (
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+            );
+            a.bind(blocks);
+            a.cmp_ri(X2, 32);
+            a.b_cond(Cond::Lo, pairs);
+            a.ldp(X3, X4, X1, 0);
+            a.ldp(X5, X6, X1, 16);
+            a.stp(X3, X4, X0, 0);
+            a.stp(X5, X6, X0, 16);
+            a.add_ri(X0, X0, 32);
+            a.add_ri(X1, X1, 32);
+            a.sub_ri(X2, X2, 32);
+            a.b(blocks);
+            a.bind(pairs);
+            a.cmp_ri(X2, 16);
+            a.b_cond(Cond::Lo, tail);
+            a.ldp(X3, X4, X1, 0);
+            a.stp(X3, X4, X0, 0);
+            a.add_ri(X0, X0, 16);
+            a.add_ri(X1, X1, 16);
+            a.sub_ri(X2, X2, 16);
+            a.bind(tail);
+            a.mov_ri(X5, 0);
+            a.bind(bytes);
+            a.cmp_rr(X5, X2);
+            a.b_cond(Cond::Hs, done);
+            a.ldr_idx(X3, X1, X5, 1, false);
+            a.str_idx(X3, X0, X5, 1, false);
+            a.add_ri(X5, X5, 1);
+            a.b(bytes);
+            a.bind(done);
+            a.ret();
+        }
     }
 
     // ---- rt_stop -----------------------------------------------------------------------------------
     a.bind(rt.stop);
     a.mov_rr(X19, X0);
     a.mov_rr(X20, X1);
-    a.bl(flush); // what the program printed comes first
+    if uses.print {
+        a.bl(flush); // what the program printed comes first
+    }
     a.mov_ri(X0, 2);
     a.lea_sect(X1, Sect::Rodata, msg_stopped);
     a.mov_ri(X2, 9);
@@ -726,420 +764,428 @@ pub fn emit(
         a.brk();
     }
 
-    // ---- out of memory -----------------------------------------------------------------------------
-    a.bind(oom);
-    a.lea_sect(X0, Sect::Rodata, msg_oom);
-    a.mov_ri(X1, 13);
-    a.bl(rt.stop);
+    if alloc_used {
+        // ---- out of memory -----------------------------------------------------------------------------
+        a.bind(oom);
+        a.lea_sect(X0, Sect::Rodata, msg_oom);
+        a.mov_ri(X1, 13);
+        a.bl(rt.stop);
 
-    // ---- rt_alloc ----------------------------------------------------------------------------------
-    // x19 header plus payload, x20 class, x21 block size, x22 the block.
-    a.bind(rt.alloc);
-    enter(a);
-    a.add_ri(X19, X0, 16);
-    let (large, have, size_loop, fresh, retry, carve, out) = (
-        a.new_label(),
-        a.new_label(),
-        a.new_label(),
-        a.new_label(),
-        a.new_label(),
-        a.new_label(),
-        a.new_label(),
-    );
-    a.mov_ri(X9, SMALL_MAX);
-    a.cmp_rr(X19, X9);
-    a.b_cond(Cond::Hi, large);
-    a.mov_ri(X20, 0);
-    a.mov_ri(X21, 32);
-    a.bind(size_loop);
-    a.cmp_rr(X21, X19);
-    a.b_cond(Cond::Hs, have);
-    a.add_rr(X21, X21, X21);
-    a.add_ri(X20, X20, 1);
-    a.b(size_loop);
-    a.bind(have);
-    state(a, X10, 0);
-    a.add_rr_sh(X10, X10, X20, Shift::Lsl, 3);
-    a.ldr(X11, X10, 0, 8); // head of this class's free list
-    a.cbz(X11, fresh);
-    // Reuse: unlink, then clear the payload.
-    a.ldr(X12, X11, 16, 8);
-    a.str(X12, X10, 0, 8);
-    a.mov_rr(X22, X11);
-    a.add_ri(X13, X11, 16);
-    a.add_rr(X14, X11, X21);
-    zero_range(a, X13, X14);
-    a.b(out);
-    // Fresh: carve from the current chunk (already zero), asking for a new chunk when it is used up.
-    a.bind(fresh);
-    a.bind(retry);
-    state(a, X10, 96);
-    a.ldr(X22, X10, 0, 8);
-    a.add_rr(X12, X22, X21);
-    a.ldr(X13, X10, 8, 8);
-    a.cmp_rr(X12, X13);
-    a.b_cond(Cond::Ls, carve);
-    mmap(a, os, CHUNK, 0x22);
-    failed(a, os, X0, oom);
-    state(a, X10, 96);
-    a.str(X0, X10, 0, 8);
-    a.mov_ri(X9, CHUNK);
-    a.add_rr(X9, X0, X9);
-    a.str(X9, X10, 8, 8);
-    a.b(retry);
-    a.bind(carve);
-    a.str(X12, X10, 0, 8);
-    a.str(X20, X22, 0, 8); // header: the class
-    a.b(out);
-    // Large: its own mapping, rounded to whole pages; the header keeps the length.
-    a.bind(large);
-    a.add_ri(X21, X19, 4095);
-    a.and_ri(X21, X21, !4095);
-    // The block freed last, if it is big enough and not more than twice as big, is reused (cleared)
-    // instead of a new mapping with its page faults.
-    let mapnew = a.new_label();
-    state(a, X10, 120);
-    a.ldr(X11, X10, 0, 8);
-    a.cbz(X11, mapnew);
-    a.ldr(X12, X11, 8, 8);
-    if rsv {
-        a.and_ri(X12, X12, !4095);
-    }
-    a.cmp_rr(X12, X21);
-    a.b_cond(Cond::Lo, mapnew);
-    a.add_rr(X13, X21, X21);
-    a.cmp_rr(X12, X13);
-    a.b_cond(Cond::Hi, mapnew);
-    a.str(XZR, X10, 0, 8);
-    a.mov_rr(X22, X11);
-    a.add_ri(X13, X11, 16);
-    a.add_rr(X14, X11, X12);
-    zero_range(a, X13, X14);
-    a.b(out);
-    a.bind(mapnew);
-    if rsv {
-        // x20 the logarithm of the reservation: the length rounded up to a power of two, times eight.
-        a.sub_ri(X13, X21, 1);
-        a.clz(X13, X13);
-        a.mov_ri(X9, 64);
-        a.sub_rr(X13, X9, X13);
-        a.add_ri(X20, X13, 3);
-        a.cmp_ri(X20, 60);
-        a.b_cond(Cond::Hi, oom);
-        a.mov_ri(X9, 1);
-        a.lslv(X12, X9, X20);
-        if win {
-            // Reserve it all, commit the part in use.
-            a.mov_ri(X0, 0);
-            a.mov_rr(X1, X12);
-            a.mov_ri(X2, 0x2000);
-            a.mov_ri(X3, 1);
-            win_call(a, IMP_VIRTUAL_ALLOC);
-            a.cbz(X0, oom);
-            a.mov_rr(X22, X0);
-            a.mov_rr(X1, X21);
-            a.mov_ri(X2, 0x1000);
-            a.mov_ri(X3, 4);
-            win_call(a, IMP_VIRTUAL_ALLOC);
-            a.cbz(X0, oom);
-        } else {
-            // Untouched pages cost nothing, so the whole reservation is mapped read-write.
-            a.mov_rr(X1, X12);
-            map_x1(a, os, 0x4022);
-            failed(a, os, X0, oom);
-            a.mov_rr(X22, X0);
-        }
-        a.mov_ri(X9, LARGE_CLASS);
-        a.str(X9, X22, 0, 8);
-        a.orr_rr(X9, X21, X20);
-        a.str(X9, X22, 8, 8);
-    } else {
-        a.mov_rr(X1, X21);
-        map_x1(a, os, 0x22);
-        failed(a, os, X0, oom);
-        a.mov_rr(X22, X0);
-        advise_huge(a, os, X22, X21);
-        a.mov_ri(X9, LARGE_CLASS);
-        a.str(X9, X22, 0, 8);
-        a.str(X21, X22, 8, 8);
-    }
-    a.bind(out);
-    a.add_ri(X0, X22, 16);
-    state(a, X10, 112);
-    a.ldr(X9, X10, 0, 8);
-    a.add_ri(X9, X9, 1);
-    a.str(X9, X10, 0, 8);
-    leave(a);
-    a.ret();
-
-    // ---- rt_free -----------------------------------------------------------------------------------
-    a.bind(rt.free);
-    {
-        let (fdone, flarge, unmap) = (a.new_label(), a.new_label(), a.new_label());
-        a.cbz(X0, fdone);
-        a.sub_ri(X10, X0, 16);
-        a.ldr(X11, X10, 0, 8);
-        state(a, X12, 112);
-        a.ldr(X13, X12, 0, 8);
-        a.sub_ri(X13, X13, 1);
-        a.str(X13, X12, 0, 8);
-        a.cmp_ri(X11, LARGE_CLASS as u32);
-        a.b_cond(Cond::Eq, flarge);
-        state(a, X12, 0);
-        a.add_rr_sh(X12, X12, X11, Shift::Lsl, 3);
-        a.ldr(X13, X12, 0, 8);
-        a.str(X13, X10, 16, 8);
-        a.str(X10, X12, 0, 8);
-        a.bind(fdone);
-        a.ret();
-        // Keep one large block for the next large allocation; unmap when the slot is taken.
-        a.bind(flarge);
-        state(a, X12, 120);
-        a.ldr(X13, X12, 0, 8);
-        a.cbnz(X13, unmap);
-        a.str(X10, X12, 0, 8);
-        a.ret();
-        a.bind(unmap);
-        if win {
-            // VirtualFree(block, 0, MEM_RELEASE); the call loses the link register.
-            a.stp_pre(FP, LR, SP, -16);
-            a.mov_rr(X0, X10);
-            a.mov_ri(X1, 0);
-            a.mov_ri(X2, 0x8000);
-            win_call(a, IMP_VIRTUAL_FREE);
-            a.ldp_post(FP, LR, SP, 16);
-        } else {
-            a.ldr(X1, X10, 8, 8);
-            if mac {
-                // The length is the reservation: 1 << (the logarithm in the low six bits).
-                a.and_ri(X3, X1, 63);
-                a.mov_ri(X1, 1);
-                a.lslv(X1, X1, X3);
-            }
-            a.mov_rr(X0, X10);
-            sys(a, os, Sys::Munmap);
-        }
-        a.ret();
-    }
-
-    // ---- rt_realloc --------------------------------------------------------------------------------
-    // A large block moves with `mremap`: the kernel moves the pages, nothing is copied and the new
-    // tail is zero. Anything else gets a new block, the smaller of the two sizes copied, and the old
-    // block freed. x19 old block, x20 new size, x21 new block or length, x22 the remapped block.
-    a.bind(rt.realloc);
-    {
-        let (generic, rdone, rclass, rcopy, rskip) = (
+        // ---- rt_alloc ----------------------------------------------------------------------------------
+        // x19 header plus payload, x20 class, x21 block size, x22 the block.
+        a.bind(rt.alloc);
+        enter(a);
+        a.add_ri(X19, X0, 16);
+        let (large, have, size_loop, fresh, retry, carve, out) = (
+            a.new_label(),
+            a.new_label(),
             a.new_label(),
             a.new_label(),
             a.new_label(),
             a.new_label(),
             a.new_label(),
         );
-        enter(a);
-        a.mov_rr(X19, X0);
-        a.mov_rr(X20, X1);
-        a.cbz(X19, generic);
-        a.sub_ri(X10, X19, 16);
+        a.mov_ri(X9, SMALL_MAX);
+        a.cmp_rr(X19, X9);
+        a.b_cond(Cond::Hi, large);
+        a.mov_ri(X20, 0);
+        a.mov_ri(X21, 32);
+        a.bind(size_loop);
+        a.cmp_rr(X21, X19);
+        a.b_cond(Cond::Hs, have);
+        a.add_rr(X21, X21, X21);
+        a.add_ri(X20, X20, 1);
+        a.b(size_loop);
+        a.bind(have);
+        state(a, X10, 0);
+        a.add_rr_sh(X10, X10, X20, Shift::Lsl, 3);
+        a.ldr(X11, X10, 0, 8); // head of this class's free list
+        a.cbz(X11, fresh);
+        // Reuse: unlink, then clear the payload.
+        a.ldr(X12, X11, 16, 8);
+        a.str(X12, X10, 0, 8);
+        a.mov_rr(X22, X11);
+        a.add_ri(X13, X11, 16);
+        a.add_rr(X14, X11, X21);
+        zero_range(a, X13, X14);
+        a.b(out);
+        // Fresh: carve from the current chunk (already zero), asking for a new chunk when it is used up.
+        a.bind(fresh);
+        a.bind(retry);
+        state(a, X10, 96);
+        a.ldr(X22, X10, 0, 8);
+        a.add_rr(X12, X22, X21);
+        a.ldr(X13, X10, 8, 8);
+        a.cmp_rr(X12, X13);
+        a.b_cond(Cond::Ls, carve);
+        mmap(a, os, CHUNK, 0x22);
+        failed(a, os, X0, oom);
+        state(a, X10, 96);
+        a.str(X0, X10, 0, 8);
+        a.mov_ri(X9, CHUNK);
+        a.add_rr(X9, X0, X9);
+        a.str(X9, X10, 8, 8);
+        a.b(retry);
+        a.bind(carve);
+        a.str(X12, X10, 0, 8);
+        a.str(X20, X22, 0, 8); // header: the class
+        a.b(out);
+        // Large: its own mapping, rounded to whole pages; the header keeps the length.
+        a.bind(large);
+        a.add_ri(X21, X19, 4095);
+        a.and_ri(X21, X21, !4095);
+        // The block freed last, if it is big enough and not more than twice as big, is reused (cleared)
+        // instead of a new mapping with its page faults.
+        let mapnew = a.new_label();
+        state(a, X10, 120);
         a.ldr(X11, X10, 0, 8);
-        a.cmp_ri(X11, LARGE_CLASS as u32);
-        a.b_cond(Cond::Ne, generic);
+        a.cbz(X11, mapnew);
+        a.ldr(X12, X11, 8, 8);
         if rsv {
-            // Growth inside the reservation: the pages are already there (macOS) or are committed now
-            // (Windows), and the new tail is still zero. Shrinking and outgrowing the reservation copy.
-            a.add_imm(X12, X20, 16 + 4095);
             a.and_ri(X12, X12, !4095);
-            a.ldr(X13, X10, 8, 8);
-            a.and_ri(X14, X13, !4095); // used length
-            a.cmp_rr(X12, X14);
-            a.b_cond(Cond::Eq, rdone);
-            a.b_cond(Cond::Lo, generic);
-            a.and_ri(X15, X13, 63);
+        }
+        a.cmp_rr(X12, X21);
+        a.b_cond(Cond::Lo, mapnew);
+        a.add_rr(X13, X21, X21);
+        a.cmp_rr(X12, X13);
+        a.b_cond(Cond::Hi, mapnew);
+        a.str(XZR, X10, 0, 8);
+        a.mov_rr(X22, X11);
+        a.add_ri(X13, X11, 16);
+        a.add_rr(X14, X11, X12);
+        zero_range(a, X13, X14);
+        a.b(out);
+        a.bind(mapnew);
+        if rsv {
+            // x20 the logarithm of the reservation: the length rounded up to a power of two, times eight.
+            a.sub_ri(X13, X21, 1);
+            a.clz(X13, X13);
+            a.mov_ri(X9, 64);
+            a.sub_rr(X13, X9, X13);
+            a.add_ri(X20, X13, 3);
+            a.cmp_ri(X20, 60);
+            a.b_cond(Cond::Hi, oom);
             a.mov_ri(X9, 1);
-            a.lslv(X9, X9, X15); // reservation
-            a.cmp_rr(X12, X9);
-            a.b_cond(Cond::Hi, generic);
-            a.orr_rr(X21, X12, X15); // the new header word
-            a.mov_rr(X22, X10);
+            a.lslv(X12, X9, X20);
             if win {
-                a.add_rr(X0, X10, X14);
-                a.sub_rr(X1, X12, X14);
+                // Reserve it all, commit the part in use.
+                a.mov_ri(X0, 0);
+                a.mov_rr(X1, X12);
+                a.mov_ri(X2, 0x2000);
+                a.mov_ri(X3, 1);
+                win_call(a, IMP_VIRTUAL_ALLOC);
+                a.cbz(X0, oom);
+                a.mov_rr(X22, X0);
+                a.mov_rr(X1, X21);
                 a.mov_ri(X2, 0x1000);
                 a.mov_ri(X3, 4);
                 win_call(a, IMP_VIRTUAL_ALLOC);
                 a.cbz(X0, oom);
+            } else {
+                // Untouched pages cost nothing, so the whole reservation is mapped read-write.
+                a.mov_rr(X1, X12);
+                map_x1(a, os, 0x4022);
+                failed(a, os, X0, oom);
+                a.mov_rr(X22, X0);
             }
-            a.str(X21, X22, 8, 8);
-            a.b(rdone);
+            a.mov_ri(X9, LARGE_CLASS);
+            a.str(X9, X22, 0, 8);
+            a.orr_rr(X9, X21, X20);
+            a.str(X9, X22, 8, 8);
         } else {
-            // New mapping length: header plus payload, whole pages.
-            a.add_imm(X12, X20, 16 + 4095);
-            a.and_ri(X12, X12, !4095);
-            a.ldr(X13, X10, 8, 8); // old length
-            a.cmp_rr(X12, X13);
-            a.b_cond(Cond::Eq, rdone); // same pages: the block stays
-            a.mov_rr(X21, X12);
-            a.mov_rr(X0, X10);
-            a.mov_rr(X1, X13);
-            a.mov_rr(X2, X12);
-            a.mov_ri(X3, 1); // may move
-            sys(a, os, Sys::Mremap);
+            a.mov_rr(X1, X21);
+            map_x1(a, os, 0x22);
             failed(a, os, X0, oom);
-            a.str(X21, X0, 8, 8);
             a.mov_rr(X22, X0);
             advise_huge(a, os, X22, X21);
-            a.add_ri(X19, X22, 16);
-            a.b(rdone);
+            a.mov_ri(X9, LARGE_CLASS);
+            a.str(X9, X22, 0, 8);
+            a.str(X21, X22, 8, 8);
         }
-        // Generic: allocate, copy what fits, free the old block.
-        a.bind(generic);
-        a.mov_rr(X0, X20);
-        a.bl(rt.alloc);
-        a.mov_rr(X21, X0);
-        a.cbz(X19, rskip);
-        // Bytes the old block can give: the rest of its class, or its mapping.
-        a.ldr(X11, X19, -16, 8);
-        a.cmp_ri(X11, LARGE_CLASS as u32);
-        a.b_cond(Cond::Ne, rclass);
-        a.ldr(X12, X19, -8, 8);
-        if rsv {
-            a.and_ri(X12, X12, !4095);
-        }
-        a.b(rcopy);
-        a.bind(rclass);
-        a.mov_ri(X12, 32);
-        a.lslv(X12, X12, X11);
-        a.bind(rcopy);
-        a.sub_ri(X12, X12, 16);
-        a.cmp_rr(X12, X20);
-        a.csel(X2, X12, X20, Cond::Ls);
-        a.mov_rr(X0, X21);
-        a.mov_rr(X1, X19);
-        a.bl(rt.memcpy);
-        a.mov_rr(X0, X19);
-        a.bl(rt.free);
-        a.bind(rskip);
-        a.mov_rr(X19, X21);
-        a.bind(rdone);
-        a.mov_rr(X0, X19);
+        a.bind(out);
+        a.add_ri(X0, X22, 16);
+        state(a, X10, 112);
+        a.ldr(X9, X10, 0, 8);
+        a.add_ri(X9, X9, 1);
+        a.str(X9, X10, 0, 8);
         leave(a);
         a.ret();
     }
 
-    // ---- rt_fmod -----------------------------------------------------------------------------------
-    // C's `fmod` for doubles, bit by bit (the algorithm of musl): the result is exact. x9 the bits
-    // of x, x10 the bits of y, x11 and x12 their exponents, x13 the sign of x.
-    a.bind(rt.fmod);
-    {
-        let (nanres, cont, retx, xnorm, xdone, ynorm, ydone) = (
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-        );
-        let (top, after, skip, skip2, denorm, fin, zero) = (
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-        );
-        a.fmov_to_gp(true, X9, V(0));
-        a.fmov_to_gp(true, X10, V(1));
-        a.ubfx(X11, X9, 52, 11);
-        a.ubfx(X12, X10, 52, 11);
-        a.lsr_ri(X13, X9, 63);
-        // y is zero or NaN, or x is infinite or NaN: the result is NaN.
-        a.lsl_ri(X14, X10, 1);
-        a.cbz(X14, nanres);
-        a.mov_ri(X15, 0xFFE0_0000_0000_0000u64 as i64);
-        a.cmp_rr(X14, X15);
-        a.b_cond(Cond::Hi, nanres);
-        a.cmp_ri(X11, 0x7FF);
-        a.b_cond(Cond::Eq, nanres);
-        // |x| < |y|: x itself; |x| == |y|: a zero with the sign of x.
-        a.lsl_ri(X15, X9, 1);
-        a.cmp_rr(X15, X14);
-        a.b_cond(Cond::Hi, cont);
-        a.b_cond(Cond::Ne, retx);
-        a.b(zero);
-        a.bind(retx);
-        a.ret();
-        a.bind(cont);
-        // Make both operands a 53-bit integer with the exponent kept apart.
-        a.cbnz(X11, xnorm);
-        a.lsl_ri(X14, X9, 12);
-        a.clz(X14, X14);
-        a.neg(X11, X14);
-        a.add_ri(X14, X14, 1);
-        a.lslv(X9, X9, X14);
-        a.b(xdone);
-        a.bind(xnorm);
-        a.and_ri(X9, X9, 0x000F_FFFF_FFFF_FFFF);
-        a.orr_ri(X9, X9, 1 << 52);
-        a.bind(xdone);
-        a.cbnz(X12, ynorm);
-        a.lsl_ri(X14, X10, 12);
-        a.clz(X14, X14);
-        a.neg(X12, X14);
-        a.add_ri(X14, X14, 1);
-        a.lslv(X10, X10, X14);
-        a.b(ydone);
-        a.bind(ynorm);
-        a.and_ri(X10, X10, 0x000F_FFFF_FFFF_FFFF);
-        a.orr_ri(X10, X10, 1 << 52);
-        a.bind(ydone);
-        // x mod y, one bit of the exponent difference at a time.
-        a.bind(top);
-        a.cmp_rr(X11, X12);
-        a.b_cond(Cond::Le, after);
-        a.cmp_rr(X9, X10);
-        a.b_cond(Cond::Lo, skip);
-        a.b_cond(Cond::Eq, zero);
-        a.sub_rr(X9, X9, X10);
-        a.bind(skip);
-        a.lsl_ri(X9, X9, 1);
-        a.sub_ri(X11, X11, 1);
-        a.b(top);
-        a.bind(after);
-        a.cmp_rr(X9, X10);
-        a.b_cond(Cond::Lo, skip2);
-        a.b_cond(Cond::Eq, zero);
-        a.sub_rr(X9, X9, X10);
-        a.bind(skip2);
-        // Shift the leading one back to bit 52.
-        a.clz(X14, X9);
-        a.sub_ri(X14, X14, 11);
-        a.lslv(X9, X9, X14);
-        a.sub_rr(X11, X11, X14);
-        // Scale the result: a normal number, or a subnormal one.
-        a.cmp_ri(X11, 0);
-        a.b_cond(Cond::Le, denorm);
-        a.and_ri(X9, X9, 0x000F_FFFF_FFFF_FFFF);
-        a.lsl_ri(X14, X11, 52);
-        a.orr_rr(X9, X9, X14);
-        a.b(fin);
-        a.bind(denorm);
-        a.neg(X14, X11);
-        a.add_ri(X14, X14, 1);
-        a.lsrv(X9, X9, X14);
-        a.bind(fin);
-        a.lsl_ri(X13, X13, 63);
-        a.orr_rr(X9, X9, X13);
-        a.fmov_from_gp(true, V(0), X9);
-        a.ret();
-        a.bind(zero);
-        a.lsl_ri(X13, X13, 63);
-        a.fmov_from_gp(true, V(0), X13);
-        a.ret();
-        a.bind(nanres);
-        a.fmul(true, V(0), V(0), V(1));
-        a.fdiv(true, V(0), V(0), V(0));
-        a.ret();
+    if free_used {
+        // ---- rt_free -----------------------------------------------------------------------------------
+        a.bind(rt.free);
+        {
+            let (fdone, flarge, unmap) = (a.new_label(), a.new_label(), a.new_label());
+            a.cbz(X0, fdone);
+            a.sub_ri(X10, X0, 16);
+            a.ldr(X11, X10, 0, 8);
+            state(a, X12, 112);
+            a.ldr(X13, X12, 0, 8);
+            a.sub_ri(X13, X13, 1);
+            a.str(X13, X12, 0, 8);
+            a.cmp_ri(X11, LARGE_CLASS as u32);
+            a.b_cond(Cond::Eq, flarge);
+            state(a, X12, 0);
+            a.add_rr_sh(X12, X12, X11, Shift::Lsl, 3);
+            a.ldr(X13, X12, 0, 8);
+            a.str(X13, X10, 16, 8);
+            a.str(X10, X12, 0, 8);
+            a.bind(fdone);
+            a.ret();
+            // Keep one large block for the next large allocation; unmap when the slot is taken.
+            a.bind(flarge);
+            state(a, X12, 120);
+            a.ldr(X13, X12, 0, 8);
+            a.cbnz(X13, unmap);
+            a.str(X10, X12, 0, 8);
+            a.ret();
+            a.bind(unmap);
+            if win {
+                // VirtualFree(block, 0, MEM_RELEASE); the call loses the link register.
+                a.stp_pre(FP, LR, SP, -16);
+                a.mov_rr(X0, X10);
+                a.mov_ri(X1, 0);
+                a.mov_ri(X2, 0x8000);
+                win_call(a, IMP_VIRTUAL_FREE);
+                a.ldp_post(FP, LR, SP, 16);
+            } else {
+                a.ldr(X1, X10, 8, 8);
+                if mac {
+                    // The length is the reservation: 1 << (the logarithm in the low six bits).
+                    a.and_ri(X3, X1, 63);
+                    a.mov_ri(X1, 1);
+                    a.lslv(X1, X1, X3);
+                }
+                a.mov_rr(X0, X10);
+                sys(a, os, Sys::Munmap);
+            }
+            a.ret();
+        }
+    }
+
+    if uses.realloc {
+        // ---- rt_realloc --------------------------------------------------------------------------------
+        // A large block moves with `mremap`: the kernel moves the pages, nothing is copied and the new
+        // tail is zero. Anything else gets a new block, the smaller of the two sizes copied, and the old
+        // block freed. x19 old block, x20 new size, x21 new block or length, x22 the remapped block.
+        a.bind(rt.realloc);
+        {
+            let (generic, rdone, rclass, rcopy, rskip) = (
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+            );
+            enter(a);
+            a.mov_rr(X19, X0);
+            a.mov_rr(X20, X1);
+            a.cbz(X19, generic);
+            a.sub_ri(X10, X19, 16);
+            a.ldr(X11, X10, 0, 8);
+            a.cmp_ri(X11, LARGE_CLASS as u32);
+            a.b_cond(Cond::Ne, generic);
+            if rsv {
+                // Growth inside the reservation: the pages are already there (macOS) or are committed now
+                // (Windows), and the new tail is still zero. Shrinking and outgrowing the reservation copy.
+                a.add_imm(X12, X20, 16 + 4095);
+                a.and_ri(X12, X12, !4095);
+                a.ldr(X13, X10, 8, 8);
+                a.and_ri(X14, X13, !4095); // used length
+                a.cmp_rr(X12, X14);
+                a.b_cond(Cond::Eq, rdone);
+                a.b_cond(Cond::Lo, generic);
+                a.and_ri(X15, X13, 63);
+                a.mov_ri(X9, 1);
+                a.lslv(X9, X9, X15); // reservation
+                a.cmp_rr(X12, X9);
+                a.b_cond(Cond::Hi, generic);
+                a.orr_rr(X21, X12, X15); // the new header word
+                a.mov_rr(X22, X10);
+                if win {
+                    a.add_rr(X0, X10, X14);
+                    a.sub_rr(X1, X12, X14);
+                    a.mov_ri(X2, 0x1000);
+                    a.mov_ri(X3, 4);
+                    win_call(a, IMP_VIRTUAL_ALLOC);
+                    a.cbz(X0, oom);
+                }
+                a.str(X21, X22, 8, 8);
+                a.b(rdone);
+            } else {
+                // New mapping length: header plus payload, whole pages.
+                a.add_imm(X12, X20, 16 + 4095);
+                a.and_ri(X12, X12, !4095);
+                a.ldr(X13, X10, 8, 8); // old length
+                a.cmp_rr(X12, X13);
+                a.b_cond(Cond::Eq, rdone); // same pages: the block stays
+                a.mov_rr(X21, X12);
+                a.mov_rr(X0, X10);
+                a.mov_rr(X1, X13);
+                a.mov_rr(X2, X12);
+                a.mov_ri(X3, 1); // may move
+                sys(a, os, Sys::Mremap);
+                failed(a, os, X0, oom);
+                a.str(X21, X0, 8, 8);
+                a.mov_rr(X22, X0);
+                advise_huge(a, os, X22, X21);
+                a.add_ri(X19, X22, 16);
+                a.b(rdone);
+            }
+            // Generic: allocate, copy what fits, free the old block.
+            a.bind(generic);
+            a.mov_rr(X0, X20);
+            a.bl(rt.alloc);
+            a.mov_rr(X21, X0);
+            a.cbz(X19, rskip);
+            // Bytes the old block can give: the rest of its class, or its mapping.
+            a.ldr(X11, X19, -16, 8);
+            a.cmp_ri(X11, LARGE_CLASS as u32);
+            a.b_cond(Cond::Ne, rclass);
+            a.ldr(X12, X19, -8, 8);
+            if rsv {
+                a.and_ri(X12, X12, !4095);
+            }
+            a.b(rcopy);
+            a.bind(rclass);
+            a.mov_ri(X12, 32);
+            a.lslv(X12, X12, X11);
+            a.bind(rcopy);
+            a.sub_ri(X12, X12, 16);
+            a.cmp_rr(X12, X20);
+            a.csel(X2, X12, X20, Cond::Ls);
+            a.mov_rr(X0, X21);
+            a.mov_rr(X1, X19);
+            a.bl(rt.memcpy);
+            a.mov_rr(X0, X19);
+            a.bl(rt.free);
+            a.bind(rskip);
+            a.mov_rr(X19, X21);
+            a.bind(rdone);
+            a.mov_rr(X0, X19);
+            leave(a);
+            a.ret();
+        }
+    }
+
+    if uses.fmod {
+        // ---- rt_fmod -----------------------------------------------------------------------------------
+        // C's `fmod` for doubles, bit by bit (the algorithm of musl): the result is exact. x9 the bits
+        // of x, x10 the bits of y, x11 and x12 their exponents, x13 the sign of x.
+        a.bind(rt.fmod);
+        {
+            let (nanres, cont, retx, xnorm, xdone, ynorm, ydone) = (
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+            );
+            let (top, after, skip, skip2, denorm, fin, zero) = (
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+            );
+            a.fmov_to_gp(true, X9, V(0));
+            a.fmov_to_gp(true, X10, V(1));
+            a.ubfx(X11, X9, 52, 11);
+            a.ubfx(X12, X10, 52, 11);
+            a.lsr_ri(X13, X9, 63);
+            // y is zero or NaN, or x is infinite or NaN: the result is NaN.
+            a.lsl_ri(X14, X10, 1);
+            a.cbz(X14, nanres);
+            a.mov_ri(X15, 0xFFE0_0000_0000_0000u64 as i64);
+            a.cmp_rr(X14, X15);
+            a.b_cond(Cond::Hi, nanres);
+            a.cmp_ri(X11, 0x7FF);
+            a.b_cond(Cond::Eq, nanres);
+            // |x| < |y|: x itself; |x| == |y|: a zero with the sign of x.
+            a.lsl_ri(X15, X9, 1);
+            a.cmp_rr(X15, X14);
+            a.b_cond(Cond::Hi, cont);
+            a.b_cond(Cond::Ne, retx);
+            a.b(zero);
+            a.bind(retx);
+            a.ret();
+            a.bind(cont);
+            // Make both operands a 53-bit integer with the exponent kept apart.
+            a.cbnz(X11, xnorm);
+            a.lsl_ri(X14, X9, 12);
+            a.clz(X14, X14);
+            a.neg(X11, X14);
+            a.add_ri(X14, X14, 1);
+            a.lslv(X9, X9, X14);
+            a.b(xdone);
+            a.bind(xnorm);
+            a.and_ri(X9, X9, 0x000F_FFFF_FFFF_FFFF);
+            a.orr_ri(X9, X9, 1 << 52);
+            a.bind(xdone);
+            a.cbnz(X12, ynorm);
+            a.lsl_ri(X14, X10, 12);
+            a.clz(X14, X14);
+            a.neg(X12, X14);
+            a.add_ri(X14, X14, 1);
+            a.lslv(X10, X10, X14);
+            a.b(ydone);
+            a.bind(ynorm);
+            a.and_ri(X10, X10, 0x000F_FFFF_FFFF_FFFF);
+            a.orr_ri(X10, X10, 1 << 52);
+            a.bind(ydone);
+            // x mod y, one bit of the exponent difference at a time.
+            a.bind(top);
+            a.cmp_rr(X11, X12);
+            a.b_cond(Cond::Le, after);
+            a.cmp_rr(X9, X10);
+            a.b_cond(Cond::Lo, skip);
+            a.b_cond(Cond::Eq, zero);
+            a.sub_rr(X9, X9, X10);
+            a.bind(skip);
+            a.lsl_ri(X9, X9, 1);
+            a.sub_ri(X11, X11, 1);
+            a.b(top);
+            a.bind(after);
+            a.cmp_rr(X9, X10);
+            a.b_cond(Cond::Lo, skip2);
+            a.b_cond(Cond::Eq, zero);
+            a.sub_rr(X9, X9, X10);
+            a.bind(skip2);
+            // Shift the leading one back to bit 52.
+            a.clz(X14, X9);
+            a.sub_ri(X14, X14, 11);
+            a.lslv(X9, X9, X14);
+            a.sub_rr(X11, X11, X14);
+            // Scale the result: a normal number, or a subnormal one.
+            a.cmp_ri(X11, 0);
+            a.b_cond(Cond::Le, denorm);
+            a.and_ri(X9, X9, 0x000F_FFFF_FFFF_FFFF);
+            a.lsl_ri(X14, X11, 52);
+            a.orr_rr(X9, X9, X14);
+            a.b(fin);
+            a.bind(denorm);
+            a.neg(X14, X11);
+            a.add_ri(X14, X14, 1);
+            a.lsrv(X9, X9, X14);
+            a.bind(fin);
+            a.lsl_ri(X13, X13, 63);
+            a.orr_rr(X9, X9, X13);
+            a.fmov_from_gp(true, V(0), X9);
+            a.ret();
+            a.bind(zero);
+            a.lsl_ri(X13, X13, 63);
+            a.fmov_from_gp(true, V(0), X13);
+            a.ret();
+            a.bind(nanres);
+            a.fmul(true, V(0), V(0), V(1));
+            a.fdiv(true, V(0), V(0), V(0));
+            a.ret();
+        }
     }
     rt
 }

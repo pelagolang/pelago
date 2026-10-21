@@ -617,6 +617,32 @@ fn rt_show_int(out: ptr, n: int) {
     rt_free(digits)
 }
 
+//~ Writes the digits of `n` and a newline into `buf`, right-aligned in 32 bytes (a number takes at
+//~ most 21 with the sign); gives the offset of the first one. Used by `print` of one integer, which
+//~ then needs no heap.
+fn rt_fmt_int_line(buf: ptr, n: int) -> int {
+    var at = 31
+    rt_store_byte(rt_offset(buf, at), rt_to_byte(10))
+    if n == 0 {
+        at -= 1
+        rt_store_byte(rt_offset(buf, at), rt_to_byte(48))
+        return at
+    }
+    /// From the end, using negative numbers so the smallest int works.
+    var m = n > 0 ? 0 - n : n
+    while m != 0 {
+        const d = 0 - (m % 10)
+        at -= 1
+        rt_store_byte(rt_offset(buf, at), rt_to_byte(48 + d))
+        m = m / 10
+    }
+    if n < 0 {
+        at -= 1
+        rt_store_byte(rt_offset(buf, at), rt_to_byte(45))
+    }
+    at
+}
+
 fn rt_show_bool(out: ptr, b: bool) {
     if b {
         rt_push_char(out, 't')
