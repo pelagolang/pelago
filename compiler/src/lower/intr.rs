@@ -238,6 +238,13 @@ impl<'a> Lowerer<'a> {
                 let n = self.layout(t).size;
                 Res::Val(self.i64c(n as i64))
             }
+            "rt_is_int" => {
+                let Some(t) = self.intr_type(def, map) else {
+                    return self.unsupported(sp, "`rt_is_int` of an unknown type");
+                };
+                let yes = matches!(self.kind(t), TyKind::Int(crate::types::IntKind::I64));
+                Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
+            }
             "rt_addr_of" => self.intr_addr_of(e, args),
             "rt_write" => {
                 let Some(t) = self.intr_type(def, map) else {

@@ -2590,3 +2590,31 @@ fn maps_find_keys_that_collide_in_the_first_slot() {
         }",
     );
 }
+
+#[test]
+fn sorting_integers_past_the_insertion_sort_limit() {
+    // 200 integers: negatives, duplicates and the extremes; the radix sort must agree with a check
+    // that every neighbour is in order, and keep the total.
+    let src = "fn main() {
+        var xs: [int] = [9223372036854775807, -9223372036854775807, 0, -1]
+        var s = 3
+        for i in 0..196 {
+            s = (s * 1103515245 + 12345) & 2147483647
+            xs.push!((s & 1023) - 500)
+        }
+        var before = 0
+        for x of xs { before += x & 65535 }
+        xs.sort!()
+        var ok = xs.len() == 200
+        var after = 0
+        for i in 0..xs.len() {
+            after += xs[i] & 65535
+            if i > 0 && xs[i - 1] > xs[i] { ok = false }
+        }
+        print(ok, before == after, xs[0], xs[199])
+    }";
+    assert_eq!(
+        output_of(src),
+        "true true -9223372036854775807 9223372036854775807\n"
+    );
+}
