@@ -159,6 +159,12 @@ pub enum Sse {
     Div = 0x5E,
 }
 
+/// A scalar float operand: a register or memory.
+pub enum Fp {
+    Reg(Xmm),
+    Mem(Mem),
+}
+
 enum Rm {
     Reg(u8),
     Mem(Mem),
@@ -329,6 +335,11 @@ impl Asm {
             self.byte(rex);
         }
         self.bytes(opcode);
+        self.modrm(reg, rm, imm_after);
+    }
+
+    /// The ModRM byte of an operand, with its SIB byte, displacement or `rip` fixup.
+    fn modrm(&mut self, reg: u8, rm: Rm, imm_after: usize) {
         let r = (reg & 7) << 3;
         match rm {
             Rm::Reg(x) => self.byte(0xC0 | r | (x & 7)),
@@ -750,6 +761,34 @@ impl Asm {
 
     pub fn fmov_rr(&mut self, dst: Xmm, src: Xmm) {
         self.sse(None, false, &[0x0F, 0x28], dst.0, Rm::Reg(src.0));
+    }
+
+    /// `dst = src * rm + dst` with one rounding (FMA3 `vfmadd231sd` / `vfmadd231ss`). `rm` is `src2`: a
+    /// register or a memory operand.
+    pub fn vfmadd231(&mut self, dst: Xmm, src: Xmm, src2: Fp, double: bool) {
+        let rm = match src2 {
+            Fp::Reg(x) => Rm::Reg(x.0),
+            Fp::Mem(m) => Rm::Mem(m),
+        };
+        let b = match &rm {
+            Rm::Reg(r) => *r >> 3,
+            Rm::Mem(m) => m.base.0 >> 3,
+            _ => 0,
+        };
+        let x = match &rm {
+            Rm::Mem(Mem {
+                index: Some((i, _)),
+                ..
+            }) => i.0 >> 3,
+            _ => 0,
+        };
+        // Three-byte VEX: the inverted R, X and B bits, the 0F38 map, W for double, the inverted second
+        // source, a scalar (L = 0) and the 66 prefix.
+        self.byte(0xC4);
+        self.byte((!(dst.0 >> 3) & 1) << 7 | (!x & 1) << 6 | (!b & 1) << 5 | 0b00010);
+        self.byte(u8::from(double) << 7 | (!src.0 & 0xF) << 3 | 0b01);
+        self.byte(0xB9);
+        self.modrm(dst.0, rm, 0);
     }
 
     pub fn farith(&mut self, op: Sse, dst: Xmm, src: Xmm, double: bool) {

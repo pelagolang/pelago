@@ -98,6 +98,7 @@ pub ext fn rt_store_bool(p: ptr, v: bool)
 pub ext fn rt_print(p: ptr, n: int)
 pub ext fn rt_to_byte(n: int) -> uint8
 pub ext fn rt_to_int(x: float) -> int
+pub ext fn rt_fma(a: float, b: float, c: float) -> float
 pub ext fn rt_to_char(n: int) -> char
 pub ext fn rt_show_to<T>(src: ptr, out: ptr)
 pub ext fn rt_show_item_to<T>(src: ptr, out: ptr)
@@ -1635,6 +1636,9 @@ impl int {
 
 impl float {
     fn abs(self) -> float = self < 0.0 ? 0.0 - self : self
+    //~ `self * b + c` rounded once, not twice: the same result on every target and in the interpreter.
+    //~ Plain `a * b + c` is never fused, so it keeps rounding after the product.
+    fn fma(self, b: float, c: float) -> float = rt_fma(self, b, c)
     fn min(self, other: float) -> float = self < other ? self : other
     fn max(self, other: float) -> float = self > other ? self : other
 

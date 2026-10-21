@@ -88,6 +88,7 @@ CASES = [
  # floating point
  ("fadd d0, d1, d2", "a.fadd(true, V(0), V(1), V(2))"), ("fadd s0, s1, s2", "a.fadd(false, V(0), V(1), V(2))"),
  ("fsub d3, d4, d5", "a.fsub(true, V(3), V(4), V(5))"), ("fmul s3, s4, s5", "a.fmul(false, V(3), V(4), V(5))"),
+ ("fmadd d0, d1, d2, d3", "a.fmadd(true, V(0), V(1), V(2), V(3))"), ("fmadd s4, s5, s6, s7", "a.fmadd(false, V(4), V(5), V(6), V(7))"),
  ("fdiv d6, d7, d8", "a.fdiv(true, V(6), V(7), V(8))"), ("fneg d0, d1", "a.fneg(true, V(0), V(1))"),
  ("fneg s0, s1", "a.fneg(false, V(0), V(1))"), ("fmov d0, d1", "a.fmov_rr(true, V(0), V(1))"),
  ("fmov s0, s1", "a.fmov_rr(false, V(0), V(1))"),

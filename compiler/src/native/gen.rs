@@ -1211,6 +1211,20 @@ impl<'m> Gen<'m> {
                 });
             }
             Op::Select(c, a, b) => self.select(f, *c, *a, *b, res.unwrap()),
+            Op::Fma(a, b, c) => {
+                // `xmm0 = c`, then `xmm0 = a * b + xmm0` in one rounding (FMA3, a Haswell or newer CPU); `b` is
+                // read where it lives (register or frame slot), so no third scratch register is needed.
+                let dbl = f.ty(*a) == IrTy::F64;
+                self.ldf(Xmm(0), *c, f);
+                let xa = self.fsrc(*a, f, Xmm(1));
+                let mb = match self.loc[b.0 as usize] {
+                    Where::Xmm(x) => Fp::Reg(x),
+                    Where::Mem(off) => Fp::Mem(mem(RBP, off)),
+                    w => panic!("float {} is read from {w:?}", b.0),
+                };
+                self.a.vfmadd231(Xmm(0), xa, mb, dbl);
+                self.stf(res.unwrap(), Xmm(0), f);
+            }
             Op::Cmp(op, a, b) => self.cmp(f, *op, *a, *b, res.unwrap()),
             Op::Neg(a) => {
                 let t = f.ty(*a);

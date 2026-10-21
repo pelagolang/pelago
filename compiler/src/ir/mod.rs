@@ -298,6 +298,8 @@ pub enum Op {
     Cmp(CmpOp, Value, Value),
     /// The second value when the bool is true, else the third (both are already computed).
     Select(Value, Value, Value),
+    /// `a * b + c` with a single rounding (floats only): the same result on every target.
+    Fma(Value, Value, Value),
     Neg(Value),
     Not(Value),
     VUn(VUn, Value),
