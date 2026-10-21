@@ -76,8 +76,18 @@ fn qemu_a64() -> Option<PathBuf> {
 /// Can this machine run AArch64 Linux programs: directly on an ARM Linux machine, or through
 /// `qemu-aarch64` where that is installed?
 pub fn can_run_a64() -> bool {
-    cfg!(all(target_os = "linux", target_arch = "aarch64"))
-        || (cfg!(all(target_os = "linux", target_arch = "x86_64")) && qemu_a64().is_some())
+    can_run_a64_on(Os::Linux)
+}
+
+/// The same for a program built for `os`: Linux as above, Windows only on a Windows ARM machine.
+pub fn can_run_a64_on(os: Os) -> bool {
+    match os {
+        Os::Linux => {
+            cfg!(all(target_os = "linux", target_arch = "aarch64"))
+                || (cfg!(all(target_os = "linux", target_arch = "x86_64")) && qemu_a64().is_some())
+        }
+        Os::Windows => cfg!(all(target_os = "windows", target_arch = "aarch64")),
+    }
 }
 
 /// Starts the program and waits for it, collecting its output.
@@ -88,7 +98,7 @@ pub fn run_image(os: Os, image: &[u8]) -> Result<Ran, String> {
 /// The same for an executable of the given processor.
 pub fn run_image_arch(arch: Arch, os: Os, image: &[u8]) -> Result<Ran, String> {
     let a64 = arch == Arch::Aarch64;
-    if (a64 && (os != Os::Linux || !can_run_a64())) || (!a64 && !can_run(os)) {
+    if (a64 && !can_run_a64_on(os)) || (!a64 && !can_run(os)) {
         return Err(format!(
             "cannot run {arch:?} {os:?} programs on this machine"
         ));
@@ -152,10 +162,15 @@ pub fn run_image_arch(arch: Arch, os: Os, image: &[u8]) -> Result<Ran, String> {
     })
 }
 
-/// Builds the module for AArch64 Linux and runs it (tests): `None` when this machine cannot run such
-/// programs. `PELAGO_SKIP_A64=1` turns the AArch64 column of the tests off (qemu is slow).
+/// Builds the module for AArch64 (Windows on a Windows ARM machine, Linux otherwise) and runs it
+/// (tests): `None` when this machine cannot run such programs. `PELAGO_SKIP_A64=1` turns the AArch64 column of the tests off (qemu is slow).
 pub fn build_and_run_a64(m: &crate::ir::Module, leak_check: bool) -> Option<Ran> {
-    if std::env::var_os("PELAGO_SKIP_A64").is_some() || !can_run_a64() {
+    let target = if cfg!(windows) {
+        Os::Windows
+    } else {
+        Os::Linux
+    };
+    if std::env::var_os("PELAGO_SKIP_A64").is_some() || !can_run_a64_on(target) {
         return None;
     }
     // Every configuration must give the same result: the frame only, the full register set, and (in
@@ -172,12 +187,12 @@ pub fn build_and_run_a64(m: &crate::ir::Module, leak_check: bool) -> Option<Ran>
         let _ = limit;
         let opts = super::gen::Options {
             leak_check,
-            target: Os::Linux,
+            target,
             regalloc,
         };
         let image = super::gen_a64::compile(m, "main", &opts)
             .unwrap_or_else(|e| panic!("the AArch64 build failed: {e}"));
-        let ran = run_image_arch(Arch::Aarch64, Os::Linux, &image).unwrap();
+        let ran = run_image_arch(Arch::Aarch64, target, &image).unwrap();
         match &first {
             None => first = Some(ran),
             Some(f) => assert_eq!(

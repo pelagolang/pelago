@@ -37,9 +37,6 @@ const SMALL_COPY: i64 = 64;
 
 /// Compiles the module to an AArch64 Linux executable whose entry runs the function named `entry`.
 pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, String> {
-    if opts.target != Os::Linux {
-        return Err("the AArch64 backend builds Linux programs only (card A-10, stage R4)".into());
-    }
     let main_fn = m
         .funcs
         .iter()
@@ -54,6 +51,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         &mut g.data,
         main_label,
         opts.leak_check,
+        opts.target,
     );
     g.rt = Some(rt);
     for d in &m.data {
@@ -71,7 +69,10 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
             size: (g.a.here() - start) as u64,
         });
     }
-    elf::write_a64(&g.a, &g.ro, &g.data, 0, &syms)
+    match opts.target {
+        Os::Linux => elf::write_a64(&g.a, &g.ro, &g.data, 0, &syms),
+        Os::Windows => super::pe::write_a64(&g.a, &g.ro, &g.data, 0),
+    }
 }
 
 /// The integer or boolean constants of a function, by value: they get no frame slot.

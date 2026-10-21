@@ -1,5 +1,5 @@
-//! Writes a Windows x86-64 executable (PE32+, console subsystem) that imports a few functions from
-//! `kernel32.dll` and nothing else.
+//! Writes a Windows executable (PE32+, console subsystem) for x86-64 or ARM64 that imports a few
+//! functions from `kernel32.dll` and nothing else.
 //!
 //! Layout (file alignment 0x200, section alignment 0x1000, image base 0x1_4000_0000, no relocations:
 //! the image does not ask for address randomisation):
@@ -97,16 +97,73 @@ fn idata(rva: u32) -> Vec<u8> {
     w.0
 }
 
-/// Builds the executable.
+/// Builds the x86-64 executable.
 pub fn write(asm: &Asm, rodata: &Blob, data: &Blob, bss: usize) -> Result<Vec<u8>, String> {
+    write_with(
+        MACHINE_X86_64,
+        asm.code.len(),
+        |a| asm.finish(a),
+        rodata,
+        data,
+        bss,
+    )
+}
+
+/// The same for ARM64 code.
+pub fn write_a64(
+    asm: &super::a64::Asm,
+    rodata: &Blob,
+    data: &Blob,
+    bss: usize,
+) -> Result<Vec<u8>, String> {
+    write_with(
+        MACHINE_ARM64,
+        asm.code.len(),
+        |a| asm.finish(a),
+        rodata,
+        data,
+        bss,
+    )
+}
+
+const MACHINE_X86_64: u16 = 0x8664;
+const MACHINE_ARM64: u16 = 0xAA64;
+
+/// `finish` turns the code into its final bytes once the addresses of the sections are known.
+fn write_with(
+    machine: u16,
+    code_len: usize,
+    finish: impl FnOnce(SectAddrs) -> Result<Vec<u8>, String>,
+    rodata: &Blob,
+    data: &Blob,
+    bss: usize,
+) -> Result<Vec<u8>, String> {
     let text_rva = SECT_ALIGN;
-    let ro_rva = align_up(text_rva + asm.code.len() as u64, SECT_ALIGN);
+    let ro_rva = align_up(text_rva + code_len as u64, SECT_ALIGN);
     let data_rva = align_up(ro_rva + (rodata.bytes.len() as u64).max(1), SECT_ALIGN);
     let data_mem = data.bytes.len() as u64 + bss as u64;
     let id_rva = align_up(data_rva + data_mem.max(1), SECT_ALIGN);
     let id = idata(id_rva as u32);
+    // ARM64 images must be relocatable (the system moves them): the import section ends with a
+    // relocation table with nothing to fix, only the padding entries of one block. The code is position
+    // independent and the loader fills in the import table, so nothing needs a fix.
+    let arm = machine == MACHINE_ARM64;
+    let mut id = id;
+    let mut reloc = (0u32, 0u32);
+    if arm {
+        while !id.len().is_multiple_of(4) {
+            id.push(0);
+        }
+        reloc = (id_rva as u32 + id.len() as u32, 12);
+        let mut b = W(Vec::new());
+        b.u32(text_rva as u32); // page
+        b.u32(12); // size of the block
+        b.u16(0); // IMAGE_REL_BASED_ABSOLUTE: padding
+        b.u16(0);
+        id.extend_from_slice(&b.0);
+    }
     let image_size = align_up(id_rva + id.len() as u64, SECT_ALIGN);
-    let text = asm.finish(SectAddrs {
+    let text = finish(SectAddrs {
         text: IMAGE_BASE + text_rva,
         rodata: IMAGE_BASE + ro_rva,
         data: IMAGE_BASE + data_rva,
@@ -127,14 +184,15 @@ pub fn write(asm: &Asm, rodata: &Blob, data: &Blob, bss: usize) -> Result<Vec<u8
     w.pad_to(0x40);
     // PE signature and COFF header.
     w.0.extend_from_slice(b"PE\0\0");
-    w.u16(0x8664); // x86-64
+    w.u16(machine);
     w.u16(4); // sections
     w.u32(0); // time stamp
     w.u32(0);
     w.u32(0);
     w.u16(240); // size of the optional header
-    w.u16(0x0023); // executable, no relocations, can handle addresses above 2 GB
-                   // Optional header (PE32+).
+                // Executable, can handle addresses above 2 GB; on x86-64 also no relocations.
+    w.u16(if arm { 0x0022 } else { 0x0023 });
+    // Optional header (PE32+).
     w.u16(0x20B);
     w.u8(14);
     w.u8(0);
@@ -161,7 +219,8 @@ pub fn write(asm: &Asm, rodata: &Blob, data: &Blob, bss: usize) -> Result<Vec<u8
     w.u32(HEADERS as u32);
     w.u32(0); // checksum
     w.u16(3); // console
-    w.u16(0x8100); // terminal server aware, no-execute compatible
+              // Terminal server aware, no-execute compatible; ARM64 also asks to be moved (dynamic base).
+    w.u16(if arm { 0x8140 } else { 0x8100 });
     w.u64(0x10_0000); // stack reserve
     w.u64(0x1000);
     w.u64(0x10_0000); // heap reserve
@@ -173,6 +232,10 @@ pub fn write(asm: &Asm, rodata: &Blob, data: &Blob, bss: usize) -> Result<Vec<u8
             1 => {
                 w.u32((id_rva) as u32);
                 w.u32(DESCRIPTORS);
+            }
+            5 if arm => {
+                w.u32(reloc.0);
+                w.u32(reloc.1);
             }
             12 => {
                 w.u32((id_rva) as u32 + iat_slot(0));

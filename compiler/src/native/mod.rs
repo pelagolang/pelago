@@ -47,7 +47,10 @@ impl Os {
             any(target_arch = "x86_64", target_arch = "aarch64")
         )) {
             Some(Os::Linux)
-        } else if cfg!(all(target_os = "windows", target_arch = "x86_64")) {
+        } else if cfg!(all(
+            target_os = "windows",
+            any(target_arch = "x86_64", target_arch = "aarch64")
+        )) {
             Some(Os::Windows)
         } else {
             None
