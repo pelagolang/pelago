@@ -144,6 +144,24 @@ fn write_with(
     let data_mem = data.bytes.len() as u64 + bss as u64;
     let id_rva = align_up(data_rva + data_mem.max(1), SECT_ALIGN);
     let id = idata(id_rva as u32);
+    // ARM64 images must be relocatable (the system moves them): the import section ends with a
+    // relocation table with nothing to fix, only the padding entries of one block. The code is position
+    // independent and the loader fills in the import table, so nothing needs a fix.
+    let arm = machine == MACHINE_ARM64;
+    let mut id = id;
+    let mut reloc = (0u32, 0u32);
+    if arm {
+        while id.len() % 4 != 0 {
+            id.push(0);
+        }
+        reloc = (id_rva as u32 + id.len() as u32, 12);
+        let mut b = W(Vec::new());
+        b.u32(text_rva as u32); // page
+        b.u32(12); // size of the block
+        b.u16(0); // IMAGE_REL_BASED_ABSOLUTE: padding
+        b.u16(0);
+        id.extend_from_slice(&b.0);
+    }
     let image_size = align_up(id_rva + id.len() as u64, SECT_ALIGN);
     let text = finish(SectAddrs {
         text: IMAGE_BASE + text_rva,
@@ -172,8 +190,9 @@ fn write_with(
     w.u32(0);
     w.u32(0);
     w.u16(240); // size of the optional header
-    w.u16(0x0023); // executable, no relocations, can handle addresses above 2 GB
-                   // Optional header (PE32+).
+                // Executable, can handle addresses above 2 GB; on x86-64 also no relocations.
+    w.u16(if arm { 0x0022 } else { 0x0023 });
+    // Optional header (PE32+).
     w.u16(0x20B);
     w.u8(14);
     w.u8(0);
@@ -200,7 +219,8 @@ fn write_with(
     w.u32(HEADERS as u32);
     w.u32(0); // checksum
     w.u16(3); // console
-    w.u16(0x8100); // terminal server aware, no-execute compatible
+              // Terminal server aware, no-execute compatible; ARM64 also asks to be moved (dynamic base).
+    w.u16(if arm { 0x8140 } else { 0x8100 });
     w.u64(0x10_0000); // stack reserve
     w.u64(0x1000);
     w.u64(0x10_0000); // heap reserve
@@ -212,6 +232,10 @@ fn write_with(
             1 => {
                 w.u32((id_rva) as u32);
                 w.u32(DESCRIPTORS);
+            }
+            5 if arm => {
+                w.u32(reloc.0);
+                w.u32(reloc.1);
             }
             12 => {
                 w.u32((id_rva) as u32 + iat_slot(0));
