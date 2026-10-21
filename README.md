@@ -1,3 +1,12 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/logo/pelago-horizontal-dark.svg">
+    <img alt="Pelago" src="assets/brand/logo/pelago-horizontal.svg" width="360">
+  </picture>
+</p>
+
+<p align="center"><strong>A self-hosting systems language.</strong><br>Native code. No GC. No runtime.</p>
+
 # Pelago
 
 Pelago (from *pelagos*, Greek for "the open sea"; source files end in `.pel`) is a self-hosting systems language. It compiles to native code with its own backend, has no garbage collector and no runtime, and is memory safe through value semantics instead of a borrow checker. The syntax is braces and newlines, with a TypeScript-like feel.
