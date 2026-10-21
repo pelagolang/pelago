@@ -1,6 +1,6 @@
 //! The loop vectoriser (card A-11, `docs/design/vectorise.md`). A counted loop whose body is plain
-//! wrapping integer arithmetic over its counters runs two iterations per vector (SSE2 has two 64-bit
-//! lanes) and `U` vectors per pass, so `2 * U` iterations per pass:
+//! wrapping integer arithmetic over its counters and over the elements of arrays runs two iterations
+//! per vector (SSE2 has two 64-bit lanes) and `U` vectors per pass, so `2 * U` iterations per pass:
 //!
 //! ```text
 //! while i < n { p += 10; t += p & 1023; i += 1 }
@@ -9,15 +9,29 @@
 //! A counter that steps by a constant `k` becomes `U` vectors holding `c, c + k` / `c + 2k, c + 3k`
 //! / ..., each stepping by `2 * U * k` per pass. An accumulator (`t += e` or `t -= e`, read nowhere
 //! else) becomes `U` vectors of partial sums, added up after the loop. Everything else in the body
-//! is done lane by lane with the same operation.
+//! is done lane by lane with the same operation. An element `xs[i]` of an array read with the test
+//! counter (`load (ptradd base, i * 8)`) is a vector load of two neighbours, and a store of the same
+//! shape is a vector store.
 //!
-//! Nothing here can change what the program does. The operations are wrapping ones (a checked
-//! operation is not vectorised), so every lane computes exactly what its iteration would have, and
-//! sums are reassociated only for integers, where wrapping addition is associative. The vector loop
-//! runs while `i < n - (2 * U - 1)`, so every iteration it covers is one the original loop would
-//! have run; the original loop is kept and finishes the last few iterations. Like the unroller, it
-//! only takes loops of two blocks with a constant bound of at least [`MIN_TRIPS`] passes and a step
-//! of at most 2^20, and a body without memory or calls (so a vector never lives across a call).
+//! Nothing here can change what the program does:
+//!
+//! - The operations are wrapping ones, so every lane computes exactly what its iteration would have,
+//!   and sums are reassociated only for integers, where wrapping addition is associative.
+//! - The vector loop runs while `i < n - (2 * U - 1) * step`, so every iteration it covers is one the
+//!   original loop would have run; the original loop is kept and finishes the last few iterations.
+//! - Memory: the loads are the ones the original loop would do a few passes later, and a loop that
+//!   stores only reads and writes through one base address with the test counter as index, so a lane
+//!   only ever touches its own element and the order between lanes does not matter.
+//! - A *checked* sum (`t += xs[i]` stops on overflow) is vectorised only behind a guard that makes
+//!   overflow impossible: the start value of the sum, the first index and the bound are in a range
+//!   where `n` additions of elements below 2^29 in absolute value cannot overflow, and the vector
+//!   loop ORs `element + 2^29` of every element it reads into a flag. If the flag shows an element
+//!   outside that range (or the guard fails before the loop) the original loop runs from the start
+//!   (a loop with checked sums has no stores, so it can run again), and stops where it always did.
+//!
+//! Like the unroller it takes loops of two blocks. A constant bound has to allow at least
+//! [`MIN_TRIPS`] passes and a step of at most 2^20; a bound that is a value the loop does not change
+//! is also accepted. The body has no calls (so a vector never lives across a call).
 
 use super::dom::Dom;
 use super::loops;
@@ -29,6 +43,11 @@ const U: usize = 2;
 const MIN_TRIPS: i128 = 256;
 /// Vectors that may be alive in the loop (the allocator has 14 registers).
 const MAX_LIVE: usize = 14;
+/// Elements of a checked sum stay below `2^ELEM_BITS` in absolute value, the bound below `2^TRIP_BITS`
+/// and the start value below `2^ACC_BITS`: `2^61 + 2^33 * 2^29` is below `2^63`.
+const ELEM_BITS: u32 = 29;
+const TRIP_BITS: u32 = 33;
+const ACC_BITS: u32 = 61;
 
 /// Vectorises what it can. The original loop, which finishes the last iterations, and the vector loop
 /// are marked [`Block::tail`], so that neither this pass nor the unroller takes them again.
@@ -62,14 +81,19 @@ enum Lane {
     S(Value),
     /// A vector.
     V(Value),
+    /// `i * 8` for the test counter `i`: only ever the offset of an address.
+    Idx,
+    /// The address `base + i * 8`, of the element this copy starts at.
+    Addr(Value),
 }
 
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     /// Steps by this constant each iteration.
     Counter(i128),
-    /// `p + e` (or `p - e` when the flag is set), `p` read nowhere else.
-    Acc(bool),
+    /// `p + e` (or `p - e` when `minus`), `p` read nowhere else. `checked`: the update stops on
+    /// overflow, which is what the guard makes impossible.
+    Acc { minus: bool, checked: bool },
 }
 
 struct Ctx<'a> {
@@ -115,13 +139,24 @@ impl Ctx<'_> {
         s
     }
 
-    fn vec(&mut self, l: Lane) -> Value {
+    /// The vector for a value; an address or an offset is not one.
+    fn vec(&mut self, l: Lane) -> Option<Value> {
         match l {
-            Lane::V(v) => v,
-            Lane::S(v) => self.splat(v),
+            Lane::V(v) => Some(v),
+            Lane::S(v) => Some(self.splat(v)),
+            Lane::Idx | Lane::Addr(_) => None,
         }
     }
+
+    fn pre_op(&mut self, op: Op, ty: IrTy) -> Value {
+        self.f
+            .emit(self.pre, op, Some(ty))
+            .expect("an operation makes a value")
+    }
 }
+
+/// The element size of the arrays this pass reads: a vector load covers two of them.
+const ELEM: i128 = 8;
 
 fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
     let hb = f.blocks[h.0 as usize].clone();
@@ -164,7 +199,17 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
         })
         .collect();
     let konst = |v: Value| known.get(&v).copied();
-    let bound = konst(n)?;
+    // Values made in the loop (the bound and the array bases must not be among them).
+    let inside: HashSet<Value> = hb
+        .params
+        .iter()
+        .copied()
+        .chain(bb.insts.iter().filter_map(|&k| f.insts[k].result))
+        .collect();
+    let bound = konst(n);
+    if bound.is_none() && inside.contains(&n) {
+        return None;
+    }
     // What the body reads of each value.
     let mut uses: HashMap<Value, usize> = HashMap::new();
     for &k in &bb.insts {
@@ -186,42 +231,43 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
     for (idx, p) in hb.params.iter().enumerate() {
         let x = back.args[idx];
         let upd = in_body.get(&x).map(|k| &f.insts[*k].op);
-        let kind = match upd {
-            Some(Op::Bin(BinOp::Add, a, e)) | Some(Op::Bin(BinOp::Add, e, a))
+        let acc = |minus: bool, checked: bool| -> Option<Kind> {
+            // `p` is read only by this update, and the update only by the jump back.
+            (uses.get(p) == Some(&1) && uses.get(&x) == Some(&1))
+                .then_some(Kind::Acc { minus, checked })
+        };
+        let kind = match upd? {
+            Op::Bin(BinOp::Add, a, e) | Op::Bin(BinOp::Add, e, a)
                 if a == p && e != p && konst(*e).is_some() =>
             {
                 Kind::Counter(konst(*e)?)
             }
-            Some(Op::Bin(o @ (BinOp::Add | BinOp::Sub), a, e))
-                if a == p && !matches!(e, v if v == p) =>
-            {
-                // `p` is read only by this update, and the update only by the jump back.
-                if uses.get(p) != Some(&1) || uses.get(&x) != Some(&1) {
-                    return None;
-                }
-                Kind::Acc(*o == BinOp::Sub)
-            }
-            Some(Op::Bin(BinOp::Add, e, a)) if a == p && e != p => {
-                if uses.get(p) != Some(&1) || uses.get(&x) != Some(&1) {
-                    return None;
-                }
-                Kind::Acc(false)
-            }
+            Op::Bin(BinOp::Add, a, e) if a == p && e != p => acc(false, false)?,
+            Op::Bin(BinOp::Add, e, a) if a == p && e != p => acc(false, false)?,
+            Op::Bin(BinOp::Sub, a, e) if a == p && e != p => acc(true, false)?,
+            Op::Checked(BinOp::Add, true, a, e) if a == p && e != p => acc(false, true)?,
+            Op::Checked(BinOp::Add, true, e, a) if a == p && e != p => acc(false, true)?,
+            Op::Checked(BinOp::Sub, true, a, e) if a == p && e != p => acc(true, true)?,
             _ => return None,
         };
         kinds.push(kind);
     }
-    // The test counter steps by a positive constant, and the bound allows many passes.
+    // The test counter steps by a positive constant, and a constant bound allows many passes.
     let Kind::Counter(step) = kinds[ix] else {
         return None;
     };
-    if !(1..=1 << 20).contains(&step) || bound < MIN_TRIPS * step {
+    if !(1..=1 << 20).contains(&step) || bound.is_some_and(|b| b < MIN_TRIPS * step) {
         return None;
     }
+    let guarded = kinds
+        .iter()
+        .any(|k| matches!(k, Kind::Acc { checked: true, .. }));
 
     // Which body instructions are vector work, and is it worth it.
-    let is_update: HashSet<Value> = back.args.iter().copied().collect();
-    let mut work = 0usize;
+    let mut work = 0usize; // vector operations per copy
+    let mut scalar_ops = 0usize; // instructions of one iteration (without constants)
+    let mut loads = 0usize;
+    let mut stores = 0usize;
     // The constants that become splats (a shift count does not), by value.
     let mut splats: HashSet<i128> = HashSet::new();
     let shift_counts: HashSet<Value> = bb
@@ -232,50 +278,137 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
             _ => None,
         })
         .collect();
+    // `i * 8`, and the addresses made from it: only for a test counter that steps by one.
+    let mut idx_muls: HashSet<Value> = HashSet::new();
+    let mut addrs: HashSet<Value> = HashSet::new();
+    let mut bases: HashSet<Value> = HashSet::new();
+    let updates: HashSet<Value> = back.args.iter().copied().collect();
     for &k in &bb.insts {
         let inst = &f.insts[k];
-        let r = inst.result?;
-        if f.ty(r) != i64t {
-            return None;
+        // Integers, and the pointers of addresses.
+        if let Some(r) = inst.result {
+            if f.ty(r) != i64t && !(f.ty(r) == IrTy::Ptr && matches!(inst.op, Op::PtrAdd(..))) {
+                return None;
+            }
         }
         match &inst.op {
             Op::Const(IrTy::Int(64), Const::Int(c)) => {
-                if !shift_counts.contains(&r) {
+                if !shift_counts.contains(&inst.result?) {
                     splats.insert(*c);
                 }
             }
-            Op::Bin(BinOp::Add | BinOp::Sub | BinOp::And | BinOp::Or | BinOp::Xor, ..) => work += 1,
+            Op::Bin(BinOp::Add | BinOp::Sub | BinOp::And | BinOp::Or | BinOp::Xor, ..) => {
+                work += 1;
+                scalar_ops += 1;
+            }
+            Op::Checked(BinOp::Add | BinOp::Sub, true, ..) if updates.contains(&inst.result?) => {
+                work += 1;
+                scalar_ops += 1;
+            }
             Op::Bin(BinOp::Shl | BinOp::UShr, _, s)
                 if konst(*s).is_some_and(|s| (0..64).contains(&s)) =>
             {
-                work += 1
+                work += 1;
+                scalar_ops += 1;
+            }
+            // `i * 8`: the offset of an element, read by addresses and nothing else (checked below).
+            Op::Bin(BinOp::Mul, a, s) if *a == i && step == 1 && konst(*s) == Some(ELEM) => {
+                idx_muls.insert(inst.result?);
+                scalar_ops += 1;
+            }
+            Op::PtrAdd(base, off)
+                if idx_muls.contains(off)
+                    && !inside.contains(base)
+                    && uses.get(&inst.result?) == Some(&1) =>
+            {
+                addrs.insert(inst.result?);
+                bases.insert(*base);
+                scalar_ops += 1;
+            }
+            Op::Load(IrTy::Int(64), q) if addrs.contains(q) => {
+                loads += 1;
+                work += 1;
+                scalar_ops += 1;
+            }
+            Op::Store(q, x) if addrs.contains(q) && f.ty(*x) == i64t => {
+                stores += 1;
+                work += 1;
+                scalar_ops += 1;
             }
             _ => return None,
         }
-        let _ = is_update.contains(&r);
     }
-    // Counters read by the body besides their own update need vectors; the others are only worked out
-    // at the end.
+    // Every offset is read by addresses only.
+    let address_reads = bb
+        .insts
+        .iter()
+        .filter(|&&k| matches!(f.insts[k].op, Op::PtrAdd(_, off) if idx_muls.contains(&off)))
+        .count();
+    if idx_muls.iter().map(|m| uses[m]).sum::<usize>() != address_reads {
+        return None;
+    }
+    // A loop that stores keeps to one array, with no sum that can stop (it could not run again). One that
+    // only fills (stores and reads nothing) is the fill pass's, and memory-bound anyway.
+    if stores > 0 && (bases.len() != 1 || guarded || loads == 0) {
+        return None;
+    }
+    // A checked sum adds up elements the guard can bound: loads, or a value masked small.
+    let mut checked_loads = 0usize;
+    for (idx, k) in kinds.iter().enumerate() {
+        if let Kind::Acc { checked: true, .. } = k {
+            let x = back.args[idx];
+            let (Op::Checked(_, _, a, e) | Op::Bin(_, a, e)) = &f.insts[in_body[&x]].op else {
+                return None;
+            };
+            let e = if *a == hb.params[idx] { *e } else { *a };
+            match in_body.get(&e).map(|k| &f.insts[*k].op) {
+                Some(Op::Load(..)) => checked_loads += 1,
+                Some(Op::Bin(BinOp::And, _, m)) | Some(Op::Bin(BinOp::And, m, _))
+                    if konst(*m).is_some_and(|m| (0..1 << ELEM_BITS).contains(&m)) => {}
+                _ => return None,
+            }
+        }
+    }
+    // Counters read by the body besides their own update (and the offsets of addresses) need
+    // vectors; the others are only worked out at the end.
+    let mut uses_v: HashMap<Value, usize> = HashMap::new();
+    for &k in &bb.insts {
+        if inst_is_idx(&f.insts[k], &idx_muls) {
+            continue;
+        }
+        f.insts[k]
+            .op
+            .for_each_value(|v| *uses_v.entry(v).or_default() += 1);
+    }
+    for a in &back.args {
+        *uses_v.entry(*a).or_default() += 1;
+    }
     let reads = |idx: usize| {
         let p = hb.params[idx];
         // Its own update reads it once; any other read, or a read of the updated value, needs lanes.
-        uses.get(&p).copied().unwrap_or(0) > 1
-            || uses.get(&back.args[idx]).copied().unwrap_or(0) > 1
+        uses_v.get(&p).copied().unwrap_or(0) > 1
+            || uses_v.get(&back.args[idx]).copied().unwrap_or(0) > 1
     };
     let mut vec_params: Vec<usize> = Vec::new();
     for idx in 0..hb.params.len() {
         match kinds[idx] {
-            Kind::Acc(_) => vec_params.push(idx),
+            Kind::Acc { .. } => vec_params.push(idx),
             Kind::Counter(_) if reads(idx) => vec_params.push(idx),
             Kind::Counter(_) => {}
         }
     }
-    let live = U * vec_params.len() + splats.len() + vec_params.len();
-    if live > MAX_LIVE || vec_params.is_empty() {
+    let flag = usize::from(checked_loads > 0);
+    let live = U * vec_params.len() + flag + splats.len() + vec_params.len() + 2 * flag;
+    if live > MAX_LIVE || (vec_params.is_empty() && stores == 0) {
         return None;
     }
-    let scalar = 2 * U * (work + 1);
-    let vector = U * (work + vec_params.len()) + 3;
+    let counters = vec_params
+        .iter()
+        .filter(|i| matches!(kinds[**i], Kind::Counter(_)))
+        .count();
+    let scalar = 2 * U * (scalar_ops + 1);
+    let mem = usize::from(loads + stores > 0);
+    let vector = U * (work + counters + 2 * checked_loads) + 3 + mem * (1 + U);
     if vector * 5 > scalar * 4 {
         return None;
     }
@@ -286,7 +419,7 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
     let tys: Vec<IrTy> = hb.params.iter().map(|p| f.ty(*p)).collect();
     let pre = f.new_block(&tys);
     let mut vtys = vec![i64t];
-    vtys.extend(std::iter::repeat_n(v2, U * vec_params.len()));
+    vtys.extend(std::iter::repeat_n(v2, U * vec_params.len() + flag));
     let h2 = f.new_block(&vtys);
     let b2 = f.new_block(&[]);
     let exit = f.new_block(&vtys);
@@ -307,11 +440,11 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
         let p0 = pre_args[idx];
         for u in 0..U {
             let v = match kinds[idx] {
-                Kind::Acc(_) if u == 0 => {
+                Kind::Acc { .. } if u == 0 => {
                     cx.f.emit(pre, Op::VBin(VBin::Build, p0, zero), Some(v2))
                         .expect("a vector")
                 }
-                Kind::Acc(_) => cx.splat(zero),
+                Kind::Acc { .. } => cx.splat(zero),
                 Kind::Counter(k) => {
                     let lane = |m: i128, cx: &mut Ctx| {
                         if m == 0 {
@@ -330,10 +463,45 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
             init.push(v);
         }
     }
+    if flag == 1 {
+        init.push(cx.splat(zero));
+    }
+
+    // The bound of the vector loop. A constant one is worked out here; for a value, the unroller's
+    // way: a `select` that makes the loop run zero times if the subtraction would pass the smallest
+    // integer. A guarded loop also needs the start values in the range the guard shows.
+    let least = cx.konst(i64::MIN as i128);
+    let mut lim = match bound {
+        Some(bnd) => cx.konst(bnd - span),
+        None => {
+            let floor = cx.konst(i64::MIN as i128 + span);
+            let ok = cx.pre_op(Op::Cmp(CmpOp::Ge, n, floor), IrTy::Bool);
+            let by = cx.konst(span);
+            let shifted = cx.pre_op(Op::Bin(BinOp::Sub, n, by), i64t);
+            cx.pre_op(Op::Select(ok, shifted, least), i64t)
+        }
+    };
+    if guarded {
+        // Nothing may be negative or large: `(i0 | n) >> 33 == 0`, each sum's start `a0 + 2^61` below
+        // `2^62` as an unsigned number.
+        let both = cx.pre_op(Op::Bin(BinOp::Or, pre_args[ix], n), i64t);
+        let t = cx.konst(TRIP_BITS as i128);
+        let mut bad = cx.pre_op(Op::Bin(BinOp::UShr, both, t), i64t);
+        for (idx, k) in kinds.iter().enumerate() {
+            if matches!(k, Kind::Acc { checked: true, .. }) {
+                let off = cx.konst(1 << ACC_BITS);
+                let shifted = cx.pre_op(Op::Bin(BinOp::Add, pre_args[idx], off), i64t);
+                let t = cx.konst(ACC_BITS as i128 + 1);
+                let high = cx.pre_op(Op::Bin(BinOp::UShr, shifted, t), i64t);
+                bad = cx.pre_op(Op::Bin(BinOp::Or, bad, high), i64t);
+            }
+        }
+        let ok = cx.pre_op(Op::Cmp(CmpOp::Eq, bad, zero), IrTy::Bool);
+        lim = cx.pre_op(Op::Select(ok, lim, least), i64t);
+    }
 
     // The vector loop's test and its exit.
     let h2p = cx.f.blocks[h2.0 as usize].params.clone();
-    let lim = cx.konst(bound - span);
     let test =
         cx.f.emit(h2, Op::Cmp(CmpOp::Lt, h2p[0], lim), Some(IrTy::Bool))
             .expect("a comparison");
@@ -354,8 +522,25 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
 
     // The body, once per vector of the pass.
     let slot = |pos: usize, u: usize| 1 + pos * U + u;
-    let mut next: Vec<Value> = vec![h2p[0]; 0];
+    let flag_slot = 1 + U * vec_params.len();
     let mut next_state: Vec<Value> = vec![h2p[0]; U * vec_params.len()];
+    // The offset of the first element of the pass, and of each vector in it.
+    let first = if loads + stores > 0 {
+        let e = cx.konst(ELEM);
+        Some(
+            cx.f.emit(b2, Op::Bin(BinOp::Mul, h2p[0], e), Some(i64t))
+                .expect("an offset"),
+        )
+    } else {
+        None
+    };
+    let mut flags = flag_slot_value(&h2p, flag, flag_slot);
+    let bias = if flag == 1 {
+        let c = cx.konst(1 << ELEM_BITS);
+        Some(cx.splat(c))
+    } else {
+        None
+    };
     for u in 0..U {
         let mut env: HashMap<Value, Lane> = HashMap::new();
         for (pos, &idx) in vec_params.iter().enumerate() {
@@ -363,25 +548,59 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
                 env.insert(hb.params[idx], Lane::V(h2p[slot(pos, u)]));
             }
         }
+        // This copy's offset into the arrays: sixteen bytes per vector before it.
+        let offset = match first {
+            Some(o) if u > 0 => {
+                let c = cx.konst(2 * u as i128 * ELEM);
+                Some(
+                    cx.f.emit(b2, Op::Bin(BinOp::Add, o, c), Some(i64t))
+                        .expect("an offset"),
+                )
+            }
+            other => other,
+        };
         for &k in &bb.insts {
             let inst = cx.f.insts[k].clone();
-            let r = inst.result.expect("checked above");
             let lane = |env: &HashMap<Value, Lane>, v: Value| *env.get(&v).unwrap_or(&Lane::S(v));
-            // Updates of counters and accumulators are made after the body.
-            let acc = hb
-                .params
-                .iter()
-                .enumerate()
-                .find(|(idx, _)| back.args[*idx] == r && matches!(kinds[*idx], Kind::Acc(_)));
+            // Updates of accumulators are made here, in their place.
+            let r = inst.result;
+            let acc = r.and_then(|r| {
+                hb.params.iter().enumerate().find(|(idx, _)| {
+                    back.args[*idx] == r && matches!(kinds[*idx], Kind::Acc { .. })
+                })
+            });
             if let Some((idx, p)) = acc {
-                let (Op::Bin(_, x, y), Kind::Acc(minus)) = (&inst.op, kinds[idx]) else {
+                let (Op::Bin(_, x, y) | Op::Checked(_, _, x, y)) = &inst.op else {
+                    return None;
+                };
+                let Kind::Acc { minus, checked } = kinds[idx] else {
                     unreachable!()
                 };
                 let e = if x == p { *y } else { *x };
                 let ve = {
                     let l = lane(&env, e);
-                    cx.vec(l)
+                    cx.vec(l)?
                 };
+                // The guard's flag: `e + 2^29` has a bit above `2^30` set when `e` is out of range.
+                if checked
+                    && matches!(
+                        in_body.get(&e).map(|k| &cx.f.insts[*k].op),
+                        Some(Op::Load(..))
+                    )
+                {
+                    let shifted =
+                        cx.f.emit(
+                            b2,
+                            Op::VBin(VBin::Add, ve, bias.expect("a guard has a bias")),
+                            Some(v2),
+                        )
+                        .expect("a vector");
+                    flags = cx.f.emit(
+                        b2,
+                        Op::VBin(VBin::Or, flags.expect("a flag"), shifted),
+                        Some(v2),
+                    );
+                }
                 let pos = vec_params.iter().position(|q| *q == idx).expect("listed");
                 let a = h2p[slot(pos, u)];
                 let o = if minus { VBin::Sub } else { VBin::Add };
@@ -393,9 +612,9 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
             }
             // A counter's update: only the jump back reads it, or the lanes of its next step.
             let counter = (0..hb.params.len())
-                .find(|idx| back.args[*idx] == r && matches!(kinds[*idx], Kind::Counter(_)));
+                .find(|idx| Some(back.args[*idx]) == r && matches!(kinds[*idx], Kind::Counter(_)));
             if let Some(idx) = counter {
-                if uses.get(&r) == Some(&1) {
+                if uses.get(&r?) == Some(&1) {
                     continue;
                 }
                 let Kind::Counter(k) = kinds[idx] else {
@@ -412,14 +631,43 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
                         inst.span,
                     )
                     .expect("a vector");
-                env.insert(r, Lane::V(n));
+                env.insert(r?, Lane::V(n));
                 continue;
             }
             let out = match &inst.op {
-                Op::Const(t, cst) => {
-                    let Const::Int(n) = cst else { return None };
-                    let _ = t;
-                    Lane::S(cx.konst(*n))
+                Op::Const(_, Const::Int(n)) => Lane::S(cx.konst(*n)),
+                Op::Bin(BinOp::Mul, ..) if r.is_some_and(|r| idx_muls.contains(&r)) => Lane::Idx,
+                Op::PtrAdd(base, off) if r.is_some_and(|r| addrs.contains(&r)) => {
+                    let (Lane::S(b), Lane::Idx) = (lane(&env, *base), lane(&env, *off)) else {
+                        return None;
+                    };
+                    Lane::Addr(b)
+                }
+                Op::Load(_, q) => {
+                    let Lane::Addr(base) = lane(&env, *q) else {
+                        return None;
+                    };
+                    let at =
+                        cx.f.emit_at(b2, Op::PtrAdd(base, offset?), Some(IrTy::Ptr), inst.span)
+                            .expect("an address");
+                    Lane::V(
+                        cx.f.emit_at(b2, Op::Load(v2, at), Some(v2), inst.span)
+                            .expect("a vector"),
+                    )
+                }
+                Op::Store(q, x) => {
+                    let Lane::Addr(base) = lane(&env, *q) else {
+                        return None;
+                    };
+                    let vx = {
+                        let l = lane(&env, *x);
+                        cx.vec(l)?
+                    };
+                    let at =
+                        cx.f.emit_at(b2, Op::PtrAdd(base, offset?), Some(IrTy::Ptr), inst.span)
+                            .expect("an address");
+                    cx.f.emit_at(b2, Op::Store(at, vx), None, inst.span);
+                    continue;
                 }
                 Op::Bin(o @ (BinOp::Shl | BinOp::UShr), a, s) => {
                     let Some(Lane::V(va)) = env.get(a).copied() else {
@@ -452,7 +700,7 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
                             BinOp::Or => VBin::Or,
                             _ => VBin::Xor,
                         };
-                        let (x, y) = (cx.vec(la), cx.vec(lc));
+                        let (x, y) = (cx.vec(la)?, cx.vec(lc)?);
                         Lane::V(
                             cx.f.emit_at(b2, Op::VBin(vo, x, y), Some(v2), inst.span)
                                 .expect("a vector"),
@@ -461,7 +709,7 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
                 }
                 _ => return None,
             };
-            env.insert(r, out);
+            env.insert(r?, out);
         }
         // The counters' next vectors.
         for (pos, &idx) in vec_params.iter().enumerate() {
@@ -476,13 +724,13 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
             }
         }
     }
-    let _ = &mut next;
     let step_i = cx.konst(2 * U as i128 * step);
     let i2 =
         cx.f.emit(b2, Op::Bin(BinOp::Add, h2p[0], step_i), Some(i64t))
             .expect("a sum");
     let mut jump = vec![i2];
     jump.extend(next_state);
+    jump.extend(flags);
     cx.f.terminate(
         b2,
         Term::Jump(Target {
@@ -526,7 +774,7 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
                 cx.f.emit(exit, Op::Bin(BinOp::Add, pre_args[idx], done), Some(i64t))
                     .expect("a sum")
             }
-            Kind::Acc(_) => {
+            Kind::Acc { .. } => {
                 let pos = vec_params.iter().position(|q| *q == idx).expect("listed");
                 let mut sum = ep[slot(pos, 0)];
                 for u in 1..U {
@@ -540,13 +788,42 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
         };
         out.push(v);
     }
-    cx.f.terminate(
-        exit,
-        Term::Jump(Target {
-            block: h,
-            args: out,
-        }),
-    );
+    let done = Target {
+        block: h,
+        args: out,
+    };
+    if flag == 1 {
+        // An element out of range: the original loop runs again from the start values.
+        let high =
+            cx.f.emit(
+                exit,
+                Op::VUn(VUn::UShr(ELEM_BITS as u8 + 1), ep[flag_slot]),
+                Some(v2),
+            )
+            .expect("a vector");
+        let seen =
+            cx.f.emit(exit, Op::VUn(VUn::ReduceAdd, high), Some(i64t))
+                .expect("a sum");
+        let z =
+            cx.f.emit(exit, Op::Const(i64t, Const::Int(0)), Some(i64t))
+                .expect("a constant");
+        let bad =
+            cx.f.emit(exit, Op::Cmp(CmpOp::Ne, seen, z), Some(IrTy::Bool))
+                .expect("a comparison");
+        cx.f.terminate(
+            exit,
+            Term::Branch(
+                bad,
+                Target {
+                    block: h,
+                    args: pre_args.clone(),
+                },
+                done,
+            ),
+        );
+    } else {
+        cx.f.terminate(exit, Term::Jump(done));
+    }
     cx.f.terminate(
         pre,
         Term::Jump(Target {
@@ -571,4 +848,14 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
     }
     let _ = (yes, no);
     Some(h2)
+}
+
+/// Whether the instruction makes `i * 8` for an address.
+fn inst_is_idx(inst: &Inst, idx_muls: &HashSet<Value>) -> bool {
+    inst.result.is_some_and(|r| idx_muls.contains(&r))
+}
+
+/// The loop-carried flag vector of a pass, when the loop has one.
+fn flag_slot_value(params: &[Value], flag: usize, slot: usize) -> Option<Value> {
+    (flag == 1).then(|| params[slot])
 }
