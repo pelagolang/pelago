@@ -677,6 +677,16 @@ pub fn emit(
     a.bind(large);
     a.lea(RSI, mem(RBX, 4095));
     a.alu_ri(Alu::And, RSI, -4096, 8);
+    if !win {
+        // From 2 MiB up the mapping is a whole number of 2 MiB pages, so the kernel can back it
+        // with huge pages from its first byte (it aligns such mappings itself).
+        let small = a.new_label();
+        a.alu_ri(Alu::Cmp, RSI, HUGE_MIN, 8);
+        a.jcc(Cc::B, small);
+        a.alu_ri(Alu::Add, RSI, (2 << 20) - 1, 8);
+        a.alu_ri(Alu::And, RSI, -(2 << 20), 8);
+        a.bind(small);
+    }
     a.mov_rr(R12, RSI, 8);
     // The block freed last, if it is big enough and not more than twice as big, is reused (cleared)
     // instead of a new mapping with its page faults.
@@ -935,7 +945,7 @@ fn emit_mmap_reg(a: &mut Asm, len: Reg, win: bool) {
 
 /// Mappings at least this big ask for huge pages: a 40 MB buffer then takes a few page faults instead
 /// of ten thousand. Only a hint (the kernel may say no); Linux only.
-const HUGE_MIN: i32 = 4 << 20;
+const HUGE_MIN: i32 = 2 << 20;
 
 /// `madvise(addr, len, MADV_HUGEPAGE)` for a big mapping; `addr` and `len` registers are kept.
 fn advise_huge(a: &mut Asm, addr: Reg, len: Reg) {
