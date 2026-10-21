@@ -24,7 +24,7 @@ cargo run -- parse-bench <file>  # time lexing plus parsing
 cargo run -- check <path>        # parse, resolve names and check types of a file or a directory
 cargo run -- ir <path>           # check, lower to the IR, verify and print it
 cargo run -- run <path>          # lower and run `main` in the IR interpreter (`--opt` optimises first, `--stats` counts)
-cargo run -- build [-o out] <path>   # native executable, optimised by default (`--no-opt`, `--target=windows`, `--arch=aarch64`, `--leak-check`); `run --native` builds and runs
+cargo run -- build [-o out] <path>   # native executable, optimised by default (`--no-opt`, `--target=windows`, `--arch=aarch64` (Linux and Windows), `--leak-check`); `run --native` builds and runs
 cargo run -- fmt [--check] <path>   # format .pel files in place (`-` filters stdin); see docs/plans/cards/S-07-formatter.md
 cargo run -- highlight <file>    # colour a `.pel` file (`--ansi`, `--html`, `--html-page`, `--plain`, `--theme dark|light`)
 cargo run -- lsp                  # the language server (stdio); see docs/plans/cards/S-06-language-server.md
