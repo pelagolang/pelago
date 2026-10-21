@@ -413,9 +413,20 @@ impl Ctx<'_> {
             let Some(kc) = params.iter().position(|p| p == c) else {
                 continue;
             };
-            let (Some(limit), Some(start)) = (self.konst(*n), self.konst(entry.1[kc])) else {
+            // The limit and the start only need a known range: the trip count is bounded by the
+            // widest gap, the highest limit and the lowest start going up, the reverse going down.
+            let bounds = |v: Value| match self.konst(v) {
+                Some(k) => Some((k, k)),
+                None => match self.range_at(v, entry.0) {
+                    L::R(r) => Some(r),
+                    _ => None,
+                },
+            };
+            let (Some(lim), Some(st)) = (bounds(*n), bounds(entry.1[kc])) else {
                 continue;
             };
+            let (limit_up, start_up) = (lim.1, st.0);
+            let (limit_dn, start_dn) = (lim.0, st.1);
             let sum = |v: Value| match self.defs[v.0 as usize].map(|d| &self.f.insts[d].op) {
                 Some(Op::Bin(BinOp::Add, a, b) | Op::Checked(BinOp::Add, _, a, b)) => {
                     Some((*a, *b))
@@ -444,23 +455,23 @@ impl Ctx<'_> {
             // How many times the body can run: while `c < limit` (or `<=`) going up, `c > limit`
             // (or `>=`) going down.
             let trips = match (cmp, up, down) {
-                (CmpOp::Lt | CmpOp::ULt, Some(s), _) if s > 0 => Some(if limit > start {
-                    (limit - start).div_ceil(s)
+                (CmpOp::Lt | CmpOp::ULt, Some(s), _) if s > 0 => Some(if limit_up > start_up {
+                    (limit_up - start_up).div_ceil(s)
                 } else {
                     0
                 }),
-                (CmpOp::Le, Some(s), _) if s > 0 => Some(if limit >= start {
-                    (limit - start) / s + 1
+                (CmpOp::Le, Some(s), _) if s > 0 => Some(if limit_up >= start_up {
+                    (limit_up - start_up) / s + 1
                 } else {
                     0
                 }),
-                (CmpOp::Gt, _, Some(s)) if s > 0 => Some(if start > limit {
-                    (start - limit).div_ceil(s)
+                (CmpOp::Gt, _, Some(s)) if s > 0 => Some(if start_dn > limit_dn {
+                    (start_dn - limit_dn).div_ceil(s)
                 } else {
                     0
                 }),
-                (CmpOp::Ge, _, Some(s)) if s > 0 => Some(if start >= limit {
-                    (start - limit) / s + 1
+                (CmpOp::Ge, _, Some(s)) if s > 0 => Some(if start_dn >= limit_dn {
+                    (start_dn - limit_dn) / s + 1
                 } else {
                     0
                 }),
@@ -663,14 +674,25 @@ pub fn run(f: &mut Func) -> bool {
     }
     cx.narrow();
     // Accumulators of counted loops have an upper bound that no comparison gives: solve again with it.
-    let caps = cx.loop_caps();
-    if caps.iter().any(Option::is_some) {
+    // A bound found for an inner loop can bound the loop around it, so go round a few times.
+    for _ in 0..3 {
+        let mut caps = cx.loop_caps();
+        for (c, old) in caps.iter_mut().zip(&cx.caps) {
+            *c = match (*c, *old) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+        }
+        if caps == cx.caps || caps.iter().all(Option::is_none) {
+            break;
+        }
         let mut again = Ctx::new(f);
         again.caps = caps;
-        if again.solve() {
-            again.narrow();
-            cx = again;
+        if !again.solve() {
+            break;
         }
+        again.narrow();
+        cx = again;
     }
     let mut safe = Vec::new();
     let mut unsigned = Vec::new();

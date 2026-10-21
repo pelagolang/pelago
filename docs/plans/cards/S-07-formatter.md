@@ -1,6 +1,6 @@
 Id: S-07
 Title: `pelago fmt` and LSP formatting
-Column: Doing (stages 1, 2a and binary breaking built)
+Column: Doing (all stages built)
 Order: -
 Depends on: parser comment-keeping (step F1); S-06 for the editor side
 Size: L, in stages
@@ -16,7 +16,7 @@ The formatter is on the roadmap ("Formatter, language server, editor syntax high
 
 **Why the first stage needs no parser change (F1):** the formatter lexes the file itself, so comments are already there; the parser does not have to keep them. F1 is dropped.
 
-**Known limit of stage 1:** a line indented one level too far, on purpose or by mistake, is kept, because without the tree it cannot be told from a `case` body. Stage 2 derives indentation from the tree and fixes this; until then `fmt --check examples` in CI keeps our own files right, and `--check` reports only lines the layout would change.
+**Former limit of stage 1** (fixed by the tree-based indentation below): a line indented one level too far was kept, because without the tree it cannot be told from a `case` body.
 
 **Configuration (owner: yes):** a `[fmt]` section in `pelago.toml`, found by walking up from the file; `indent` and `width` first. Built (`compiler/src/config.rs`): `indent` (1 to 8, default 4) and `width` (20 to 400, default 100; used by stage 2 wrapping). `pelago.toml` is the general config file for everything language-related, so other sections can come later; unknown sections and keys are errors with a line number. The CLI and the language server both read it.
 
@@ -30,7 +30,7 @@ width = 100
 
 **Binary breaking built** (`fmt/wrap.rs`, `break_binary`): when no list can be broken, the line is broken after every top-level operator of the loosest kind it holds (`||`, then `&&`, `??`, binary `+` and `-`), the pieces indented one level (question 7; the parser already continues a line that ends in an operator). Comparisons and other operators are not broken.
 
-**Stage 2b (not built):** deriving indentation from the tree so a line indented one level too far is corrected. `compiler/core/core.pel` is not formatted yet (it has a few long calls); CI checks `examples` only.
+**Indentation from the tree built** (`fmt/levels.rs`): the start of every statement, block tail and `case` line is looked up in the syntax tree. Its indent is the bracket depth plus the number of `switch` arm bodies around it, so a line indented too far (or too little) is corrected. A `case x: { ... }` body counts no extra level, as its braces show it. Lines that continue a statement keep the levels the author gave them and move with their statement; a comment above a statement lines up with it. Not corrected: lines inside brackets that are not statements (fields, enum cases), which keep the author's levels.
 
 # What it needs
 

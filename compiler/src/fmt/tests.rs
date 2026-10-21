@@ -211,3 +211,34 @@ fn a_long_sum_breaks_after_the_plus_but_not_after_a_unary_minus() {
     );
     assert_eq!(super::format_with(&out, &narrow(40)).unwrap(), out);
 }
+
+#[test]
+fn a_case_body_gets_one_level_whatever_the_author_wrote() {
+    let good = "fn f(x: int) {\n    switch x {\n        case 1:\n            g()\n            h()\n        case 2: {\n            k()\n        }\n        default:\n            m()\n    }\n}\n";
+    assert_eq!(fmt(good), good);
+    let too_deep = "fn f(x: int) {\n    switch x {\n        case 1:\n                g()\n                h()\n        case 2: {\n            k()\n        }\n        default:\n                m()\n    }\n}\n";
+    assert_eq!(fmt(too_deep), good);
+    let flat = "fn f(x: int) {\n    switch x {\n        case 1:\n        g()\n        h()\n        default:\n        m()\n    }\n}\n";
+    assert_eq!(
+        fmt(flat),
+        "fn f(x: int) {\n    switch x {\n        case 1:\n            g()\n            h()\n        default:\n            m()\n    }\n}\n"
+    );
+}
+
+#[test]
+fn nested_switches_comments_and_chains_follow_their_statement() {
+    let src = "fn f(x: int, y: int) {\n    switch x {\n        case 1:\n            /// pick\n                switch y {\n                    case 1:\n                        g()\n                        const c = items\n                            .map(~> it)\n                            .to_list()\n                }\n    }\n}\n";
+    assert_eq!(
+        fmt(src),
+        "fn f(x: int, y: int) {\n    switch x {\n        case 1:\n            /// pick\n            switch y {\n                case 1:\n                    g()\n                    const c = items\n                        .map(~> it)\n                        .to_list()\n            }\n    }\n}\n"
+    );
+}
+
+#[test]
+fn a_statement_indented_too_far_is_corrected() {
+    let src = "fn f() {\n        g()\n    if x {\n                h()\n    }\n}\n";
+    assert_eq!(
+        fmt(src),
+        "fn f() {\n    g()\n    if x {\n        h()\n    }\n}\n"
+    );
+}
