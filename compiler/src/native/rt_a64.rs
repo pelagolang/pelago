@@ -12,7 +12,7 @@
 //! may change `x0` to `x17`, `v0` to `v7` and the flags and keep `x19` and up, which is what this
 //! runtime promises already; `x18` is the system's and is never touched. Windows has no `mremap`, so
 //! a large block always grows by copying, and its stack is reserved and committed at once (it is
-//! only touched as it is used) with an inaccessible zone at the bottom.
+//! only touched as it is used) with a guard page 256 KiB above its base.
 //!
 //! State words (see `rt.rs`): 144 the base of our stack (0: the system's), 152 the top of the stack
 //! the Windows fault handler runs on (0: none), 160 scratch for `VirtualProtect` and `GetConsoleMode`.
@@ -32,6 +32,10 @@ const CHUNK: i64 = 1 << 20;
 const STACK: i64 = 1 << 30;
 /// The stack on Windows: reserved and committed in one go, 256 MiB.
 const STACK_WIN: i64 = 1 << 28;
+/// Windows: a `PAGE_GUARD` page this far above the base of our stack. The first touch clears the flag
+/// and raises an exception that the system can still deliver on the committed room below, which an
+/// inaccessible zone would not allow (the frame of the exception is built at the stack pointer).
+const GUARD_WIN: i64 = 256 * 1024;
 /// The stack the Windows fault handler runs on.
 const HANDLER_STACK_WIN: i64 = 64 * 1024;
 /// The lowest 1 MiB of our stack is mapped inaccessible, so running into it is a fault.
@@ -253,12 +257,14 @@ pub fn emit(
     state(a, X9, 144);
     a.ldr(X0, X9, 0, 8);
     a.cbz(X0, noguard);
-    a.mov_ri(X1, GUARD);
     if win {
-        a.mov_ri(X2, 1); // PAGE_NOACCESS
+        a.add_imm(X0, X0, GUARD_WIN);
+        a.mov_ri(X1, 4096);
+        a.mov_ri(X2, 0x104); // read and write, guard page
         state(a, X3, 160);
         win_call(a, IMP_VIRTUAL_PROTECT);
     } else {
+        a.mov_ri(X1, GUARD);
         a.mov_ri(X2, 0);
         sys(a, SYS_MPROTECT);
     }
@@ -558,9 +564,12 @@ pub fn emit(
         if win {
             // `x0` the exception pointers: the record's code, and for an access violation the
             // address at +0x28. Anything else is passed on (CONTINUE_SEARCH, 0).
-            let pass = a.new_label();
+            let (pass, tripped) = (a.new_label(), a.new_label());
             a.ldr(X9, X0, 0, 8);
             a.ldr(X10, X9, 0, 4);
+            a.mov_ri(X11, 0x8000_0001); // guard page violation
+            a.cmp_rr(X10, X11);
+            a.b_cond(Cond::Eq, tripped);
             a.mov_ri(X11, 0xC000_00FD); // stack overflow
             a.cmp_rr(X10, X11);
             a.b_cond(Cond::Eq, overflow);
@@ -570,6 +579,17 @@ pub fn emit(
             a.bind(pass);
             a.mov_ri(X0, 0);
             a.ret();
+            // Our stack's guard page: an overflow when the address is in the stack, else not ours.
+            a.bind(tripped);
+            a.ldr(X9, X9, 0x28, 8);
+            state(a, X10, 144);
+            a.ldr(X11, X10, 0, 8);
+            a.cbz(X11, pass);
+            a.sub_rr(X9, X9, X11);
+            a.mov_ri(X12, STACK_WIN);
+            a.cmp_rr(X9, X12);
+            a.b_cond(Cond::Lo, overflow);
+            a.b(pass);
             a.bind(check);
             a.ldr(X9, X9, 0x28, 8);
         } else {
