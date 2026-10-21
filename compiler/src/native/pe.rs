@@ -151,7 +151,7 @@ fn write_with(
     let mut id = id;
     let mut reloc = (0u32, 0u32);
     if arm {
-        while id.len() % 4 != 0 {
+        while !id.len().is_multiple_of(4) {
             id.push(0);
         }
         reloc = (id_rva as u32 + id.len() as u32, 12);
