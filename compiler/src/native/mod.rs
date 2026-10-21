@@ -125,6 +125,9 @@ pub mod regs_a64;
 pub mod rt;
 pub mod rt_a64;
 pub mod x86;
+pub mod x86_emit;
+pub mod x86_mir;
+pub mod x86_select;
 
 #[cfg(test)]
 mod a64_golden;

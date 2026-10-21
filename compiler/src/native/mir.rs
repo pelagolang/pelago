@@ -65,6 +65,9 @@ pub struct FrameId(pub u32);
 pub enum FrameKind {
     Slot,
     Spill,
+    /// The stack arguments of the calls this function makes: at the bottom of the frame, where the
+    /// callee finds them above its return address.
+    Outgoing,
     /// The arguments the caller left on the stack, above the frame: the emitter gives it an
     /// address, nothing is reserved for it.
     Incoming,
@@ -184,7 +187,9 @@ pub struct MInst {
     pub op: u16,
     pub ops: Vec<Operand>,
     pub flags: IFlags,
-    /// The physical registers the instruction destroys besides the ones it names as defs.
+    /// The physical registers the instruction destroys besides the ones it names as defs: everything
+    /// a call leaves undefined, or the registers a macro uses inside itself. The allocator keeps
+    /// reloads out of them and, for a call, splits the values that live across it.
     pub clobbers: RegSet,
 }
 
@@ -211,6 +216,12 @@ impl MInst {
 
     pub fn call(mut self, clobbers: RegSet) -> MInst {
         self.flags.0 |= IFlags::CALL;
+        self.clobbers = clobbers;
+        self
+    }
+
+    /// Registers the instruction uses inside itself (not a call).
+    pub fn clobbering(mut self, clobbers: RegSet) -> MInst {
         self.clobbers = clobbers;
         self
     }
@@ -506,9 +517,6 @@ pub fn verify(f: &MFunc, t: &dyn Target) -> Result<(), String> {
             let is_branch = i.flags.has(IFlags::BRANCH);
             if i.flags.has(IFlags::NOFALL) && k + 1 != b.insts.len() {
                 return err(bi, k, "an instruction after one that never falls through");
-            }
-            if i.clobbers.0 != 0 && !i.flags.has(IFlags::CALL) {
-                return err(bi, k, "clobbers without the call flag");
             }
             let mut bad = None;
             visit_regs(i, |r, _| match r {

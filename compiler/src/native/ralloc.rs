@@ -94,14 +94,18 @@ fn class_of_loc(t: &dyn Target, l: Loc) -> Class {
     }
 }
 
-fn scratch(t: &dyn Target, c: Class, k: usize) -> PReg {
-    *t.scratch(c)
-        .get(k)
-        .unwrap_or_else(|| panic!("the target has no scratch register number {k} for {c:?}"))
+/// The scratch registers of a class that a sequence of moves may use: not one the moves read or write,
+/// and not one that holds something live across them.
+fn free_scratch(t: &dyn Target, c: Class, avoid: RegSet) -> [PReg; 2] {
+    let mut it = t.scratch(c).iter().copied().filter(|r| !avoid.contains(*r));
+    match (it.next(), it.next()) {
+        (Some(a), Some(b)) => [a, b],
+        _ => panic!("fewer than two scratch registers of {c:?} are free for a parallel copy"),
+    }
 }
 
 /// One move from `s` to `d`; a slot to a slot goes through the first scratch register.
-fn emit_one(t: &dyn Target, d: Loc, s: Loc, out: &mut Vec<MInst>) {
+fn emit_one(t: &dyn Target, d: Loc, s: Loc, avoid: RegSet, out: &mut Vec<MInst>) {
     let c = class_of_loc(t, d);
     match (d, s) {
         (Loc::Reg(a), Loc::Reg(b)) => {
@@ -113,20 +117,20 @@ fn emit_one(t: &dyn Target, d: Loc, s: Loc, out: &mut Vec<MInst>) {
         (Loc::Slot(f, _), Loc::Reg(b)) => out.push(t.store(c, f, b)),
         (Loc::Slot(f1, _), Loc::Slot(f2, _)) => {
             if f1 != f2 {
-                let s0 = scratch(t, c, 0);
+                let s0 = free_scratch(t, c, avoid)[0];
                 out.push(t.load(c, s0, f2));
                 out.push(t.store(c, f1, s0));
             }
         }
         (Loc::Reg(a), Loc::Imm(n)) => out.push(t.mov_imm(a, n)),
         (Loc::Slot(f, _), Loc::Imm(n)) => {
-            let s0 = scratch(t, c, 0);
+            let s0 = free_scratch(t, c, avoid)[0];
             out.push(t.mov_imm(s0, n));
             out.push(t.store(c, f, s0));
         }
         (Loc::Reg(a), Loc::Addr(f, disp)) => out.push(t.lea(a, f, disp)),
         (Loc::Slot(f, _), Loc::Addr(g, disp)) => {
-            let s0 = scratch(t, c, 0);
+            let s0 = free_scratch(t, c, avoid)[0];
             out.push(t.lea(s0, g, disp));
             out.push(t.store(c, f, s0));
         }
@@ -136,7 +140,14 @@ fn emit_one(t: &dyn Target, d: Loc, s: Loc, out: &mut Vec<MInst>) {
 
 /// Makes all the moves `(to, from)` as if at once: a place that is both written and read is read
 /// first. A cycle is broken with the second scratch register of its class.
-fn emit_moves(t: &dyn Target, mut pend: Vec<(Loc, Loc)>, out: &mut Vec<MInst>) {
+fn emit_moves(t: &dyn Target, mut pend: Vec<(Loc, Loc)>, mut avoid: RegSet, out: &mut Vec<MInst>) {
+    for (d, s) in &pend {
+        for l in [d, s] {
+            if let Loc::Reg(r) = l {
+                avoid.insert(*r);
+            }
+        }
+    }
     pend.retain(|(d, s)| d != s);
     while !pend.is_empty() {
         let ready = (0..pend.len()).find(|&i| {
@@ -148,12 +159,12 @@ fn emit_moves(t: &dyn Target, mut pend: Vec<(Loc, Loc)>, out: &mut Vec<MInst>) {
         match ready {
             Some(i) => {
                 let (d, s) = pend.remove(i);
-                emit_one(t, d, s, out);
+                emit_one(t, d, s, avoid, out);
             }
             None => {
                 let d0 = pend[0].0;
-                let tmp = Loc::Reg(scratch(t, class_of_loc(t, d0), 1));
-                emit_one(t, tmp, d0, out);
+                let tmp = Loc::Reg(free_scratch(t, class_of_loc(t, d0), avoid)[1]);
+                emit_one(t, tmp, d0, avoid, out);
                 for m in pend.iter_mut().filter(|m| m.1 == d0) {
                     m.1 = tmp;
                 }
@@ -208,6 +219,9 @@ pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
     let live = liveness(f, nphys);
     let mut ranges: Vec<Vec<(u32, u32)>> = vec![Vec::new(); nphys + nv];
     let mut weight = vec![0u64; nv];
+    // The physical registers live after each instruction: a reload must not use them.
+    let ninst: usize = f.blocks.iter().map(|b| b.insts.len()).sum();
+    let mut live_phys: Vec<RegSet> = vec![RegSet::default(); ninst];
     let mut calls: Vec<Call> = Vec::new();
     let mut hints: Vec<Vec<(Reg, u64)>> = vec![Vec::new(); nv];
     let first_inst: Vec<usize> = {
@@ -246,6 +260,9 @@ pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
                 }
             } else if inst.flags.has(IFlags::NOFALL) {
                 now = Bits::new(nphys + nv);
+            }
+            for id in now.iter().take_while(|id| *id < nphys) {
+                live_phys[first_inst[bi] + k].insert(PReg(id as u8));
             }
             let (mut defs, mut uses) = (Vec::new(), Vec::new());
             visit_regs(inst, |r, a| {
@@ -430,13 +447,14 @@ pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
                     pend.push((loc(*d, f), s));
                 }
                 let total = pend.iter().filter(|(d, s)| d != s).count();
-                emit_moves(t, pend, &mut out);
+                let live = live_phys[idx];
+                emit_moves(t, pend, live, &mut out);
                 stats.copies_removed += n - total.min(n);
                 continue;
             }
             let mut inst = inst;
             // Registers this instruction names, to keep the scratch registers off them.
-            let mut busy: Vec<PReg> = Vec::new();
+            let mut busy: Vec<PReg> = live_phys[idx].iter().chain(inst.clobbers.iter()).collect();
             let mut spilled: Vec<(u32, bool, bool)> = Vec::new();
             visit_regs(&inst, |r, a| match r {
                 Reg::Phys(p) => busy.push(p),

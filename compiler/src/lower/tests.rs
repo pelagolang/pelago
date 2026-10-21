@@ -379,10 +379,16 @@ fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
         }
         // The frame-only generator and the one with registers must both be right, also with few
         // registers (every spill and split path).
-        for (regalloc, limit) in REG_SETS {
-            if os == Os::Windows && (!regalloc || limit != usize::MAX) {
+        // The machine-IR path (work item W4) runs beside the old generator on every configuration
+        // that has registers, on Linux.
+        for (mir, (regalloc, limit)) in REG_SETS.iter().flat_map(|&c| [(false, c), (true, c)]) {
+            if os == Os::Windows && (mir || !regalloc || limit != usize::MAX) {
                 continue;
             }
+            if mir && !regalloc {
+                continue;
+            }
+            gen::MIR.with(|m| m.set(Some(mir)));
             gen::REG_LIMIT.with(|l| l.set(limit));
             let opts = gen::Options {
                 leak_check: true,
@@ -394,8 +400,9 @@ fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
                 Err(e) => panic!("the native build ({what}, {os:?}) failed: {e}\n{src}"),
             };
             gen::REG_LIMIT.with(|l| l.set(usize::MAX));
+            gen::MIR.with(|m| m.set(None));
             let r = exec::run_image(os, &image).unwrap();
-            let how = format!("{what}, {os:?}, regalloc {regalloc}, {limit} registers");
+            let how = format!("{what}, {os:?}, mir {mir}, regalloc {regalloc}, {limit} registers");
             assert_eq!(r.out, want, "native output ({how}) differs in {src}");
             assert_eq!(
                 (r.err.as_str(), r.code),
