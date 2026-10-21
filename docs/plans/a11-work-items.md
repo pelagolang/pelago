@@ -107,7 +107,7 @@ Best of 5, seconds. Five programs added in `claude/perf/more-benchmarks`; the fi
 | structlist | 0.019 | 0.008 | 0.008 | 2.4x | `list<struct>` field update: per-element address recomputed, two `add_checked`, no vectorisation (the checked C build is 3.3x faster too) |
 | strsplit | 0.039 | 0.018 | 0.012 | 2.2x | `split` builds an `iter<str>` list and `parse_int` returns a `result`; the twins parse in place |
 | switchwork | 0.048 | 0.045 | 0.035 | 1.08x | enum payload loads and the jump table; Rust is 1.4x faster here |
-| sortwork | 0.156 | 0.163 | 0.040 | 0.96x | at C (glibc `qsort`), 3.9x behind Rust's `sort`; `rt_sort` is a byte-wise merge sort with an indirect compare |
+| sortwork | 0.035 | 0.169 | 0.039 | 0.21x | done: `list<int>::sort` is a radix sort (insertion sort up to 48 elements); other element types still use the byte-wise merge sort with an indirect compare (was 0.156) |
 - **Size:** each M to L. `resultpath` (return small `result`/`option` in registers, inline across `?`) and `sortwork` (monomorphic compare, typed element moves) look like the best first targets.
 
 ### W10. AArch64 (card A-10)
