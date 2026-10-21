@@ -152,7 +152,7 @@ fn a_slot_whose_address_escapes_stays() {
 }
 
 #[test]
-fn a_slot_used_with_two_types_is_not_promoted() {
+fn a_narrow_load_from_a_wide_store_keeps_the_low_byte() {
     let mut f = Func::new("main", &[], IrTy::I64);
     let e = f.entry();
     let s = f.emit(e, Op::Slot(8, 8), Some(IrTy::Ptr)).unwrap();
@@ -166,8 +166,8 @@ fn a_slot_used_with_two_types_is_not_promoted() {
         .unwrap();
     f.terminate(e, Term::Return(Some(w)));
     let (o, before, after) = both(&module_of(f));
-    assert_eq!(before, after);
-    assert_eq!(count(&o.funcs[0], |op| matches!(op, Op::Slot(..))), 1);
+    assert_eq!((before, after), (Val::int(2), Val::int(2)));
+    assert_eq!(count(&o.funcs[0], |op| matches!(op, Op::Slot(..))), 0);
 }
 
 #[test]
@@ -1909,4 +1909,105 @@ fn a_loop_test_moves_onto_a_counter_that_moves_with_it() {
         .iter()
         .any(|i| matches!(i.op, Op::Const(_, Const::Int(2005))));
     assert!(limit, "{}", print_func(&f, None));
+}
+
+#[test]
+fn a_copy_at_an_offset_between_two_slots_is_split() {
+    // The payload of one result moved into another (what `?` does): copy 8 bytes from a+8 to b+8.
+    let mut f = Func::new("main", &[IrTy::I64], IrTy::I64);
+    let e = f.entry();
+    let x = f.block_params(e)[0];
+    let a = f.emit(e, Op::Slot(16, 8), Some(IrTy::Ptr)).unwrap();
+    let b = f.emit(e, Op::Slot(16, 8), Some(IrTy::Ptr)).unwrap();
+    let eight = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(8)), Some(IrTy::I64))
+        .unwrap();
+    let a8 = f.emit(e, Op::PtrAdd(a, eight), Some(IrTy::Ptr)).unwrap();
+    let b8 = f.emit(e, Op::PtrAdd(b, eight), Some(IrTy::Ptr)).unwrap();
+    f.emit(e, Op::Store(a8, x), None);
+    f.emit(e, Op::MemCopy(b8, a8, eight), None);
+    let y = f.emit(e, Op::Load(IrTy::I64, b8), Some(IrTy::I64)).unwrap();
+    f.terminate(e, Term::Return(Some(y)));
+    let mut g = f.clone();
+    assert!(split::run(&mut g));
+    assert_eq!(count(&g, |o| matches!(o, Op::MemCopy(..))), 0);
+    optimize_func(&mut g);
+    assert_eq!(count(&g, |o| matches!(o, Op::Slot(..))), 0);
+    let (m, n) = (module_of(f), module_of(g));
+    for p in [5u128, 0, 77] {
+        let a = [Val::Int(p)];
+        assert_eq!(
+            run_full(&m, "main", &a).result,
+            run_full(&n, "main", &a).result
+        );
+    }
+}
+
+#[test]
+fn integers_of_two_widths_at_one_offset_share_a_piece() {
+    // A tagged payload: the tag says whether the 8 bytes at offset 8 hold an i64 or a single byte.
+    let mut f = Func::new("main", &[IrTy::I64], IrTy::I64);
+    let e = f.entry();
+    let x = f.block_params(e)[0];
+    let s = f.emit(e, Op::Slot(16, 8), Some(IrTy::Ptr)).unwrap();
+    let eight = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(8)), Some(IrTy::I64))
+        .unwrap();
+    let s8 = f.emit(e, Op::PtrAdd(s, eight), Some(IrTy::Ptr)).unwrap();
+    let (ok, bad, join) = (f.new_block(&[]), f.new_block(&[]), f.new_block(&[]));
+    let zero = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(0)), Some(IrTy::I64))
+        .unwrap();
+    let c = f
+        .emit(e, Op::Cmp(CmpOp::Eq, x, zero), Some(IrTy::Bool))
+        .unwrap();
+    f.terminate(
+        e,
+        Term::Branch(
+            c,
+            Target {
+                block: bad,
+                args: vec![],
+            },
+            Target {
+                block: ok,
+                args: vec![],
+            },
+        ),
+    );
+    f.emit(ok, Op::Store(s8, x), None);
+    f.terminate(
+        ok,
+        Term::Jump(Target {
+            block: join,
+            args: vec![],
+        }),
+    );
+    let one = f
+        .emit(bad, Op::Const(IrTy::I8, Const::Int(1)), Some(IrTy::I8))
+        .unwrap();
+    f.emit(bad, Op::Store(s8, one), None);
+    f.terminate(
+        bad,
+        Term::Jump(Target {
+            block: join,
+            args: vec![],
+        }),
+    );
+    let y = f
+        .emit(join, Op::Load(IrTy::I64, s8), Some(IrTy::I64))
+        .unwrap();
+    f.terminate(join, Term::Return(Some(y)));
+    let mut g = f.clone();
+    assert!(split::run(&mut g));
+    optimize_func(&mut g);
+    assert_eq!(count(&g, |o| matches!(o, Op::Slot(..))), 0);
+    let (m, n) = (module_of(f), module_of(g));
+    for p in [5u128, 0, 77] {
+        let a = [Val::Int(p)];
+        assert_eq!(
+            run_full(&m, "main", &a).result,
+            run_full(&n, "main", &a).result
+        );
+    }
 }
