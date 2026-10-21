@@ -1334,66 +1334,70 @@ impl<'m> Gen<'m> {
             BinOp::Div | BinOp::Rem | BinOp::UDiv | BinOp::URem => {
                 let signed = matches!(op, BinOp::Div | BinOp::Rem);
                 let want_rem = matches!(op, BinOp::Rem | BinOp::URem);
-                self.ld_ext(X9, a, f, signed);
-                self.ld_ext(X10, b, f, signed);
+                let ra = self.rd_ext(a, X9, f, signed);
+                let rb = self.rd_ext(b, X10, f, signed);
+                let rd = self.wr(r, X11);
                 let z = self.stop_label(Stop::Div0);
-                self.a.cbz(X10, z);
+                self.a.cbz(rb, z);
                 // `MIN / -1` does not trap here: it wraps to `MIN` (and the remainder is 0), like the interpreter.
+                let q = if want_rem { X11 } else { rd };
                 if signed {
-                    self.a.sdiv(X11, X9, X10);
+                    self.a.sdiv(q, ra, rb);
                 } else {
-                    self.a.udiv(X11, X9, X10);
+                    self.a.udiv(q, ra, rb);
                 }
                 if want_rem {
-                    self.a.msub(X11, X11, X10, X9);
+                    self.a.msub(rd, q, rb, ra);
                 }
-                self.mask(X11, w);
-                self.st(r, X11);
+                self.mask(rd, w);
+                self.fin(r, rd);
             }
             BinOp::MulHi | BinOp::UMulHi => {
                 let signed = op == BinOp::MulHi;
-                self.ld_ext(X9, a, f, signed);
-                self.ld_ext(X10, b, f, signed);
+                let ra = self.rd_ext(a, X9, f, signed);
+                let rb = self.rd_ext(b, X10, f, signed);
+                let rd = self.wr(r, X11);
                 if w == 64 {
                     if signed {
-                        self.a.smulh(X11, X9, X10);
+                        self.a.smulh(rd, ra, rb);
                     } else {
-                        self.a.umulh(X11, X9, X10);
+                        self.a.umulh(rd, ra, rb);
                     }
                 } else {
-                    self.a.mul(X11, X9, X10);
+                    self.a.mul(rd, ra, rb);
                     if signed {
-                        self.a.asr_ri(X11, X11, w);
+                        self.a.asr_ri(rd, rd, w);
                     } else {
-                        self.a.lsr_ri(X11, X11, w);
+                        self.a.lsr_ri(rd, rd, w);
                     }
-                    self.mask(X11, w);
+                    self.mask(rd, w);
                 }
-                self.st(r, X11);
+                self.fin(r, rd);
             }
             BinOp::Shl | BinOp::Shr | BinOp::UShr => {
+                let rd = self.wr(r, X9);
                 if let Some(n) = self.imm[b.0 as usize].filter(|n| (0..w as i64).contains(n)) {
                     // A constant amount below the width: no check, an immediate shift.
-                    self.ld_ext(X9, a, f, op == BinOp::Shr);
+                    let ra = self.rd_ext(a, X9, f, op == BinOp::Shr);
                     match op {
-                        BinOp::Shl => self.a.lsl_ri(X9, X9, n as u32),
-                        BinOp::Shr => self.a.asr_ri(X9, X9, n as u32),
-                        _ => self.a.lsr_ri(X9, X9, n as u32),
+                        BinOp::Shl => self.a.lsl_ri(rd, ra, n as u32),
+                        BinOp::Shr => self.a.asr_ri(rd, ra, n as u32),
+                        _ => self.a.lsr_ri(rd, ra, n as u32),
                     }
                 } else {
-                    self.ld(X10, b);
-                    self.a.cmp_ri(X10, w);
+                    let rb = self.rd(b, X10);
+                    self.a.cmp_ri(rb, w);
                     let s = self.stop_label(Stop::Shift);
                     self.a.b_cond(Cond::Hs, s);
-                    self.ld_ext(X9, a, f, op == BinOp::Shr);
+                    let ra = self.rd_ext(a, X9, f, op == BinOp::Shr);
                     match op {
-                        BinOp::Shl => self.a.lslv(X9, X9, X10),
-                        BinOp::Shr => self.a.asrv(X9, X9, X10),
-                        _ => self.a.lsrv(X9, X9, X10),
+                        BinOp::Shl => self.a.lslv(rd, ra, rb),
+                        BinOp::Shr => self.a.asrv(rd, ra, rb),
+                        _ => self.a.lsrv(rd, ra, rb),
                     }
                 }
-                self.mask(X9, w);
-                self.st(r, X9);
+                self.mask(rd, w);
+                self.fin(r, rd);
             }
         }
         Ok(())
