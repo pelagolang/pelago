@@ -1,12 +1,12 @@
 //! Writes a static ELF64 executable for Linux x86-64 or AArch64.
 //!
-//! Layout (one file, two loadable segments, page aligned):
+//! Layout (one file, two loadable segments; the data follows the code in the file, a page later in memory):
 //!
 //! ```text
 //! 0x400000  ELF header, program headers      |
 //!           .text                            | segment 1: read + execute
 //!           .rodata                          |
-//! next page .data, then .bss (zeroed)        | segment 2: read + write
+//! .data (a page later in memory), .bss (zeroed) | segment 2: read + write
 //! (file end) section headers, symbols        (for gdb and objdump; the loader ignores them)
 //! ```
 
@@ -81,7 +81,9 @@ pub fn layout_for(arch: Arch, text_len: usize, rodata_len: usize, data_len: usiz
     let text = BASE + TEXT_OFF;
     let rodata = align_up(text + text_len as u64, 16);
     let seg1_end = rodata + rodata_len as u64;
-    let data = align_up(seg1_end, page(arch));
+    // The data starts right after the read-only part in the file, and a page further on in
+    // memory: the same offset modulo the page size, so the loader maps it without padding.
+    let data = BASE + align_up(seg1_end - BASE, 16) + page(arch);
     Layout {
         text,
         rodata,
@@ -167,8 +169,8 @@ fn write_with(
         idata: 0,
     })?;
     let ro_off = lay.rodata - BASE;
-    let data_off = lay.data - BASE;
     let seg1_size = ro_off + rodata.bytes.len() as u64;
+    let data_off = align_up(seg1_size, 16);
 
     let mut w = W(Vec::new());
     // ELF header
