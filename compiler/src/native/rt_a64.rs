@@ -48,16 +48,42 @@ const LARGE_CLASS: i64 = 255;
 /// Mappings at least this big ask for huge pages.
 const HUGE_MIN: i64 = 4 << 20;
 
-const SYS_IOCTL: i64 = 29;
-const SYS_WRITE: i64 = 64;
-const SYS_EXIT_GROUP: i64 = 94;
-const SYS_SIGALTSTACK: i64 = 132;
-const SYS_RT_SIGACTION: i64 = 134;
-const SYS_MUNMAP: i64 = 215;
-const SYS_MREMAP: i64 = 216;
-const SYS_MMAP: i64 = 222;
-const SYS_MPROTECT: i64 = 226;
-const SYS_MADVISE: i64 = 233;
+/// The system calls the runtime makes.
+#[derive(Clone, Copy)]
+enum Sys {
+    Ioctl,
+    Write,
+    Exit,
+    Sigaltstack,
+    Sigaction,
+    Munmap,
+    Mremap,
+    Mmap,
+    Mprotect,
+    Madvise,
+}
+
+/// The call numbers: the generic Linux ones, and the BSD ones of macOS (`mremap` and `madvise`
+/// hints for huge pages are Linux only).
+fn number(os: Os, call: Sys) -> i64 {
+    let (linux, mac) = match call {
+        Sys::Ioctl => (29, 54),
+        Sys::Write => (64, 4),
+        Sys::Exit => (94, 1),
+        Sys::Sigaltstack => (132, 53),
+        Sys::Sigaction => (134, 46),
+        Sys::Munmap => (215, 73),
+        Sys::Mremap => (216, 0),
+        Sys::Mmap => (222, 197),
+        Sys::Mprotect => (226, 74),
+        Sys::Madvise => (233, 75),
+    };
+    if os == Os::MacOs {
+        mac
+    } else {
+        linux
+    }
+}
 
 /// The entry points of the runtime.
 pub struct Runtime {
@@ -87,9 +113,22 @@ fn state(a: &mut Asm, r: Reg, off: u32) {
     a.lea_sect(r, Sect::Data, off);
 }
 
-fn sys(a: &mut Asm, nr: i64) {
-    a.mov_ri(X8, nr);
-    a.svc();
+/// A system call. Linux: number in `x8`, result in `x0` (-4095 to -1 for an error). macOS: number in
+/// `x16`, `svc #0x80`, an error is the carry flag with a positive error number in `x0`, turned here into
+/// the Linux form; macOS also overwrites `x1`, so nothing may be kept there across a call.
+fn sys(a: &mut Asm, os: Os, call: Sys) {
+    let nr = number(os, call);
+    if os == Os::MacOs {
+        let ok = a.new_label();
+        a.mov_ri(X16, nr);
+        a.svc_imm(0x80);
+        a.b_cond(Cond::Lo, ok); // carry clear
+        a.neg(X0, X0);
+        a.bind(ok);
+    } else {
+        a.mov_ri(X8, nr);
+        a.svc();
+    }
 }
 
 /// Calls the imported Windows function `import` (an index into `rt::IMPORTS`) with the arguments in
@@ -111,12 +150,18 @@ fn map_x1(a: &mut Asm, os: Os, flags: i64) {
         win_call(a, IMP_VIRTUAL_ALLOC);
         return;
     }
+    // macOS: MAP_PRIVATE is 2, MAP_ANON 0x1000, MAP_NORESERVE 0x40.
+    let flags = match (os, flags) {
+        (Os::MacOs, 0x22) => 0x1002,
+        (Os::MacOs, 0x4022) => 0x1042,
+        _ => flags,
+    };
     a.mov_ri(X0, 0);
     a.mov_ri(X2, 3);
     a.mov_ri(X3, flags);
     a.mov_ri(X4, -1);
     a.mov_ri(X5, 0);
-    sys(a, SYS_MMAP);
+    sys(a, os, Sys::Mmap);
 }
 
 fn mmap(a: &mut Asm, os: Os, len: i64, flags: i64) {
@@ -174,6 +219,7 @@ pub fn emit(
     os: Os,
 ) -> Runtime {
     let win = os == Os::Windows;
+    let mac = os == Os::MacOs;
     let state_at = data.add_zero(STATE_SIZE, 16);
     assert_eq!(state_at, 0, "the runtime state must come first in .data");
     let rt = Runtime {
@@ -190,6 +236,7 @@ pub fn emit(
     };
     let flush = a.new_label();
     let fault = a.new_label();
+    let tramp = a.new_label();
     let oom = a.new_label();
     let msg_stopped = ro.add(b"stopped: ", 1);
     let msg_overflow = ro.add(b"stack overflow", 1);
@@ -208,11 +255,11 @@ pub fn emit(
     mmap(a, os, stack, 0x4022); // Linux: private, anonymous, no reservation
     failed(a, os, X0, keep);
     a.mov_rr(X19, X0);
-    if !win {
+    if os == Os::Linux {
         // Big frames (a 40 MB array in a local) fault in 2 MiB at a time when the kernel agrees.
         a.mov_ri(X1, STACK);
         a.mov_ri(X2, 14); // MADV_HUGEPAGE
-        sys(a, SYS_MADVISE);
+        sys(a, os, Sys::Madvise);
     }
     state(a, X9, 144);
     a.str(X19, X9, 0, 8);
@@ -241,12 +288,12 @@ pub fn emit(
         a.uxt(X0, X0, 32); // a BOOL
         a.cbz(X0, piped);
     } else {
-        a.sub_ri(SP, SP, 64);
+        a.sub_ri(SP, SP, 80);
         a.mov_ri(X0, 1);
-        a.mov_ri(X1, 0x5401); // TCGETS
+        a.mov_ri(X1, if mac { 0x4048_7413 } else { 0x5401 }); // TIOCGETA, TCGETS
         a.mov_from_sp(X2);
-        sys(a, SYS_IOCTL);
-        a.add_ri(SP, SP, 64);
+        sys(a, os, Sys::Ioctl);
+        a.add_ri(SP, SP, 80);
         a.cbnz(X0, piped);
     }
     state(a, X9, 128);
@@ -266,7 +313,7 @@ pub fn emit(
     } else {
         a.mov_ri(X1, GUARD);
         a.mov_ri(X2, 0);
-        sys(a, SYS_MPROTECT);
+        sys(a, os, Sys::Mprotect);
     }
     a.bind(noguard);
     // A stack of its own for the handler: the faulting one may be the one that ran out.
@@ -283,6 +330,34 @@ pub fn emit(
         a.mov_ri(X0, 1); // call this handler first
         a.lea_label(X1, fault);
         win_call(a, IMP_ADD_VEH);
+    } else if mac {
+        mmap(a, os, ALT_STACK, 0x22);
+        failed(a, os, X0, nosig);
+        a.sub_ri(SP, SP, 64);
+        a.str(X0, SP, 0, 8); // stack_t { sp, size, flags }
+        a.mov_ri(X9, ALT_STACK);
+        a.str(X9, SP, 8, 8);
+        a.str(XZR, SP, 16, 8);
+        a.mov_from_sp(X0);
+        a.mov_ri(X1, 0);
+        sys(a, os, Sys::Sigaltstack);
+        // struct __sigaction { handler, trampoline, mask: u32, flags: u32 }. The kernel calls the
+        // trampoline with the handler and the signal's details; it calls the handler on the alternate
+        // stack, with siginfo.
+        a.lea_label(X9, fault);
+        a.str(X9, SP, 32, 8);
+        a.lea_label(X9, tramp);
+        a.str(X9, SP, 40, 8);
+        a.mov_ri(X9, 0x41i64 << 32); // mask 0; SA_ONSTACK | SA_SIGINFO
+        a.str(X9, SP, 48, 8);
+        for sig in [11, 10] {
+            // SIGSEGV, SIGBUS
+            a.mov_ri(X0, sig);
+            a.add_ri(X1, SP, 32);
+            a.mov_ri(X2, 0);
+            sys(a, os, Sys::Sigaction);
+        }
+        a.add_ri(SP, SP, 64);
     } else {
         mmap(a, os, ALT_STACK, 0x22);
         failed(a, os, X0, nosig);
@@ -293,7 +368,7 @@ pub fn emit(
         a.str(X9, SP, 16, 8);
         a.mov_from_sp(X0);
         a.mov_ri(X1, 0);
-        sys(a, SYS_SIGALTSTACK);
+        sys(a, os, Sys::Sigaltstack);
         // struct sigaction { handler, flags, (restorer,) mask }: on the alternate stack, with siginfo.
         // The words after the flags stay zero, which suits the layout with and without a restorer.
         a.lea_label(X9, fault);
@@ -307,7 +382,7 @@ pub fn emit(
             a.add_ri(X1, SP, 32);
             a.mov_ri(X2, 0);
             a.mov_ri(X3, 8);
-            sys(a, SYS_RT_SIGACTION);
+            sys(a, os, Sys::Sigaction);
         }
         a.add_ri(SP, SP, 64);
     }
@@ -344,7 +419,7 @@ pub fn emit(
     if win {
         win_call(a, IMP_EXIT_PROCESS);
     } else {
-        sys(a, SYS_EXIT_GROUP);
+        sys(a, os, Sys::Exit);
     }
     a.brk();
 
@@ -456,7 +531,9 @@ pub fn emit(
         a.bind(wloop);
         a.cbz(X2, wdone);
         a.mov_rr(X0, X9);
-        sys(a, SYS_WRITE);
+        a.mov_rr(X10, X1); // macOS overwrites x1
+        sys(a, os, Sys::Write);
+        a.mov_rr(X1, X10);
         a.adds_ri(XZR, X0, 4); // interrupted (-4): try again
         a.b_cond(Cond::Eq, wloop);
         a.cmp_ri(X0, 0);
@@ -557,7 +634,7 @@ pub fn emit(
     a.bl(rt.exit);
 
     // ---- the fault handler -------------------------------------------------------------------------
-    // `x0` is the signal, `x1` the siginfo (the faulting address at +16).
+    // `x0` is the signal, `x1` the siginfo.
     {
         let (overflow, invalid, check) = (a.new_label(), a.new_label(), a.new_label());
         a.bind(fault);
@@ -593,7 +670,8 @@ pub fn emit(
             a.bind(check);
             a.ldr(X9, X9, 0x28, 8);
         } else {
-            a.ldr(X9, X1, 16, 8);
+            // siginfo: the faulting address is at +16 (Linux) or +24 (macOS).
+            a.ldr(X9, X1, if mac { 24 } else { 16 }, 8);
         }
         state(a, X10, 144);
         a.ldr(X11, X10, 0, 8);
@@ -628,6 +706,19 @@ pub fn emit(
         a.lea_sect(X0, Sect::Rodata, msg_overflow);
         a.mov_ri(X1, 14);
         a.bl(rt.stop);
+    }
+
+    // ---- the signal trampoline (macOS) -------------------------------------------------------------
+    // The kernel calls it with the handler in `x0`, then the style of the call, the signal, the siginfo
+    // and the context; the handler gets the last three. It never returns (it ends in `stop`).
+    if mac {
+        a.bind(tramp);
+        a.mov_rr(X9, X0);
+        a.mov_rr(X0, X2);
+        a.mov_rr(X1, X3);
+        a.mov_rr(X2, X4);
+        a.blr(X9);
+        a.brk();
     }
 
     // ---- out of memory -----------------------------------------------------------------------------
@@ -722,8 +813,8 @@ pub fn emit(
     map_x1(a, os, 0x22);
     failed(a, os, X0, oom);
     a.mov_rr(X22, X0);
-    if !win {
-        advise_huge(a, X22, X21);
+    if os == Os::Linux {
+        advise_huge(a, os, X22, X21);
     }
     a.mov_ri(X9, LARGE_CLASS);
     a.str(X9, X22, 0, 8);
@@ -776,7 +867,7 @@ pub fn emit(
         } else {
             a.ldr(X1, X10, 8, 8);
             a.mov_rr(X0, X10);
-            sys(a, SYS_MUNMAP);
+            sys(a, os, Sys::Munmap);
         }
         a.ret();
     }
@@ -802,7 +893,7 @@ pub fn emit(
         a.ldr(X11, X10, 0, 8);
         a.cmp_ri(X11, LARGE_CLASS as u32);
         a.b_cond(Cond::Ne, generic);
-        if win {
+        if os != Os::Linux {
             // No `mremap` here: a large block moves by copying.
             a.b(generic);
         } else {
@@ -817,11 +908,11 @@ pub fn emit(
             a.mov_rr(X1, X13);
             a.mov_rr(X2, X12);
             a.mov_ri(X3, 1); // may move
-            sys(a, SYS_MREMAP);
+            sys(a, os, Sys::Mremap);
             failed(a, os, X0, oom);
             a.str(X21, X0, 8, 8);
             a.mov_rr(X22, X0);
-            advise_huge(a, X22, X21);
+            advise_huge(a, os, X22, X21);
             a.add_ri(X19, X22, 16);
             a.b(rdone);
         }
@@ -977,7 +1068,7 @@ pub fn emit(
 }
 
 /// `madvise(addr, len, MADV_HUGEPAGE)` for a big mapping; `addr` and `len` registers are kept.
-fn advise_huge(a: &mut Asm, addr: Reg, len: Reg) {
+fn advise_huge(a: &mut Asm, os: Os, addr: Reg, len: Reg) {
     let skip = a.new_label();
     a.mov_ri(X9, HUGE_MIN);
     a.cmp_rr(len, X9);
@@ -985,6 +1076,6 @@ fn advise_huge(a: &mut Asm, addr: Reg, len: Reg) {
     a.mov_rr(X0, addr);
     a.mov_rr(X1, len);
     a.mov_ri(X2, 14);
-    sys(a, SYS_MADVISE);
+    sys(a, os, Sys::Madvise);
     a.bind(skip);
 }

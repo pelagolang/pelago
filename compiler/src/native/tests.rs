@@ -606,6 +606,7 @@ mod a64_run {
     pub use super::super::a64::*;
     use super::super::elf::{self, Blob};
     use super::super::exec::{self, Ran};
+    use super::super::macho;
     use super::super::pe;
     use super::super::rt_a64::{self, Runtime};
     use super::super::{Arch, Os};
@@ -614,6 +615,8 @@ mod a64_run {
     pub fn os() -> Os {
         if cfg!(windows) {
             Os::Windows
+        } else if cfg!(target_os = "macos") {
+            Os::MacOs
         } else {
             Os::Linux
         }
@@ -636,6 +639,7 @@ mod a64_run {
         match os() {
             Os::Linux => elf::write_a64(&a, &ro, &data, 0, &[]).unwrap(),
             Os::Windows => pe::write_a64(&a, &ro, &data, 0).unwrap(),
+            Os::MacOs => macho::write_a64(&a, &ro, &data, 0).unwrap(),
         }
     }
 
@@ -662,6 +666,8 @@ fn a64_hello_world_is_a_real_executable() {
     if os() == super::Os::Linux {
         assert_eq!(&img[..4], b"\x7fELF");
         assert_eq!(&img[18..20], &[183, 0], "EM_AARCH64");
+    } else if os() == super::Os::MacOs {
+        assert_eq!(&img[..4], &[0xCF, 0xFA, 0xED, 0xFE], "MH_MAGIC_64");
     } else {
         assert_eq!(&img[..2], b"MZ");
         assert_eq!(&img[0x44..0x46], &[0x64, 0xAA], "IMAGE_FILE_MACHINE_ARM64");

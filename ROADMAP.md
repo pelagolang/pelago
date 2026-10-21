@@ -21,7 +21,7 @@ A serious, self-hosting systems language:
 | Syntax family | Braces, TS/Rust-like, no significant indentation | decided |
 | Memory safety | Value semantics (read-only by default, plus `inout` / `sink` access modes; second-class references) | decided, pending the paper test below |
 | Backend | One backend, our own, from day one | decided |
-| Second native target | AArch64 Linux static ELF from a second generator beside the x86-64 one (`gen_a64.rs`, `rt_a64.rs`), same IR and same semantics, tested under `qemu-aarch64` and on ARM runners; Windows on ARM built (run in CI on a Windows ARM runner), macOS later (`docs/plans/cards/A-10-aarch64.md`) | decided |
+| Second native target | AArch64 Linux static ELF from a second generator beside the x86-64 one (`gen_a64.rs`, `rt_a64.rs`), same IR and same semantics, tested under `qemu-aarch64` and on ARM runners; Windows on ARM and macOS built (run in CI on ARM runners) (`docs/plans/cards/A-10-aarch64.md`) | decided |
 | First native target | x86-64 Linux static ELF, no libc, no linker, own encoder; Windows PE right after the test suite passes natively (tested in `windows-latest` CI); simple code generator first, register allocation later; System V-shaped internal calling convention (`docs/design/backend.md`, card A-09) | decided |
 | Bootstrap | Stage 0 compiler in Rust, then rewritten in the language itself | decided |
 | OO | Structs and interfaces, plus an `obj` kind with single inheritance (written with `:`) from the start (heap-allocated, singly owned, closed unless `open`). First feature to cut if compile speed or the safety model suffers | decided |
@@ -163,7 +163,7 @@ Plan: `docs/plans/cards/A-09-native-backend.md` (stages N1 to N7; waits for the 
 
 - [ ] Optimizer that uses no-alias facts from value semantics (inlining, loop optimizations, vectorization)
 - [ ] Benchmarks against Rust and C, published and tracked
-- [ ] More targets: AArch64 (Linux built, plan and status: `docs/plans/cards/A-10-aarch64.md`; registers and Windows on ARM built, macOS open), then RISC-V; native speed plan: `docs/plans/cards/A-11-native-speed.md`
+- [ ] More targets: AArch64 (Linux built, plan and status: `docs/plans/cards/A-10-aarch64.md`; registers, Windows on ARM and macOS built), then RISC-V; native speed plan: `docs/plans/cards/A-11-native-speed.md`
 - [ ] Compile-time profiling and speedups
 
 ## Phase 7: Tooling and community

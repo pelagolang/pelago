@@ -10,6 +10,8 @@
 pub enum Os {
     Linux,
     Windows,
+    /// Apple Silicon only (AArch64, `--arch=aarch64`).
+    MacOs,
 }
 
 /// The processor the executable is built for.
@@ -52,6 +54,8 @@ impl Os {
             any(target_arch = "x86_64", target_arch = "aarch64")
         )) {
             Some(Os::Windows)
+        } else if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            Some(Os::MacOs)
         } else {
             None
         }
@@ -63,6 +67,7 @@ pub mod elf;
 pub mod exec;
 pub mod gen;
 pub mod gen_a64;
+pub mod macho;
 pub mod pe;
 pub mod regs;
 pub mod regs_a64;
