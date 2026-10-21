@@ -10,8 +10,11 @@
 #   --checked  also time C with `-O2 -ftrapv` and Rust with `-O -C overflow-checks=on`, which stop on overflow like
 #              Pelago does, and print a second table against them (C and Rust without checks are the "goal" rows)
 #   name ...   only these programs (file names in benches/ without `.pel`)
+# Environment: CC (default gcc) is the C compiler; PELAGO_BUILD_FLAGS is added to `pelago build` (for example
+# `--arch=aarch64 --target=macos`, so the suite times the AArch64 backend on an ARM machine).
 # Each program must print the same output as its C twin; a mismatch is reported and the exit status is 1.
 set -e
+CC=${CC:-gcc}
 json=0
 checked=0
 runs=7
@@ -44,14 +47,14 @@ if [ "$OS" = "Windows_NT" ]; then
 fi
 for name in $names; do
     echo "building $name" >&2
-    target/release/pelago build --opt -o "$out/$name.pel$exe" "compiler/benches/$name.pel" >/dev/null
-    gcc -O0 -o "$out/$name.c0$exe" "compiler/benches/c/$name.c"
-    gcc -O2 -o "$out/$name.c2$exe" "compiler/benches/c/$name.c"
+    target/release/pelago build --opt $PELAGO_BUILD_FLAGS -o "$out/$name.pel$exe" "compiler/benches/$name.pel" >/dev/null
+    $CC -O0 -o "$out/$name.c0$exe" "compiler/benches/c/$name.c"
+    $CC -O2 -o "$out/$name.c2$exe" "compiler/benches/c/$name.c"
     if [ "$have_rust" = 1 ] && [ -f "compiler/benches/rs/$name.rs" ]; then
         rustc -O -C overflow-checks=off -o "$out/$name.rs$exe" "compiler/benches/rs/$name.rs"
     fi
     if [ "$checked" = 1 ]; then
-        gcc -O2 -ftrapv -o "$out/$name.ct$exe" "compiler/benches/c/$name.c"
+        $CC -O2 -ftrapv -o "$out/$name.ct$exe" "compiler/benches/c/$name.c"
         if [ "$have_rust" = 1 ] && [ -f "compiler/benches/rs/$name.rs" ]; then
             rustc -O -C overflow-checks=on -o "$out/$name.rc$exe" "compiler/benches/rs/$name.rs"
         fi
