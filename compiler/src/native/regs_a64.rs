@@ -437,6 +437,14 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
         }
         true
     };
+    let crossing_all: Vec<bool> = (0..nc).map(crosses_call).collect();
+    let mut prefer_callee = crossing_all.clone();
+    for &(s, d) in pairs.keys() {
+        if s != d && (crossing_all[s] || crossing_all[d]) && fits(s, d) {
+            prefer_callee[s] = true;
+            prefer_callee[d] = true;
+        }
+    }
     // The register for `c` among `homes` (with the values already in them): one held by a partner of a
     // copy first, since sharing it removes the copy, then the first that is free.
     let pick = |c: usize, homes: &[(bool, u8)], taken: &[Vec<usize>]| -> Option<usize> {
@@ -455,9 +463,18 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
                 .iter()
                 .any(|&o| pairs.contains_key(&(o, c)) || pairs.contains_key(&(c, o)))
         };
-        (0..homes.len())
+        // A value that shares with one living across a call goes to the callee-saved registers too, so
+        // that the two can meet in one.
+        let callee_first = prefer_callee[c];
+        let order: Vec<usize> = (0..homes.len())
+            .filter(|&k| homes[k].0 == callee_first)
+            .chain((0..homes.len()).filter(|&k| homes[k].0 != callee_first))
+            .collect();
+        order
+            .iter()
+            .copied()
             .find(|&k| ok(k) && partner(k))
-            .or_else(|| (0..homes.len()).find(|&k| ok(k)))
+            .or_else(|| order.iter().copied().find(|&k| ok(k)))
     };
     let kinds_g: Vec<(bool, u8)> = gprs.iter().map(|g| (g.1, g.0 .0)).collect();
     let kinds_f: Vec<(bool, u8)> = fprs.iter().map(|g| (g.1, g.0 .0)).collect();
