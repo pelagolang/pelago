@@ -1,6 +1,7 @@
-//! Writes a macOS AArch64 executable (Mach-O, card A-10 stage R4): static, no `dyld`, no `libSystem`.
-//! The program starts at the entry of an `LC_UNIXTHREAD` command and talks to the kernel with system
-//! calls, like the Linux one.
+//! Writes a macOS AArch64 executable (Mach-O, card A-10 stage R4): no library is loaded, no `libSystem`.
+//! macOS 14 refuses a program without `dyld` (the kernel kills a static `LC_UNIXTHREAD` one), so the
+//! file asks for `/usr/lib/dyld`, which sets the process up and calls the `LC_MAIN` entry; from there the
+//! program talks to the kernel with system calls, like the Linux one.
 //!
 //! Apple Silicon refuses to run code that is not signed, so the file ends with an **ad-hoc code
 //! signature**: a `CodeDirectory` that holds the SHA-256 of every 4096-byte page of the file before it
@@ -12,7 +13,7 @@
 //! __PAGEZERO  4 GiB of inaccessible address space, no file bytes (required of 64-bit programs)
 //! __TEXT      file offset 0: the headers (one page), then the code, then the constants; r-x
 //! __DATA      the initialised data, then zeroed space; rw-
-//! __LINKEDIT  the code signature; r--
+//! __LINKEDIT  an empty chained-fixups table (dyld insists on one), then the code signature; r--
 //! ```
 
 use super::elf::Blob;
@@ -23,11 +24,21 @@ const PAGE: u64 = 0x4000;
 /// Where the code starts in the file and in memory (after the headers).
 const CODE_AT: u64 = PAGE;
 
-const LOAD_COMMANDS: u32 = 6;
+const LOAD_COMMANDS: u32 = 9;
 const SEGMENT_SIZE: u32 = 72;
-const THREAD_SIZE: u32 = 288;
+const FIXUPS_CMD_SIZE: u32 = 16;
+const DYLD_CMD_SIZE: u32 = 32;
+const BUILD_CMD_SIZE: u32 = 32;
+const MAIN_CMD_SIZE: u32 = 24;
+/// Size of the (empty) chained-fixups blob for four segments, padded to 8 bytes.
+const FIXUPS_SIZE: u64 = 64;
 const SIGNATURE_CMD_SIZE: u32 = 16;
-const COMMANDS_SIZE: u32 = 4 * SEGMENT_SIZE + THREAD_SIZE + SIGNATURE_CMD_SIZE;
+const COMMANDS_SIZE: u32 = 4 * SEGMENT_SIZE
+    + FIXUPS_CMD_SIZE
+    + DYLD_CMD_SIZE
+    + BUILD_CMD_SIZE
+    + MAIN_CMD_SIZE
+    + SIGNATURE_CMD_SIZE;
 
 fn align_up(v: u64, a: u64) -> u64 {
     v.div_ceil(a) * a
@@ -106,7 +117,7 @@ pub fn write_a64(
     w.u32(2); // MH_EXECUTE
     w.u32(LOAD_COMMANDS);
     w.u32(COMMANDS_SIZE);
-    w.u32(1); // MH_NOUNDEFS
+    w.u32(0x0020_0085); // MH_NOUNDEFS | MH_DYLDLINK | MH_TWOLEVEL | MH_PIE
     w.u32(0);
     w.segment("__PAGEZERO", 0, IMAGE_BASE, 0, 0, 0);
     w.segment("__TEXT", IMAGE_BASE, text_size, 0, text_size, 5);
@@ -119,29 +130,45 @@ pub fn write_a64(
         3,
     );
     // The signature is built last (it hashes everything before it), but its size is known now.
-    let sig_len = signature_len(link_off);
+    let sig_off = link_off + FIXUPS_SIZE;
+    let sig_len = signature_len(sig_off);
     w.segment(
         "__LINKEDIT",
         IMAGE_BASE + data_vm + data_mem,
-        align_up(sig_len, PAGE),
+        align_up(FIXUPS_SIZE + sig_len, PAGE),
         link_off,
-        sig_len,
+        FIXUPS_SIZE + sig_len,
         1,
     );
-    // LC_UNIXTHREAD: ARM_THREAD_STATE64 with only the program counter set (the kernel makes the stack).
-    w.u32(0x5);
-    w.u32(THREAD_SIZE);
-    w.u32(6); // ARM_THREAD_STATE64
-    w.u32(68); // its size in 32-bit words
-    for r in 0..33 {
-        // x0 to x28, fp, lr, sp, pc
-        w.u64(if r == 32 { IMAGE_BASE + CODE_AT } else { 0 });
-    }
-    w.u32(0); // cpsr
-    w.u32(0);
+    // LC_DYLD_CHAINED_FIXUPS: macOS 14 starts a program through dyld, which wants this table even
+    // when, as here, there is nothing to fix up.
+    w.u32(0x8000_0034);
+    w.u32(FIXUPS_CMD_SIZE);
+    w.u32(link_off as u32);
+    w.u32(FIXUPS_SIZE as u32);
+    // LC_LOAD_DYLINKER: the program is started by /usr/lib/dyld (it loads no library).
+    w.u32(0xE);
+    w.u32(DYLD_CMD_SIZE);
+    w.u32(12);
+    w.0.extend_from_slice(b"/usr/lib/dyld\0");
+    w.pad_to(w.0.len() + 6);
+    // LC_BUILD_VERSION: macOS 14.0, SDK 14.5, one tool (ld).
+    w.u32(0x32);
+    w.u32(BUILD_CMD_SIZE);
+    w.u32(1);
+    w.u32(0x000E_0000);
+    w.u32(0x000E_0500);
+    w.u32(1);
+    w.u32(3);
+    w.u32(0x041D_0C00);
+    // LC_MAIN: dyld calls the entry like `main`; the program never returns, it exits by system call.
+    w.u32(0x8000_0028);
+    w.u32(MAIN_CMD_SIZE);
+    w.u64(CODE_AT);
+    w.u64(0);
     w.u32(0x1D); // LC_CODE_SIGNATURE
     w.u32(SIGNATURE_CMD_SIZE);
-    w.u32(link_off as u32);
+    w.u32(sig_off as u32);
     w.u32(sig_len as u32);
     debug_assert_eq!(w.0.len() as u32, 32 + COMMANDS_SIZE);
     w.pad_to(CODE_AT as usize);
@@ -151,10 +178,28 @@ pub fn write_a64(
     w.pad_to(text_size as usize);
     w.0.extend_from_slice(&data.bytes);
     w.pad_to(link_off as usize);
+    w.0.extend_from_slice(&fixups());
+    debug_assert_eq!(w.0.len() as u64, sig_off);
     let sig = signature(&w.0, text_size);
     debug_assert_eq!(sig.len() as u64, sig_len);
     w.0.extend_from_slice(&sig);
     Ok(w.0)
+}
+
+/// A chained-fixups table (`dyld_chained_fixups_header`) for the four segments with no fixups and no imports.
+fn fixups() -> Vec<u8> {
+    let mut b = W(Vec::new());
+    for v in [0, 32, 56, 56, 0, 1, 0] {
+        // version, starts offset, imports offset, symbols offset, import count, format, symbol format
+        b.u32(v);
+    }
+    b.pad_to(32);
+    b.u32(4); // segments
+    for _ in 0..4 {
+        b.u32(0); // no fixups in this one
+    }
+    b.pad_to(FIXUPS_SIZE as usize);
+    b.0
 }
 
 // ---- The ad-hoc code signature ------------------------------------------------------------------------
@@ -186,7 +231,7 @@ fn signature(file: &[u8], text_size: u64) -> Vec<u8> {
     be32(&mut b, 0xFADE_0C02);
     be32(&mut b, cd_len as u32);
     be32(&mut b, 0x0002_0400); // version
-    be32(&mut b, 2); // CS_ADHOC
+    be32(&mut b, 0x0002_0002); // CS_ADHOC | CS_LINKER_SIGNED
     be32(&mut b, (CD_HEADER + IDENT.len()) as u32); // hash offset
     be32(&mut b, CD_HEADER as u32); // identifier offset
     be32(&mut b, 0); // special slots

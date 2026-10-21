@@ -25,7 +25,7 @@ Touches: new `compiler/src/native/a64.rs` (encoder), `native/gen_a64.rs` (code g
 | **R1** | `a64.rs`: the encoder for the forms the generator needs (`mov`/`movz`/`movk`, `ldr`/`str` in all widths, `add`/`sub`/`and`/`orr`/`eor`, `mul`, `sdiv`/`udiv`/`msub`, shifts, `cmp`, `cset`, `b`/`b.cond`/`bl`/`blr`/`ret`, `adr`/`adrp`, scalar float `fadd`/`fsub`/`fmul`/`fdiv`/`fcmp`/`scvtf`/`fcvtzs`/`fcvt`, `svc`). Golden bytes checked against `aarch64-linux-gnu-as` (apt `binutils-aarch64-linux-gnu`). | every form matches the assembler |
 | **R2** | Linux ELF (`EM_AARCH64`), the runtime over syscalls (`svc #0`: `write` 64, `exit_group` 94, `mmap` 222, `munmap` 215), the simple generator `gen_a64.rs`. Calling convention: AAPCS64 (`x0` to `x7`, `d0` to `d7`, callee-saved `x19` to `x28`). | all tests green under `qemu-aarch64` and on the `ubuntu-24.04-arm` runner |
 | **R3** | Registers for the heaviest values (`x19` to `x28`, `d8` to `d15`), its own allocator in `regs_a64.rs` (liveness hulls, loop-depth weights; only `successors` and `fused_cmp` are shared with `regs.rs`). | all tests green; benches recorded |
-| **R4** | Windows on ARM (PE machine `0xAA64`, `kernel32` imports, Microsoft ARM64 conventions): **built**, runs in CI on `windows-11-arm`. macOS (static Mach-O with an ad-hoc code signature, raw Darwin syscalls): **built**, runs in CI on `macos-14`. | each its own PR; see risks |
+| **R4** | Windows on ARM (PE machine `0xAA64`, `kernel32` imports, Microsoft ARM64 conventions): **built**, runs in CI on `windows-11-arm`. macOS (Mach-O started by dyld (no libraries) with an ad-hoc code signature, raw Darwin syscalls): **built**, runs in CI on `macos-14`. | each its own PR; see risks |
 
 # Design choice: how to share code with x86-64
 
