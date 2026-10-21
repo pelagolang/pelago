@@ -550,6 +550,17 @@ impl Asm {
     }
 
     /// `rd = cc ? rn : rm`
+    /// `ccmn rn, rm, #nzcv, cc`: when `cc` holds the flags of `rn + rm`, else the flags `nzcv`.
+    pub fn ccmn(&mut self, rn: Reg, rm: Reg, nzcv: u32, cc: Cond) {
+        self.word(
+            0xBA40_0000
+                | (rm.0 as u32) << 16
+                | (cc as u32) << 12
+                | (rn.0 as u32) << 5
+                | (nzcv & 15),
+        );
+    }
+
     pub fn csel(&mut self, rd: Reg, rn: Reg, rm: Reg, cc: Cond) {
         self.word(
             0x9A80_0000

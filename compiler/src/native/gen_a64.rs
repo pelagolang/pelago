@@ -253,6 +253,11 @@ struct Gen<'m> {
     cond_stubs: Vec<CondStub>,
     /// Where `CheckedIf` resumes after the jump to its stub.
     resume: Option<Label>,
+    /// Integer compares that only feed the `Select` right after them: the compare (keyed by the
+    /// `Select`) is made where the `Select` is, and the `Select` uses the flags.
+    sel_cmp: HashMap<usize, (CmpOp, Value, Value)>,
+    /// The compares that were moved into their `Select`.
+    sel_skip: std::collections::HashSet<usize>,
 }
 
 impl<'m> Gen<'m> {
@@ -278,6 +283,8 @@ impl<'m> Gen<'m> {
             slot_off: HashMap::new(),
             frame: 0,
             block_labels: Vec::new(),
+            sel_cmp: HashMap::new(),
+            sel_skip: std::collections::HashSet::new(),
             stops: [None; 4],
             stubs: Vec::new(),
             cond_stubs: Vec::new(),
@@ -319,6 +326,28 @@ impl<'m> Gen<'m> {
                 if let Some(last) = super::regs::fused_cmp(f, bi, &uses) {
                     if let Some(r) = f.insts[last].result {
                         fused[r.0 as usize] = true;
+                    }
+                }
+            }
+            self.sel_cmp.clear();
+            self.sel_skip.clear();
+            for b in &f.blocks {
+                for w in b.insts.windows(2) {
+                    if let (Op::Cmp(op, x, y), Op::Select(c, a, e)) =
+                        (&f.insts[w[0]].op, &f.insts[w[1]].op)
+                    {
+                        let r = f.insts[w[0]].result;
+                        if r == Some(*c)
+                            && *a != *c
+                            && *e != *c
+                            && uses[c.0 as usize] == 1
+                            && !is_float(f.ty(*x))
+                            && !fused[c.0 as usize]
+                        {
+                            fused[c.0 as usize] = true;
+                            self.sel_cmp.insert(w[1], (*op, *x, *y));
+                            self.sel_skip.insert(w[0]);
+                        }
                     }
                 }
             }
@@ -612,7 +641,7 @@ impl<'m> Gen<'m> {
             while k < b.insts.len() {
                 let i = b.insts[k];
                 k += 1;
-                if fused.is_some_and(|(l, ..)| l == i) {
+                if fused.is_some_and(|(l, ..)| l == i) || self.sel_skip.contains(&i) {
                     continue;
                 }
                 // A check whose value nobody reads, right before the plain operation it guards (what
@@ -939,6 +968,15 @@ impl<'m> Gen<'m> {
             }
             Op::Bin(op, a, b) => self.bin(f, *op, *a, *b, res.unwrap())?,
             Op::Checked(..) | Op::CheckedIf(..) => self.checked_inst(f, &inst.op, res.unwrap()),
+            Op::Select(_, a, b) if self.sel_cmp.contains_key(&id) => {
+                let (op, x, y) = self.sel_cmp[&id];
+                let ra = self.rd(*a, X9);
+                let rb = self.rd(*b, X10);
+                let cc = self.int_cmp_in(f, op, x, y, X11, X12);
+                let rd = self.wr(res.unwrap(), X9);
+                self.a.csel(rd, ra, rb, cc);
+                self.fin(res.unwrap(), rd);
+            }
             Op::Select(c, a, b) => {
                 let ra = self.rd(*a, X9);
                 let rb = self.rd(*b, X10);
@@ -1417,6 +1455,26 @@ impl<'m> Gen<'m> {
         ov: Label,
     ) {
         let w = bits(f.ty(a));
+        // A signed 64-bit product by 3 is `x + 2x`, which the adder checks: when `2x` overflows so does
+        // `3x`, otherwise the second addition's flag tells. The product itself is one shifted add, off
+        // the path of the check.
+        if w == 64 && signed && op == BinOp::Mul {
+            let x = match (self.imm[a.0 as usize], self.imm[b.0 as usize]) {
+                (_, Some(3)) => Some(a),
+                (Some(3), _) if self.imm[b.0 as usize].is_none() => Some(b),
+                _ => None,
+            };
+            if let Some(x) = x {
+                let rx = self.rd(x, X9);
+                let rd = self.wr(r, X11);
+                self.a.add_rr_sh(rd, rx, rx, Shift::Lsl, 1);
+                self.a.adds_rr(X12, rx, rx);
+                self.a.ccmn(X12, rx, 1, Cond::Vc);
+                self.ov_jump(Cond::Vs, ov);
+                self.fin(r, rd);
+                return;
+            }
+        }
         let ra = self.rd_ext(a, X9, f, signed);
         let rd = self.wr(r, X11);
         if w == 64 {
