@@ -140,6 +140,10 @@ Geometric mean about 1.4x C `-O2` (about 1.6x Rust; rerun `compare.sh` for exact
 What was still slow before that round, in order of likely payoff: every checked operation and bounds check is a compare and branch, the calling convention goes through memory for every
 float, small `MemCopy` uses `rep movsb`, and no value is split between a register and memory (a value too rarely used for a register still pays a load and a store per use).
 
+### Fused multiply-add
+
+`Op::Fma(a, b, c)` is `a * b + c` with a single rounding, reached only through `float.fma` (`rt_fma`); the compiler never fuses a multiply and an add by itself. x86 emits `vfmadd231sd/ss` (FMA3, so a Haswell or newer CPU; `b` is read from its register or frame slot, `c` is loaded into `xmm0`); AArch64 emits `fmadd`, with `v31` as the third scratch. The interpreter uses `mul_add`.
+
 ### Floats in SSE registers (A-11 W11)
 
 Floats go through the same allocator as integers, in a second bank: `xmm2` to `xmm15` (`gen::XMM_REGS`). `xmm0` and `xmm1` stay the templates' scratch registers and `xmm0` carries a

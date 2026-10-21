@@ -62,6 +62,7 @@ A serious, self-hosting systems language:
 | Comments | `/// line`, `///* block *///` (nests); documentation `//~ line`, `//~* block *~//`; `//` and `/* */` are errors with a hint (`docs/design/comments.md`) | decided |
 | Brand | Monoline capital P + dot + wave mark; lowercase `pelago` in Comfortaa Bold, text in Outfit; teal `#0E7C86`, lagoon `#5FD0C8`, deep sea `#0B2239`; assets in `assets/brand/` (`docs/design/brand.md`) | decided |
 | `int` | Always exactly 64 bits; sized types for dense data | decided |
+| Fused multiply-add | Never automatic: `a.fma(b, c)` (one rounding) is an explicit `float` method; `a * b + c` always rounds twice, so results match everywhere. x86 needs FMA3 (Haswell or newer); AArch64 has `fmadd` | decided (Dennis, 2026-10-21) |
 | Conversions | Written `x to float`, allowed only when nothing can be lost; lossy ones get a different spelling | decided in principle |
 | Generics | `<T>` | decided |
 | Statements | Newlines end statements, no semicolons | decided |
