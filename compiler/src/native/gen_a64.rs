@@ -259,6 +259,8 @@ struct Gen<'m> {
     sel_cmp: HashMap<usize, (CmpOp, Value, Value)>,
     /// The compares that were moved into their `Select`.
     sel_skip: std::collections::HashSet<usize>,
+    /// `x - a * b` and `x + a * b` on 64 bits: the instruction of the sum or difference, with (is a sum, a, b, x).
+    madd: HashMap<usize, (bool, Value, Value, Value)>,
 }
 
 impl<'m> Gen<'m> {
@@ -287,6 +289,7 @@ impl<'m> Gen<'m> {
             block_labels: Vec::new(),
             sel_cmp: HashMap::new(),
             sel_skip: std::collections::HashSet::new(),
+            madd: HashMap::new(),
             stops: [None; 4],
             stubs: Vec::new(),
             cond_stubs: Vec::new(),
@@ -348,6 +351,36 @@ impl<'m> Gen<'m> {
                         {
                             fused[c.0 as usize] = true;
                             self.sel_cmp.insert(w[1], (*op, *x, *y));
+                            self.sel_skip.insert(w[0]);
+                        }
+                    }
+                }
+            }
+            // A product read once, right before the sum or difference that uses it, is one `madd` / `msub`.
+            self.madd.clear();
+            for b in &f.blocks {
+                for w in b.insts.windows(2) {
+                    if let (
+                        Op::Bin(BinOp::Mul, a, m),
+                        Op::Bin(op @ (BinOp::Add | BinOp::Sub), p, q),
+                    ) = (&f.insts[w[0]].op, &f.insts[w[1]].op)
+                    {
+                        let Some(prod) = f.insts[w[0]].result else {
+                            continue;
+                        };
+                        let (add, x) = match op {
+                            BinOp::Add if *q == prod => (true, *p),
+                            BinOp::Add if *p == prod => (true, *q),
+                            _ if *q == prod => (false, *p),
+                            _ => continue,
+                        };
+                        if f.ty(prod) == IrTy::Int(64)
+                            && uses[prod.0 as usize] == 1
+                            && x != prod
+                            && !fused[prod.0 as usize]
+                        {
+                            fused[prod.0 as usize] = true;
+                            self.madd.insert(w[1], (add, *a, *m, x));
                             self.sel_skip.insert(w[0]);
                         }
                     }
@@ -421,6 +454,10 @@ impl<'m> Gen<'m> {
 
     fn ld(&mut self, r: Reg, v: Value) {
         match self.imm[v.0 as usize] {
+            Some(_) if self.reg[v.0 as usize].is_some() => {
+                let h = self.reg[v.0 as usize].unwrap();
+                self.a.mov_rr(r, h);
+            }
             Some(n) => self.a.mov_ri(r, n),
             None => {
                 if let Some(h) = self.reg[v.0 as usize] {
@@ -439,7 +476,7 @@ impl<'m> Gen<'m> {
     /// The register to read `v` from: its home, or `scratch` after loading it there.
     fn rd(&mut self, v: Value, scratch: Reg) -> Reg {
         match (self.imm[v.0 as usize], self.reg[v.0 as usize]) {
-            (None, Some(h)) => h,
+            (_, Some(h)) => h,
             _ => {
                 self.ld(scratch, v);
                 scratch
@@ -451,7 +488,7 @@ impl<'m> Gen<'m> {
     fn rd_ext(&mut self, v: Value, scratch: Reg, f: &Func, signed: bool) -> Reg {
         let narrow_signed = signed && matches!(f.ty(v), IrTy::Int(b) if b < 64);
         match (self.imm[v.0 as usize], self.reg[v.0 as usize]) {
-            (None, Some(h)) if !narrow_signed => h,
+            (_, Some(h)) if !narrow_signed => h,
             _ => {
                 self.ld_ext(scratch, v, f, signed);
                 scratch
@@ -665,6 +702,12 @@ impl<'m> Gen<'m> {
                     self.a.ldr(X9, FP, 16 + 8 * k as i32, 8);
                     self.st(*p, X9);
                 }
+            }
+        }
+        // Constants kept in a register are built once, after the parameters are out of the way.
+        for (v, n) in self.imm.clone().into_iter().enumerate() {
+            if let (Some(n), Some(r)) = (n, self.reg[v]) {
+                self.a.mov_ri(r, n);
             }
         }
         let uses = f.use_counts();
@@ -1011,6 +1054,18 @@ impl<'m> Gen<'m> {
                     self.a.mov_ri(d, bits_v);
                     self.fin(r, d);
                 }
+            }
+            Op::Bin(..) if self.madd.contains_key(&id) => {
+                let (add, a, b, x) = self.madd[&id];
+                let (ra, rb, rx) = (self.rd(a, X9), self.rd(b, X10), self.rd(x, X11));
+                let r = res.unwrap();
+                let rd = self.wr(r, X9);
+                if add {
+                    self.a.madd(rd, ra, rb, rx);
+                } else {
+                    self.a.msub(rd, ra, rb, rx);
+                }
+                self.fin(r, rd);
             }
             Op::Bin(op, a, b) => self.bin(f, *op, *a, *b, res.unwrap())?,
             Op::Checked(..) | Op::CheckedIf(..) => self.checked_inst(f, &inst.op, res.unwrap()),
