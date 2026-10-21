@@ -55,8 +55,28 @@ fn reg_limit() -> usize {
     }
     #[cfg(not(test))]
     {
-        usize::MAX
+        // For debugging the allocators: `PELAGO_REG_LIMIT=2` keeps two registers of each kind.
+        static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        *LIMIT.get_or_init(|| {
+            std::env::var("PELAGO_REG_LIMIT")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(usize::MAX)
+        })
     }
+}
+
+thread_local! {
+    /// Tests choose the machine IR path (`Some(true)`) or the older generator (`Some(false)`);
+    /// otherwise `PELAGO_MIR=1` turns it on (work item W4, default off until it matches the old path).
+    pub static MIR: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+fn mir_mode() -> bool {
+    MIR.with(|m| m.get()).unwrap_or_else(|| {
+        static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *ENV.get_or_init(|| std::env::var("PELAGO_MIR").is_ok_and(|v| v == "1"))
+    })
 }
 
 /// What to build.
@@ -689,6 +709,38 @@ impl<'m> Gen<'m> {
     // ---- Functions -----------------------------------------------------------------------------------
 
     fn function(&mut self, fi: usize, f: &Func) -> Result<(), String> {
+        if self.regalloc && mir_mode() {
+            if let Some(mut mf) = super::x86_select::select(f) {
+                let target = super::x86_mir::X86::new();
+                if cfg!(debug_assertions) {
+                    super::mir::verify(&mf, &target)?;
+                }
+                let dump = std::env::var("PELAGO_MIR_DUMP").is_ok_and(|v| v == "1");
+                if dump {
+                    eprintln!("{}", mf.print(&target));
+                }
+                super::ralloc::allocate(&mut mf, &target, reg_limit());
+                if dump {
+                    eprintln!("after allocation:\n{}", mf.print(&target));
+                }
+                let label = self.funcs[fi];
+                let mut env = super::x86_emit::Env {
+                    a: &mut self.a,
+                    ro: &mut self.ro,
+                    funcs: &self.funcs,
+                    data_off: &self.data_off,
+                    stops: [
+                        self.stop_div0,
+                        self.stop_shift,
+                        self.stop_overflow,
+                        self.stop_unreachable,
+                    ],
+                    rt: self.rt.as_ref().expect("the runtime is emitted first"),
+                };
+                super::x86_emit::emit(&mut env, &mf, label);
+                return Ok(());
+            }
+        }
         self.layout(f);
         self.ret_ty = f.ret;
         self.block_labels = f.blocks.iter().map(|_| self.a.new_label()).collect();
