@@ -8,7 +8,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 
 | Column | Card | Title | Size |
 |---|---|---|---|
-| Needs decision | [A-10](cards/A-10-aarch64.md) | AArch64 (64-bit ARM) backend: Linux first, then Windows on ARM and macOS | L |
+| Doing | [A-10](cards/A-10-aarch64.md) | AArch64 (64-bit ARM) backend: R1 (encoder) and R2 (Linux ELF, runtime, generator, tests under qemu and on ARM CI) built; R3 registers, then Windows on ARM and macOS | L |
 | Doing | [A-11](cards/A-11-native-speed.md) | Native speed: S1 to S3 first rounds done (collatz 0.30 s to 0.09 s, C -O2 0.07 s); open work split in [a11-work-items.md](a11-work-items.md) | XL |
 | Done | [A-09](cards/A-09-native-backend.md) | Native backend: x86-64 machine code, ELF and PE, straight from the IR (all stages and the leftovers: buffered print, float semantics, stack guard) | XL |
 
@@ -16,7 +16,6 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 
 | Column | Card | Title | Size |
 |---|---|---|---|
-| Doing (stage 1 built) | [S-07](cards/S-07-formatter.md) | `pelago fmt` and LSP formatting | L |
 
 ## Shelf (parked on purpose)
 
@@ -31,6 +30,8 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 
 | Card | What | Where |
 |---|---|---|
+| [S-07](cards/S-07-formatter.md) | `pelago fmt` and LSP formatting: token layout, `[fmt]` in `pelago.toml`, wrapping, import sorting, tree-based indentation | `compiler/src/fmt/` |
+| [S-05](cards/S-05-zed-and-tree-sitter.md) | Tree-sitter grammar (`pelagolang/tree-sitter-pelago`) and Zed extension (`pelagolang/zed-pelago`), the VS Code extension split out to `pelagolang/vscode-pelago`; done (owner) | the three repositories |
 | [A-01](cards/A-01-cleanup.md) | `stubs.rs` removed | `compiler/src/lower/` |
 | [A-07](cards/A-07-async.md) | `async fn` / `await` / `future<T>` / `block_on` at stage 0 (eager); suspension is S-04 | `core.pel`, IR26 |
 | [B-03](cards/B-03-highlighter.md) | Highlighter: `pelago highlight`, generated TextMate grammar, VS Code extension | `compiler/src/highlight.rs`, `editors/` |
@@ -53,5 +54,4 @@ Nothing right now.
 
 ## Review
 
-- [S-05](cards/S-05-zed-and-tree-sitter.md): Tree-sitter grammar (`pelagolang/tree-sitter-pelago`) and Zed extension (`pelagolang/zed-pelago`) built, tested in the sandbox and readied for publishing; waits for the owner's try-out in VS Code (checklist in the card), a licence, and the publish.
 - [S-06](cards/S-06-language-server.md): `pelago lsp` built (L1 to L5); the owner reviews.
