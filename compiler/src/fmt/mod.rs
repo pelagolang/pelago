@@ -20,7 +20,12 @@
 //! spacing, the output is also parsed and must print the same tree as the input.
 //!
 //! When no list can be broken, a long line is broken after its loosest top-level `||`, `&&`, `??`,
-//! `+` or `-`. Not done yet: fixing a line indented one level too far, which needs the tree; see `docs/plans/cards/S-07-formatter.md`.
+//! `+` or `-`. Indentation of statements, block tails and `case` lines no longer comes from the
+//! author: it is the bracket depth plus the `switch` arm bodies around the line, read from the
+//! tree (see [`levels`]). Lines that continue a statement (`.method()` chains, wrapped
+//! conditions) keep the extra levels the author gave them, moved along with their statement.
+
+use std::collections::HashMap;
 
 use crate::ast_print::print_file;
 use crate::config::FmtConfig;
@@ -76,11 +81,12 @@ pub fn format_with(src: &str, config: &FmtConfig) -> Result<String, String> {
     let sorted = imports::sort_imports(src);
     let src = sorted.as_str();
     let tokens = tokenize(src).tokens;
-    let out = wrap::wrap(&layout(src, &tokens, config), config);
+    let (before, _) = parse_and_check(src);
+    let arms = levels::arm_levels(&before.file);
+    let out = wrap::wrap(&layout(src, &tokens, &arms, config), config);
     if signature(src, &tokens) != signature(&out, &tokenize(&out).tokens) {
         return Err("formatting would change the tokens; not applied (this is a bug)".to_string());
     }
-    let (before, _) = parse_and_check(src);
     let (after, _) = parse_and_check(&out);
     if !after.errors.is_empty() || print_file(&before.file, src) != print_file(&after.file, &out) {
         return Err("formatting would change the tree; not applied (this is a bug)".to_string());
@@ -128,18 +134,22 @@ fn signature(src: &str, tokens: &[Token]) -> Vec<(TokenKind, String)> {
         .collect()
 }
 
-fn layout(src: &str, tokens: &[Token], config: &FmtConfig) -> String {
+fn layout(src: &str, tokens: &[Token], arms: &HashMap<u32, usize>, config: &FmtConfig) -> String {
     let text = |t: &Token| &src[t.span.start as usize..t.span.end as usize];
     let mut out = String::with_capacity(src.len());
     // The lines on which the brackets still open were opened.
     let mut open: Vec<usize> = Vec::new();
+    // How far the tree moved the line on which each of those brackets was opened, and the move
+    // for the statement being laid out now; lines that continue it move with it.
+    let mut moves: Vec<isize> = Vec::new();
+    let mut cur_move = 0isize;
     let mut line = 0usize;
     // Newlines waiting to be written: 0 on a line, 1 for a break, 2 for a blank line too.
     let mut pending = 0usize;
     let mut prev: Option<&Token> = None;
     // The last token that was not a comment, to see whether the line above goes on.
     let mut last_code: Option<&Token> = None;
-    for t in tokens {
+    for (i, t) in tokens.iter().enumerate() {
         match t.kind {
             TokenKind::Eof => break,
             TokenKind::Newline => {
@@ -175,15 +185,36 @@ fn layout(src: &str, tokens: &[Token], config: &FmtConfig) -> String {
                     }
                 }
                 open.pop();
+                cur_move = moves.pop().unwrap_or(cur_move);
             }
-            let mut depth = {
+            let depth = {
                 shown.dedup();
                 shown.len()
             };
-            // What the brackets cannot tell: a `case` body, a `.method()` chain, the arms of a
-            // ternary. Keep the levels the author added on top of the bracket depth.
-            depth += extra_levels(src, t, depth, config.indent);
-            for _ in 0..depth {
+            // What the brackets cannot tell: a `.method()` chain, the arms of a ternary. Keep
+            // the levels the author added on top of the bracket depth.
+            let author = depth + extra_levels(src, t, depth, config.indent);
+            // A `switch` arm body is not in brackets, but the tree knows it: statements, tails
+            // and `case` lines get the bracket depth plus the arm bodies around them, whatever
+            // the author wrote. Lines that continue a statement move with it.
+            let next_code = tokens[i..]
+                .iter()
+                .find(|n| !n.kind.is_trivia() && n.kind != TokenKind::Newline);
+            let level = if let Some(&a) = arms.get(&t.span.start) {
+                cur_move = (depth + a) as isize - author as isize;
+                depth + a
+            } else if let Some(a) = t
+                .kind
+                .is_trivia()
+                .then(|| next_code.and_then(|n| arms.get(&n.span.start)))
+                .flatten()
+            {
+                // A comment above a statement lines up with it.
+                depth + a
+            } else {
+                (author as isize + cur_move).max(0) as usize
+            };
+            for _ in 0..level {
                 out.extend(std::iter::repeat_n(' ', config.indent));
             }
             pending = 0;
@@ -205,11 +236,13 @@ fn layout(src: &str, tokens: &[Token], config: &FmtConfig) -> String {
             }
             if closer {
                 open.pop();
+                cur_move = moves.pop().unwrap_or(cur_move);
             }
         }
         out.push_str(text(t));
         if is_opener(t.kind) {
             open.push(line);
+            moves.push(cur_move);
         }
         if !t.kind.is_trivia() {
             last_code = Some(t);
@@ -221,6 +254,7 @@ fn layout(src: &str, tokens: &[Token], config: &FmtConfig) -> String {
 }
 
 mod imports;
+mod levels;
 mod wrap;
 
 #[cfg(test)]
