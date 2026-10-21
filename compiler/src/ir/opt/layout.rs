@@ -18,7 +18,40 @@ use super::dom::Dom;
 use super::loops;
 use crate::ir::*;
 
+/// A comparison that only a branch reads goes right before it, where the code generator fuses the two
+/// (no bool is made); work that was scheduled between them stays ahead.
+fn sink_tests(f: &mut Func) -> bool {
+    let uses = f.use_counts();
+    let mut changed = false;
+    for bi in 0..f.blocks.len() {
+        let Some(Term::Branch(c, ..)) = f.blocks[bi].term else {
+            continue;
+        };
+        let Some(pos) = f.blocks[bi]
+            .insts
+            .iter()
+            .position(|&i| f.insts[i].result == Some(c))
+        else {
+            continue;
+        };
+        if uses[c.0 as usize] == 1
+            && pos + 1 < f.blocks[bi].insts.len()
+            && matches!(f.insts[f.blocks[bi].insts[pos]].op, Op::Cmp(..))
+        {
+            let i = f.blocks[bi].insts.remove(pos);
+            f.blocks[bi].insts.push(i);
+            changed = true;
+        }
+    }
+    changed
+}
+
 pub fn run(f: &mut Func) -> bool {
+    let sunk = sink_tests(f);
+    run_order(f) || sunk
+}
+
+fn run_order(f: &mut Func) -> bool {
     let n = f.blocks.len();
     let dom = Dom::new(f);
     if dom.rpo.len() != n {

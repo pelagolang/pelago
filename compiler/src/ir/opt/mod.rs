@@ -41,6 +41,7 @@ mod stats;
 mod tailrec;
 #[cfg(test)]
 mod tests;
+mod thread;
 mod undo;
 mod unroll;
 mod vectorise;
@@ -167,6 +168,7 @@ fn rounds(f: &mut Func, divs: bool) {
         changed |= step(f, "licm", licm::run);
         changed |= step(f, "ivopt", ivopt::run);
         if divs {
+            changed |= step(f, "thread", thread::run);
             changed |= step(f, "ifconv", ifconv::run);
         }
         changed |= step(f, "simplify", cfg::run);
