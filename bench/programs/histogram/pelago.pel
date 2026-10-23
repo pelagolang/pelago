@@ -1,0 +1,13 @@
+fn main() {
+    var bins: [int] = []
+    for i in 0..1024 { bins.push!(0) }
+    var s = 3
+    for i in 0..30000000 {
+        s = (s * 1103515245 + 12345) & 2147483647
+        const b = (s >> 10) & 1023
+        bins[b] = bins[b] + 1
+    }
+    var t = 0
+    for i in 0..1024 { t += bins[i] * (i & 15) }
+    print(t)
+}

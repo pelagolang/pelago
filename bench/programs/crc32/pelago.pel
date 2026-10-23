@@ -1,0 +1,17 @@
+fn main() {
+    var table: [int] = []
+    for n in 0..256 {
+        var c = n
+        for k in 0..8 {
+            if c & 1 == 1 { c = 3988292384 ^ (c >> 1) } else { c = c >> 1 }
+        }
+        table.push!(c)
+    }
+    var crc = 4294967295
+    var s = 1
+    for i in 0..20000000 {
+        s = (s * 1103515245 + 12345) & 2147483647
+        crc = table[(crc ^ (s >> 8)) & 255] ^ (crc >> 8)
+    }
+    print(crc ^ 4294967295)
+}

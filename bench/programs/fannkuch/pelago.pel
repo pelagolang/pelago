@@ -1,0 +1,59 @@
+fn main() {
+    const n = 9
+    var perm1: [int] = []
+    var perm: [int] = []
+    var count: [int] = []
+    for i in 0..n {
+        perm1.push!(i)
+        perm.push!(0)
+        count.push!(0)
+    }
+    var maxflips = 0
+    var checksum = 0
+    var permcount = 0
+    var r = n
+    var done = false
+    while !done {
+        while r != 1 {
+            count[r - 1] = r
+            r -= 1
+        }
+        for i in 0..n { perm[i] = perm1[i] }
+        var flips = 0
+        var k = perm[0]
+        while k != 0 {
+            var i = 0
+            var j = k
+            while i < j {
+                const t = perm[i]
+                perm[i] = perm[j]
+                perm[j] = t
+                i += 1
+                j -= 1
+            }
+            flips += 1
+            k = perm[0]
+        }
+        if flips > maxflips { maxflips = flips }
+        if permcount % 2 == 0 { checksum += flips } else { checksum -= flips }
+        var more = true
+        while more {
+            if r == n {
+                done = true
+                more = false
+            } else {
+                const p0 = perm1[0]
+                var i = 0
+                while i < r {
+                    perm1[i] = perm1[i + 1]
+                    i += 1
+                }
+                perm1[r] = p0
+                count[r] -= 1
+                if count[r] > 0 { more = false } else { r += 1 }
+            }
+        }
+        permcount += 1
+    }
+    print(checksum, maxflips)
+}

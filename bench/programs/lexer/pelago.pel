@@ -1,0 +1,27 @@
+fn main() {
+    var text = ""
+    for i in 0..60000 { text.push_str!("let x#(i % 97) = 12#(i % 13) + foo(y) ;\n") }
+    var idents = 0
+    var numbers = 0
+    var symbols = 0
+    var in_ident = false
+    var in_number = false
+    for c of text.chars() {
+        const letter = (c >= 'a' && c <= 'z') || c == '_'
+        const digit = c >= '0' && c <= '9'
+        if letter && !in_number {
+            if !in_ident { idents += 1 }
+            in_ident = true
+        } else if digit && !in_ident {
+            if !in_number { numbers += 1 }
+            in_number = true
+        } else if digit {
+            in_number = false
+        } else {
+            in_ident = false
+            in_number = false
+            if c != ' ' && c != '\n' { symbols += 1 }
+        }
+    }
+    print(idents, numbers, symbols)
+}

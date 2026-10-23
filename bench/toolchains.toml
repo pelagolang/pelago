@@ -1,11 +1,11 @@
-# Versions the published results are made with (the Dockerfile installs them). The harness records the versions it finds and
-# reports a tool whose version string does not contain the pinned text; an empty pin means "not pinned yet".
-# Fill the pins from a first run inside the container: docker build -t pelago-bench -f bench/Dockerfile . and read the
-# Environment table of bench/results.md.
+# Versions the published results are made with (bench/Dockerfile installs them). The harness records the versions it finds and
+# reports a tool whose version string does not contain the pinned text.
+# Latest releases as of 2026-10-23: GCC 16.2 (2026-08-07), LLVM/Clang 23.1 (2026-08-25), Rust 1.99.1 (2026-10-15),
+# TinyCC mob branch at commit e23dabed (the last tagged release is 0.9.27 from 2017; the tree reports itself as 0.9.28rc).
 [pinned]
-gcc = ""
-"g++" = ""
-clang = ""
-"clang++" = ""
-tcc = ""
-rustc = "1.97.0"
+gcc = "16.2"
+"g++" = "16.2"
+clang = "23.1"
+"clang++" = "23.1"
+tcc = "0.9.28rc"
+rustc = "1.99.1"

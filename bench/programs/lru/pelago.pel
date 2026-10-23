@@ -1,0 +1,55 @@
+fn main() {
+    const cap = 1024
+    const space = 8192
+    var key: [int] = []
+    var prev: [int] = []
+    var next: [int] = []
+    var slot_of: [int] = []
+    for i in 0..cap {
+        key.push!(-1)
+        prev.push!(-1)
+        next.push!(-1)
+    }
+    for i in 0..space { slot_of.push!(-1) }
+    var head = -1
+    var tail = -1
+    var size = 0
+    var hits = 0
+    var s = 17
+    for i in 0..5000000 {
+        s = (s * 1103515245 + 12345) & 2147483647
+        const r = (s >> 8) % space
+        const k = if s & 3 == 0 { r % 512 } else { r }
+        var slot = slot_of[k]
+        if slot >= 0 {
+            hits += 1
+            if slot != head {
+                const p = prev[slot]
+                const n = next[slot]
+                next[p] = n
+                if n >= 0 { prev[n] = p } else { tail = p }
+                prev[slot] = -1
+                next[slot] = head
+                prev[head] = slot
+                head = slot
+            }
+        } else {
+            if size < cap {
+                slot = size
+                size += 1
+            } else {
+                slot = tail
+                slot_of[key[slot]] = -1
+                tail = prev[slot]
+                if tail >= 0 { next[tail] = -1 } else { head = -1 }
+            }
+            key[slot] = k
+            slot_of[k] = slot
+            prev[slot] = -1
+            next[slot] = head
+            if head >= 0 { prev[head] = slot } else { tail = slot }
+            head = slot
+        }
+    }
+    print(hits, head)
+}
