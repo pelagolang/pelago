@@ -41,20 +41,20 @@ jobs:
         shell: bash
         timeout-minutes: 35
         env:
-          BENCH_TIMEOUT: "90"
           CC: ${{ matrix.cc }}
           PELAGO_BUILD_FLAGS: ${{ matrix.flags }}
         run: |
           status=0
-          sh bench/compare.sh --json --checked --runs 5 > bench.txt 2> bench.log || status=$?
-          tail -30 bench.log
-          cat bench.txt
-          { echo '```'; grep -v '^{' bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          python3 bench/harness/run.py --runs 5 --warmups 1 --compile-runs 1 --timeout 90 --json bench.json --md bench.md \
+            2> >(tee bench.log >&2) || status=$?
+          wait
+          [ -f bench.md ] && cat bench.md >> "$GITHUB_STEP_SUMMARY"
           exit $status
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: bench-${{ matrix.name }}
           path: |
-            bench.txt
+            bench.json
+            bench.md
             bench.log

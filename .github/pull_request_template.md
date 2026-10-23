@@ -53,7 +53,7 @@ cargo test
 
 ### Performance (`perf`, or anything that can change generated code)
 
-Run `bench/compare.sh --runs 7` from the repository root. Goal: every row at or below **both** C `-O2` and Rust `-O`.
+Run `python3 bench/harness/run.py --runs 7` from the repository root (see `bench/design.md`). Goal: every row at or below **both** C `-O2` and Rust `-O`.
 
 | program | before (s) | after (s) | C -O2 (s) | Rust -O (s) | vs -O2 | vs Rust |
 |---|---|---|---|---|---|---|
