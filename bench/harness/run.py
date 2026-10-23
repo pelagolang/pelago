@@ -1,31 +1,36 @@
 #!/usr/bin/env python3
 """Benchmark harness: Pelago against C, C++ and Rust, with several compilers per language.
 
-Usage (from the repository root; needs python3 and at least one of gcc, clang, tcc, g++, clang++, rustc):
-    python3 compiler/benches/harness.py [--runs N] [--warmups N] [--compile-runs N] [--pin CPU]
-                                        [--json FILE] [--md FILE] [--site FILE] [--history FILE] [--size small,medium,large]
-                                        [--bless] [--timeout S] [name ...]
+Usage (from the repository root; needs python 3.11+ and at least one of gcc, clang, tcc, g++, clang++, rustc):
+    python3 bench/harness/run.py [--runs N] [--warmups N] [--compile-runs N] [--pin CPU] [--size small,medium,large]
+                                 [--save] [--json FILE] [--md FILE] [--site FILE] [--history FILE] [--bless]
+                                 [--timeout S] [name ...]
 
-For every program in benches/*.pel it builds one executable per available contestant, checks that all of them print the
-same output, then reports run time (median and minimum of N runs after discarded warm-ups, with the spread), compile time
-(median of M builds), binary size and peak memory. The goal row is Pelago at or below the best of all other rows.
+Each program is a directory bench/programs/<name>/ with pelago.pel, c.c, cpp.cpp, rs.rs (a twin may be missing), sizes.toml
+(optional) and expected*.txt (written by --bless). The harness builds one executable per available contestant, checks that all
+print the same output, then reports run time (median and minimum of N runs after discarded warm-ups, with the spread), compile
+time (median of M builds), binary size and peak memory. The goal row is Pelago at or below the best of all other rows.
 
-Contestants (a missing compiler just drops its rows; override a command with the environment variables CC, CXX, CLANG,
-CLANGXX, TCC, RUSTC):
+Contestants (a missing compiler just drops its rows; override a command with CC, CXX, CLANG, CLANGXX, TCC, RUSTC):
     pelago       target/release/pelago build --opt            (PELAGO_BUILD_FLAGS is added)
-    gcc-O0 gcc-O2 gcc-O2-trapv clang-O2 tcc          C twins in benches/c
-    g++-O2 clang++-O2                                 C++ twins in benches/cpp
-    rustc-O rustc-O-checked                           Rust twins in benches/rs
-Sizes: `sizes.json` lists, per program, text replacements that make the `small` (fits in cache) and `large` (does not) versions
-of the same source; `medium` is the committed source. Programs without an entry run at medium only. `expected/<name>.<size>.txt`
-holds the agreed output; `--bless` writes it from the reference row, and a later run compares every row to it.
-`--site FILE` writes the medium results in the `website/content/bench.json` format; `--history FILE` appends one JSON line.
+    gcc-O0 gcc-O2 gcc-O2-trapv clang-O2 tcc          c.c
+    g++-O2 clang++-O2                                 cpp.cpp
+    g++-O2-expert                                     cpp-expert.cpp (arena, flat tables; only where the program has one)
+    rustc-O rustc-O-checked                           rs.rs
 The `-trapv` and `-checked` rows stop on overflow like Pelago does; they are the like-for-like rows.
+Sizes: sizes.toml gives, per size, text replacements applied to every twin; `medium` is the committed source. Programs
+without a sizes.toml run at medium only. `--bless` writes expected.txt (expected.small.txt, ...) from the reference row (gcc -O2,
+else clang, g++, rustc); later runs compare every row to the file.
+`--save` writes bench/results/<date>-<machine>.json and bench/results.md. `--site FILE` writes the medium results in the
+`website/content/bench.json` format; `--history FILE` appends one JSON line. bench/toolchains.toml lists the pinned versions;
+the results say when a tool differs.
 """
-import argparse, json, math, os, platform, shutil, statistics, subprocess, sys, tempfile, time
+import argparse, json, tomllib, math, os, platform, shutil, statistics, subprocess, sys, tempfile, time
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.dirname(os.path.dirname(ROOT))
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)  # bench/
+REPO = os.path.dirname(ROOT)
+PROGRAMS = os.path.join(ROOT, "programs")
 EXE = ".exe" if os.name == "nt" else ""
 
 
@@ -39,7 +44,7 @@ def tool(env, *names):
 
 
 def contestants():
-    """(label, language dir, source suffix, command builder or None when the tool is missing, checked)"""
+    """(label, source file name in a program directory, command builder or None when the tool is missing, checked)"""
     cc, clang, tcc = tool("CC", "gcc"), tool("CLANG", "clang"), tool("TCC", "tcc")
     cxx, clangxx, rustc = tool("CXX", "g++"), tool("CLANGXX", "clang++"), tool("RUSTC", "rustc")
     pel = os.path.join(REPO, "target", "release", "pelago" + EXE)
@@ -52,16 +57,17 @@ def contestants():
         return (lambda src, out: [rustc, *opts, "-o", out, src]) if rustc else None
 
     return [
-        ("pelago", "", ".pel", lambda src, out: [pel, "build", "--opt", *flags, "-o", out, src], True),
-        ("gcc-O0", "c", ".c", c(cc, "-O0"), False),
-        ("gcc-O2", "c", ".c", c(cc, "-O2"), False),
-        ("gcc-O2-trapv", "c", ".c", c(cc, "-O2", "-ftrapv"), True),
-        ("clang-O2", "c", ".c", c(clang, "-O2"), False),
-        ("tcc", "c", ".c", c(tcc), False),
-        ("g++-O2", "cpp", ".cpp", c(cxx, "-O2", "-std=c++17"), False),
-        ("clang++-O2", "cpp", ".cpp", c(clangxx, "-O2", "-std=c++17"), False),
-        ("rustc-O", "rs", ".rs", rs("-O", "-C", "codegen-units=1", "-C", "overflow-checks=off"), False),
-        ("rustc-O-checked", "rs", ".rs", rs("-O", "-C", "codegen-units=1", "-C", "overflow-checks=on"), True),
+        ("pelago", "pelago.pel", lambda src, out: [pel, "build", "--opt", *flags, "-o", out, src], True),
+        ("gcc-O0", "c.c", c(cc, "-O0"), False),
+        ("gcc-O2", "c.c", c(cc, "-O2"), False),
+        ("gcc-O2-trapv", "c.c", c(cc, "-O2", "-ftrapv"), True),
+        ("clang-O2", "c.c", c(clang, "-O2"), False),
+        ("tcc", "c.c", c(tcc), False),
+        ("g++-O2", "cpp.cpp", c(cxx, "-O2", "-std=c++17"), False),
+        ("clang++-O2", "cpp.cpp", c(clangxx, "-O2", "-std=c++17"), False),
+        ("g++-O2-expert", "cpp-expert.cpp", c(cxx, "-O2", "-std=c++17"), False),
+        ("rustc-O", "rs.rs", rs("-O", "-C", "codegen-units=1", "-C", "overflow-checks=off"), False),
+        ("rustc-O-checked", "rs.rs", rs("-O", "-C", "codegen-units=1", "-C", "overflow-checks=on"), True),
     ]
 
 
@@ -117,6 +123,27 @@ def run_once(path, timeout, pin):
     return time.perf_counter() - start, None, out.replace(b"\r\n", b"\n")
 
 
+def peak_rss_kib(path, timeout):
+    """Peak resident KiB of one extra run. Linux: poll VmHWM in /proc (ru_maxrss would be inflated by this Python process, which
+    the child inherits at fork); elsewhere ru_maxrss from run_once."""
+    if not os.path.exists("/proc/self/status"):
+        return None
+    p = subprocess.Popen([path], stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL)
+    best, end = 0, time.time() + timeout
+    while p.poll() is None and time.time() < end:
+        try:
+            with open(f"/proc/{p.pid}/status") as f:
+                for line in f:
+                    if line.startswith("VmHWM:"):
+                        best = max(best, int(line.split()[1]))
+        except OSError:
+            pass
+        time.sleep(0.0005)
+    p.kill()
+    p.wait()
+    return best or None
+
+
 def measure(path, runs, warmups, timeout, pin):
     for _ in range(warmups):
         run_once(path, timeout, pin)
@@ -126,6 +153,9 @@ def measure(path, runs, warmups, timeout, pin):
         times.append(s)
         if r is not None:
             rss.append(r)
+    hwm = peak_rss_kib(path, timeout)
+    if hwm is not None:
+        rss = [hwm]
     med = statistics.median(times)
     spread = (max(times) - min(times)) / med if med else 0.0
     return {"median": med, "min": min(times), "spread": spread, "rss_kib": max(rss) if rss else None, "text": text}
@@ -159,7 +189,7 @@ def sized_source(src, name, size, repl, tmp):
             applied += 1
     if not applied:
         raise SystemExit(f"sizes.json: no replacement for {name} {size} applies to {src}")
-    d = os.path.join(tmp, "src", size, os.path.basename(os.path.dirname(src)) or "pel")
+    d = os.path.join(tmp, "src", size, name)
     os.makedirs(d, exist_ok=True)
     out = os.path.join(d, os.path.basename(src))
     with open(out, "w") as f:
@@ -171,13 +201,24 @@ def geomean(xs):
     return math.exp(sum(math.log(x) for x in xs) / len(xs)) if xs else None
 
 
+def check_pins(env):
+    """Names of tools whose version string does not contain the version pinned in bench/toolchains.toml."""
+    path = os.path.join(ROOT, "toolchains.toml")
+    if not os.path.exists(path):
+        return ""
+    with open(path, "rb") as f:
+        pins = tomllib.load(f).get("pinned", {})
+    drift = [f"{k} (pinned {v})" for k, v in pins.items() if v and env.get(k) and v not in env[k]]
+    return ", ".join(drift)
+
+
 def run_size(size, names, cons, repl, a, tmp):
     """Build, check and time every program at one size; returns {name: {label: result}} and the list of problems."""
     results, bad = {}, []
     for name in names:
         row = {}
-        for label, lang, suffix, mk, _checked in cons:
-            src = os.path.join(ROOT, lang, name + suffix)
+        for label, fname, mk, _checked in cons:
+            src = os.path.join(PROGRAMS, name, fname)
             if mk is None or not os.path.exists(src):
                 continue
             src = sized_source(src, name, size, repl, os.path.join(tmp, size))
@@ -200,10 +241,9 @@ def run_size(size, names, cons, repl, a, tmp):
             row[label] = m
         if not row:
             continue
-        exp_path = os.path.join(ROOT, "expected", f"{name}.{size}.txt")
+        exp_path = os.path.join(PROGRAMS, name, "expected.txt" if size == "medium" else f"expected.{size}.txt")
         ref = next((row[k]["text"] for k in ("gcc-O2", "clang-O2", "g++-O2", "rustc-O") if k in row and "text" in row[k]), None)
         if a.bless and ref is not None:
-            os.makedirs(os.path.dirname(exp_path), exist_ok=True)
             with open(exp_path, "wb") as f:
                 f.write(ref)
         elif os.path.exists(exp_path):
@@ -248,6 +288,15 @@ def report(results, labels, a, size):
     gm = geomean(ratios)
     if gm:
         emit(f"\nGeometric mean of pelago / best other row: {gm:.2f}x; at or below every other row on {below} of {len(ratios)} programs.")
+    emit("\nCost of overflow checks (checked / unchecked run time; Pelago always checks) and Pelago against the checked rows\n")
+    emit("| program | gcc -ftrapv / gcc | rustc checked / unchecked | pelago / gcc -ftrapv | pelago / rustc checked |")
+    emit("|---|---:|---:|---:|---:|")
+    def rat(row, x, y):
+        a, b = row.get(x, {}).get("median"), row.get(y, {}).get("median")
+        return f"{a / b:.2f}x" if a and b else "-"
+    for name, row in results.items():
+        emit(f"| {name} | {rat(row, 'gcc-O2-trapv', 'gcc-O2')} | {rat(row, 'rustc-O-checked', 'rustc-O')} | "
+             f"{rat(row, 'pelago', 'gcc-O2-trapv')} | {rat(row, 'pelago', 'rustc-O-checked')} |")
     for title, key in [("Compile time, median seconds", "compile"), ("Binary size, KiB", "size"), ("Peak memory, MiB", "rss_kib")]:
         emit(f"\n{title}\n")
         emit("| program | " + " | ".join(labels) + " |")
@@ -291,6 +340,7 @@ def main():
     ap.add_argument("--pin", type=int, default=None, help="run on this CPU with taskset (Linux)")
     ap.add_argument("--size", default="medium", help="comma list of small, medium, large (default medium)")
     ap.add_argument("--bless", action="store_true", help="write expected/<name>.<size>.txt from the reference row")
+    ap.add_argument("--save", action="store_true", help="write bench/results/<date>-<machine>.json and bench/results.md")
     ap.add_argument("--json", metavar="FILE")
     ap.add_argument("--md", metavar="FILE")
     ap.add_argument("--site", metavar="FILE", help="write the medium results as website/content/bench.json")
@@ -298,12 +348,17 @@ def main():
     a = ap.parse_args()
 
     sizes = [s.strip() for s in a.size.split(",")]
-    names = a.names or sorted(f[:-4] for f in os.listdir(ROOT) if f.endswith(".pel"))
-    with open(os.path.join(ROOT, "sizes.json")) as f:
-        repl = {k: v for k, v in json.load(f).items() if not k.startswith("_")}
+    names = a.names or sorted(d for d in os.listdir(PROGRAMS) if os.path.exists(os.path.join(PROGRAMS, d, "pelago.pel")))
+    repl = {}
+    for n in names:
+        sp = os.path.join(PROGRAMS, n, "sizes.toml")
+        if os.path.exists(sp):
+            with open(sp, "rb") as f:
+                repl[n] = {sz: v["replace"] for sz, v in tomllib.load(f).items()}
     subprocess.run(["cargo", "build", "--release", "-q"], cwd=REPO, check=True)
     cons = contestants()
     env = environment()
+    env["toolchain_drift"] = check_pins(env) or None
     all_results, all_bad, parts = {}, [], []
     with tempfile.TemporaryDirectory() as tmp:
         for size in sizes:
@@ -320,11 +375,17 @@ def main():
         parts.append("OUTPUT DIFFERS: " + ", ".join(all_bad))
     text = "\n\n".join(parts)
     print(text)
+    raw = {"environment": env, "runs": a.runs, "warmups": a.warmups, "results": all_results}
+    if a.save:
+        os.makedirs(os.path.join(ROOT, "results"), exist_ok=True)
+        machine = (env.get("machine") or "machine").replace(" ", "-")
+        a.json = a.json or os.path.join(ROOT, "results", f"{env['date']}-{machine}-{env.get('os', '').split('-')[0].lower()}.json")
+        a.md = a.md or os.path.join(ROOT, "results.md")
     if a.json:
         with open(a.json, "w") as f:
-            json.dump({"environment": env, "runs": a.runs, "warmups": a.warmups, "results": all_results}, f, indent=1)
+            json.dump(raw, f, indent=1)
     if a.md:
-        head = ["# Benchmark results", "", "Generated by `compiler/benches/harness.py`. Do not edit by hand.", "", "## Environment", "",
+        head = ["# Benchmark results", "", "Generated by `bench/harness/run.py`. Do not edit by hand.", "", "## Environment", "",
                 "| | |", "|---|---|"] + [f"| {k} | {v} |" for k, v in env.items() if v] + ["", "## Results", ""]
         with open(a.md, "w") as f:
             f.write("\n".join(head) + "\n" + text + "\n")

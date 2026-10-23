@@ -1,0 +1,23 @@
+fn main() {
+    const n = 1024
+    var a: [int] = []
+    var b: [int] = []
+    var s = 5
+    for i in 0..n * n {
+        s = (s * 1103515245 + 12345) & 2147483647
+        a.push!(s & 255)
+        b.push!(0)
+    }
+    for pass in 0..4 {
+        for y in 1..n - 1 {
+            for x in 1..n - 1 {
+                const i = y * n + x
+                b[i] = (a[i - n - 1] + a[i - n] + a[i - n + 1] + a[i - 1] + a[i] + a[i + 1] + a[i + n - 1] + a[i + n] + a[i + n + 1]) / 9
+            }
+        }
+        for i in n..n * n - n { a[i] = b[i] }
+    }
+    var t = 0
+    for i in 0..n * n { t += a[i] * (i & 7) }
+    print(t)
+}

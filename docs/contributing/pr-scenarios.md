@@ -29,7 +29,7 @@ Branch `claude/perf/const-division`, title `perf(native): divide by constants wi
 > Signed and unsigned are separate paths; `i64::MIN / -1` is left alone.
 >
 > ## Evidence
-> `compiler/benches/compare.sh --runs 7`, x86-64 Linux, gcc 13.2, rustc 1.84:
+> `bench/compare.sh --runs 7`, x86-64 Linux, gcc 13.2, rustc 1.84:
 >
 > | program | before (s) | after (s) | C -O2 (s) | Rust -O (s) | vs -O2 | vs Rust |
 > |---|---|---|---|---|---|---|

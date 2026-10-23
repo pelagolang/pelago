@@ -1,0 +1,38 @@
+enum expr {
+    num(n: int)
+    x
+    add(box<expr>, box<expr>)
+    mul(box<expr>, box<expr>)
+    neg(box<expr>)
+}
+
+fn build(d: int, s: int) -> expr {
+    if d == 0 {
+        if s & 1 == 1 { expr.x } else { expr.num(n: s & 15) }
+    } else {
+        const l = (s * 1103515245 + 12345) & 2147483647
+        const r = (s * 69069 + 1) & 2147483647
+        switch s % 3 {
+            case 0: expr.add(box(build(d - 1, l)), box(build(d - 1, r)))
+            case 1: expr.mul(box(build(d - 1, l)), box(build(d - 1, r)))
+            default: expr.neg(box(build(d - 1, l)))
+        }
+    }
+}
+
+fn eval(e: expr, v: int) -> int {
+    switch e {
+        case .num(n): n
+        case .x: v & 1048575
+        case .add(a, b): (eval(a.get(), v) + eval(b.get(), v)) & 1048575
+        case .mul(a, b): (eval(a.get(), v) * eval(b.get(), v)) & 1048575
+        case .neg(a): 1048575 - eval(a.get(), v)
+    }
+}
+
+fn main() {
+    const e = build(14, 7)
+    var t = 0
+    for v in 0..3000 { t = (t + eval(e, v)) & 1048575 }
+    print(t)
+}

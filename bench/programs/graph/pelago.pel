@@ -1,0 +1,33 @@
+fn main() {
+    const n = 200000
+    var adj: [int] = []
+    var s = 99
+    for i in 0..n * 4 {
+        s = (s * 1103515245 + 12345) & 2147483647
+        adj.push!(s % n)
+    }
+    var dist: [int] = []
+    var queue: [int] = []
+    for i in 0..n {
+        dist.push!(-1)
+        queue.push!(0)
+    }
+    var head = 0
+    var tail = 1
+    dist[0] = 0
+    while head < tail {
+        const u = queue[head]
+        head += 1
+        for k in 0..4 {
+            const v = adj[u * 4 + k]
+            if dist[v] < 0 {
+                dist[v] = dist[u] + 1
+                queue[tail] = v
+                tail += 1
+            }
+        }
+    }
+    var t = 0
+    for i in 0..n { t += dist[i] + 1 }
+    print(tail, t)
+}

@@ -46,7 +46,7 @@ jobs:
           PELAGO_BUILD_FLAGS: ${{ matrix.flags }}
         run: |
           status=0
-          sh compiler/benches/compare.sh --json --checked --runs 5 > bench.txt 2> bench.log || status=$?
+          sh bench/compare.sh --json --checked --runs 5 > bench.txt 2> bench.log || status=$?
           tail -30 bench.log
           cat bench.txt
           { echo '```'; grep -v '^{' bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
