@@ -108,12 +108,11 @@ The TextMate grammar in `editors/textmate/` is generated from the compiler's key
 
 ## Speed
 
-The native backend is held to a hard goal: every program in the benchmark suite at or below both C at `-O2` and Rust at `-O`, without giving up overflow traps. The suite is in [compiler/benches/](compiler/benches), each Pelago program next to a C and a Rust twin that print the same output.
+The native backend is held to a hard goal: every program in the benchmark suite at or below both C at `-O2` and Rust at `-O`, without giving up overflow traps. The suite is in [bench/](bench), each Pelago program next to C, C++ and Rust twins that print the same output.
 
 ```
-sh bench/compare.sh            # needs gcc, python3 and optionally rustc; run from the repository root
-sh bench/compare.sh --checked  # also compare against C -O2 -ftrapv and Rust with overflow checks on
-sh bench/compare.sh --json --runs 7 collatz sieve
+python3 bench/harness/run.py                       # needs python 3.11+, gcc and optionally g++, clang, tcc, rustc; run from the repository root
+python3 bench/harness/run.py --runs 7 --size small,medium,large collatz sieve
 ```
 
 A snapshot (best of 5, one container, native `--opt`): geometric mean 1.04x of C `-O2` and 1.09x of Rust, at or below C `-O2` on 8 of 16 programs (the five newest, covering sorting, strings, `switch`, structs in lists and `result` paths, are the weakest). Numbers move with every performance PR; the work plan is [docs/plans/a11-work-items.md](docs/plans/a11-work-items.md), and the backend is described in [docs/design/backend.md](docs/design/backend.md). CI also runs the suite on Windows.

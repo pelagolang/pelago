@@ -39,22 +39,18 @@ jobs:
       - name: Run the suite
         shell: bash
         timeout-minutes: 25
-        env:
-          BENCH_TIMEOUT: "60"
         run: |
           status=0
-          sh bench/compare.sh --json --runs 5 > bench-windows.txt 2> bench-windows.log || status=$?
-          cat bench-windows.log
-          cat bench-windows.txt
-          grep -v '^{' bench-windows.txt > bench-windows-table.txt || true
-          grep '^{' bench-windows.txt > bench-windows.jsonl || true
-          { echo '```'; cat bench-windows-table.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          python3 bench/harness/run.py --runs 3 --warmups 1 --compile-runs 1 --timeout 60 --json bench-windows.json --md bench-windows.md \
+            2> >(tee bench-windows.log >&2) || status=$?
+          wait
+          [ -f bench-windows.md ] && cat bench-windows.md >> "$GITHUB_STEP_SUMMARY"
           exit $status
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: bench-windows
           path: |
-            bench-windows.txt
+            bench-windows.json
+            bench-windows.md
             bench-windows.log
-            bench-windows.jsonl
