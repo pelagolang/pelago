@@ -1,0 +1,63 @@
+// Brainfuck interpreter after kostya/benchmarks brainfuck/bf.c (MIT, Copyright (c) 2014 Konstantin Makarchev); program: brainfuck/bench.b
+#include <cstdio>
+#include <string>
+#include <vector>
+
+struct op {
+    enum kind { inc, move, loop, print } type;
+    long long offset = 0;
+    std::vector<op> body;
+};
+
+static std::vector<op> parse(const std::string &code, size_t &pos) {
+    std::vector<op> ops;
+    while (pos < code.size()) {
+        char c = code[pos++];
+        switch (c) {
+        case '+': ops.push_back({op::inc, 1, {}}); break;
+        case '-': ops.push_back({op::inc, -1, {}}); break;
+        case '>': ops.push_back({op::move, 1, {}}); break;
+        case '<': ops.push_back({op::move, -1, {}}); break;
+        case '.': ops.push_back({op::print, 0, {}}); break;
+        case '[': {
+            auto body = parse(code, pos);
+            ops.push_back({op::loop, 0, std::move(body)});
+            break;
+        }
+        case ']': return ops;
+        default: break;
+        }
+    }
+    return ops;
+}
+
+static void eval(const std::vector<op> &ops, std::vector<long long> &tape, size_t &pos, long long &sum1, long long &sum2) {
+    for (const op &o : ops) {
+        switch (o.type) {
+        case op::inc: tape[pos] += o.offset; break;
+        case op::move:
+            pos += o.offset;
+            if (pos >= tape.size()) tape.resize(tape.size() * 2, 0);
+            break;
+        case op::loop:
+            while (tape[pos] > 0) eval(o.body, tape, pos, sum1, sum2);
+            break;
+        case op::print:
+            sum1 = (sum1 + tape[pos]) % 255;
+            sum2 = (sum2 + sum1) % 255;
+            break;
+        }
+    }
+}
+
+int main() {
+    const std::string src = ">++[<+++++++++++++>-]<[[>+>+<<-]>[<+>-]++++++++[>++++++++<-]>.[-]<<>++++++++++[>++++++++++[>++++++++++[>++++++++++[>++++++++++[>++++++++++[>++++++++++[-]<-]<-]<-]<-]<-]<-]<-]++++++++++.";
+    size_t pos = 0;
+    auto ops = parse(src, pos);
+    std::vector<long long> tape(1, 0);
+    size_t p = 0;
+    long long sum1 = 0, sum2 = 0;
+    eval(ops, tape, p, sum1, sum2);
+    std::printf("%lld\n", (sum2 << 8) | sum1);
+    return 0;
+}

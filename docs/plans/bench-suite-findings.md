@@ -4,7 +4,7 @@ Written 2026-10-23 while adding the programs of the suites that goose's `bench/`
 
 ## Where the programs come from
 
-Every program below is written from the public description of the problem (algorithm, sizes, checksum), never copied: the `bddicken/languages` repository has no licence file, and the suites are large. Each program has the four twins (`pelago.pel`, `c.c`, `cpp.cpp`, `rs.rs`), prints one agreed output and has `small` / `medium` / `large` sizes. Output is integers or `%.6f` floats so every language prints the same text.
+Programs from `bddicken/languages` (no licence file) are written from the public description of the problem (algorithm, sizes, checksum), never copied. Programs from `kostya/benchmarks` (MIT) follow its sources with attribution. Each program has the four twins (`pelago.pel`, `c.c`, `cpp.cpp`, `rs.rs`), prints one agreed output and has `small` / `medium` / `large` sizes. Output is integers or `%.6f` floats so every language prints the same text.
 
 | Suite (as used in goose `bench/`) | Benchmark | Status in `bench/programs/` |
 |---|---|---|
@@ -19,9 +19,13 @@ Every program below is written from the public description of the problem (algor
 | plb2 | matmul | already `matmul` (integer; the suite's is float 1500x1500) |
 | plb2 | nqueen | `nqueen` (bit masks) |
 | plb2 | sudoku, bedcov | not added yet (longer programs) |
-| kostya2 | brainfuck, base64, primes | `brainfuck`, `base64` (hand-written codec), `primes` (sieve of Atkin, digit trie, breadth-first walk) |
-| kostya2 | json (typed and DOM), matmul (float) | not added yet |
-| kostya (50 benchmarks) | all | **not added**: the list lives in the suite's own `run.js` / `test.js`, which cannot be read without cloning it |
+| kostya (`kostya/benchmarks`, MIT) | brainfuck `bench.b` and `mandel.b` | `kostya_bf_bench`, `kostya_bf_mandel` (op-tree interpreter after `bf.c`, the real `.b` programs; mandel takes about 20 s per run, so it carries a `heavy` marker and runs only when named or with `--heavy`) |
+| kostya | base64 | `base64` (131072 bytes of `a`, padding, fresh buffers; 256 tries, the suite uses 8192) |
+| kostya | matmul | `kostya_matmul` (float, transposed second matrix; `calc(400)`, the suite uses 1500) |
+| kostya | primes | `primes` (sieve of Atkin to 5,000,000, digit trie, breadth-first walk from prefix 32338, sorted) |
+| kostya | json | `kostya_json` (20000 records built in memory; hand-written parser into a tree; averages x, y, z; the suite parses 524288 records from a file) |
+
+The kostya repository has exactly these five tests (goose's `bench/kostya/README.md` talks about a 50-benchmark suite and points to a repository called LangArena; that is a different project from `kostya/benchmarks` and I did not read it). It is MIT licensed, so the Brainfuck programs and the structure of each test are used with attribution in the file headers.
 | goose's own | sum, push, rng, tree, strlist, words, records, particles, scene, sexp, calc, respond, bintrees, blur, graph, interp, lru | the generic ones exist (`loop_sum`, `list_sum`, `wordfreq`, `structlist`, `bintrees`, `blur`, `graph`, `interp`, `lru`); `scene`, `sexp`, `calc`, `respond`, `particles` are goose-specific designs and not added |
 
 Not yet blessed or run for all three sizes: the harness run was stopped on Dennis's request. `expected.txt` (medium) of every new program was checked against the C twin; `small` / `large` files exist only where the stopped run got to them, and the harness falls back to the reference row for the rest.
@@ -32,7 +36,7 @@ Not yet blessed or run for all three sizes: the harness run was stopped on Denni
 2. `str.chars()` builds a full list before iterating (seen in `lexer`, 5x behind at the large size).
 3. `levenshtein` is 4x behind gcc and clang at medium: two heap rows per call and bounds checks in the inner loop.
 4. `loops` is 1.7x behind clang and rustc and level with gcc -O2 (they vectorise or strength-reduce `j % u`).
-5. `brainfuck`, `base64`, `knucleotide`, `primes`, `nqueen`, `fasta`: run and agree with C. No timing table was collected for them.
+5. `base64`, `knucleotide`, `primes`, `nqueen`, `fasta`, `kostya_*`: run and agree with C. No timing table was collected for them.
 
 ## Features Pelago lacks (found while writing the twins)
 
@@ -40,6 +44,8 @@ Needed to port the remaining suite programs, in the order they would unlock work
 
 | Missing | Unlocks |
 |---|---|
+| `loop` and `obj` are reserved words, so an enum case or field cannot be called that (the kostya interpreter's `loop` op became `again`, the JSON `obj` case `dict`) | none: only a naming note |
+| Float printing trims trailing zeros (`4.19036`), so the C, C++ and Rust twins must trim the same way | a `%.6f`-style formatter |
 | Big integers in the library (`bigint`) | edigits, pidigits, secp256k1 |
 | Regular expressions in the library | regex-redux |
 | Coroutines or channels (concurrency design is on paper only) | coro-prime-sieve |

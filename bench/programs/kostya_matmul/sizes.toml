@@ -1,0 +1,6 @@
+# Replacements applied to the source text of every twin; the committed source is the medium size.
+[small]
+replace = [["calc(400)", "calc(200)"]]
+
+[large]
+replace = [["calc(400)", "calc(800)"]]

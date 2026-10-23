@@ -1,5 +1,58 @@
+///* After kostya/benchmarks base64 (MIT, Copyright (c) 2014 Konstantin Makarchev): encode and decode a 128 KiB block into newly allocated buffers, with '=' padding. *///
+fn encode(src: [int], table: [int]) -> [int] {
+    var out: [int] = []
+    const full = src.len() - src.len() % 3
+    var i = 0
+    while i < full {
+        const v = (src[i] << 16) | (src[i + 1] << 8) | src[i + 2]
+        out.push!(table[(v >> 18) & 63])
+        out.push!(table[(v >> 12) & 63])
+        out.push!(table[(v >> 6) & 63])
+        out.push!(table[v & 63])
+        i += 3
+    }
+    const rest = src.len() % 3
+    if rest == 1 {
+        const v = src[i] << 16
+        out.push!(table[(v >> 18) & 63])
+        out.push!(table[(v >> 12) & 63])
+        out.push!(61)
+        out.push!(61)
+    } else if rest == 2 {
+        const v = (src[i] << 16) | (src[i + 1] << 8)
+        out.push!(table[(v >> 18) & 63])
+        out.push!(table[(v >> 12) & 63])
+        out.push!(table[(v >> 6) & 63])
+        out.push!(61)
+    }
+    return out
+}
+
+fn decode(src: [int], rev: [int]) -> [int] {
+    var size = src.len()
+    while size > 0 && (src[size - 1] == 61 || src[size - 1] == 10 || src[size - 1] == 13) { size -= 1 }
+    var out: [int] = []
+    var i = 0
+    while i + 4 <= size {
+        const v = (rev[src[i]] << 18) | (rev[src[i + 1]] << 12) | (rev[src[i + 2]] << 6) | rev[src[i + 3]]
+        out.push!((v >> 16) & 255)
+        out.push!((v >> 8) & 255)
+        out.push!(v & 255)
+        i += 4
+    }
+    const rest = size - i
+    if rest == 2 {
+        const v = (rev[src[i]] << 18) | (rev[src[i + 1]] << 12)
+        out.push!((v >> 16) & 255)
+    } else if rest == 3 {
+        const v = (rev[src[i]] << 18) | (rev[src[i + 1]] << 12) | (rev[src[i + 2]] << 6)
+        out.push!((v >> 16) & 255)
+        out.push!((v >> 8) & 255)
+    }
+    return out
+}
+
 fn main() {
-    const n = 3000000
     var table: [int] = []
     for i in 0..26 { table.push!(65 + i) }
     for i in 0..26 { table.push!(97 + i) }
@@ -9,36 +62,15 @@ fn main() {
     var rev: [int] = []
     for i in 0..256 { rev.push!(0) }
     for i in 0..64 { rev[table[i]] = i }
-    var data: [int] = []
-    var s = 1
-    for i in 0..n {
-        s = (s * 1103515245 + 12345) & 2147483647
-        data.push!((s >> 8) & 255)
-    }
-    var check = 0
-    var bad = 0
-    for round in 0..3 {
-        var enc: [int] = []
-        var i = 0
-        while i < n {
-            const v = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2]
-            enc.push!(table[(v >> 18) & 63])
-            enc.push!(table[(v >> 12) & 63])
-            enc.push!(table[(v >> 6) & 63])
-            enc.push!(table[v & 63])
-            i += 3
-        }
-        for c in enc { check = (check * 31 + c) & 2147483647 }
-        var j = 0
-        i = 0
-        while j < enc.len() {
-            const v = (rev[enc[j]] << 18) | (rev[enc[j + 1]] << 12) | (rev[enc[j + 2]] << 6) | rev[enc[j + 3]]
-            if data[i] != (v >> 16) & 255 { bad += 1 }
-            if data[i + 1] != (v >> 8) & 255 { bad += 1 }
-            if data[i + 2] != v & 255 { bad += 1 }
-            i += 3
-            j += 4
-        }
-    }
-    print(check, bad)
+    var text: [int] = []
+    for i in 0..131072 { text.push!(97) }
+    const encoded = encode(text, table)
+    const decoded = decode(encoded, rev)
+    var ok = 0
+    if decoded.len() == text.len() { ok = 1 }
+    var s_encoded = 0
+    var s_decoded = 0
+    for t in 0..256 { s_encoded += encode(text, table).len() }
+    for t in 0..256 { s_decoded += decode(encoded, rev).len() }
+    print(ok, s_encoded, s_decoded)
 }

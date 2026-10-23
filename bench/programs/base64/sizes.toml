@@ -1,6 +1,7 @@
 # Replacements applied to the source text of every twin; the committed source is the medium size.
+# kostya runs 8192 tries; medium is 256.
 [small]
-replace = [["n = 3000000", "n = 300000"]]
+replace = [["for t in 0..256", "for t in 0..32"], ["t < 256", "t < 32"], ["for _ in 0..256", "for _ in 0..32"]]
 
 [large]
-replace = [["n = 3000000", "n = 12000000"]]
+replace = [["for t in 0..256", "for t in 0..2048"], ["t < 256", "t < 2048"], ["for _ in 0..256", "for _ in 0..2048"]]

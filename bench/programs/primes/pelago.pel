@@ -1,5 +1,7 @@
+///* After kostya/benchmarks primes (MIT, Copyright (c) 2014 Konstantin Makarchev): sieve of Atkin, digit trie, breadth-first walk from a prefix, sorted result. *///
 fn main() {
-    const limit = 2000000
+    const limit = 5000000
+    const prefix = 32338
     var sieve: [int] = []
     for i in 0..limit + 1 { sieve.push!(0) }
     var x = 1
@@ -17,10 +19,10 @@ fn main() {
         x += 1
     }
     var r = 5
-    while r * r <= limit {
+    while r * r < limit {
         if sieve[r] == 1 {
             var k = r * r
-            while k <= limit {
+            while k < limit {
                 sieve[k] = 0
                 k += r * r
             }
@@ -28,14 +30,12 @@ fn main() {
         r += 1
     }
     var child: [int] = []
-    var cnt: [int] = []
+    var term: [int] = []
     for d in 0..10 { child.push!(0) }
-    cnt.push!(0)
+    term.push!(0)
     var nodes = 1
-    var primes = 0
     for p in 2..limit + 1 {
         if p == 2 || p == 3 || (p >= 5 && sieve[p] == 1) {
-            primes += 1
             var d = 1
             while d * 10 <= p { d *= 10 }
             var node = 0
@@ -44,25 +44,43 @@ fn main() {
                 if child[node * 10 + digit] == 0 {
                     child[node * 10 + digit] = nodes
                     for e in 0..10 { child.push!(0) }
-                    cnt.push!(0)
+                    term.push!(0)
                     nodes += 1
                 }
                 node = child[node * 10 + digit]
-                cnt[node] += 1
                 d /= 10
+            }
+            term[node] = 1
+        }
+    }
+    var head = 0
+    var d = 1
+    while d * 10 <= prefix { d *= 10 }
+    while d > 0 && head >= 0 {
+        const next = child[head * 10 + (prefix / d) % 10]
+        head = next == 0 ? -1 : next
+        d /= 10
+    }
+    var found: [int] = []
+    if head >= 0 {
+        var queue: [int] = [head]
+        var values: [int] = [prefix]
+        var at = 0
+        while at < queue.len() {
+            const node = queue[at]
+            const value = values[at]
+            at += 1
+            if term[node] == 1 { found.push!(value) }
+            for digit in 0..10 {
+                if child[node * 10 + digit] != 0 {
+                    queue.push!(child[node * 10 + digit])
+                    values.push!(value * 10 + digit)
+                }
             }
         }
     }
-    var queue: [int] = [0]
-    var head = 0
-    var check = 0
-    while head < queue.len() {
-        const node = queue[head]
-        head += 1
-        check = (check * 31 + cnt[node]) & 2147483647
-        for digit in 0..10 {
-            if child[node * 10 + digit] != 0 { queue.push!(child[node * 10 + digit]) }
-        }
-    }
-    print(primes, nodes, check)
+    found.sort!()
+    var sum = 0
+    for v in found { sum += v }
+    if found.len() > 0 { print(found.len(), found[0], found[found.len() - 1], sum) } else { print(0) }
 }
