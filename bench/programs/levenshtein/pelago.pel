@@ -1,0 +1,40 @@
+fn dist(a: [int], b: [int]) -> int {
+    var prev: [int] = []
+    var cur: [int] = []
+    for j in 0..b.len() + 1 {
+        prev.push!(j)
+        cur.push!(0)
+    }
+    for i in 0..a.len() {
+        cur[0] = i + 1
+        for j in 0..b.len() {
+            const cost = if a[i] == b[j] { 0 } else { 1 }
+            var best = prev[j] + cost
+            if prev[j + 1] + 1 < best { best = prev[j + 1] + 1 }
+            if cur[j] + 1 < best { best = cur[j] + 1 }
+            cur[j + 1] = best
+        }
+        for j in 0..b.len() + 1 { prev[j] = cur[j] }
+    }
+    return prev[b.len()]
+}
+
+fn main() {
+    var words: [[int]] = []
+    var s = 7
+    for w in 0..600 {
+        s = (s * 1103515245 + 12345) & 2147483647
+        const len = 8 + (s >> 8) % 40
+        var word: [int] = []
+        for k in 0..len {
+            s = (s * 1103515245 + 12345) & 2147483647
+            word.push!(97 + (s >> 8) % 26)
+        }
+        words.push!(sink word)
+    }
+    var total = 0
+    for i in 0..600 {
+        for j in i + 1..600 { total += dist(words[i], words[j]) }
+    }
+    print(total)
+}

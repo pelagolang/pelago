@@ -1,0 +1,17 @@
+fn main() {
+    const im = 139968
+    const ia = 3877
+    const ic = 29573
+    var codes: [int] = [97, 99, 103, 116, 66, 68, 72, 75, 77, 78, 82, 83, 86, 87, 89]
+    var cum: [int] = [270, 390, 510, 780, 800, 820, 840, 860, 880, 900, 920, 940, 960, 980, 1000]
+    var seed = 42
+    var sum = 0
+    for i in 0..5000000 {
+        seed = (seed * ia + ic) % im
+        const r = seed * 1000
+        var k = 0
+        while r >= im * cum[k] { k += 1 }
+        sum = (sum * 31 + codes[k]) & 2147483647
+    }
+    print(sum, seed)
+}

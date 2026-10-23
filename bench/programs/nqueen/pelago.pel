@@ -1,0 +1,17 @@
+fn solve(n: int, cols: int, d1: int, d2: int) -> int {
+    const all = (1 << n) - 1
+    if cols == all { return 1 }
+    var count = 0
+    var avail = all ^ (cols | d1 | d2)
+    while avail != 0 {
+        const bit = avail & -avail
+        avail = avail ^ bit
+        count += solve(n, cols | bit, ((d1 | bit) << 1) & all, (d2 | bit) >> 1)
+    }
+    return count
+}
+
+fn main() {
+    const n = 14
+    print(solve(n, 0, 0, 0))
+}

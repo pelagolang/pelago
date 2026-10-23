@@ -51,7 +51,7 @@ def contestants():
     flags = os.environ.get("PELAGO_BUILD_FLAGS", "").split()
 
     def c(tool_, *opts):
-        return (lambda src, out: [tool_, *opts, "-o", out, src]) if tool_ else None
+        return (lambda src, out: [tool_, *opts, "-o", out, src, *([] if os.name == "nt" else ["-lm"])]) if tool_ else None
 
     def rs(*opts):
         return (lambda src, out: [rustc, *opts, "-o", out, src]) if rustc else None
