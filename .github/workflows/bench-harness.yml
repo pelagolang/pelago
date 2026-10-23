@@ -13,6 +13,9 @@ jobs:
         include:
           - { name: linux-x86, os: ubuntu-24.04 }
           - { name: linux-arm, os: ubuntu-24.04-arm }
+          # Blacksmith bare-metal runners: need the Blacksmith GitHub App installed on the organisation.
+          - { name: blacksmith-x86, os: blacksmith-4vcpu-ubuntu-2404 }
+          - { name: blacksmith-arm, os: blacksmith-4vcpu-ubuntu-2404-arm }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:

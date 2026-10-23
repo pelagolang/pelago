@@ -43,6 +43,8 @@ Rows: `pelago`, `gcc-O0`, `gcc-O2`, `gcc-O2-trapv`, `clang-O2`, `tcc`, `g++-O2`,
 | Program | Why it is here |
 |---|---|
 | collatz, divmod, fib38, tak, loop_sum, floatloop | scalar codegen: division by constants, calls, loops, floats |
+| crc32, histogram, mandelbrot, fannkuch | table lookups with shifts and xors, counting into a small array, fixed-point loops with signed division, permutation shuffling with array swaps |
+| lru, lexer | linked structure in index arrays (the "non-nested lifetime" case), character scanning over a big string |
 | sieve, list_sum, sortwork | arrays, growth, library sort |
 | strbuild, strsplit, wordfreq | strings and hash maps |
 | structlist, structloop, switchwork, resultpath | structs, enums with `switch`, error results |
@@ -53,7 +55,7 @@ Rows: `pelago`, `gcc-O0`, `gcc-O2`, `gcc-O2-trapv`, `clang-O2`, `tcc`, `g++-O2`,
 | blur | 3x3 box blur over a flat image (the vectoriser's case) |
 | matmul | integer matrix multiply (strided access) |
 
-Still to add: LRU cache, a records/JSON-like workload, a lexer/parser run, SIMD-friendly float kernels, a self-hosting run of our own compiler stages.
+Still to add: a records/JSON-like workload, a parser run, SIMD-friendly float kernels, a self-hosting run of our own compiler stages.
 
 ## Sizes, expected output, results page
 
@@ -66,6 +68,7 @@ Still to add: LRU cache, a records/JSON-like workload, a lexer/parser run, SIMD-
 
 - Medium size: Pelago is within about 1.2x of the best other row on `interp` and `wordfreq` and ahead on `mapwork`, but about 2.3x gcc and 7x the arena version on `bintrees`, about 2x on `matmul` and 1.7x on `graph`.
 - Large size (cache-busting) is where the gaps open: `mapwork` 8x, `list_sum` 7.6x (growing a 20M-element list), `strsplit` 4.5x, `graph` 3.1x, `blur` 2.9x, `sortwork` 2.5x against the best row. Geometric mean 2.55x, at or below every other row on 2 of 17 programs.
+- Six more programs (large, 1 run): `lexer` 5.4x (the `chars()` iterator builds a list of all characters first), `fannkuch` and `lru` about 1.7x, `histogram` 1.4x, `mandelbrot` 1.4x, `crc32` 1.1x.
 - So the scalar kernels are close, while memory behaviour (growth, hashing, allocation, cache locality) is the next target. These numbers come from single runs on a shared VM; use them as a pointer, not a result.
 
 ## Where to run the published numbers
