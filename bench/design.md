@@ -2,7 +2,7 @@
 
 Decisions (Dennis, 2026-10-23): benchmark against C **and** C++; against gcc **and** clang (C and C++), plus tcc for the compile-time axis; headline numbers from both a pinned container and a quiet machine; our own program list, grown well beyond goose's 16; target is **at or below the best of all rows**, with Pelago's exact overflow traps on.
 
-## What the harness measures (`compiler/benches/harness.py`)
+## What the harness measures (`bench/harness/run.py`)
 
 | Metric | How |
 |---|---|

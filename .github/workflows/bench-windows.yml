@@ -12,7 +12,7 @@ on:
       - "compiler/src/ir/**"
       - "compiler/src/lower/**"
       - "compiler/core/**"
-      - "compiler/benches/**"
+      - "bench/**"
       - ".github/workflows/bench-windows.yml"
   pull_request:
     paths:
@@ -20,7 +20,7 @@ on:
       - "compiler/src/ir/**"
       - "compiler/src/lower/**"
       - "compiler/core/**"
-      - "compiler/benches/**"
+      - "bench/**"
       - ".github/workflows/bench-windows.yml"
 
 jobs:
@@ -43,7 +43,7 @@ jobs:
           BENCH_TIMEOUT: "60"
         run: |
           status=0
-          sh compiler/benches/compare.sh --json --runs 5 > bench-windows.txt 2> bench-windows.log || status=$?
+          sh bench/compare.sh --json --runs 5 > bench-windows.txt 2> bench-windows.log || status=$?
           cat bench-windows.log
           cat bench-windows.txt
           grep -v '^{' bench-windows.txt > bench-windows-table.txt || true

@@ -22,7 +22,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y gcc g++ clang tcc
       - name: Run the harness
         run: |
-          python3 compiler/benches/harness.py --runs 7 --size small,medium,large --json bench.json --md bench.md --site site-bench.json --history history.jsonl 2> bench.log || status=$?
+          python3 bench/harness/run.py --runs 7 --size small,medium,large --json bench.json --md bench.md --site site-bench.json --history history.jsonl 2> bench.log || status=$?
           cat bench.md >> "$GITHUB_STEP_SUMMARY"
           exit ${status:-0}
       - uses: actions/upload-artifact@v4

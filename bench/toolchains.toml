@@ -1,0 +1,11 @@
+# Versions the published results are made with (the Dockerfile installs them). The harness records the versions it finds and
+# reports a tool whose version string does not contain the pinned text; an empty pin means "not pinned yet".
+# Fill the pins from a first run inside the container: docker build -t pelago-bench -f bench/Dockerfile . and read the
+# Environment table of bench/results.md.
+[pinned]
+gcc = ""
+"g++" = ""
+clang = ""
+"clang++" = ""
+tcc = ""
+rustc = "1.97.0"
