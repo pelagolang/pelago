@@ -1,0 +1,35 @@
+name: bench-harness
+
+# The full benchmark harness (Pelago against gcc, clang, tcc, g++, clang++ and rustc): run time, compile time, binary size and
+# peak memory. Manual, because it takes a while; shared runners are noisy, so read the spread marks in the table.
+on:
+  workflow_dispatch:
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x86, os: ubuntu-24.04 }
+          - { name: linux-arm, os: ubuntu-24.04-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install compilers
+        run: sudo apt-get update && sudo apt-get install -y gcc g++ clang tcc
+      - name: Run the harness
+        run: |
+          python3 compiler/benches/harness.py --runs 7 --json bench.json --md bench.md 2> bench.log || status=$?
+          cat bench.md >> "$GITHUB_STEP_SUMMARY"
+          exit ${status:-0}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-harness-${{ matrix.name }}
+          path: |
+            bench.json
+            bench.md
+            bench.log
