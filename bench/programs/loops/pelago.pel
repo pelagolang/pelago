@@ -1,0 +1,13 @@
+fn main() {
+    var s = 1
+    for i in 0..1000 { s = (s * 1103515245 + 12345) & 2147483647 }
+    const u = 20 + s % 30
+    const r = (s >> 8) % 10000
+    var a: [int] = []
+    for i in 0..10000 { a.push!(0) }
+    for i in 0..10000 {
+        for j in 0..10000 { a[i] = a[i] + j % u }
+        a[i] += r
+    }
+    print(a[r])
+}

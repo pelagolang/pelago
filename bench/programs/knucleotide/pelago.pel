@@ -1,0 +1,26 @@
+fn main() {
+    const n = 500000
+    var seq: [int] = []
+    var s = 1
+    for i in 0..n {
+        s = (s * 1103515245 + 12345) & 2147483647
+        seq.push!((s >> 16) & 3)
+    }
+    for k in [1, 2, 4, 6, 9] {
+        var m: map<int, int> = {:}
+        const mask = (1 << (2 * k)) - 1
+        var w = 0
+        for i in 0..n {
+            w = ((w << 2) | seq[i]) & mask
+            if i >= k - 1 { m.insert!(w, (m.get(w) ?? 0) + 1) }
+        }
+        var most = 0
+        var total = 0
+        for key of m.keys() {
+            const c = m.get(key) ?? 0
+            total += c
+            if c > most { most = c }
+        }
+        print(k, m.len(), most, total)
+    }
+}

@@ -53,6 +53,7 @@ Rows: `pelago`, `gcc-O0`, `gcc-O2`, `gcc-O2-trapv`, `clang-O2`, `tcc`, `g++-O2`,
 | graph | breadth-first search over a random graph in flat arrays (cache misses) |
 | blur | 3x3 box blur over a flat image (the vectoriser's case) |
 | matmul | integer matrix multiply (strided access) |
+| hello, loops, levenshtein, nbody, spectralnorm, nqueen, fasta, knucleotide, kostya_bf_bench, kostya_bf_mandel, kostya_matmul, kostya_json, base64, primes | the programs of the suites goose draws on (bddicken, plb, plb2, kostya2), written from their descriptions; kostya's are MIT and attributed in the file headers; a `heavy` file in a program directory excludes it unless the program is named or `--heavy` is given; see `docs/plans/bench-suite-findings.md` for coverage, findings and the missing language features |
 
 Still to add: a records/JSON-like workload, a parser run, SIMD-friendly float kernels, a self-hosting run of our own compiler stages.
 

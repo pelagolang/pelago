@@ -1,0 +1,43 @@
+///* After kostya/benchmarks matmul (written by Attractive Chaos, MIT license): float matrices, second matrix transposed. *///
+fn gen(n: int, seed: float) -> [[float]] {
+    const tmp = seed / (n to float) / (n to float)
+    var m: [[float]] = []
+    for i in 0..n {
+        var row: [float] = []
+        for j in 0..n { row.push!(tmp * ((i - j) to float) * ((i + j) to float)) }
+        m.push!(sink row)
+    }
+    return m
+}
+
+fn mul(n: int, a: [[float]], b: [[float]]) -> [[float]] {
+    var c: [[float]] = []
+    for i in 0..n {
+        var row: [float] = []
+        for j in 0..n { row.push!(b[j][i]) }
+        c.push!(sink row)
+    }
+    var m: [[float]] = []
+    for i in 0..n {
+        var row: [float] = []
+        for j in 0..n {
+            var t = 0.0
+            for k in 0..n { t += a[i][k] * c[j][k] }
+            row.push!(t)
+        }
+        m.push!(sink row)
+    }
+    return m
+}
+
+fn calc(size: int) -> float {
+    const n = size / 2 * 2
+    const a = gen(n, 1.0)
+    const b = gen(n, 2.0)
+    const m = mul(n, a, b)
+    return m[n / 2][n / 2]
+}
+
+fn main() {
+    print(calc(400))
+}

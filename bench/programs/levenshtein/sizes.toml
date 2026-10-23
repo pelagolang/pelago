@@ -1,0 +1,6 @@
+# Replacements applied to the source text of every twin; the committed source is the medium size.
+[small]
+replace = [["600", "300"]]
+
+[large]
+replace = [["600", "1000"]]

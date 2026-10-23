@@ -1,0 +1,44 @@
+fn a(i: int, j: int) -> float {
+    return 1.0 / ((((i + j) * (i + j + 1)) / 2 + i + 1) to float)
+}
+
+fn mul_av(v: [float], inout out: [float]) {
+    for i in 0..v.len() {
+        var s = 0.0
+        for j in 0..v.len() { s += a(i, j) * v[j] }
+        out[i] = s
+    }
+}
+
+fn mul_atv(v: [float], inout out: [float]) {
+    for i in 0..v.len() {
+        var s = 0.0
+        for j in 0..v.len() { s += a(j, i) * v[j] }
+        out[i] = s
+    }
+}
+
+fn main() {
+    const n = 2000
+    var u: [float] = []
+    var v: [float] = []
+    var t: [float] = []
+    for i in 0..n {
+        u.push!(1.0)
+        v.push!(0.0)
+        t.push!(0.0)
+    }
+    for k in 0..10 {
+        mul_av(u, inout t)
+        mul_atv(t, inout v)
+        mul_av(v, inout t)
+        mul_atv(t, inout u)
+    }
+    var vbv = 0.0
+    var vv = 0.0
+    for i in 0..n {
+        vbv += u[i] * v[i]
+        vv += v[i] * v[i]
+    }
+    print((vbv / vv).sqrt())
+}

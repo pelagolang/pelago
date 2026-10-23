@@ -1,0 +1,204 @@
+///* After kostya/benchmarks json (MIT, Copyright (c) 2014 Konstantin Makarchev): parse pretty-printed JSON of coordinates and average x, y, z. The text is built in memory, as byte codes, because the test's /tmp/1.json cannot be read yet. Keys are kept as hashes. *///
+enum jv {
+    lit
+    num(f: float)
+    str(h: int)
+    arr(items: [jv])
+    dict(keys: [int], vals: [jv])
+}
+
+fn skip(t: [int], inout p: int) {
+    while p < t.len() && (t[p] == 32 || t[p] == 10 || t[p] == 13 || t[p] == 9) { p += 1 }
+}
+
+fn parse_value(t: [int], inout p: int) -> jv {
+    skip(t, inout p)
+    const c = t[p]
+    if c == 123 {
+        p += 1
+        var keys: [int] = []
+        var vals: [jv] = []
+        skip(t, inout p)
+        if t[p] == 125 {
+            p += 1
+            return jv.dict(keys: keys, vals: vals)
+        }
+        var more = true
+        while more {
+            skip(t, inout p)
+            p += 1
+            var h = 0
+            while t[p] != 34 {
+                h = (h * 31 + t[p]) & 2147483647
+                p += 1
+            }
+            p += 1
+            skip(t, inout p)
+            p += 1
+            const v = parse_value(t, inout p)
+            keys.push!(h)
+            vals.push!(sink v)
+            skip(t, inout p)
+            if t[p] == 44 { p += 1 } else {
+                p += 1
+                more = false
+            }
+        }
+        return jv.dict(keys: keys, vals: vals)
+    } else if c == 91 {
+        p += 1
+        var items: [jv] = []
+        skip(t, inout p)
+        if t[p] == 93 {
+            p += 1
+            return jv.arr(items: items)
+        }
+        var more = true
+        while more {
+            const v = parse_value(t, inout p)
+            items.push!(sink v)
+            skip(t, inout p)
+            if t[p] == 44 { p += 1 } else {
+                p += 1
+                more = false
+            }
+        }
+        return jv.arr(items: items)
+    } else if c == 34 {
+        p += 1
+        var h = 0
+        while t[p] != 34 {
+            h = (h * 31 + t[p]) & 2147483647
+            p += 1
+        }
+        p += 1
+        return jv.str(h: h)
+    } else if c == 45 || (c >= 48 && c <= 57) {
+        var neg = false
+        if c == 45 {
+            neg = true
+            p += 1
+        }
+        var m = 0
+        while t[p] >= 48 && t[p] <= 57 {
+            m = m * 10 + (t[p] - 48)
+            p += 1
+        }
+        var scale = 1.0
+        if t[p] == 46 {
+            p += 1
+            while t[p] >= 48 && t[p] <= 57 {
+                m = m * 10 + (t[p] - 48)
+                scale = scale * 10.0
+                p += 1
+            }
+        }
+        const v = (m to float) / scale
+        return jv.num(f: neg ? 0.0 - v : v)
+    } else {
+        while p < t.len() && t[p] >= 97 && t[p] <= 122 { p += 1 }
+        return jv.lit
+    }
+}
+
+fn codes(s: str) -> [int] {
+    var out: [int] = []
+    for c of s.chars() { out.push!(c to int) }
+    return out
+}
+
+fn put(inout out: [int], frag: [int]) {
+    for c in frag { out.push!(c) }
+}
+
+fn digits(inout out: [int], v: int, width: int) {
+    var d = 1
+    for i in 1..width { d *= 10 }
+    while d > 0 {
+        out.push!(48 + (v / d) % 10)
+        d /= 10
+    }
+}
+
+fn next(s: int) -> int = (s * 1103515245 + 12345) & 2147483647
+
+fn main() {
+    const records = 20000
+    const f_start = codes("{\n  \"coordinates\": [\n")
+    const f_x = codes("    {\n      \"x\": -0.")
+    const f_y = codes(",\n      \"y\": ")
+    const f_z = codes(",\n      \"z\": 0.")
+    const f_name = codes(",\n      \"name\": \"")
+    const f_tail = codes("\",\n      \"opts\": {\n        \"1\": [\n          1,\n          true\n        ]\n      }\n    }")
+    const f_sep = codes(",\n")
+    const f_end = codes("\n  ],\n  \"info\": \"some info\"\n}\n")
+    var text: [int] = []
+    var s = 1
+    put(inout text, f_start)
+    for i in 0..records {
+        if i > 0 { put(inout text, f_sep) }
+        put(inout text, f_x)
+        s = next(s)
+        digits(inout text, (s >> 8) % 1000000, 6)
+        put(inout text, f_y)
+        s = next(s)
+        const b = (s >> 8) % 1000000000
+        digits(inout text, b / 1000000, 1)
+        text.push!(46)
+        digits(inout text, b % 1000000, 6)
+        put(inout text, f_z)
+        s = next(s)
+        digits(inout text, (s >> 8) % 1000000, 6)
+        put(inout text, f_name)
+        for k in 0..6 {
+            s = next(s)
+            text.push!(97 + (s >> 8) % 26)
+        }
+        text.push!(32)
+        s = next(s)
+        digits(inout text, (s >> 8) % 10000, 4)
+        put(inout text, f_tail)
+    }
+    put(inout text, f_end)
+
+    var p = 0
+    const root = parse_value(text, inout p)
+    var sx = 0.0
+    var sy = 0.0
+    var sz = 0.0
+    var n = 0
+    switch root {
+        case .dict(keys, vals): {
+            for i in 0..keys.len() {
+                if keys[i] == 1871919611 {
+                    switch vals[i] {
+                        case .arr(items): {
+                            for item in items {
+                                switch item {
+                                    case .dict(k, v): {
+                                        n += 1
+                                        for j in 0..k.len() {
+                                            switch v[j] {
+                                                case .num(f): {
+                                                    if k[j] == 120 { sx += f }
+                                                    else if k[j] == 121 { sy += f }
+                                                    else if k[j] == 122 { sz += f }
+                                                }
+                                                default: {}
+                                            }
+                                        }
+                                    }
+                                    default: {}
+                                }
+                            }
+                        }
+                        default: {}
+                    }
+                }
+            }
+        }
+        default: {}
+    }
+    const len = n to float
+    print(n, sx / len, sy / len, sz / len)
+}

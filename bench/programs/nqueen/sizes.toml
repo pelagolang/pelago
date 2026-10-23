@@ -1,0 +1,6 @@
+# Replacements applied to the source text of every twin; the committed source is the medium size.
+[small]
+replace = [["n = 14", "n = 12"]]
+
+[large]
+replace = [["n = 14", "n = 15"]]

@@ -1,0 +1,7 @@
+# Replacements applied to the source text of every twin; the committed source is the medium size.
+# kostya parses 524288 records from /tmp/1.json; medium is 20000.
+[small]
+replace = [["records = 20000", "records = 4000"]]
+
+[large]
+replace = [["records = 20000", "records = 100000"]]

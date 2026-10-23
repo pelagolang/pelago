@@ -51,7 +51,7 @@ def contestants():
     flags = os.environ.get("PELAGO_BUILD_FLAGS", "").split()
 
     def c(tool_, *opts):
-        return (lambda src, out: [tool_, *opts, "-o", out, src]) if tool_ else None
+        return (lambda src, out: [tool_, *opts, "-o", out, src, *([] if os.name == "nt" else ["-lm"])]) if tool_ else None
 
     def rs(*opts):
         return (lambda src, out: [rustc, *opts, "-o", out, src]) if rustc else None
@@ -339,6 +339,7 @@ def main():
     ap.add_argument("--timeout", type=float, default=120)
     ap.add_argument("--pin", type=int, default=None, help="run on this CPU with taskset (Linux)")
     ap.add_argument("--size", default="medium", help="comma list of small, medium, large (default medium)")
+    ap.add_argument("--heavy", action="store_true", help="include programs marked with a `heavy` file (several seconds per run)")
     ap.add_argument("--bless", action="store_true", help="write expected/<name>.<size>.txt from the reference row")
     ap.add_argument("--save", action="store_true", help="write bench/results/<date>-<machine>.json and bench/results.md")
     ap.add_argument("--json", metavar="FILE")
@@ -348,7 +349,10 @@ def main():
     a = ap.parse_args()
 
     sizes = [s.strip() for s in a.size.split(",")]
-    names = a.names or sorted(d for d in os.listdir(PROGRAMS) if os.path.exists(os.path.join(PROGRAMS, d, "pelago.pel")))
+    names = a.names or sorted(
+        d for d in os.listdir(PROGRAMS)
+        if os.path.exists(os.path.join(PROGRAMS, d, "pelago.pel")) and (a.heavy or not os.path.exists(os.path.join(PROGRAMS, d, "heavy")))
+    )
     repl = {}
     for n in names:
         sp = os.path.join(PROGRAMS, n, "sizes.toml")
