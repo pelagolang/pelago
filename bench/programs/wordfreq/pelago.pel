@@ -1,0 +1,11 @@
+fn main() {
+    var counts: map<string, int> = {:}
+    for i in 0..200000 {
+        const key = "w#(i * 7919 % 5003)"
+        const current = counts.get(key) ?? 0
+        counts.insert!(sink key, current + 1)
+    }
+    var t = 0
+    for k in 0..5003 { t += (counts.get("w#k") ?? 0) * (k & 15) }
+    print(counts.len(), t)
+}

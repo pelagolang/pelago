@@ -1,0 +1,21 @@
+enum tree {
+    leaf
+    node(box<tree>, box<tree>)
+}
+
+fn make(d: int) -> tree {
+    if d == 0 { tree.leaf } else { tree.node(box(make(d - 1)), box(make(d - 1))) }
+}
+
+fn check(t: tree) -> int {
+    switch t {
+        case .leaf: 0
+        case .node(l, r): 1 + check(l.get()) + check(r.get())
+    }
+}
+
+fn main() {
+    var total = 0
+    for it in 0..20 { total += check(make(16)) }
+    print(total)
+}

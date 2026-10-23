@@ -15,6 +15,7 @@ Contestants (a missing compiler just drops its rows; override a command with CC,
     pelago       target/release/pelago build --opt            (PELAGO_BUILD_FLAGS is added)
     gcc-O0 gcc-O2 gcc-O2-trapv clang-O2 tcc          c.c
     g++-O2 clang++-O2                                 cpp.cpp
+    g++-O2-expert                                     cpp-expert.cpp (arena, flat tables; only where the program has one)
     rustc-O rustc-O-checked                           rs.rs
 The `-trapv` and `-checked` rows stop on overflow like Pelago does; they are the like-for-like rows.
 Sizes: sizes.toml gives, per size, text replacements applied to every twin; `medium` is the committed source. Programs
@@ -64,6 +65,7 @@ def contestants():
         ("tcc", "c.c", c(tcc), False),
         ("g++-O2", "cpp.cpp", c(cxx, "-O2", "-std=c++17"), False),
         ("clang++-O2", "cpp.cpp", c(clangxx, "-O2", "-std=c++17"), False),
+        ("g++-O2-expert", "cpp-expert.cpp", c(cxx, "-O2", "-std=c++17"), False),
         ("rustc-O", "rs.rs", rs("-O", "-C", "codegen-units=1", "-C", "overflow-checks=off"), False),
         ("rustc-O-checked", "rs.rs", rs("-O", "-C", "codegen-units=1", "-C", "overflow-checks=on"), True),
     ]
@@ -286,6 +288,15 @@ def report(results, labels, a, size):
     gm = geomean(ratios)
     if gm:
         emit(f"\nGeometric mean of pelago / best other row: {gm:.2f}x; at or below every other row on {below} of {len(ratios)} programs.")
+    emit("\nCost of overflow checks (checked / unchecked run time; Pelago always checks) and Pelago against the checked rows\n")
+    emit("| program | gcc -ftrapv / gcc | rustc checked / unchecked | pelago / gcc -ftrapv | pelago / rustc checked |")
+    emit("|---|---:|---:|---:|---:|")
+    def rat(row, x, y):
+        a, b = row.get(x, {}).get("median"), row.get(y, {}).get("median")
+        return f"{a / b:.2f}x" if a and b else "-"
+    for name, row in results.items():
+        emit(f"| {name} | {rat(row, 'gcc-O2-trapv', 'gcc-O2')} | {rat(row, 'rustc-O-checked', 'rustc-O')} | "
+             f"{rat(row, 'pelago', 'gcc-O2-trapv')} | {rat(row, 'pelago', 'rustc-O-checked')} |")
     for title, key in [("Compile time, median seconds", "compile"), ("Binary size, KiB", "size"), ("Peak memory, MiB", "rss_kib")]:
         emit(f"\n{title}\n")
         emit("| program | " + " | ".join(labels) + " |")
