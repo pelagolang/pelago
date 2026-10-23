@@ -3,7 +3,8 @@
 
 Usage (from the repository root; needs python3 and at least one of gcc, clang, tcc, g++, clang++, rustc):
     python3 compiler/benches/harness.py [--runs N] [--warmups N] [--compile-runs N] [--pin CPU]
-                                        [--json FILE] [--md FILE] [--timeout S] [name ...]
+                                        [--json FILE] [--md FILE] [--site FILE] [--history FILE] [--size small,medium,large]
+                                        [--bless] [--timeout S] [name ...]
 
 For every program in benches/*.pel it builds one executable per available contestant, checks that all of them print the
 same output, then reports run time (median and minimum of N runs after discarded warm-ups, with the spread), compile time
@@ -15,6 +16,10 @@ CLANGXX, TCC, RUSTC):
     gcc-O0 gcc-O2 gcc-O2-trapv clang-O2 tcc          C twins in benches/c
     g++-O2 clang++-O2                                 C++ twins in benches/cpp
     rustc-O rustc-O-checked                           Rust twins in benches/rs
+Sizes: `sizes.json` lists, per program, text replacements that make the `small` (fits in cache) and `large` (does not) versions
+of the same source; `medium` is the committed source. Programs without an entry run at medium only. `expected/<name>.<size>.txt`
+holds the agreed output; `--bless` writes it from the reference row, and a later run compares every row to it.
+`--site FILE` writes the medium results in the `website/content/bench.json` format; `--history FILE` appends one JSON line.
 The `-trapv` and `-checked` rows stop on overflow like Pelago does; they are the like-for-like rows.
 """
 import argparse, json, math, os, platform, shutil, statistics, subprocess, sys, tempfile, time
@@ -140,68 +145,86 @@ def build(cmd, out, compile_runs):
     return statistics.median(times)
 
 
+def sized_source(src, name, size, repl, tmp):
+    """Path of the source for `size`: the file itself for medium, else a copy with the size's replacements applied."""
+    pairs = repl.get(name, {}).get(size)
+    if size == "medium" or pairs is None:
+        return src if size == "medium" else None
+    with open(src) as f:
+        text = f.read()
+    applied = 0
+    for old, new in pairs:  # a pair may be missing from a twin (sieve's `n + 1` is written differently in each language)
+        if old in text:
+            text = text.replace(old, new)
+            applied += 1
+    if not applied:
+        raise SystemExit(f"sizes.json: no replacement for {name} {size} applies to {src}")
+    d = os.path.join(tmp, "src", size, os.path.basename(os.path.dirname(src)) or "pel")
+    os.makedirs(d, exist_ok=True)
+    out = os.path.join(d, os.path.basename(src))
+    with open(out, "w") as f:
+        f.write(text)
+    return out
+
+
 def geomean(xs):
     return math.exp(sum(math.log(x) for x in xs) / len(xs)) if xs else None
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("names", nargs="*")
-    ap.add_argument("--runs", type=int, default=7)
-    ap.add_argument("--warmups", type=int, default=2)
-    ap.add_argument("--compile-runs", type=int, default=3)
-    ap.add_argument("--timeout", type=float, default=120)
-    ap.add_argument("--pin", type=int, default=None, help="run on this CPU with taskset (Linux)")
-    ap.add_argument("--json", metavar="FILE")
-    ap.add_argument("--md", metavar="FILE")
-    a = ap.parse_args()
-
-    names = a.names or sorted(f[:-4] for f in os.listdir(ROOT) if f.endswith(".pel"))
-    subprocess.run(["cargo", "build", "--release", "-q"], cwd=REPO, check=True)
-    cons = contestants()
-    env = environment()
+def run_size(size, names, cons, repl, a, tmp):
+    """Build, check and time every program at one size; returns {name: {label: result}} and the list of problems."""
     results, bad = {}, []
-    with tempfile.TemporaryDirectory() as tmp:
-        for name in names:
-            row = {}
-            for label, lang, suffix, mk, _checked in cons:
-                src = os.path.join(ROOT, lang, name + suffix)
-                if mk is None or not os.path.exists(src):
-                    continue
-                out = os.path.join(tmp, f"{name}.{label.replace('+', 'p')}{EXE}")
-                print(f"building {name} [{label}]", file=sys.stderr, flush=True)
-                ct = build(mk(src, out), out, a.compile_runs)
-                if isinstance(ct, str):
-                    row[label] = {"error": ct}
-                    continue
-                print(f"running  {name} [{label}]", file=sys.stderr, flush=True)
-                try:
-                    m = measure(out, a.runs, a.warmups, a.timeout, a.pin)
-                except subprocess.TimeoutExpired:
-                    row[label] = {"error": "timeout"}
-                    continue
-                m["compile"] = ct
-                m["size"] = os.path.getsize(out)
-                row[label] = m
-            ref = next((row[k]["text"] for k in ("gcc-O2", "clang-O2", "g++-O2", "rustc-O") if k in row and "text" in row[k]), None)
-            for label, m in row.items():
-                if "text" in m:
-                    if ref is not None and m["text"] != ref:
-                        m["mismatch"] = True
-                        bad.append(f"{name} [{label}]")
-                    del m["text"]
-            results[name] = row
+    for name in names:
+        row = {}
+        for label, lang, suffix, mk, _checked in cons:
+            src = os.path.join(ROOT, lang, name + suffix)
+            if mk is None or not os.path.exists(src):
+                continue
+            src = sized_source(src, name, size, repl, os.path.join(tmp, size))
+            if src is None:
+                break
+            out = os.path.join(tmp, f"{name}.{size}.{label}{EXE}")
+            print(f"building {name} {size} [{label}]", file=sys.stderr, flush=True)
+            ct = build(mk(src, out), out, a.compile_runs)
+            if isinstance(ct, str):
+                row[label] = {"error": ct}
+                continue
+            print(f"running  {name} {size} [{label}]", file=sys.stderr, flush=True)
+            try:
+                m = measure(out, a.runs, a.warmups, a.timeout, a.pin)
+            except subprocess.TimeoutExpired:
+                row[label] = {"error": "timeout"}
+                continue
+            m["compile"] = ct
+            m["size"] = os.path.getsize(out)
+            row[label] = m
+        if not row:
+            continue
+        exp_path = os.path.join(ROOT, "expected", f"{name}.{size}.txt")
+        ref = next((row[k]["text"] for k in ("gcc-O2", "clang-O2", "g++-O2", "rustc-O") if k in row and "text" in row[k]), None)
+        if a.bless and ref is not None:
+            os.makedirs(os.path.dirname(exp_path), exist_ok=True)
+            with open(exp_path, "wb") as f:
+                f.write(ref)
+        elif os.path.exists(exp_path):
+            with open(exp_path, "rb") as f:
+                ref = f.read()
+        for label, m in row.items():
+            if "text" in m:
+                if ref is not None and m["text"] != ref:
+                    m["mismatch"] = True
+                    bad.append(f"{name} {size} [{label}]")
+                del m["text"]
+        results[name] = row
+    return results, bad
 
-    labels = [c[0] for c in cons if any(c[0] in r and "median" in r[c[0]] for r in results.values())]
+
+def report(results, labels, a, size):
     others = [l for l in labels if l != "pelago"]
-
-    def best_other(row):
-        vals = [row[l]["median"] for l in others if l in row and "median" in row[l]]
-        return min(vals) if vals else None
-
     lines = []
     emit = lines.append
-    emit(f"Run time, median of {a.runs} after {a.warmups} warm-ups, seconds (spread = (max-min)/median; `!` marks > 10%)")
+    emit(f"### Size: {size}\n")
+    emit(f"Run time, median of {a.runs} after {a.warmups} warm-ups, seconds (`!` marks a spread over 10%: (max-min)/median)\n")
     emit("| program | " + " | ".join(labels) + " | pelago / best other |")
     emit("|---|" + "---:|" * (len(labels) + 1))
     ratios, below = [], 0
@@ -215,47 +238,104 @@ def main():
                 cells.append("error")
             else:
                 cells.append(f"{m['median']:.3f}" + ("!" if m["spread"] > 0.10 else "") + (" DIFF" if m.get("mismatch") else ""))
-        b = best_other(row)
+        vals = [row[l]["median"] for l in others if l in row and "median" in row[l]]
         p = row.get("pelago", {}).get("median")
-        r = p / b if p and b else None
+        r = p / min(vals) if p and vals else None
         if r is not None:
             ratios.append(r)
             below += r <= 1.0
-        emit(f"| {name} | " + " | ".join(cells) + f" | {r:.2f}x |" if r is not None else f"| {name} | " + " | ".join(cells) + " | - |")
+        emit(f"| {name} | " + " | ".join(cells) + (f" | {r:.2f}x |" if r is not None else " | - |"))
     gm = geomean(ratios)
     if gm:
         emit(f"\nGeometric mean of pelago / best other row: {gm:.2f}x; at or below every other row on {below} of {len(ratios)} programs.")
-    for title, key, fmt in [("Compile time, median seconds", "compile", "{:.3f}"), ("Binary size, KiB", "size", None),
-                            ("Peak memory, MiB", "rss_kib", None)]:
-        emit(f"\n{title}")
+    for title, key in [("Compile time, median seconds", "compile"), ("Binary size, KiB", "size"), ("Peak memory, MiB", "rss_kib")]:
+        emit(f"\n{title}\n")
         emit("| program | " + " | ".join(labels) + " |")
         emit("|---|" + "---:|" * len(labels))
         for name, row in results.items():
             cells = []
             for l in labels:
                 v = row.get(l, {}).get(key)
-                if v is None:
-                    cells.append("-")
-                elif key == "size":
-                    cells.append(f"{v / 1024:.0f}")
-                elif key == "rss_kib":
-                    cells.append(f"{v / 1024:.1f}")
-                else:
-                    cells.append(fmt.format(v))
+                cells.append("-" if v is None else f"{v / 1024:.0f}" if key == "size" else f"{v / 1024:.1f}" if key == "rss_kib" else f"{v:.3f}")
             emit(f"| {name} | " + " | ".join(cells) + " |")
-    if bad:
-        emit("\nOUTPUT DIFFERS: " + ", ".join(bad))
-    text = "\n".join(lines)
+    return "\n".join(lines), gm, below, len(ratios)
+
+
+def site_json(results, env, a):
+    """The medium results in the format of website/content/bench.json."""
+    rows, rc, rr = [], [], []
+    for name, row in results.items():
+        p, c2, rs = (row.get(k, {}).get("median") for k in ("pelago", "gcc-O2", "rustc-O"))
+        if not (p and c2):
+            continue
+        d = {"name": name, "pelago": round(p, 4), "c_o2": round(c2, 4), "ratio_o2": round(p / c2, 2)}
+        rc.append(p / c2)
+        if rs:
+            d.update({"rust": round(rs, 4), "ratio_rust": round(p / rs, 2)})
+            rr.append(p / rs)
+        rows.append(d)
+    return {"date": env["date"], "runs": a.runs, "machine": f"{env.get('cpus')}-core {env.get('machine')} {env.get('os')}",
+            "gcc": (env.get("gcc") or "").split()[-1] if env.get("gcc") else None,
+            "rustc": (env.get("rustc") or "").split()[1] if env.get("rustc") else None,
+            "geomean_c": round(geomean(rc), 2) if rc else None, "geomean_rust": round(geomean(rr), 2) if rr else None,
+            "at_or_below_c": sum(1 for r in rc if r <= 1.0), "rows": rows}
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("names", nargs="*")
+    ap.add_argument("--runs", type=int, default=7)
+    ap.add_argument("--warmups", type=int, default=2)
+    ap.add_argument("--compile-runs", type=int, default=3)
+    ap.add_argument("--timeout", type=float, default=120)
+    ap.add_argument("--pin", type=int, default=None, help="run on this CPU with taskset (Linux)")
+    ap.add_argument("--size", default="medium", help="comma list of small, medium, large (default medium)")
+    ap.add_argument("--bless", action="store_true", help="write expected/<name>.<size>.txt from the reference row")
+    ap.add_argument("--json", metavar="FILE")
+    ap.add_argument("--md", metavar="FILE")
+    ap.add_argument("--site", metavar="FILE", help="write the medium results as website/content/bench.json")
+    ap.add_argument("--history", metavar="FILE", help="append one JSON line (date, geomean, per-program ratios)")
+    a = ap.parse_args()
+
+    sizes = [s.strip() for s in a.size.split(",")]
+    names = a.names or sorted(f[:-4] for f in os.listdir(ROOT) if f.endswith(".pel"))
+    with open(os.path.join(ROOT, "sizes.json")) as f:
+        repl = {k: v for k, v in json.load(f).items() if not k.startswith("_")}
+    subprocess.run(["cargo", "build", "--release", "-q"], cwd=REPO, check=True)
+    cons = contestants()
+    env = environment()
+    all_results, all_bad, parts = {}, [], []
+    with tempfile.TemporaryDirectory() as tmp:
+        for size in sizes:
+            results, bad = run_size(size, names, cons, repl, a, tmp)
+            all_results[size] = results
+            all_bad += bad
+    summary = {}
+    for size, results in all_results.items():
+        labels = [c[0] for c in cons if any(c[0] in r and "median" in r[c[0]] for r in results.values())]
+        text, gm, below, n = report(results, labels, a, size)
+        summary[size] = {"geomean": gm, "below": below, "programs": n}
+        parts.append(text)
+    if all_bad:
+        parts.append("OUTPUT DIFFERS: " + ", ".join(all_bad))
+    text = "\n\n".join(parts)
     print(text)
     if a.json:
         with open(a.json, "w") as f:
-            json.dump({"environment": env, "runs": a.runs, "warmups": a.warmups, "results": results}, f, indent=1)
+            json.dump({"environment": env, "runs": a.runs, "warmups": a.warmups, "results": all_results}, f, indent=1)
     if a.md:
         head = ["# Benchmark results", "", "Generated by `compiler/benches/harness.py`. Do not edit by hand.", "", "## Environment", "",
                 "| | |", "|---|---|"] + [f"| {k} | {v} |" for k, v in env.items() if v] + ["", "## Results", ""]
         with open(a.md, "w") as f:
             f.write("\n".join(head) + "\n" + text + "\n")
-    sys.exit(1 if bad else 0)
+    if a.site and "medium" in all_results:
+        with open(a.site, "w") as f:
+            json.dump(site_json(all_results["medium"], env, a), f, indent=1)
+            f.write("\n")
+    if a.history:
+        with open(a.history, "a") as f:
+            f.write(json.dumps({"date": env["date"], "pelago": env.get("pelago"), "machine": env.get("machine"), "summary": summary}) + "\n")
+    sys.exit(1 if all_bad else 0)
 
 
 if __name__ == "__main__":
