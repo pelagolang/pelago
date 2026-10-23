@@ -2,8 +2,16 @@ name: bench-harness
 
 # The full benchmark harness (Pelago against gcc, clang, tcc, g++, clang++ and rustc): run time, compile time, binary size and
 # peak memory. Manual, because it takes a while; shared runners are noisy, so read the spread marks in the table.
+# A full run (all 28 programs at small, medium and large with 7 runs) takes well over an hour; the default is medium with 5 runs.
 on:
   workflow_dispatch:
+    inputs:
+      sizes:
+        description: "Sizes to run, comma separated: small, medium, large"
+        default: "medium"
+      runs:
+        description: "Timed runs per executable"
+        default: "5"
 
 jobs:
   bench:
@@ -17,16 +25,22 @@ jobs:
           - { name: blacksmith-x86, os: blacksmith-4vcpu-ubuntu-2404 }
           - { name: blacksmith-arm, os: blacksmith-4vcpu-ubuntu-2404-arm }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Install compilers
         run: sudo apt-get update && sudo apt-get install -y gcc g++ clang tcc
       - name: Run the harness
+        env:
+          SIZES: ${{ inputs.sizes || 'medium' }}
+          RUNS: ${{ inputs.runs || '5' }}
         run: |
-          python3 bench/harness/run.py --runs 7 --size small,medium,large --json bench.json --md bench.md --site site-bench.json --history history.jsonl 2> bench.log || status=$?
-          cat bench.md >> "$GITHUB_STEP_SUMMARY"
+          # Progress and finished sizes go to the job log as they happen (stderr), and to bench.log.
+          python3 bench/harness/run.py --runs "$RUNS" --warmups 1 --compile-runs 2 --size "$SIZES" --json bench.json --md bench.md \
+            --site site-bench.json --history history.jsonl 2> >(tee bench.log >&2) || status=$?
+          wait
+          [ -f bench.md ] && cat bench.md >> "$GITHUB_STEP_SUMMARY"
           exit ${status:-0}
       - uses: actions/upload-artifact@v4
         if: always()

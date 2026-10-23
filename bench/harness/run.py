@@ -359,18 +359,18 @@ def main():
     cons = contestants()
     env = environment()
     env["toolchain_drift"] = check_pins(env) or None
-    all_results, all_bad, parts = {}, [], []
+    all_results, all_bad, parts, summary = {}, [], [], {}
     with tempfile.TemporaryDirectory() as tmp:
         for size in sizes:
             results, bad = run_size(size, names, cons, repl, a, tmp)
             all_results[size] = results
             all_bad += bad
-    summary = {}
-    for size, results in all_results.items():
-        labels = [c[0] for c in cons if any(c[0] in r and "median" in r[c[0]] for r in results.values())]
-        text, gm, below, n = report(results, labels, a, size)
-        summary[size] = {"geomean": gm, "below": below, "programs": n}
-        parts.append(text)
+            # Print each size as soon as it is done, so a long run shows its progress (and a killed run keeps what finished).
+            labels = [c[0] for c in cons if any(c[0] in r and "median" in r[c[0]] for r in results.values())]
+            text, gm, below, n = report(results, labels, a, size)
+            summary[size] = {"geomean": gm, "below": below, "programs": n}
+            parts.append(text)
+            print(text, file=sys.stderr, flush=True)
     if all_bad:
         parts.append("OUTPUT DIFFERS: " + ", ".join(all_bad))
     text = "\n\n".join(parts)
