@@ -10,6 +10,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 |---|---|---|---|
 | Doing | [A-10](cards/A-10-aarch64.md) | AArch64 (64-bit ARM) backend: R1 (encoder) and R2 (Linux ELF, runtime, generator, tests under qemu and on ARM CI) built; R3 (registers) built; Windows on ARM and macOS built | L |
 | Doing | [A-11](cards/A-11-native-speed.md) | Native speed: S1 to S3 first rounds done (collatz 0.30 s to 0.09 s, C -O2 0.07 s); open work split in [a11-work-items.md](a11-work-items.md) | XL |
+| Doing | [A-12](cards/A-12-concurrency.md) | Concurrency built out: stackful tasks, scheduler, blocking channels, `select`, locks, coroutines, atomics, workers (plan in `docs/design/concurrency-runtime.md`) | XL |
 | Done | [A-09](cards/A-09-native-backend.md) | Native backend: x86-64 machine code, ELF and PE, straight from the IR (all stages and the leftovers: buffered print, float semantics, stack guard) | XL |
 
 ## Track B: tooling and identity
@@ -22,9 +23,9 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 | Card | Title | Revisit when |
 |---|---|---|
 | [S-01](cards/S-01-map-storage.md) | Our own map and set storage: O(1) removal, still insertion-ordered | A benchmark shows removal or iteration is slow, or the backend exists |
-| [S-02](cards/S-02-real-threads.md) | Real threads for tasks | The machine-code backend can emit atomics and thread start |
+| [S-02](cards/S-02-real-threads.md) | Real threads for tasks (superseded by A-12, stages C5 and C6) | The machine-code backend can emit atomics and thread start |
 | [S-03](cards/S-03-limits.md) | Smaller limits: many-call closures, static tables, a few more | Each line names its own trigger |
-| [S-04](cards/S-04-async-suspension.md) | async: suspension in the middle of a body (state machines) | Real threads exist, or a program needs many concurrent waits |
+| [S-04](cards/S-04-async-suspension.md) | async: suspension in the middle of a body (state machines; A-12 stage C7 proposes tasks instead) | Real threads exist, or a program needs many concurrent waits |
 
 ## Done
 
