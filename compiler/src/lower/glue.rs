@@ -377,13 +377,7 @@ impl<'a> Lowerer<'a> {
             TyKind::String => {
                 let len = self.load_at(src, 8, IrTy::I64);
                 let data = self.load_at(src, 0, IrTy::Ptr);
-                let buf = self
-                    .emit(Op::Alloc(len), Some(IrTy::Ptr), Span::new(0, 0))
-                    .unwrap_or(data);
-                self.emit(Op::MemCopy(buf, data, len), None, Span::new(0, 0));
-                self.store_at(dst, 0, buf);
-                self.store_at(dst, 8, len);
-                // An empty copy still owns its (zero-size) block; a capacity of at least 1 says so.
+                // An empty copy still owns a block of one byte; a capacity of at least 1 says so.
                 let one = self.i64c(1);
                 let big = self.emit(
                     Op::Cmp(CmpOp::Lt, len, one),
@@ -397,6 +391,12 @@ impl<'a> Lowerer<'a> {
                     },
                     None => len,
                 };
+                let buf = self
+                    .emit(Op::Alloc(cap), Some(IrTy::Ptr), Span::new(0, 0))
+                    .unwrap_or(data);
+                self.emit(Op::MemCopy(buf, data, len), None, Span::new(0, 0));
+                self.store_at(dst, 0, buf);
+                self.store_at(dst, 8, len);
                 self.store_at(dst, 16, cap);
             }
             TyKind::List(e) | TyKind::Iter(e) => {
@@ -411,11 +411,7 @@ impl<'a> Lowerer<'a> {
                         Span::new(0, 0),
                     )
                     .unwrap_or(len);
-                let buf = self
-                    .emit(Op::Alloc(bytes), Some(IrTy::Ptr), Span::new(0, 0))
-                    .unwrap_or(data);
-                self.store_at(dst, 0, buf);
-                self.store_at(dst, 8, len);
+                // An empty copy owns a block of one element; a capacity of at least 1 says so.
                 let one = self.i64c(1);
                 let small = self.emit(
                     Op::Cmp(CmpOp::Lt, len, one),
@@ -429,6 +425,18 @@ impl<'a> Lowerer<'a> {
                     },
                     None => len,
                 };
+                let block = self
+                    .emit(
+                        Op::Bin(BinOp::Mul, cap, sz),
+                        Some(IrTy::I64),
+                        Span::new(0, 0),
+                    )
+                    .unwrap_or(bytes);
+                let buf = self
+                    .emit(Op::Alloc(block), Some(IrTy::Ptr), Span::new(0, 0))
+                    .unwrap_or(data);
+                self.store_at(dst, 0, buf);
+                self.store_at(dst, 8, len);
                 self.store_at(dst, 16, cap);
                 if self.needs_drop(e) {
                     // Element by element.
