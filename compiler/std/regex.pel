@@ -1,0 +1,648 @@
+/// Regular expressions: `regex.compile` builds a matcher, `isMatch`, `find`, `findAll`, `replaceAll` use it.
+///
+/// ```
+/// import std.regex
+///
+/// const re = regex.compile("(a+)b|c")?
+/// print(re.isMatch("xaab"), re.findAll("ab c").len(), re.replaceAll("ab c", "<$0>"))
+/// ```
+///
+/// The matcher is a Pike VM: time grows with `text length * pattern length`, never exponentially.
+/// It works on bytes, so `.` and classes see UTF-8 text one byte at a time. Syntax: literals, `.`,
+/// `[a-z]`, `[^...]`, `\d \D \w \W \s \S \b \B`, `^ $`, `( )`, `(?: )`, `|`, `* + ?`, `{n}`, `{n,}`,
+/// `{n,m}` and lazy forms such as `*?`. Flags such as `(?i)` are not supported.
+
+//~ A match: where it starts and ends, and the start and end of each group (`-1` for a group that
+//~ did not take part). Group 0 is the whole match.
+pub struct found {
+    pub start: int
+    pub end: int
+    pub groups: [int]
+}
+
+//~ A compiled pattern.
+pub struct regex {
+    op: [int]
+    x: [int]
+    y: [int]
+    ranges: [int]
+    classes: [int]
+    groupCount: int
+}
+
+/// Instruction codes.
+const CHAR: int = 0
+const ANY: int = 1
+const CLASS: int = 2
+const SPLIT: int = 3
+const JMP: int = 4
+const SAVE: int = 5
+const ASSERT: int = 6
+const MATCH: int = 7
+
+/// Syntax tree node kinds.
+const N_EMPTY: int = 0
+const N_BYTE: int = 1
+const N_ANY: int = 2
+const N_CLASS: int = 3
+const N_CAT: int = 4
+const N_ALT: int = 5
+const N_STAR: int = 6
+const N_PLUS: int = 7
+const N_QUEST: int = 8
+const N_GROUP: int = 9
+const N_ASSERT: int = 10
+const N_REPEAT: int = 11
+
+struct tree {
+    kind: [int]
+    a: [int]
+    b: [int]
+    c: [int]
+    d: [int]
+}
+
+struct parser {
+    nodes: tree
+    ranges: [int]
+    classes: [int]
+    groups: int
+    pos: int
+}
+
+fn fail(sink message: string) -> parse_error = parse_error { message: message }
+
+fn node(inout p: parser, kind: int, a: int, b: int, c: int, d: int) -> int {
+    p.nodes.kind.push!(kind)
+    p.nodes.a.push!(a)
+    p.nodes.b.push!(b)
+    p.nodes.c.push!(c)
+    p.nodes.d.push!(d)
+    p.nodes.kind.len() - 1
+}
+
+fn addRange(inout p: parser, lo: int, hi: int) {
+    p.ranges.push!(lo)
+    p.ranges.push!(hi)
+}
+
+fn addEscapeRanges(inout p: parser, e: int) -> bool {
+    if e == 100 {
+        addRange(inout p, 48, 57)
+    } else if e == 119 {
+        addRange(inout p, 48, 57)
+        addRange(inout p, 65, 90)
+        addRange(inout p, 95, 95)
+        addRange(inout p, 97, 122)
+    } else if e == 115 {
+        addRange(inout p, 9, 13)
+        addRange(inout p, 32, 32)
+    } else {
+        return false
+    }
+    true
+}
+
+fn escapedByte(e: int) -> int {
+    if e == 110 { return 10 }
+    if e == 116 { return 9 }
+    if e == 114 { return 13 }
+    if e == 102 { return 12 }
+    if e == 118 { return 11 }
+    e
+}
+
+fn peek(p: parser, s: str) -> int = p.pos < s.len() ? s.byteAt(p.pos) to int : -1
+
+fn parseClass(inout p: parser, s: str) -> int ! parse_error {
+    /// The `[` is already read.
+    const start = p.ranges.len()
+    var neg = 0
+    if peek(p, s) == 94 {
+        neg = 1
+        p.pos += 1
+    }
+    var first = true
+    while true {
+        const c = peek(p, s)
+        if c < 0 { return err(fail("the character class is not closed")) }
+        if c == 93 && !first {
+            p.pos += 1
+            break
+        }
+        first = false
+        p.pos += 1
+        var lo = c
+        if c == 92 {
+            const e = peek(p, s)
+            if e < 0 { return err(fail("a pattern cannot end with a backslash")) }
+            p.pos += 1
+            if addEscapeRanges(inout p, e) { continue }
+            lo = escapedByte(e)
+        }
+        var hi = lo
+        if peek(p, s) == 45 && p.pos + 1 < s.len() && s.byteAt(p.pos + 1) != 93 {
+            p.pos += 1
+            var h = peek(p, s)
+            p.pos += 1
+            if h == 92 {
+                const e = peek(p, s)
+                if e < 0 { return err(fail("a pattern cannot end with a backslash")) }
+                p.pos += 1
+                h = escapedByte(e)
+            }
+            if h < lo { return err(fail("a character range is backwards")) }
+            hi = h
+        }
+        addRange(inout p, lo, hi)
+    }
+    const count = (p.ranges.len() - start) / 2
+    p.classes.push!(start)
+    p.classes.push!(count)
+    p.classes.push!(neg)
+    ok(p.classes.len() / 3 - 1)
+}
+
+/// \d \w \s and their capitals, \b \B, or a plain escaped byte.
+fn escapeNode(inout p: parser, e: int) -> int {
+    if e == 100 || e == 119 || e == 115 || e == 68 || e == 87 || e == 83 {
+        const start = p.ranges.len()
+        const lower = e >= 97 ? e : e + 32
+        addEscapeRanges(inout p, lower)
+        p.classes.push!(start)
+        p.classes.push!((p.ranges.len() - start) / 2)
+        p.classes.push!(e >= 97 ? 0 : 1)
+        return node(inout p, N_CLASS, p.classes.len() / 3 - 1, 0, 0, 0)
+    }
+    if e == 98 { return node(inout p, N_ASSERT, 2, 0, 0, 0) }
+    if e == 66 { return node(inout p, N_ASSERT, 3, 0, 0, 0) }
+    node(inout p, N_BYTE, escapedByte(e), 0, 0, 0)
+}
+
+fn parseNumber(inout p: parser, s: str) -> int {
+    var n = -1
+    while peek(p, s) >= 48 && peek(p, s) <= 57 {
+        if n < 0 { n = 0 }
+        if n < 100000 { n = n * 10 + (peek(p, s) - 48) }
+        p.pos += 1
+    }
+    n
+}
+
+fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
+    const c = peek(p, s)
+    p.pos += 1
+    if c == 40 {
+        var capture = true
+        if peek(p, s) == 63 {
+            if p.pos + 1 < s.len() && s.byteAt(p.pos + 1) == 58 {
+                capture = false
+                p.pos += 2
+            } else {
+                return err(fail("this group syntax is not supported"))
+            }
+        }
+        var index = 0
+        if capture {
+            p.groups += 1
+            index = p.groups
+        }
+        const inner = parseAlt(inout p, s, depth + 1)?
+        if peek(p, s) != 41 { return err(fail("a group is not closed")) }
+        p.pos += 1
+        if !capture { return ok(inner) }
+        return ok(node(inout p, N_GROUP, inner, index, 0, 0))
+    }
+    if c == 91 {
+        const index = parseClass(inout p, s)?
+        return ok(node(inout p, N_CLASS, index, 0, 0, 0))
+    }
+    if c == 46 { return ok(node(inout p, N_ANY, 0, 0, 0, 0)) }
+    if c == 94 { return ok(node(inout p, N_ASSERT, 0, 0, 0, 0)) }
+    if c == 36 { return ok(node(inout p, N_ASSERT, 1, 0, 0, 0)) }
+    if c == 92 {
+        const e = peek(p, s)
+        if e < 0 { return err(fail("a pattern cannot end with a backslash")) }
+        p.pos += 1
+        return ok(escapeNode(inout p, e))
+    }
+    if c == 42 || c == 43 || c == 63 { return err(fail("a repeat has nothing to repeat")) }
+    ok(node(inout p, N_BYTE, c, 0, 0, 0))
+}
+
+fn parseRepeat(inout p: parser, s: str, depth: int) -> int ! parse_error {
+    var atom = parseAtom(inout p, s, depth)?
+    while true {
+        const c = peek(p, s)
+        var kind = -1
+        var lo = 0
+        var hi = -1
+        if c == 42 {
+            kind = N_STAR
+        } else if c == 43 {
+            kind = N_PLUS
+        } else if c == 63 {
+            kind = N_QUEST
+        } else if c == 123 {
+            const save = p.pos
+            p.pos += 1
+            const a = parseNumber(inout p, s)
+            if a >= 0 {
+                lo = a
+                hi = a
+                if peek(p, s) == 44 {
+                    p.pos += 1
+                    hi = parseNumber(inout p, s)
+                }
+            }
+            if a < 0 || peek(p, s) != 125 {
+                /// Not a repeat: a plain `{`, left for the next atom.
+                p.pos = save
+                break
+            }
+            if hi >= 0 && hi < lo { return err(fail("a repeat count is backwards")) }
+            if lo > 1000 || hi > 1000 { return err(fail("a repeat count is too large")) }
+            kind = N_REPEAT
+        } else {
+            break
+        }
+        p.pos += 1
+        var greedy = 1
+        if peek(p, s) == 63 {
+            greedy = 0
+            p.pos += 1
+        }
+        if kind == N_REPEAT {
+            atom = node(inout p, kind, atom, lo, hi, greedy)
+        } else {
+            atom = node(inout p, kind, atom, greedy, 0, 0)
+        }
+    }
+    ok(atom)
+}
+
+fn parseCat(inout p: parser, s: str, depth: int) -> int ! parse_error {
+    var left = node(inout p, N_EMPTY, 0, 0, 0, 0)
+    var first = true
+    while true {
+        const c = peek(p, s)
+        if c < 0 || c == 124 || c == 41 { break }
+        const right = parseRepeat(inout p, s, depth)?
+        if first {
+            left = right
+            first = false
+        } else {
+            left = node(inout p, N_CAT, left, right, 0, 0)
+        }
+    }
+    ok(left)
+}
+
+fn parseAlt(inout p: parser, s: str, depth: int) -> int ! parse_error {
+    if depth > 200 { return err(fail("the pattern is nested too deeply")) }
+    var left = parseCat(inout p, s, depth)?
+    while peek(p, s) == 124 {
+        p.pos += 1
+        const right = parseCat(inout p, s, depth)?
+        left = node(inout p, N_ALT, left, right, 0, 0)
+    }
+    ok(left)
+}
+
+/// ---- Compiling to instructions ----------------------------------------------------------------------
+
+struct code {
+    op: [int]
+    x: [int]
+    y: [int]
+}
+
+fn emit(inout c: code, op: int, x: int, y: int) -> int {
+    c.op.push!(op)
+    c.x.push!(x)
+    c.y.push!(y)
+    c.op.len() - 1
+}
+
+/// Sets the two branches of a split: `body` is taken first when `greedy`, `after` first otherwise.
+fn splitTo(inout c: code, split: int, body: int, after: int, greedy: bool) {
+    c.x[split] = greedy ? body : after
+    c.y[split] = greedy ? after : body
+}
+
+fn compileNode(inout c: code, t: tree, n: int) {
+    const kind = t.kind[n]
+    if kind == N_BYTE {
+        emit(inout c, CHAR, t.a[n], 0)
+    } else if kind == N_ANY {
+        emit(inout c, ANY, 0, 0)
+    } else if kind == N_CLASS {
+        emit(inout c, CLASS, t.a[n], 0)
+    } else if kind == N_CAT {
+        compileNode(inout c, t, t.a[n])
+        compileNode(inout c, t, t.b[n])
+    } else if kind == N_ALT {
+        const split = emit(inout c, SPLIT, 0, 0)
+        c.x[split] = c.op.len()
+        compileNode(inout c, t, t.a[n])
+        const jmp = emit(inout c, JMP, 0, 0)
+        c.y[split] = c.op.len()
+        compileNode(inout c, t, t.b[n])
+        c.x[jmp] = c.op.len()
+    } else if kind == N_STAR {
+        const split = emit(inout c, SPLIT, 0, 0)
+        const body = c.op.len()
+        compileNode(inout c, t, t.a[n])
+        emit(inout c, JMP, split, 0)
+        splitTo(inout c, split, body, c.op.len(), t.b[n] == 1)
+    } else if kind == N_PLUS {
+        const body = c.op.len()
+        compileNode(inout c, t, t.a[n])
+        const split = emit(inout c, SPLIT, 0, 0)
+        splitTo(inout c, split, body, c.op.len(), t.b[n] == 1)
+    } else if kind == N_QUEST {
+        const split = emit(inout c, SPLIT, 0, 0)
+        const body = c.op.len()
+        compileNode(inout c, t, t.a[n])
+        splitTo(inout c, split, body, c.op.len(), t.b[n] == 1)
+    } else if kind == N_GROUP {
+        emit(inout c, SAVE, 2 * t.b[n], 0)
+        compileNode(inout c, t, t.a[n])
+        emit(inout c, SAVE, 2 * t.b[n] + 1, 0)
+    } else if kind == N_ASSERT {
+        emit(inout c, ASSERT, t.a[n], 0)
+    } else if kind == N_REPEAT {
+        const lo = t.b[n]
+        const hi = t.c[n]
+        const greedy = t.d[n] == 1
+        var i = 0
+        while i < lo {
+            compileNode(inout c, t, t.a[n])
+            i += 1
+        }
+        if hi < 0 {
+            const split = emit(inout c, SPLIT, 0, 0)
+            const body = c.op.len()
+            compileNode(inout c, t, t.a[n])
+            emit(inout c, JMP, split, 0)
+            splitTo(inout c, split, body, c.op.len(), greedy)
+        } else {
+            var pending: [int] = []
+            var k = lo
+            while k < hi {
+                pending.push!(emit(inout c, SPLIT, 0, 0))
+                compileNode(inout c, t, t.a[n])
+                k += 1
+            }
+            var j = 0
+            while j < pending.len() {
+                splitTo(inout c, pending[j], pending[j] + 1, c.op.len(), greedy)
+                j += 1
+            }
+        }
+    }
+}
+
+//~ Builds a matcher from the pattern text.
+pub fn compile(pattern: str) -> regex ! parse_error {
+    var p = parser {
+        nodes: tree { kind: [], a: [], b: [], c: [], d: [] },
+        ranges: [],
+        classes: [],
+        groups: 0,
+        pos: 0,
+    }
+    const root = parseAlt(inout p, pattern, 0)?
+    if p.pos < pattern.len() { return err(fail("an unmatched `)`")) }
+    var c = code { op: [], x: [], y: [] }
+    emit(inout c, SAVE, 0, 0)
+    compileNode(inout c, p.nodes, root)
+    emit(inout c, SAVE, 1, 0)
+    emit(inout c, MATCH, 0, 0)
+    ok(regex {
+        op: copy c.op,
+        x: copy c.x,
+        y: copy c.y,
+        ranges: copy p.ranges,
+        classes: copy p.classes,
+        groupCount: p.groups,
+    })
+}
+
+/// ---- Running ---------------------------------------------------------------------------------------
+
+/// The threads of one step: program counters and their capture slots, flattened.
+struct threads {
+    pcs: [int]
+    caps: [int]
+    mark: [int]
+}
+
+fn isWord(b: int) -> bool = (b >= 48 && b <= 57) ||
+    (b >= 65 && b <= 90) ||
+    b == 95 ||
+    (b >= 97 && b <= 122)
+
+fn classHas(re: regex, index: int, b: int) -> bool {
+    const start = re.classes[index * 3]
+    const count = re.classes[index * 3 + 1]
+    var inside = false
+    var i = 0
+    while i < count {
+        if b >= re.ranges[start + 2 * i] && b <= re.ranges[start + 2 * i + 1] {
+            inside = true
+            break
+        }
+        i += 1
+    }
+    re.classes[index * 3 + 2] == 1 ? !inside : inside
+}
+
+fn addThread(re: regex, text: str, inout list: threads, pc: int, pos: int, caps: [int], gen: int) {
+    if list.mark[pc] == gen { return }
+    list.mark[pc] = gen
+    const op = re.op[pc]
+    if op == JMP {
+        addThread(re, text, inout list, re.x[pc], pos, caps, gen)
+    } else if op == SPLIT {
+        addThread(re, text, inout list, re.x[pc], pos, caps, gen)
+        addThread(re, text, inout list, re.y[pc], pos, caps, gen)
+    } else if op == SAVE {
+        var next = copy caps
+        next[re.x[pc]] = pos
+        addThread(re, text, inout list, pc + 1, pos, next, gen)
+    } else if op == ASSERT {
+        const kind = re.x[pc]
+        const before = pos > 0 ? text.byteAt(pos - 1) to int : -1
+        const after = pos < text.len() ? text.byteAt(pos) to int : -1
+        var holds = false
+        if kind == 0 {
+            holds = pos == 0
+        } else if kind == 1 {
+            holds = pos == text.len()
+        } else {
+            const edge = (before >= 0 && isWord(before)) != (after >= 0 && isWord(after))
+            holds = kind == 2 ? edge : !edge
+        }
+        if holds { addThread(re, text, inout list, pc + 1, pos, caps, gen) }
+    } else {
+        list.pcs.push!(pc)
+        var i = 0
+        while i < caps.len() {
+            list.caps.push!(caps[i])
+            i += 1
+        }
+    }
+}
+
+fn slice(from: [int], start: int, end: int) -> [int] {
+    var out: [int] = []
+    var i = start
+    while i < end {
+        out.push!(from[i])
+        i += 1
+    }
+    out
+}
+
+/// The slots of the first match at or after `from`, or an empty list.
+fn run(re: regex, text: str, from: int) -> [int] {
+    const slots = 2 * (re.groupCount + 1)
+    var current = threads { pcs: [], caps: [], mark: [] }
+    var following = threads { pcs: [], caps: [], mark: [] }
+    var i = 0
+    while i < re.op.len() {
+        current.mark.push!(-1)
+        following.mark.push!(-1)
+        i += 1
+    }
+    var matched: [int] = []
+    var pos = from
+    var gen = 0
+    while pos <= text.len() {
+        if matched.len() == 0 {
+            var start: [int] = []
+            var k = 0
+            while k < slots {
+                start.push!(-1)
+                k += 1
+            }
+            addThread(re, text, inout current, 0, pos, start, gen)
+        }
+        if current.pcs.len() == 0 && matched.len() > 0 { break }
+        const byte = pos < text.len() ? text.byteAt(pos) to int : -1
+        var t = 0
+        while t < current.pcs.len() {
+            const pc = current.pcs[t]
+            const op = re.op[pc]
+            var advance = false
+            if op == MATCH {
+                matched = slice(current.caps, t * slots, (t + 1) * slots)
+                break
+            } else if op == CHAR {
+                advance = byte == re.x[pc]
+            } else if op == ANY {
+                advance = byte >= 0 && byte != 10
+            } else if op == CLASS {
+                advance = byte >= 0 && classHas(re, re.x[pc], byte)
+            }
+            if advance {
+                const carried = slice(current.caps, t * slots, (t + 1) * slots)
+                addThread(re, text, inout following, pc + 1, pos + 1, carried, gen + 1)
+            }
+            t += 1
+        }
+        /// The next step's threads become the current ones.
+        const nextPcs = copy following.pcs
+        const nextCaps = copy following.caps
+        following.pcs = []
+        following.caps = []
+        current.pcs = nextPcs
+        current.caps = nextCaps
+        const marks = copy current.mark
+        current.mark = copy following.mark
+        following.mark = marks
+        gen += 1
+        pos += 1
+    }
+    matched
+}
+
+impl regex {
+    //~ The number of capture groups, not counting the whole match.
+    fn groups(self) -> int = self.groupCount
+
+    //~ Whether the pattern matches anywhere in `text`.
+    fn isMatch(self, text: str) -> bool = run(self, text, 0).len() > 0
+
+    //~ The first match.
+    fn find(self, text: str) -> found? {
+        const slots = run(self, text, 0)
+        if slots.len() == 0 { return none }
+        found { start: slots[0], end: slots[1], groups: slots }
+    }
+
+    //~ Every match, left to right, without overlaps. An empty match moves on by one byte.
+    fn findAll(self, text: str) -> [found] {
+        var out: [found] = []
+        var from = 0
+        while from <= text.len() {
+            const slots = run(self, text, from)
+            if slots.len() == 0 { break }
+            const start = slots[0]
+            const end = slots[1]
+            out.push!(found { start: start, end: end, groups: slots })
+            from = end > start ? end : end + 1
+        }
+        out
+    }
+
+    //~ How many matches `findAll` would give.
+    fn count(self, text: str) -> int = self.findAll(text).len()
+
+    //~ Replaces every match. `$0` to `$9` in `replacement` stand for the whole match and the groups, `$$` for a dollar sign.
+    fn replaceAll(self, text: str, replacement: str) -> string {
+        var out = ""
+        var last = 0
+        const hits = self.findAll(text)
+        var h = 0
+        while h < hits.len() {
+            const hit = copy hits[h]
+            out.pushStr!(text[last..hit.start])
+            var i = 0
+            while i < replacement.len() {
+                const b = replacement.byteAt(i) to int
+                if b == 36 && i + 1 < replacement.len() {
+                    const d = replacement.byteAt(i + 1) to int
+                    if d == 36 {
+                        out.pushByte!(replacement.byteAt(i))
+                        i += 2
+                        continue
+                    }
+                    if d >= 48 && d <= 57 {
+                        const g = d - 48
+                        if g <= self.groupCount && hit.groups[2 * g] >= 0 {
+                            out.pushStr!(text[hit.groups[2 * g]..hit.groups[2 * g + 1]])
+                        }
+                        i += 2
+                        continue
+                    }
+                }
+                out.pushByte!(replacement.byteAt(i))
+                i += 1
+            }
+            last = hit.end
+            h += 1
+        }
+        out.pushStr!(text[last..text.len()])
+        out
+    }
+}
+
+impl found {
+    //~ The text of group `n` (0 is the whole match), or `none` when the group did not take part.
+    fn group(self, text: str, n: int) -> string? {
+        if n < 0 || 2 * n + 1 >= self.groups.len() || self.groups[2 * n] < 0 { return none }
+        "#(text[self.groups[2 * n]..self.groups[2 * n + 1]])"
+    }
+}

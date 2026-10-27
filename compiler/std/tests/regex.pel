@@ -1,0 +1,101 @@
+/// `std.regex`; the expected lines come from Python's `re`.
+import std.regex
+
+fn t(pattern: str, text: str) -> int ! parse_error {
+    const re = regex.compile(pattern)?
+    var spans = ""
+    const hits = re.findAll(text)
+    var i = 0
+    while i < hits.len() {
+        spans.pushStr!("#(hits[i].start)-#(hits[i].end) ")
+        i += 1
+    }
+    print(re.isMatch(text), hits.len(), spans.trim(), re.replaceAll(text, "<$0>"))
+    ok(0)
+}
+
+fn main() {
+    t("abc", "xabcabcx").or(1)
+    t("a+", "caaab aa").or(1)
+    t("a*", "baac").or(1)
+    t("a+?", "aaa").or(1)
+    t("(a+)(b+)", "aabbb ab abbb").or(1)
+    t("(a|b)+c", "abac bbc c").or(1)
+    t("(?:ab)+", "ababab ab").or(1)
+    t("[a-c]+", "abcdabc").or(1)
+    t("[^a-c]+", "abcdxyzabc").or(1)
+    t("\\d+", "a12b345").or(1)
+    t("\\w+", "hi there_1 !").or(1)
+    t("\\s+", "a  b\tc").or(1)
+    t("\\D+", "12ab34").or(1)
+    t("\\W+", "a, b.").or(1)
+    t("^a", "aa\na").or(1)
+    t("a$", "aa\na").or(1)
+    t("^$", "").or(1)
+    t("\\bcat\\b", "cat concat cat.").or(1)
+    t("\\Bat", "cat at").or(1)
+    t("a{2}", "aaaaa").or(1)
+    t("a{2,}", "a aa aaaa").or(1)
+    t("a{1,2}", "aaaaa").or(1)
+    t("a{2,3}?", "aaaaa").or(1)
+    t("x*y", "xxy y xy").or(1)
+    t("(a)(b)?", "ab a").or(1)
+    t("colou?r", "color colour").or(1)
+    t("[a-z]+@[a-z]+\\.com", "me@site.com you@x.org").or(1)
+    t("a.c", "abc a\nc a-c").or(1)
+    t("(\\w+)@(\\w+)", "bob@home sue@work").or(1)
+    t("tHa[Nt]", "tHaN tHat tHab").or(1)
+    t("agggtaaa|tttaccct", "xagggtaaa tttaccct").or(1)
+    t("[cgt]gggtaaa|tttaccc[acg]", "cgggtaaa tttaccca").or(1)
+    t("(ab|a)(bc|c)?", "abc ac").or(1)
+    t("\\.", "a.b.c").or(1)
+    t("[.\\-]+", "a.-.b").or(1)
+    t("\\\\", "a\\b").or(1)
+    t("a|b|c", "abcd").or(1)
+    t("(a*)*b", "aaab").or(1)
+    t("(a*)+", "aa").or(1)
+    t("z", "aaa").or(1)
+    t("a{0}b", "ab").or(1)
+    print(
+        regex.compile("(").isOk(),
+        regex.compile("a)").isOk(),
+        regex.compile("[a").isOk(),
+        regex.compile("*a").isOk(),
+        regex.compile("a\\").isOk(),
+        regex.compile("a{3,2}").isOk(),
+    )
+    print(groups())
+    print(slow())
+}
+
+fn groups() -> int ! parse_error {
+    const re = regex.compile("(\\w+)@(\\w+)(x)?")?
+    const hit = re.find("mail bob@home now")
+    switch hit {
+        case some(h): print(
+            h.start,
+            h.end,
+            h.group("mail bob@home now", 0),
+            h.group("mail bob@home now", 1),
+            h.group("mail bob@home now", 2),
+            h.group("mail bob@home now", 3),
+            h.group("mail bob@home now", 4),
+        )
+        case none: print("no match")
+    }
+    print(re.groups(), re.count("a@b c@d e"), re.replaceAll("a@b c@d", "$2.$1 $$ $3|"))
+    ok(0)
+}
+
+/// A pattern that makes a backtracking matcher take exponential time.
+fn slow() -> int ! parse_error {
+    const re = regex.compile("(a*)*c")?
+    var text = ""
+    var i = 0
+    while i < 200 {
+        text.pushStr!("a")
+        i += 1
+    }
+    print(re.isMatch(text), re.isMatch("#(text)c"))
+    ok(0)
+}

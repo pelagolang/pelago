@@ -35,6 +35,7 @@ pub const CORE_MODULES: &[(&str, &str)] = &[
 pub const STD_MODULES: &[(&str, &str)] = &[
     ("big", include_str!("../std/big.pel")),
     ("json", include_str!("../std/json.pel")),
+    ("regex", include_str!("../std/regex.pel")),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
