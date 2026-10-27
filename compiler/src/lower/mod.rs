@@ -128,6 +128,7 @@ pub(crate) struct FnEntry<'a> {
     pub file: ModuleId,
     pub decl: &'a FnDecl,
     pub mods: &'a Modifiers,
+    pub attrs: &'a [Attr],
 }
 
 /// A module-level constant or variable: its initializer is evaluated where it is used.
@@ -312,6 +313,7 @@ impl<'a> Lowerer<'a> {
                             file,
                             decl: f,
                             mods: &item.mods,
+                            attrs: &item.attrs,
                         },
                     );
                 }
@@ -609,7 +611,7 @@ impl<'a> Lowerer<'a> {
         let Some(entry) = self.fns.get(&def) else {
             return;
         };
-        let (file, decl) = (entry.file, entry.decl);
+        let (file, decl, attrs) = (entry.file, entry.decl, entry.attrs);
         if matches!(decl.body, FnBody::None) {
             // An `ext` function: the compiler supplies it.
             self.lower_intrinsic_job(id, def, &subst);
@@ -632,6 +634,10 @@ impl<'a> Lowerer<'a> {
             (Ok(()), None) => {
                 let mut func = st.func;
                 func.compact();
+                let src = &self.program.module(file).src;
+                if attrs.iter().any(|a| a.name.text(src) == "checkfree") {
+                    func.checkfree = Some((file.0, decl.name.span));
+                }
                 self.module.funcs[id.0 as usize] = func;
             }
             (_, fail) => {

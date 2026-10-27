@@ -405,6 +405,9 @@ pub struct Block {
     /// The header of a loop that finishes what a vectorised loop left over (or is the vector loop):
     /// the unroller and the vectoriser leave it alone.
     pub tail: bool,
+    /// The checked copy of a loop that `opt::bce` made a check-free copy of: it runs only when the
+    /// guard in front of the loops fails, so `@checkfree` does not count what it still tests.
+    pub slow: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -416,6 +419,10 @@ pub struct Func {
     pub values: Vec<IrTy>,
     pub blocks: Vec<Block>,
     pub insts: Vec<Inst>,
+    /// Set for a function written `@checkfree`: the module and the declaration it came from. The
+    /// optimiser keeps it a function of its own, and the build fails when an index test is left on
+    /// its fast path (`opt::kept_checks`).
+    pub checkfree: Option<(u32, Span)>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -457,6 +464,7 @@ impl Func {
             values: Vec::new(),
             blocks: Vec::new(),
             insts: Vec::new(),
+            checkfree: None,
         };
         let entry = f.new_block(params);
         debug_assert_eq!(entry, BlockId(0));

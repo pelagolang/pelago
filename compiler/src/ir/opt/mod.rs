@@ -13,6 +13,7 @@
 
 #![allow(clippy::needless_range_loop)]
 
+mod bce;
 mod cache;
 mod cfg;
 mod constdata;
@@ -47,6 +48,7 @@ mod undo;
 mod unroll;
 mod vectorise;
 
+pub use bce::kept_checks;
 pub use fill::{fill_loops, filled_slots, FillLoop};
 pub use fx::{HashMap as FxHashMap, HashSet as FxHashSet};
 pub use inline::{drop_idle_task_drain, prune};
@@ -171,6 +173,7 @@ fn rounds(f: &mut Func, divs: bool) {
         changed |= step(f, "licm", licm::run);
         changed |= step(f, "ivopt", ivopt::run);
         if divs {
+            changed |= step(f, "bce", bce::run);
             changed |= step(f, "thread", thread::run);
             changed |= step(f, "ifconv", ifconv::run);
         }

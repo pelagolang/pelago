@@ -61,6 +61,16 @@
   (fn find ((xs : (list string)) (name : string)) -> (option int) (block (tail none)))
   (const index (?? (call find names (str "Dennis")) (neg 1)))
   (fn (@ inline) square ((x : int)) -> int = (* x x))
+  (fn
+    (@ checkfree)
+    dot
+    ((a : (list int)) (b : (list int)))
+    ->
+    int
+    (block
+      (var s 0)
+      (for-in i (.. 0 (call (. b len))) (block (tail (+= s (* (index a i) (index b i))))))
+      (tail (return s))))
   (fn meta build_table () -> (array int 256) (block (tail table)))
   (const table (meta (call build_table)))
   (fn max (generics (T ordered)) ((a : T) (b : T)) -> T (block (tail (?: (> a b) a b))))

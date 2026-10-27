@@ -409,6 +409,23 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
         }
         pelago::ir::opt::optimize(&mut module, pelago::ir::opt::Options::default());
         pelago::ir::opt::prune(&mut module, &["main"]);
+        // `@checkfree` is judged on the optimised code.
+        for f in &module.funcs {
+            let Some((file, span)) = f.checkfree else {
+                continue;
+            };
+            let kept = pelago::ir::opt::kept_checks(f);
+            if kept > 0 {
+                let module = program.module(pelago::package::ModuleId(file));
+                let index = LineIndex::new(&module.src);
+                let (line, col) = index.line_col(&module.src, span.start);
+                eprintln!(
+                    "{}:{line}:{col}: error: `{}` is `@checkfree` but keeps {kept} index test(s) the optimiser could not prove",
+                    module.path, f.name
+                );
+                failed = true;
+            }
+        }
         timer.lap("optimise IR");
         if timer.on {
             for (name, d, runs) in pelago::ir::opt::pass_times().iter().take(8) {
