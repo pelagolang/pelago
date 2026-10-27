@@ -796,6 +796,28 @@ impl Asm {
         self.sse(Some(p), false, &[0x0F, op as u8], dst.0, Rm::Reg(src.0));
     }
 
+    /// `dst = sqrt(src)` (`sqrtsd` / `sqrtss`), correctly rounded.
+    pub fn fsqrt(&mut self, dst: Xmm, src: Xmm, double: bool) {
+        let p = if double { 0xF2 } else { 0xF3 };
+        self.sse(Some(p), false, &[0x0F, 0x51], dst.0, Rm::Reg(src.0));
+    }
+
+    /// `dst = src` rounded to a whole number (`roundsd` / `roundss`, SSE4.1): `mode` 1 rounds down, 2 up. Bit 3
+    /// keeps the "inexact" flag quiet.
+    pub fn fround(&mut self, dst: Xmm, src: Xmm, mode: u8, double: bool) {
+        let op = if double { 0x0B } else { 0x0A };
+        self.op(
+            Some(0x66),
+            false,
+            &[0x0F, 0x3A, op],
+            dst.0,
+            Rm::Reg(src.0),
+            false,
+            1,
+        );
+        self.byte(mode | 8);
+    }
+
     /// Compares and sets the flags like an unsigned compare; the parity flag marks "unordered".
     pub fn fcmp(&mut self, a: Xmm, b: Xmm, double: bool) {
         let p = double.then_some(0x66);

@@ -1,0 +1,84 @@
+/// `option` and `result`.
+
+impl<T> option<T> {
+    fn isSome(self) -> bool {
+        switch self {
+            case some(_): true
+            case none: false
+        }
+    }
+
+    fn isNone(self) -> bool = !self.isSome()
+
+    fn unwrapOr(self, fallback: T) -> T {
+        switch self {
+            case some(v): rt_clone<T>(rt_addr_of(v))
+            case none: rt_clone<T>(rt_addr_of(fallback))
+        }
+    }
+
+    fn map<U>(self, f: fn(T) -> U) -> U? {
+        switch self {
+            case some(v): f(rt_clone<T>(rt_addr_of(v)))
+            case none: none
+        }
+    }
+
+    fn orErr<E>(self, e: E) -> T ! E {
+        switch self {
+            case some(v): ok(rt_clone<T>(rt_addr_of(v)))
+            case none: err(rt_clone<E>(rt_addr_of(e)))
+        }
+    }
+}
+
+impl<T, E> result<T, E> {
+    fn ok(self) -> T? {
+        switch self {
+            case ok(v): return rt_clone<T>(rt_addr_of(v))
+            case err(_): return none
+        }
+    }
+
+    fn isOk(self) -> bool {
+        switch self {
+            case ok(_): true
+            case err(_): false
+        }
+    }
+
+    fn isErr(self) -> bool = !self.isOk()
+
+    fn or(self, fallback: T) -> T {
+        switch self {
+            case ok(v): rt_clone<T>(rt_addr_of(v))
+            case err(_): rt_clone<T>(rt_addr_of(fallback))
+        }
+    }
+
+    fn mapErr<F>(self, f: fn(E) -> F) -> T ! F {
+        switch self {
+            case ok(v): ok(rt_clone<T>(rt_addr_of(v)))
+            case err(e): err(f(rt_clone<E>(rt_addr_of(e))))
+        }
+    }
+
+    //~ Adds a line of context to the error: `context: error`.
+    fn context(self, message: str) -> T ! error {
+        switch self {
+            case ok(v): ok(rt_clone<T>(rt_addr_of(v)))
+            case err(e): {
+                var text = ""
+                rt_str_push(
+                    rt_addr_of(text),
+                    rt_hdr_data(rt_addr_of(message)),
+                    rt_hdr_len(rt_addr_of(message)),
+                )
+                rt_push_char(rt_addr_of(text), ':')
+                rt_push_char(rt_addr_of(text), ' ')
+                rt_show_to<E>(rt_addr_of(e), rt_addr_of(text))
+                err(rt_cast<string, error>(sink text))
+            }
+        }
+    }
+}

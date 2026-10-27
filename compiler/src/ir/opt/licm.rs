@@ -72,6 +72,8 @@ fn candidates(f: &Func, dom: &Dom, lp: &Loop) -> Vec<usize> {
                         | Op::Alloc(_)
                         | Op::Realloc(..)
                         | Op::Free(_)
+                        | Op::CtxInit(..)
+                        | Op::CtxSwitch(..)
                 );
             }
         }

@@ -112,6 +112,8 @@ pub mod op {
     pub const RT_FREE: i64 = 1;
     pub const RT_REALLOC: i64 = 2;
     pub const RT_PRINT: i64 = 3;
+    pub const RT_CTX_INIT: i64 = 4;
+    pub const RT_CTX_SWITCH: i64 = 5;
     /// Epilogue and `ret`; `[rax Use]` when a value is returned.
     pub const RET: u16 = B + 31;
     /// Stop the program with the message number `Imm`: `[Imm n]`.
@@ -177,7 +179,9 @@ pub mod op {
     pub const VALU_XOR: i64 = 4;
     /// `rep stos` of `Imm` bytes per element: `[rdi UseDef, rax Use, rcx UseDef, Imm width]`.
     pub const REP_STOS: u16 = B + 61;
-    pub const COUNT: u16 = B + 62;
+    /// `d = sqrt / floor / ceil of s`: `[d Def, s Use, Imm kind (0, 1, 2), Imm double]`.
+    pub const FUN: u16 = B + 62;
+    pub const COUNT: u16 = B + 63;
 }
 
 /// Symbols: the shared stop routines, then the functions of the module.

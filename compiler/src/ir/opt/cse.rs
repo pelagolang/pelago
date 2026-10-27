@@ -11,8 +11,8 @@
 //! (checked or not), which the constants of inlined code and struct fields leave behind.
 
 use super::dom::Dom;
+use super::fx::HashMap;
 use crate::ir::*;
-use std::collections::HashMap;
 use std::mem::{discriminant, Discriminant};
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -55,7 +55,7 @@ pub fn run(f: &mut Func) -> bool {
     let dom = Dom::new(f);
     let defs = f.defs();
     // Operand identity: a constant is named by its value, anything else by its number.
-    let mut consts: HashMap<ConstKey, u64> = HashMap::new();
+    let mut consts: HashMap<ConstKey, u64> = HashMap::default();
     let mut name: Vec<u64> = (0..f.values.len() as u64).collect();
     for (v, d) in defs.iter().enumerate() {
         if let Some(d) = d {
@@ -72,9 +72,9 @@ pub fn run(f: &mut Func) -> bool {
             cval[v] = Some(*n);
         }
     }
-    let mut rep: HashMap<Value, Value> = HashMap::new();
+    let mut rep: HashMap<Value, Value> = HashMap::default();
     let mut gone: Vec<usize> = Vec::new();
-    let mut seen: HashMap<Key, Vec<(Value, BlockId)>> = HashMap::new();
+    let mut seen: HashMap<Key, Vec<(Value, BlockId)>> = HashMap::default();
     for &b in &dom.rpo {
         for pos in 0..f.blocks[b.0 as usize].insts.len() {
             let ii = f.blocks[b.0 as usize].insts[pos];

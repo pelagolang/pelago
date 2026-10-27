@@ -24,7 +24,7 @@ impl<'a> Lowerer<'a> {
         };
         match &callee.kind {
             ExprKind::Field { base, name, .. } => match self.src_text(name.span) {
-                "recv" | "try_recv" => Some(ArmKind::Recv(base)),
+                "recv" | "tryRecv" | "try_recv" => Some(ArmKind::Recv(base)),
                 "send" => Some(ArmKind::Send),
                 _ => None,
             },

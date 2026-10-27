@@ -23,6 +23,7 @@ A serious, self-hosting systems language:
 | Backend | One backend, our own, from day one | decided |
 | Second native target | AArch64 Linux static ELF from a second generator beside the x86-64 one (`gen_a64.rs`, `rt_a64.rs`), same IR and same semantics, tested under `qemu-aarch64` and on ARM runners; Windows on ARM and macOS built (run in CI on ARM runners) (`docs/plans/cards/A-10-aarch64.md`) | decided |
 | First native target | x86-64 Linux static ELF, no libc, no linker, own encoder; Windows PE right after the test suite passes natively (tested in `windows-latest` CI); simple code generator first, register allocation later; System V-shaped internal calling convention (`docs/design/backend.md`, card A-09) | decided |
+| Run mode | `pelago run` runs native code by default (loaded in the compiler's own process on Linux, no temp file); `--interp` selects the IR interpreter (`docs/design/run-mode.md`) | decided |
 | Bootstrap | Stage 0 compiler in Rust, then rewritten in the language itself | decided |
 | OO | Structs and interfaces, plus an `obj` kind with single inheritance (written with `:`) from the start (heap-allocated, singly owned, closed unless `open`). First feature to cut if compile speed or the safety model suffers | decided |
 | Compile-time code | `meta` | decided |
@@ -39,11 +40,14 @@ A serious, self-hosting systems language:
 | Collections | `docs/design/collections.md` decisions C1 to C8 recorded (must-exist indexing, negative indexes, insertion-ordered maps, `string`/`str`, `+` and spread); builders (own comprehension shape: `[x of xs if x > 0 ~> x * 2]`) added | decided |
 | Errors | `docs/design/errors.md` decisions E1 to E8: expected failures are `result`/`option`, bugs stop the program (no unwinding), overflow stops in every build with `+% -% *%` for wrapping, `converts` for `?` and `to` | decided |
 | Concurrency | `docs/design/concurrency.md` decisions CC1 to CC9: threads with `sink`/copy capture, scopes, `chan<T>` pairs, `select`, `shared`/`lock`/`atomic`; async still deferred; `par_for` helper; global `var` forbidden | decided |
+| Narrow links | `docs/design/narrow-links.md` NL1 to NL4: pool-relative `link<T, W>` into `pool<T, W>`, width always written, pool on its own card (A-14, after the arenas of A-13) | decided |
+| Naming | `docs/design/basics.md` B8: function and method names are camelCase by default (library and examples); snake_case still accepted | decided |
 | List patterns | `docs/design/list-patterns.md` LP1 to LP8: `[first, ...rest]` with `...`, rest is a view, `some(v)` for options, patterns over text, `sink` elements revisited later | decided |
 | Parser | `docs/design/parser.md` P1 to P10 decided: top-level statements, `loop` values, loop labels (`outer: for ...`, `break outer`), closure return types (`(x: int) -> int ~> ...`), doc comments kept, syntax checks pass | decided |
 | Checker | `docs/design/checker.md`: all five stages built (names, types, interfaces, exhaustiveness, value semantics); TC1 to TC13 decided, VS1 to VS6 chosen (literals, two implicit conversions, no same-scope redeclaration, `fn` types are views, empty literals need context, integer division, equality) | decided |
 | Imports | Imports are bindings: `import std.io`, `import fmt = std.io`, `import { a, b: c, ... } = path`; cycles allowed, top-level only, `pub pkg` middle visibility, orphan rule (`docs/design/modules.md`). A file is a module named after the file; relative paths with leading dots stay | decided |
 | Config | `pelago.toml` is the general config file for everything language-related; the formatter reads its `[fmt]` section (`indent`, `width`), found by walking up from the file (`docs/plans/cards/S-07-formatter.md`) | decided |
+| Arenas | Library `arena` with checked 32+32-bit `aref<T>` handles, plain types only in v1; no hidden region that redirects `box` (`docs/design/arena.md`) | proposed, awaiting owner |
 | Maps | `map { "a": 1 }`, empty map `{:}` | decided |
 | Closures | `x ~> x * 2` and `~> it * 2` | decided |
 | One-shot closures | A closure that consumes a `[sink]` capture has the type `once fn(...)` (inferred, never written on the closure); calling it is `f!!()` and uses it up; `fn` may stand where `once fn` is wanted; `spawn` takes `once fn` (`functions.md` section 19) | decided, built |
@@ -67,6 +71,7 @@ A serious, self-hosting systems language:
 | Generics | `<T>` | decided |
 | Statements | Newlines end statements, no semicolons | decided |
 | Call sites | `inout` repeated at the call site; `copy` explicit for owning types | decided |
+| Index tests | Always on, never dropped: the optimiser settles them once in front of a loop (a guard, a test-free copy and the original loop as fallback), so a program that indexes out of range stops at the same pass with the same output. `@checkfree` on a function fails the build if a test is left on its fast path | decided (Dennis, 2026-10-27, Goose comparison item 2) |
 | Kernel / OS use | Parked for now | parked |
 | Name | Undecided | open |
 

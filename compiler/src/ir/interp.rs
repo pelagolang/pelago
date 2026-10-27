@@ -70,6 +70,39 @@ const STACK_SIZE: usize = 8 << 20;
 /// machine gets a big stack for it.
 const HOST_STACK: usize = 1 << 30;
 const MAX_DEPTH: u32 = 200_000;
+/// A context started by `CtxInit` runs on a host thread of its own; it gets a smaller host stack and call depth.
+const CTX_HOST_STACK: usize = 64 << 20;
+const CTX_MAX_DEPTH: u32 = 20_000;
+/// Context handles are numbers like function addresses: far outside memory, 16 apart.
+const CTX_BASE: usize = 1 << 41;
+/// Starts the message of the error that unwinds a context thread after the run has ended.
+const SHUTDOWN: &str = "\0shutdown";
+
+/// Contexts (`CtxInit`, `CtxSwitch`) are host threads that pass a baton: exactly one runs at a time, so
+/// the machine is never used by two threads at once and the order is fixed by the program.
+struct Baton {
+    /// The context allowed to run (0 is the one `main` started in).
+    current: usize,
+    /// The first failure of any context; every waiting context returns it.
+    fail: Option<String>,
+    done: bool,
+}
+
+struct Ctxs {
+    baton: std::sync::Mutex<Baton>,
+    cv: std::sync::Condvar,
+}
+
+struct CtxInfo {
+    lo: usize,
+    hi: usize,
+    code: usize,
+    env: Val,
+    started: bool,
+}
+
+/// The machine's address, passed to a context thread. Only the thread holding the baton uses it.
+struct MachinePtr(usize);
 
 struct Machine<'m> {
     m: &'m Module,
@@ -86,7 +119,16 @@ struct Machine<'m> {
     steps: u64,
     max_steps: u64,
     depth: u32,
+    max_depth: u32,
     trace: Vec<String>,
+    /// The part of memory slots are taken from (`sp` moves inside it).
+    stack_lo: usize,
+    stack_hi: usize,
+    ctxs: Vec<CtxInfo>,
+    /// The context running now.
+    me: usize,
+    baton: std::sync::Arc<Ctxs>,
+    threads: Vec<std::thread::JoinHandle<()>>,
 }
 
 /// What a run gave: the result (or the message of a stop), the text written, and the bytes of heap
@@ -181,7 +223,27 @@ fn run_inner(
         steps: 0,
         max_steps,
         depth: 0,
+        max_depth: MAX_DEPTH,
         trace: Vec::new(),
+        stack_lo: stack_base,
+        stack_hi: stack_base + STACK_SIZE,
+        ctxs: vec![CtxInfo {
+            lo: 0,
+            hi: 0,
+            code: 0,
+            env: Val::Unit,
+            started: true,
+        }],
+        me: 0,
+        baton: std::sync::Arc::new(Ctxs {
+            baton: std::sync::Mutex::new(Baton {
+                current: 0,
+                fail: None,
+                done: false,
+            }),
+            cv: std::sync::Condvar::new(),
+        }),
+        threads: Vec::new(),
     };
     let mut call_args: Vec<Val> = args.to_vec();
     let mut ret_addr = 0;
@@ -192,7 +254,11 @@ fn run_inner(
     let result = std::thread::scope(|s| {
         std::thread::Builder::new()
             .stack_size(HOST_STACK)
-            .spawn_scoped(s, || mc.call(i, &call_args))
+            .spawn_scoped(s, || {
+                let r = mc.call(i, &call_args);
+                mc.shutdown();
+                r
+            })
             .map(|h| {
                 h.join()
                     .unwrap_or_else(|_| Err("the interpreter crashed".to_string()))
@@ -228,15 +294,17 @@ fn run_inner(
 impl Machine<'_> {
     fn call(&mut self, fi: usize, args: &[Val]) -> Result<Val, String> {
         let r = self.call_inner(fi, args);
-        if r.is_err() && self.trace.len() < 12 {
-            self.trace.push(self.m.funcs[fi].name.clone());
+        if let Err(msg) = &r {
+            if self.trace.len() < 12 && msg != SHUTDOWN {
+                self.trace.push(self.m.funcs[fi].name.clone());
+            }
         }
         r
     }
 
     fn call_inner(&mut self, fi: usize, args: &[Val]) -> Result<Val, String> {
         self.depth += 1;
-        if self.depth > MAX_DEPTH {
+        if self.depth > self.max_depth {
             return Err("the stack is full".to_string());
         }
         let f = &self.m.funcs[fi];
@@ -300,6 +368,137 @@ impl Machine<'_> {
         self.sp = frame;
         self.depth -= 1;
         Ok(result)
+    }
+
+    // ---- Contexts -------------------------------------------------------------------------------
+
+    // These stay out of line: `exec` recurses once per interpreted call, so its frame must stay small.
+    #[inline(never)]
+    fn ctx_init(&mut self, lo: usize, size: i64, code: usize, env: Val) -> Result<Val, String> {
+        if size < 0
+            || lo
+                .checked_add(size as usize)
+                .is_none_or(|e| e > self.mem.len())
+        {
+            return Err("a context needs a stack inside memory".to_string());
+        }
+        if code < FUNC_BASE || code - FUNC_BASE >= self.m.funcs.len() {
+            return Err("a context starts at a bad function address".to_string());
+        }
+        self.ctxs.push(CtxInfo {
+            lo,
+            hi: lo + size as usize,
+            code: code - FUNC_BASE,
+            env,
+            started: false,
+        });
+        Ok(Val::Ptr(CTX_BASE + (self.ctxs.len() - 1) * 16))
+    }
+
+    #[inline(never)]
+    fn ctx_switch(&mut self, save: usize, to: usize) -> Result<(), String> {
+        let id = to.wrapping_sub(CTX_BASE) / 16;
+        if to < CTX_BASE || !(to - CTX_BASE).is_multiple_of(16) || id >= self.ctxs.len() {
+            return Err("switched to something that is not a context".to_string());
+        }
+        self.check(save, 8)?;
+        let me = self.me;
+        self.write(save, IrTy::Ptr, Val::Ptr(CTX_BASE + me * 16))?;
+        if id != me {
+            self.switch_to(id)?;
+        }
+        Ok(())
+    }
+
+    /// Hands the baton to context `id` (starting its thread the first time) and waits to get it back.
+    #[inline(never)]
+    fn switch_to(&mut self, id: usize) -> Result<(), String> {
+        let me = self.me;
+        let saved = (
+            self.sp,
+            self.stack_lo,
+            self.stack_hi,
+            self.depth,
+            self.max_depth,
+        );
+        let baton = self.baton.clone();
+        if !self.ctxs[id].started {
+            self.ctxs[id].started = true;
+            let info = &self.ctxs[id];
+            let (lo, hi, code, env) = (info.lo, info.hi, info.code, info.env);
+            let mp = MachinePtr(self as *mut Machine<'_> as usize);
+            let b = baton.clone();
+            baton.baton.lock().map_err(|_| "a context crashed")?.current = id;
+            let h = std::thread::Builder::new()
+                .stack_size(CTX_HOST_STACK)
+                .spawn(move || {
+                    let mp = mp;
+                    // SAFETY: the machine outlives every context thread (`shutdown` joins them), and only
+                    // the context holding the baton touches it; the spawner waits below.
+                    let mc: &mut Machine<'_> = unsafe { &mut *(mp.0 as *mut Machine<'_>) };
+                    mc.me = id;
+                    mc.stack_lo = lo;
+                    mc.stack_hi = hi;
+                    mc.sp = lo;
+                    mc.depth = 0;
+                    mc.max_depth = CTX_MAX_DEPTH;
+                    let r = mc.call(code, &[env]);
+                    let msg = match r {
+                        Err(m) => m,
+                        Ok(_) => "a context returned; it must switch away instead".to_string(),
+                    };
+                    if let Ok(mut st) = b.baton.lock() {
+                        if st.fail.is_none() {
+                            st.fail = Some(msg);
+                        }
+                    }
+                    b.cv.notify_all();
+                })
+                .map_err(|_| "cannot start a context thread".to_string())?;
+            self.threads.push(h);
+        } else {
+            baton.baton.lock().map_err(|_| "a context crashed")?.current = id;
+        }
+        baton.cv.notify_all();
+        let mut st = baton.baton.lock().map_err(|_| "a context crashed")?;
+        loop {
+            if let Some(m) = &st.fail {
+                // Only the first context reports the failure; the others unwind without touching the machine.
+                return Err(if me == 0 {
+                    m.clone()
+                } else {
+                    SHUTDOWN.to_string()
+                });
+            }
+            if st.done {
+                return Err(SHUTDOWN.to_string());
+            }
+            if st.current == me {
+                break;
+            }
+            st = baton.cv.wait(st).map_err(|_| "a context crashed")?;
+        }
+        drop(st);
+        (
+            self.sp,
+            self.stack_lo,
+            self.stack_hi,
+            self.depth,
+            self.max_depth,
+        ) = saved;
+        self.me = me;
+        Ok(())
+    }
+
+    /// Ends the run: contexts still waiting unwind and their threads are joined.
+    fn shutdown(&mut self) {
+        if let Ok(mut st) = self.baton.baton.lock() {
+            st.done = true;
+        }
+        self.baton.cv.notify_all();
+        for h in std::mem::take(&mut self.threads) {
+            let _ = h.join();
+        }
     }
 
     // ---- Memory ---------------------------------------------------------------------------------
@@ -459,6 +658,14 @@ impl Machine<'_> {
                 Val::Int(n) => Val::Int(mask(0u128.wrapping_sub(n), bits_of(ty(a)))),
                 other => other,
             },
+            Op::FUn(o, a) => match get(a) {
+                Val::Float(x) => Val::Float(if ty(a) == IrTy::F32 {
+                    o.apply(x as f32 as f64) as f32 as f64
+                } else {
+                    o.apply(x)
+                }),
+                other => other,
+            },
             Op::Not(a) => match get(a) {
                 Val::Bool(b) => Val::Bool(!b),
                 Val::Int(n) => Val::Int(mask(!n, bits_of(ty(a)))),
@@ -533,7 +740,7 @@ impl Machine<'_> {
                 let align = (*align as usize).max(1);
                 let at = self.sp.div_ceil(align) * align;
                 let end = at + *size as usize;
-                if end > self.stack_base + STACK_SIZE {
+                if end > self.stack_hi {
                     return Err("the stack is full".to_string());
                 }
                 for b in &mut self.mem[at..end] {
@@ -567,6 +774,16 @@ impl Machine<'_> {
             }
             Op::Free(p) => {
                 self.free(get(p))?;
+                Val::Unit
+            }
+            Op::CtxInit(base, size, code, env) => self.ctx_init(
+                addr(&get(base))?,
+                get(size).signed(64) as i64,
+                addr(&get(code))?,
+                get(env),
+            )?,
+            Op::CtxSwitch(save, to) => {
+                self.ctx_switch(addr(&get(save))?, addr(&get(to))?)?;
                 Val::Unit
             }
             Op::Realloc(p, n) => {

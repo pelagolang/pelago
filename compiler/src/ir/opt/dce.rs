@@ -1,7 +1,7 @@
 //! Dead code: values nobody reads, stores into slots nobody reads, block parameters nobody reads.
 
+use super::fx::HashSet;
 use crate::ir::*;
-use std::collections::HashSet;
 
 pub fn run(f: &mut Func) -> bool {
     let mut changed = false;
@@ -31,7 +31,7 @@ fn dead_insts(f: &mut Func) -> bool {
     let mut any = false;
     loop {
         let uses = f.use_counts();
-        let mut dead = HashSet::new();
+        let mut dead = HashSet::default();
         for b in &f.blocks {
             for &i in &b.insts {
                 let inst = &f.insts[i];
@@ -89,7 +89,7 @@ fn dead_stores(f: &mut Func) -> bool {
     if only_stored.is_empty() {
         return false;
     }
-    let mut dead = HashSet::new();
+    let mut dead = HashSet::default();
     for b in &f.blocks {
         for &i in &b.insts {
             match &f.insts[i].op {

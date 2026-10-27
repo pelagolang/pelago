@@ -43,7 +43,7 @@ A function often meets more than one kind of failure. Two tools, and you can mix
 // 1. A catch-all: `error` holds any error (boxed on the heap, only when an error actually happens).
 fn load(path: string) -> config ! error {
     const text = read_file(path)?          // io_error becomes an `error`
-    const port = parse_int(text)?          // so does parse_error
+    const port = parseInt(text)?          // so does parse_error
     config { port: port }
 }
 
@@ -64,7 +64,7 @@ every error type). Nothing is lost, so it is the same lossless conversion that `
 ## 4. Adding context
 
 ```
-const port = parse_int(text).context("reading the port")?
+const port = parseInt(text).context("reading the port")?
 // error shown as: reading the port: bad digit at position 3
 const data = read_file(path).context(~> "loading #path")?    // the message is built only if there is an error
 ```
@@ -74,17 +74,17 @@ Context lines stack, so the message reads like a path from the top-level caller 
 ## 5. Handling a result
 
 ```
-switch parse_int(text) {
+switch parseInt(text) {
     case ok(n): print("got #n")
     case err(.empty): print("nothing there")
     case err(e): print("error: #(e.message())")
 }
 
-if parse_int(text) is err(e) { log(e) }
+if parseInt(text) is err(e) { log(e) }
 
-const n = parse_int(text).or(0)             // a default; the error is dropped, visibly
-const maybe = parse_int(text).ok()          // result -> option, error dropped, visibly
-const found = find(xs, 3).or_err(not_found) // option -> result
+const n = parseInt(text).or(0)             // a default; the error is dropped, visibly
+const maybe = parseInt(text).ok()          // result -> option, error dropped, visibly
+const found = find(xs, 3).orErr(not_found) // option -> result
 ```
 
 `??` stays for `option` only. A silent default on a `result` would hide errors, so it is spelled out with `.or(...)`.
@@ -95,7 +95,7 @@ const found = find(xs, 3).or_err(not_found) // option -> result
 into one result, collect them:
 
 ```
-const nums: [int] ! parse_error = texts.map(~> parse_int(it)).to_list()   // stops at the first error
+const nums: [int] ! parse_error = texts.map(~> parseInt(it)).toList()   // stops at the first error
 ```
 
 An iterator of results collects into a `result` of a list: the first error wins and the rest are not run.
@@ -125,9 +125,9 @@ Overflow is a bug unless you ask for it, so by default it **stops**, in every bu
 ```
 const big = a * b                 // stops if it doesn't fit
 const hash = a *% 31 +% b         // wraps around on purpose (hashes, checksums)
-const safe = a.checked_add(b)     // option<int>: none on overflow
-const capped = a.saturating_add(b)
-const wrapped = a.wrapping_add(b)   // the same wrap as `+%`, as a method
+const safe = a.checkedAdd(b)     // option<int>: none on overflow
+const capped = a.saturatingAdd(b)
+const wrapped = a.wrappingAdd(b)   // the same wrap as `+%`, as a method
 ```
 
 The compiler removes checks it can prove unnecessary (loop counters, values it knows are small). `*%`, `+%` and `-%`
@@ -165,7 +165,7 @@ If `main` returns an error, its message (with context) goes to standard error an
 - **E2** `.context("...")` stacks into a message chain.
 - **E3** A stop aborts the process with no unwinding; `@on_stop` for a last word; tests run in separate processes.
 - **E4** Overflow stops in every build. Wrapping has both forms: the operators `+%`, `-%`, `*%` (and `+%=`, `-%=`, `*%=`) and the methods
-  `wrapping_add` and friends, plus `checked_` and `saturating_` methods. Six new tokens in the lexer.
+  `wrappingAdd` and friends, plus `checked_` and `saturating_` methods. Six new tokens in the lexer.
 - **E5** `main` may return `void ! error`.
 - **E6** `??` is for `option` only; results use `.or(...)` and `.ok()`.
 - **E7** `?` returns from the nearest function or closure; iterators of results collect into a `result`.

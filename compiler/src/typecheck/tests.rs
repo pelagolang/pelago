@@ -299,9 +299,12 @@ fn option_and_result() {
     clean("fn f() -> int ! error { ok(1) }");
     clean("fn f() -> int ! error { err(error_value()) }\nfn error_value() -> error { todo() }");
     flagged("fn f() -> int ! error { ok(\"a\") }", "carries `string`");
-    clean("fn parse(s: str) -> int ! parse_error { s.parse_int() }\nfn g(s: str) -> int ! error { const n = parse(s)?\n ok(n + 1) }");
-    flagged("fn parse(s: str) -> int ! parse_error { s.parse_int() }\nfn g(s: str) -> int ! string { const n = parse(s)?\n ok(n) }", "would return an error");
-    flagged("fn parse(s: str) -> int ! parse_error { s.parse_int() }\nfn g(s: str) -> int { parse(s)? }", "not a result");
+    clean("fn parse(s: str) -> int ! parse_error { s.parseInt() }\nfn g(s: str) -> int ! error { const n = parse(s)?\n ok(n + 1) }");
+    flagged("fn parse(s: str) -> int ! parse_error { s.parseInt() }\nfn g(s: str) -> int ! string { const n = parse(s)?\n ok(n) }", "would return an error");
+    flagged(
+        "fn parse(s: str) -> int ! parse_error { s.parseInt() }\nfn g(s: str) -> int { parse(s)? }",
+        "not a result",
+    );
     clean("fn first(xs: [int]) -> int? { const x = xs.first()?\n x }");
     flagged(
         "fn first(xs: [int]) -> int { xs.first()? }",
@@ -473,19 +476,19 @@ fn closures() {
         "fn(int) -> int"
     );
     assert_eq!(
-        probe("const xs = [1, 2]\n const probe = xs.map(x ~> x * 2).to_list()"),
+        probe("const xs = [1, 2]\n const probe = xs.map(x ~> x * 2).toList()"),
         "[int]"
     );
     assert_eq!(
-        probe("const xs = [1, 2]\n const probe = xs.map(~> it * 2).to_list()"),
+        probe("const xs = [1, 2]\n const probe = xs.map(~> it * 2).toList()"),
         "[int]"
     );
     assert_eq!(
-        probe("const xs = [1, 2]\n const probe = xs.filter(~> it > 1).to_list()"),
+        probe("const xs = [1, 2]\n const probe = xs.filter(~> it > 1).toList()"),
         "[int]"
     );
     assert_eq!(
-        probe("const xs = [1, 2]\n const probe = xs.map(x ~> \"#x\").to_list()"),
+        probe("const xs = [1, 2]\n const probe = xs.map(x ~> \"#x\").toList()"),
         "[string]"
     );
     assert_eq!(
@@ -514,12 +517,13 @@ fn closures() {
 #[test]
 fn strings_and_methods() {
     assert_eq!(probe("const probe = \"abc\".len()"), "int");
-    assert_eq!(probe("const probe = \"abc\".chars().to_list()"), "[char]");
+    assert_eq!(probe("const probe = \"abc\".chars().toList()"), "[char]");
     assert_eq!(
-        probe("const probe = \"a b\".split(\" \").to_list()"),
+        probe("const probe = \"a b\".split(\" \").toList()"),
         "[str]"
     );
     assert_eq!(probe("const probe = \"x\".to_upper()"), "string");
+    assert_eq!(probe("const probe = \"x\".toUpper()"), "string");
     assert_eq!(
         probe("const probe = \"5\".parse_int()"),
         "int ! parse_error"
@@ -1215,13 +1219,13 @@ const APP_ERR: &str = "enum app_error { parse(parse_error)\n other }\nimpl conve
 #[test]
 fn question_mark_converts_errors() {
     clean(&format!(
-        "{APP_ERR}fn t(s: str) -> int ! app_error {{ const n = s.parse_int()?\n ok(n) }}"
+        "{APP_ERR}fn t(s: str) -> int ! app_error {{ const n = s.parseInt()?\n ok(n) }}"
     ));
     flagged(
-        "enum app_error { other }\nfn t(s: str) -> int ! app_error { const n = s.parse_int()?\n ok(n) }",
+        "enum app_error { other }\nfn t(s: str) -> int ! app_error { const n = s.parseInt()?\n ok(n) }",
         "write `impl converts<app_error> for parse_error`",
     );
-    clean("fn t(s: str) -> int ! error { const n = s.parse_int()?\n ok(n) }");
+    clean("fn t(s: str) -> int ! error { const n = s.parseInt()?\n ok(n) }");
     clean(&format!(
         "{APP_ERR}fn t(e: parse_error) -> app_error = e to app_error"
     ));
@@ -1261,7 +1265,7 @@ fn defer_cannot_leave_the_scope() {
         "cannot use `break`",
     );
     flagged(
-        "fn t(s: str) -> void ! error { defer { s.parse_int()? } }",
+        "fn t(s: str) -> void ! error { defer { s.parseInt()? } }",
         "cannot use `?`",
     );
     flagged(
@@ -1448,4 +1452,12 @@ fn length_arithmetic_is_checked() {
             .any(|m| m.contains("[int; 4]") && m.contains("[int; 5]")),
         "{e:?}"
     );
+}
+
+#[test]
+fn naming_styles_find_each_other() {
+    clean("fn isEven(n: int) -> bool = n % 2 == 0\nfn t() -> bool = is_even(2)");
+    clean("fn big_sum(a: int, b: int) -> int = a + b\nfn t() -> int = bigSum(1, 2)");
+    clean("fn t(xs: [int]) -> bool = xs.is_empty() || xs.isEmpty()");
+    flagged("fn t() -> int = nothing_here()", "cannot find");
 }

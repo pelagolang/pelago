@@ -34,9 +34,9 @@
 //! is also accepted. The body has no calls (so a vector never lives across a call).
 
 use super::dom::Dom;
+use super::fx::{HashMap, HashSet};
 use super::loops;
 use crate::ir::*;
-use std::collections::{HashMap, HashSet};
 
 /// Vectors per pass, so iterations per pass are `2 * U`.
 const U: usize = 2;
@@ -211,7 +211,7 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
         return None;
     }
     // What the body reads of each value.
-    let mut uses: HashMap<Value, usize> = HashMap::new();
+    let mut uses: HashMap<Value, usize> = HashMap::default();
     for &k in &bb.insts {
         f.insts[k]
             .op
@@ -269,7 +269,7 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
     let mut loads = 0usize;
     let mut stores = 0usize;
     // The constants that become splats (a shift count does not), by value.
-    let mut splats: HashSet<i128> = HashSet::new();
+    let mut splats: HashSet<i128> = HashSet::default();
     let shift_counts: HashSet<Value> = bb
         .insts
         .iter()
@@ -279,9 +279,9 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
         })
         .collect();
     // `i * 8`, and the addresses made from it: only for a test counter that steps by one.
-    let mut idx_muls: HashSet<Value> = HashSet::new();
-    let mut addrs: HashSet<Value> = HashSet::new();
-    let mut bases: HashSet<Value> = HashSet::new();
+    let mut idx_muls: HashSet<Value> = HashSet::default();
+    let mut addrs: HashSet<Value> = HashSet::default();
+    let mut bases: HashSet<Value> = HashSet::default();
     let updates: HashSet<Value> = back.args.iter().copied().collect();
     for &k in &bb.insts {
         let inst = &f.insts[k];
@@ -371,7 +371,7 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
     }
     // Counters read by the body besides their own update (and the offsets of addresses) need
     // vectors; the others are only worked out at the end.
-    let mut uses_v: HashMap<Value, usize> = HashMap::new();
+    let mut uses_v: HashMap<Value, usize> = HashMap::default();
     for &k in &bb.insts {
         if inst_is_idx(&f.insts[k], &idx_muls) {
             continue;
@@ -428,9 +428,9 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
         f,
         pre,
         body: b2,
-        consts: HashMap::new(),
-        splats: HashMap::new(),
-        inner: HashSet::new(),
+        consts: HashMap::default(),
+        splats: HashMap::default(),
+        inner: HashSet::default(),
     };
 
     // Entry: the vectors of every counter and accumulator.
@@ -542,7 +542,7 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
         None
     };
     for u in 0..U {
-        let mut env: HashMap<Value, Lane> = HashMap::new();
+        let mut env: HashMap<Value, Lane> = HashMap::default();
         for (pos, &idx) in vec_params.iter().enumerate() {
             if matches!(kinds[idx], Kind::Counter(_)) {
                 env.insert(hb.params[idx], Lane::V(h2p[slot(pos, u)]));

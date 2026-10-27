@@ -1,0 +1,380 @@
+/// Growing buffers, sorting and `list`.
+
+/// ---- Growing buffers: the header of a list or string is a pointer, a length and a capacity -----
+
+pub fn rt_hdr_data(h: ptr) -> ptr = rt_load_ptr(h)
+pub fn rt_hdr_len(h: ptr) -> int = rt_load_int(rt_offset(h, 8))
+pub fn rt_hdr_cap(h: ptr) -> int = rt_load_int(rt_offset(h, 16))
+pub fn rt_hdr_set_len(h: ptr, n: int) { rt_store_int(rt_offset(h, 8), n) }
+
+//~ Makes room for `needed` elements of `size` bytes. A capacity of 0 means the buffer is not owned.
+//~ Small on purpose, so the optimiser inlines the check into every push loop; only a full buffer calls `rt_grow_slow`.
+pub fn rt_grow(h: ptr, size: int, needed: int) {
+    if rt_hdr_cap(h) >= needed { return }
+    rt_grow_slow(h, size, needed)
+}
+
+pub fn rt_grow_slow(h: ptr, size: int, needed: int) {
+    const cap = rt_hdr_cap(h)
+    var ncap = cap * 2
+    if ncap < 4 { ncap = 4 }
+    if ncap < needed { ncap = needed }
+    const old = rt_hdr_data(h)
+    if cap > 0 {
+        /// An owned buffer: a big one is remapped by the system instead of copied.
+        rt_store_ptr(h, rt_realloc(old, ncap * size))
+    } else {
+        const data = rt_alloc(ncap * size)
+        const len = rt_hdr_len(h)
+        if len > 0 { rt_copy(data, old, len * size) }
+        rt_store_ptr(h, data)
+    }
+    rt_store_int(rt_offset(h, 16), ncap)
+}
+
+//~ Exchanges two blocks of `size` bytes.
+pub fn rt_swap_bytes(a: ptr, b: ptr, size: int) {
+    const tmp = rt_alloc(size)
+    rt_copy(tmp, a, size)
+    rt_copy(a, b, size)
+    rt_copy(b, tmp, size)
+    rt_free(tmp)
+}
+
+//~ Sorts `n` elements of `size` bytes with a merge sort; `cmp` is a comparison glue function.
+pub fn rt_sort(base: ptr, n: int, size: int, cmp: ptr) {
+    if n < 2 { return }
+    const tmp = rt_alloc(n * size)
+    var width = 1
+    var from = base
+    var to = tmp
+    while width < n {
+        var start = 0
+        while start < n {
+            var mid = start + width
+            if mid > n { mid = n }
+            var end = start + 2 * width
+            if end > n { end = n }
+            var i = start
+            var j = mid
+            var k = start
+            while k < end {
+                if i < mid &&
+                    (j >= end || rt_call_int2(cmp, rt_offset(from, i * size), rt_offset(from, j * size)) <= 0) {
+                    rt_copy(rt_offset(to, k * size), rt_offset(from, i * size), size)
+                    i += 1
+                } else {
+                    rt_copy(rt_offset(to, k * size), rt_offset(from, j * size), size)
+                    j += 1
+                }
+                k += 1
+            }
+            start += 2 * width
+        }
+        const swapped = from
+        from = to
+        to = swapped
+        width *= 2
+    }
+    if rt_addr_int(from) != rt_addr_int(base) { rt_copy(base, from, n * size) }
+    rt_free(tmp)
+}
+
+//~ Sorts `n` integers at `base`: insertion sort when short, else a radix sort on the eight bytes (the
+//~ order of equal integers cannot be seen, so the result is the same as for any stable sort).
+pub fn rt_sort_int(base: ptr, n: int) {
+    if n < 2 { return }
+    if n <= 48 {
+        var i = 1
+        while i < n {
+            const x = rt_load_int(rt_offset(base, i * 8))
+            var j = i
+            while j > 0 && rt_load_int(rt_offset(base, (j - 1) * 8)) > x {
+                rt_store_int(rt_offset(base, j * 8), rt_load_int(rt_offset(base, (j - 1) * 8)))
+                j -= 1
+            }
+            rt_store_int(rt_offset(base, j * 8), x)
+            i += 1
+        }
+        return
+    }
+    const tmp = rt_alloc(n * 8)
+    const counts = rt_alloc(16384)
+    var z = 0
+    while z < 2048 { rt_store_int(rt_offset(counts, z * 8), 0); z += 1 }
+    /// One pass over the data counts every byte position.
+    var i = 0
+    while i < n {
+        const x = rt_load_int(rt_offset(base, i * 8))
+        var p = 0
+        while p < 8 {
+            var d = (x >> (p * 8)) & 255
+            if p == 7 { d = d ^ 128 }
+            const c = rt_offset(counts, (p * 256 + d) * 8)
+            rt_store_int(c, rt_load_int(c) +% 1)
+            p += 1
+        }
+        i += 1
+    }
+    var from = base
+    var to = tmp
+    var p = 0
+    while p < 8 {
+        const row = rt_offset(counts, p * 2048)
+        /// A byte position where every integer has the same byte needs no pass.
+        var busy = 0
+        var d = 0
+        var sum = 0
+        while d < 256 {
+            const c = rt_load_int(rt_offset(row, d * 8))
+            if c > 0 { busy += 1 }
+            rt_store_int(rt_offset(row, d * 8), sum)
+            sum = sum +% c
+            d += 1
+        }
+        if busy > 1 {
+            var k = 0
+            while k < n {
+                const x = rt_load_int(rt_offset(from, k * 8))
+                var e = (x >> (p * 8)) & 255
+                if p == 7 { e = e ^ 128 }
+                const c = rt_offset(row, e * 8)
+                const at = rt_load_int(c)
+                rt_store_int(rt_offset(to, at * 8), x)
+                rt_store_int(c, at +% 1)
+                k += 1
+            }
+            const swapped = from
+            from = to
+            to = swapped
+        }
+        p += 1
+    }
+    if rt_addr_int(from) != rt_addr_int(base) { rt_copy(base, from, n * 8) }
+    rt_free(counts)
+    rt_free(tmp)
+}
+
+//~ Is the value at `probe` equal to one of the `size`-byte elements of the list at `h`?
+pub fn rt_list_contains(h: ptr, probe: ptr, size: int, eq: ptr) -> bool {
+    var i = 0
+    const n = rt_hdr_len(h)
+    while i < n {
+        if rt_call_bool2(eq, rt_offset(rt_hdr_data(h), i * size), probe) { return true }
+        i += 1
+    }
+    false
+}
+
+//~ Does the text at `h` contain the text (or character) at `p`?
+pub fn rt_str_contains(h: ptr, p: ptr) -> bool {
+    const n = rt_hdr_len(h)
+    const pn = rt_hdr_len(p)
+    var i = 0
+    while i + pn <= n {
+        if rt_bytes_eq(rt_offset(rt_hdr_data(h), i), rt_hdr_data(p), pn) { return true }
+        i += 1
+    }
+    pn == 0
+}
+
+impl<T: eq> list<T> {
+    fn contains(self, item: T) -> bool {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        const eq = rt_eq_fn<T>()
+        const probe = rt_addr_of(item)
+        var i = 0
+        const len = rt_hdr_len(h)
+        while i < len {
+            if rt_call_bool2(eq, rt_offset(rt_hdr_data(h), i * size), probe) { return true }
+            i += 1
+        }
+        false
+    }
+}
+
+impl<T: order> list<T> {
+    fn sort(inout self) {
+        const h = rt_addr_of(self)
+        if rt_is_int<T>() {
+            rt_sort_int(rt_hdr_data(h), rt_hdr_len(h))
+        } else {
+            rt_sort(rt_hdr_data(h), rt_hdr_len(h), rt_size_of<T>(), rt_cmp_fn<T>())
+        }
+    }
+
+    fn sorted(self) -> list<T> {
+        var out = rt_clone<list<T>>(rt_addr_of(self))
+        out.sort!()
+        out
+    }
+}
+
+impl<T> list<T> {
+    fn len(self) -> int = rt_hdr_len(rt_addr_of(self))
+    fn isEmpty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
+
+    fn get(self, index: int) -> T? {
+        const h = rt_addr_of(self)
+        if index < 0 || index >= rt_hdr_len(h) { return none }
+        return rt_clone<T>(rt_offset(rt_hdr_data(h), index * rt_size_of<T>()))
+    }
+
+    fn first(self) -> T? = self.get(0)
+    fn last(self) -> T? = self.get(self.len() - 1)
+
+    fn push(inout self, sink item: T) {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        const len = rt_hdr_len(h)
+        rt_grow(h, size, len + 1)
+        rt_write<T>(rt_offset(rt_hdr_data(h), len * size), sink item)
+        rt_hdr_set_len(h, len + 1)
+    }
+
+    fn pop(inout self) -> T? {
+        const h = rt_addr_of(self)
+        const len = rt_hdr_len(h)
+        if len == 0 { return none }
+        rt_hdr_set_len(h, len - 1)
+        return rt_read<T>(rt_offset(rt_hdr_data(h), (len - 1) * rt_size_of<T>()))
+    }
+
+    fn insert(inout self, index: int, sink item: T) {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        const len = rt_hdr_len(h)
+        if index < 0 || index > len { panic("insert: index out of range") }
+        rt_grow(h, size, len + 1)
+        const at = rt_offset(rt_hdr_data(h), index * size)
+        var i = len - 1
+        while i >= index {
+            rt_copy(
+                rt_offset(rt_hdr_data(h), (i + 1) * size),
+                rt_offset(rt_hdr_data(h), i * size),
+                size,
+            )
+            i -= 1
+        }
+        rt_write<T>(at, sink item)
+        rt_hdr_set_len(h, len + 1)
+    }
+
+    fn remove(inout self, index: int) -> T {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        const len = rt_hdr_len(h)
+        if index < 0 || index >= len { panic("remove: index out of range") }
+        const value = rt_read<T>(rt_offset(rt_hdr_data(h), index * size))
+        var i = index
+        while i < len - 1 {
+            rt_copy(
+                rt_offset(rt_hdr_data(h), i * size),
+                rt_offset(rt_hdr_data(h), (i + 1) * size),
+                size,
+            )
+            i += 1
+        }
+        rt_hdr_set_len(h, len - 1)
+        value
+    }
+
+    fn clear(inout self) {
+        const h = rt_addr_of(self)
+        const drop = rt_drop_fn<T>()
+        const size = rt_size_of<T>()
+        if !rt_is_null(drop) {
+            var i = 0
+            const len = rt_hdr_len(h)
+            while i < len {
+                rt_call_void1(drop, rt_offset(rt_hdr_data(h), i * size))
+                i += 1
+            }
+        }
+        rt_hdr_set_len(h, 0)
+    }
+
+    fn reverse(inout self) {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var i = 0
+        var j = rt_hdr_len(h) - 1
+        while i < j {
+            rt_swap_bytes(
+                rt_offset(rt_hdr_data(h), i * size),
+                rt_offset(rt_hdr_data(h), j * size),
+                size,
+            )
+            i += 1
+            j -= 1
+        }
+    }
+
+    fn swap(inout self, a: int, b: int) {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        const len = rt_hdr_len(h)
+        if a < 0 || a >= len || b < 0 || b >= len { panic("swap: index out of range") }
+        if a != b { rt_swap_bytes(rt_offset(rt_hdr_data(h), a * size), rt_offset(rt_hdr_data(h), b * size), size) }
+    }
+
+    fn extend(inout self, other: list<T>) {
+        const h = rt_addr_of(self)
+        const o = rt_addr_of(other)
+        const size = rt_size_of<T>()
+        var i = 0
+        const n = rt_hdr_len(o)
+        while i < n {
+            self.push!(rt_clone<T>(rt_offset(rt_hdr_data(o), i * size)))
+            i += 1
+        }
+    }
+
+    fn reversed(self) -> list<T> {
+        var out = rt_clone<list<T>>(rt_addr_of(self))
+        out.reverse!()
+        out
+    }
+
+    fn iter(self) -> iter<T> = rt_cast<list<T>, iter<T>>(rt_clone<list<T>>(rt_addr_of(self)))
+    fn toList(self) -> list<T> = rt_clone<list<T>>(rt_addr_of(self))
+    fn map<U>(self, f: fn(T) -> U) -> iter<U> {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var out: list<U> = []
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            out.push!(f(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size))))
+            i += 1
+        }
+        rt_cast<list<U>, iter<U>>(sink out)
+    }
+
+    fn filter(self, f: fn(T) -> bool) -> iter<T> {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var out: list<T> = []
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            if f(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size))) {
+                out.push!(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size)))
+            }
+            i += 1
+        }
+        rt_cast<list<T>, iter<T>>(sink out)
+    }
+
+    fn each(self, f: fn(T)) {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            f(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size)))
+            i += 1
+        }
+    }
+}

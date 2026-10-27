@@ -19,7 +19,7 @@ use super::regs::{folds, fused_cmp, small_copy, Base, Fold};
 use super::x86_mir::{self as x, call_clobbers, cc_num, op, Cc, INT_ARGS, SYM_FUNC};
 use super::x86_mir::{RAX, RCX, RDX, RSI};
 use crate::ir::Target as JumpTarget;
-use crate::ir::{BinOp, CastKind, CmpOp, Const, Func, IrTy, Op, Term, Test, VBin, VUn, Value};
+use crate::ir::{BinOp, CastKind, CmpOp, Const, FUn, Func, IrTy, Op, Term, Test, VBin, VUn, Value};
 use std::collections::HashMap;
 
 fn bits(t: IrTy) -> u32 {
@@ -106,7 +106,7 @@ struct Sel<'m> {
     /// Comparisons whose only readers are selects in their own block: each select compares again.
     deferred: HashMap<Value, (CmpOp, Value, Value)>,
     fills: Vec<crate::ir::opt::FillLoop>,
-    filled: std::collections::HashSet<usize>,
+    filled: crate::ir::opt::fx::HashSet<usize>,
     /// Where the operands of a float remainder wait (16 bytes), made on first use.
     frem_scratch: Option<FrameId>,
 }
@@ -1051,6 +1051,20 @@ impl<'m> Sel<'m> {
                     ],
                 ));
             }
+            Op::FUn(o, a) => {
+                let d = self.reg_of(res.unwrap());
+                let s = self.vr(*a);
+                let kind = match o {
+                    FUn::Sqrt => 0,
+                    FUn::Floor => 1,
+                    FUn::Ceil => 2,
+                };
+                let dbl = Operand::Imm(i64::from(f.ty(*a) == IrTy::F64));
+                self.emit(MInst::new(
+                    op::FUN,
+                    vec![Operand::def(d), Operand::use_(s), Operand::Imm(kind), dbl],
+                ));
+            }
             Op::VUn(o, a) => {
                 let d = self.reg_of(res.unwrap());
                 match o {
@@ -1106,6 +1120,15 @@ impl<'m> Sel<'m> {
                     op::VALU,
                     vec![Operand::use_def(d), Operand::use_(rb), Operand::Imm(kind)],
                 ));
+            }
+            Op::CtxInit(b, n, c, e) => {
+                let (b, n, c, e) = (self.src(*b), self.src(*n), self.src(*c), self.src(*e));
+                let args = vec![(x::RDI, b), (RSI, n), (RDX, c), (x::RCX, e)];
+                self.runtime(op::RT_CTX_INIT, args, res);
+            }
+            Op::CtxSwitch(s, t) => {
+                let (a, b) = (self.src(*s), self.src(*t));
+                self.runtime(op::RT_CTX_SWITCH, vec![(x::RDI, a), (RSI, b)], None);
             }
         }
     }

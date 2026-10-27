@@ -561,6 +561,8 @@ impl Em<'_, '_> {
                     op::RT_ALLOC => rt.alloc,
                     op::RT_FREE => rt.free,
                     op::RT_REALLOC => rt.realloc,
+                    op::RT_CTX_INIT => rt.ctx_init,
+                    op::RT_CTX_SWITCH => rt.ctx_switch,
                     _ => rt.print,
                 };
                 self.env.a.call(l);
@@ -728,6 +730,13 @@ impl Em<'_, '_> {
             op::FRESIZE => {
                 let (d, x) = (xr(phys(&ops[0])), xr(phys(&ops[1])));
                 self.env.a.cvt_float_resize(d, x, imm(&ops[2]) == 1);
+            }
+            op::FUN => {
+                let (d, s, dbl) = (xr(phys(&ops[0])), xr(phys(&ops[1])), imm(&ops[3]) == 1);
+                match imm(&ops[2]) {
+                    0 => self.env.a.fsqrt(d, s, dbl),
+                    k => self.env.a.fround(d, s, k as u8, dbl),
+                }
             }
             op::FFMA => {
                 let dbl = imm(&ops[3]) == 1;

@@ -2,8 +2,8 @@
 //! run at all, then fold. A branch on a known condition becomes a jump (and the other side is
 //! dropped by the CFG pass), so a drop flag that is always set stops costing anything.
 
+use super::fx::HashMap;
 use crate::ir::*;
-use std::collections::HashMap;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Lat {
@@ -166,7 +166,7 @@ fn apply(f: &mut Func, lat: &[Lat], exec: &[bool]) -> bool {
         }
     }
     // Block parameters with a known value: the uses see a constant made at the top of the block.
-    let mut map: HashMap<Value, Value> = HashMap::new();
+    let mut map: HashMap<Value, Value> = HashMap::default();
     let uses = f.use_counts();
     for bi in 1..f.blocks.len() {
         if !exec[bi] {

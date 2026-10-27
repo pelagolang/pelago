@@ -64,7 +64,7 @@ fn sum_to(n: int, acc: int = 0) -> int {
     become sum_to(n - 1, acc + n)
 }
 
-fn parse_int(s: string) -> int ! parse_error {
+fn parseInt(s: string) -> int ! parse_error {
     const n = digits(s)?
     ok(n)
 }
@@ -73,6 +73,13 @@ fn find(xs: [string], name: string) -> int? { none }
 const index = find(names, "Dennis") ?? -1
 
 @inline fn square(x: int) -> int = x * x
+
+@checkfree
+fn dot(a: [int], b: [int]) -> int {
+    var s = 0
+    for i in 0..b.len() { s += a[i] * b[i] }
+    return s
+}
 
 meta fn build_table() -> [int; 256] { table }
 const table = meta build_table()
@@ -176,9 +183,9 @@ const tail = xs[-3..]
 const hash = a *% 31 +% b
 h *%= 31
 h +%= c
-const safe = a.checked_add(b)
-const capped = a.saturating_add(b)
-const wrapped = a.wrapping_add(b)
+const safe = a.checkedAdd(b)
+const capped = a.saturatingAdd(b)
+const wrapped = a.wrappingAdd(b)
 
 /// ---- List patterns ------------------------------------------------------------------
 fn sum_list(xs: [int]) -> int {
@@ -206,7 +213,7 @@ switch inout xs {
 }
 
 fn command(line: string) {
-    switch line.split(" ").to_list() {
+    switch line.split(" ").toList() {
         case ["add", name]: add!(name)
         case ["rename", old, new]: rename!(old, new)
         case [cmd, ...]: print("unknown command #cmd")
@@ -371,7 +378,7 @@ const first_ok = a ?? b ?? c
 const chain = items
     .filter(~> it > 0)
     .map(~> it * 2)
-    .to_list()
+    .toList()
 const piped = raw
     |> trim
     |> parse

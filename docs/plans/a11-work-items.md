@@ -89,6 +89,10 @@ Size is S (hours), M (a day), L (several days). "Collides with" means the same f
 - **Depends on:** nothing. **Size:** M. It splits into two threads if wanted: (a) runtime and print buffering, (b) float semantics in interpreter and `cast`.
 - **Collides with:** W1 (`interp.rs`), W3/W5 (`gen.rs`, small hunks).
 
+### W12. Index tests settled in front of the loop (done: PR `claude/perf/bounds-check-elim`)
+- **What:** `ir/opt/bce.rs` versions a counted loop: a guard in front tests `start + k >= 0`, `n - 1 + k <u len` per distinct index test, and that no store of the loop reaches a length it reads; the loop then runs without the tests, with the original loop (`Block::slow`) as the fallback, so an out-of-range index stops at the same pass with the same output. `@checkfree` (a function attribute, `Func::checkfree`) fails the build if a test is left outside the fallback copies (`opt::kept_checks`). Loops known to run under 16 passes, or over 2^32, keep their tests. Measured (best of 8, noisy box): levenshtein -17%, kostya_matmul -28%, sieve -20%, spectralnorm -13%, rest within noise.
+- **Left:** strength reduction (pointer stepping) stays dropped: x86 addressing modes already fold `base + i * 8`. `loops` is bound by `j % u` with a variable `u`, not by tests. Loops with a call, a push or an unknown store address keep their tests when the length is read from memory.
+
 ### W9. Loop optimisations — done in PR #16 except alignment (open) and strength reduction (dropped)
 - **What:** loop-invariant code motion, strength reduction (`i * 8` into an add), alignment of loop heads, and branch layout (likely path falls through).
 - **Touches:** new `ir/opt/licm.rs`, `ir/opt/mod.rs`, `ir/opt/tests.rs`, `native/gen.rs` (alignment only, via a new `Asm::align`).
@@ -105,7 +109,7 @@ Best of 5, seconds. Five programs added in `claude/perf/more-benchmarks`; the fi
 |---|---|---|---|---|---|
 | resultpath | 0.030-0.040 | 0.015 | 0.017 | 2-2.6x | `result` slots are split into registers and `?` no longer tests a tag: `opt/thread.rs` lets a predecessor that knows the tag skip the join's test (was 0.058, 3.7x), and `ranges` decides signed compares of small values (the `h * 3 > 1e9` bound check). What is left is the three `jo` checks on counters that C does not have and the `ok`/`bad` counters that the trip count would bound |
 | structlist | 0.019 | 0.008 | 0.008 | 2.4x | `list<struct>` field update: per-element address recomputed, two `add_checked`, no vectorisation (the checked C build is 3.3x faster too) |
-| strsplit | 0.039 | 0.018 | 0.012 | 2.2x | `split` builds an `iter<str>` list and `parse_int` returns a `result`; the twins parse in place |
+| strsplit | 0.039 | 0.018 | 0.012 | 2.2x | `split` builds an `iter<str>` list and `parseInt` returns a `result`; the twins parse in place |
 | switchwork | 0.048 | 0.045 | 0.035 | 1.08x | enum payload loads and the jump table; Rust is 1.4x faster here |
 | sortwork | 0.035 | 0.169 | 0.039 | 0.21x | done: `list<int>::sort` is a radix sort (insertion sort up to 48 elements); other element types still use the byte-wise merge sort with an indirect compare (was 0.156) |
 - **Size:** each M to L. `resultpath` (return small `result`/`option` in registers, inline across `?`) and `sortwork` (monomorphic compare, typed element moves) look like the best first targets.

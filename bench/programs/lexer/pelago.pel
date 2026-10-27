@@ -1,6 +1,6 @@
 fn main() {
     var text = ""
-    for i in 0..60000 { text.push_str!("let x#(i % 97) = 12#(i % 13) + foo(y) ;\n") }
+    for i in 0..60000 { text.pushStr!("let x#(i % 97) = 12#(i % 13) + foo(y) ;\n") }
     var idents = 0
     var numbers = 0
     var symbols = 0
