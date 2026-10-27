@@ -372,7 +372,46 @@ impl Machine<'_> {
 
     // ---- Contexts -------------------------------------------------------------------------------
 
+    // These stay out of line: `exec` recurses once per interpreted call, so its frame must stay small.
+    #[inline(never)]
+    fn ctx_init(&mut self, lo: usize, size: i64, code: usize, env: Val) -> Result<Val, String> {
+        if size < 0
+            || lo
+                .checked_add(size as usize)
+                .is_none_or(|e| e > self.mem.len())
+        {
+            return Err("a context needs a stack inside memory".to_string());
+        }
+        if code < FUNC_BASE || code - FUNC_BASE >= self.m.funcs.len() {
+            return Err("a context starts at a bad function address".to_string());
+        }
+        self.ctxs.push(CtxInfo {
+            lo,
+            hi: lo + size as usize,
+            code: code - FUNC_BASE,
+            env,
+            started: false,
+        });
+        Ok(Val::Ptr(CTX_BASE + (self.ctxs.len() - 1) * 16))
+    }
+
+    #[inline(never)]
+    fn ctx_switch(&mut self, save: usize, to: usize) -> Result<(), String> {
+        let id = to.wrapping_sub(CTX_BASE) / 16;
+        if to < CTX_BASE || !(to - CTX_BASE).is_multiple_of(16) || id >= self.ctxs.len() {
+            return Err("switched to something that is not a context".to_string());
+        }
+        self.check(save, 8)?;
+        let me = self.me;
+        self.write(save, IrTy::Ptr, Val::Ptr(CTX_BASE + me * 16))?;
+        if id != me {
+            self.switch_to(id)?;
+        }
+        Ok(())
+    }
+
     /// Hands the baton to context `id` (starting its thread the first time) and waits to get it back.
+    #[inline(never)]
     fn switch_to(&mut self, id: usize) -> Result<(), String> {
         let me = self.me;
         let saved = (
@@ -729,40 +768,14 @@ impl Machine<'_> {
                 self.free(get(p))?;
                 Val::Unit
             }
-            Op::CtxInit(base, size, code, env) => {
-                let (lo, size) = (addr(&get(base))?, get(size).signed(64));
-                let code = addr(&get(code))?;
-                if size < 0
-                    || lo
-                        .checked_add(size as usize)
-                        .is_none_or(|e| e > self.mem.len())
-                {
-                    return Err("a context needs a stack inside memory".to_string());
-                }
-                if code < FUNC_BASE || code - FUNC_BASE >= self.m.funcs.len() {
-                    return Err("a context starts at a bad function address".to_string());
-                }
-                self.ctxs.push(CtxInfo {
-                    lo,
-                    hi: lo + size as usize,
-                    code: code - FUNC_BASE,
-                    env: get(env),
-                    started: false,
-                });
-                Val::Ptr(CTX_BASE + (self.ctxs.len() - 1) * 16)
-            }
+            Op::CtxInit(base, size, code, env) => self.ctx_init(
+                addr(&get(base))?,
+                get(size).signed(64) as i64,
+                addr(&get(code))?,
+                get(env),
+            )?,
             Op::CtxSwitch(save, to) => {
-                let (save, to) = (addr(&get(save))?, addr(&get(to))?);
-                let id = to.wrapping_sub(CTX_BASE) / 16;
-                if to < CTX_BASE || !(to - CTX_BASE).is_multiple_of(16) || id >= self.ctxs.len() {
-                    return Err("switched to something that is not a context".to_string());
-                }
-                self.check(save, 8)?;
-                let me = self.me;
-                self.write(save, IrTy::Ptr, Val::Ptr(CTX_BASE + me * 16))?;
-                if id != me {
-                    self.switch_to(id)?;
-                }
+                self.ctx_switch(addr(&get(save))?, addr(&get(to))?)?;
                 Val::Unit
             }
             Op::Realloc(p, n) => {
