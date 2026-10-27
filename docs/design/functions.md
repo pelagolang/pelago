@@ -265,8 +265,8 @@ at first, and has a step limit so a runaway loop becomes an error, not a hang.
   text as static data, lists as an allocation that is filled). Bakeable: numbers, `bool`, `char`, `string`, `str`, arrays, lists, tuples,
   structs, enums, `option`, `result`, `box`, maps and sets (the last two are rebuilt by inserting the entries when the code runs). Not bakeable
   (a clear error): closures, `obj`, `any`. Rules (checker): a `meta
-  fn` can be called only inside `meta`; compile-time code cannot `print` (use `meta_note("...")`), call `ext` functions of its own program
-  or read a `var`; `meta_error("...")` stops the compilation with a message. The step budget is 10 million, or `@meta_limit(n)` on the
+  fn` can be called only inside `meta`; compile-time code cannot `print` (use `metaNote("...")`), call `ext` functions of its own program
+  or read a `var`; `metaError("...")` stops the compilation with a message. The step budget is 10 million, or `@meta_limit(n)` on the
   declaration. Results are cached per expression; a constant that needs itself is an error. Owner answers (recommendations used): reflection
   later, budget 10 million with `@meta_limit`, baked data is built where it is used (a copy), `target` fields as listed above. A failing compile-time run reports its call chain
   (`... (in inner <- outer)`). Not built: static data with relocations (the code that builds the value is generated instead).
@@ -274,7 +274,7 @@ at first, and has a step limit so a runaway loop becomes an error, not a hang.
 ### Built so far: async at stage 0 (card A-07)
 
 `async fn f(...) -> T` is called like any function and gives a `future<T>`; `await e` (only inside an `async fn`) consumes the future and gives
-the `T`; `block_on(future)` does the same from ordinary code. At this stage a call **runs the body to the end** (like the cooperative tasks
+the `T`; `blockOn(future)` does the same from ordinary code. At this stage a call **runs the body to the end** (like the cooperative tasks
 of stage 0, IR18) and the future holds the result, so `await` never has to wait. `await f()?` means `(await f())?`. Futures have the layout
 of a `T`, and no executor exists. What is not built: suspension in the middle of a body (a state machine per `async fn`, with the rule
 that no view or `inout` lives across an `await`), `async` closures and blocks, `select` over futures. Those wait for real threads (S-02)
