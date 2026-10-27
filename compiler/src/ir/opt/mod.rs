@@ -180,8 +180,11 @@ fn rounds(f: &mut Func, divs: bool) {
     }
 }
 
+/// Per pass: its name, the time spent in it and how often it ran.
+pub type PassTimes = Vec<(&'static str, std::time::Duration, u32)>;
+
 thread_local! {
-    static PASS_TIMES: std::cell::RefCell<Option<Vec<(&'static str, std::time::Duration, u32)>>> =
+    static PASS_TIMES: std::cell::RefCell<Option<PassTimes>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -191,7 +194,7 @@ pub fn time_passes() {
 }
 
 /// The time and number of runs per pass since `time_passes`, slowest first.
-pub fn pass_times() -> Vec<(&'static str, std::time::Duration, u32)> {
+pub fn pass_times() -> PassTimes {
     let mut v = PASS_TIMES
         .with(|t| t.borrow_mut().take())
         .unwrap_or_default();
