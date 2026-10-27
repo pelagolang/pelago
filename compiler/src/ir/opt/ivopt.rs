@@ -20,6 +20,9 @@ use std::collections::{HashMap, HashSet};
 /// The counters of a formula with their coefficients.
 type Terms = Vec<(Value, u64)>;
 
+/// How each value is read: by instruction and by terminator.
+type Uses = (HashMap<Value, Vec<usize>>, HashMap<Value, usize>);
+
 /// `k + sum(c * p)` over counters `p`, with wrapping coefficients.
 #[derive(Clone, Debug)]
 struct Aff {
@@ -72,17 +75,41 @@ pub fn run(f: &mut Func) -> bool {
 
 fn once(f: &mut Func) -> bool {
     let dom = Dom::new(f);
+    // The analyses stay valid across the loops tried: a loop that fails changes nothing.
+    let preds = f.predecessors();
+    let defs = f.defs();
+    // How each value is read, by instruction and by terminator.
+    let mut inst_uses: HashMap<Value, Vec<usize>> = HashMap::new();
+    let mut term_uses: HashMap<Value, usize> = HashMap::new();
+    for b in &f.blocks {
+        for &i in &b.insts {
+            f.insts[i]
+                .op
+                .for_each_value(|v| inst_uses.entry(v).or_default().push(i));
+        }
+        if let Some(t) = &b.term {
+            t.for_each_value(|v| *term_uses.entry(v).or_default() += 1);
+        }
+    }
+    let uses = (inst_uses, term_uses);
     for lp in loops::find(f, &dom) {
-        if lp.header.0 != 0 && try_loop(f, &lp) {
+        if lp.header.0 != 0 && try_loop(f, &lp, &dom, &preds, &defs, &uses) {
             return true;
         }
     }
     false
 }
 
-fn try_loop(f: &mut Func, lp: &Loop) -> bool {
+fn try_loop(
+    f: &mut Func,
+    lp: &Loop,
+    dom: &Dom,
+    preds: &[Vec<BlockId>],
+    defs: &[Option<usize>],
+    uses: &Uses,
+) -> bool {
+    let (inst_uses, term_uses) = uses;
     let h = lp.header;
-    let preds = f.predecessors();
     let latches: Vec<BlockId> = preds[h.0 as usize]
         .iter()
         .copied()
@@ -96,7 +123,6 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
         return false;
     };
     let back = back.clone();
-    let defs = f.defs();
     let const_of = |v: Value| -> Option<u64> {
         match defs[v.0 as usize].map(|i| &f.insts[i].op) {
             Some(Op::Const(IrTy::Int(64), Const::Int(c))) => Some(*c as u64),
@@ -115,7 +141,7 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
 
     // Every value in the loop made from counters, as a formula.
     let mut aff: HashMap<Value, Option<Aff>> = HashMap::new();
-    for &b in &Dom::new(f).rpo {
+    for &b in &dom.rpo {
         if !lp.contains(b) {
             continue;
         }
@@ -183,23 +209,9 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
             }
         }
     }
-    // How each value is read, by instruction and by terminator.
-    let mut inst_uses: HashMap<Value, Vec<usize>> = HashMap::new();
-    let mut term_uses: HashMap<Value, usize> = HashMap::new();
-    for b in &f.blocks {
-        for &i in &b.insts {
-            f.insts[i]
-                .op
-                .for_each_value(|v| inst_uses.entry(v).or_default().push(i));
-        }
-        if let Some(t) = &b.term {
-            t.for_each_value(|v| *term_uses.entry(v).or_default() += 1);
-        }
-    }
-
     // Values with the same counters and coefficients differ by a constant, so they share one counter.
     let mut groups: Vec<(Terms, Vec<(Value, u64)>)> = Vec::new();
-    for &b in &Dom::new(f).rpo {
+    for &b in &dom.rpo {
         if !lp.contains(b) {
             continue;
         }
@@ -221,6 +233,9 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
         }
     }
     // Keep a group only when the loop ends up with fewer instructions.
+    if groups.is_empty() {
+        return false;
+    }
     let before = weight(f, lp);
     for (terms, members) in groups {
         let mut g = f.clone();
@@ -231,7 +246,7 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
             rewrite(&mut g, lp, latch, &terms, &members, &step);
         }
         super::dce::run(&mut g);
-        let after = weight(&g, lp);
+        let after = weight_live(&g, lp);
         if after < before || (level && after == before) {
             *f = g;
             return true;
@@ -244,6 +259,11 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
 fn weight(f: &Func, lp: &Loop) -> usize {
     let mut base = f.clone();
     super::dce::run(&mut base);
+    weight_live(&base, lp)
+}
+
+/// `weight` of a function that has had its dead code removed already.
+fn weight_live(base: &Func, lp: &Loop) -> usize {
     base.blocks
         .iter()
         .enumerate()
