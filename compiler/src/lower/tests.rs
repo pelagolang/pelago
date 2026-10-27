@@ -712,6 +712,16 @@ fn program_sp1() {
     assert_eq!(output_of(src), "42\n");
 }
 
+/// Two contexts passing control back and forth (`rt_ctx_init`, `rt_ctx_switch`), the base of tasks and coroutines.
+#[test]
+fn program_ctx1() {
+    let src = "var g_main: ptr = rt_null()\nvar g_co: ptr = rt_null()\nfn body() {\n for k of 0..3 {\n  print(\"co #k\")\n  rt_ctx_switch(g_co, rt_load_ptr(g_main))\n }\n print(\"co done\")\n rt_ctx_switch(g_co, rt_load_ptr(g_main))\n}\nfn main() {\n const stack = rt_alloc(65536)\n g_main = rt_alloc(8)\n g_co = rt_alloc(8)\n const blk = rt_alloc(16)\n const f: once fn() = () ~> body()\n rt_write<once fn()>(blk, sink f)\n var co = rt_ctx_init(stack, 65536, rt_load_ptr(blk), rt_load_ptr(rt_offset(blk, 8)))\n for k of 0..4 {\n  print(\"main #k\")\n  rt_ctx_switch(g_main, co)\n  co = rt_load_ptr(g_co)\n }\n const back = rt_read<once fn()>(blk)\n rt_free(stack)\n rt_free(g_main)\n rt_free(g_co)\n rt_free(blk)\n}\n";
+    assert_eq!(
+        output_of(src),
+        "main 0\nco 0\nmain 1\nco 1\nmain 2\nco 2\nmain 3\nco done\n"
+    );
+}
+
 #[test]
 fn program_sp2() {
     let src = "fn main() { const (tx, rx) = chan<int>()\n const p = spawn([sink tx] ~> { for i of 0..3 { tx.send(i * 10) } })\n for v of rx.iter() { print(v) }\n p.join!!() }\n";
