@@ -256,6 +256,17 @@ impl<'a> Lowerer<'a> {
                 };
                 self.wrap(Op::Fma(a, b, c), IrTy::F64, sp)
             }
+            "rt_sqrt" | "rt_floor" | "rt_ceil" => {
+                let Some(x) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
+                let o = match name.as_str() {
+                    "rt_sqrt" => FUn::Sqrt,
+                    "rt_floor" => FUn::Floor,
+                    _ => FUn::Ceil,
+                };
+                self.wrap(Op::FUn(o, x), IrTy::F64, sp)
+            }
             "rt_to_int" => {
                 let Some(x) = self.arg_scalar(args, 0) else {
                     return Res::Never;

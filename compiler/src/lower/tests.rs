@@ -1533,6 +1533,28 @@ fn native_agrees_on_fused_multiply_add() {
     );
 }
 
+/// `sqrt`, `floor`, `ceil` and `round` are single instructions natively; they agree with the interpreter
+/// on halves, negatives, huge numbers, NaN and infinities.
+#[test]
+fn native_agrees_on_sqrt_and_rounding() {
+    agree(
+        "fn main() {
+            var xs = [2.0, 0.0, 0.25, 1.0e300, 0.0 - 1.0, 0.5, 0.0 - 0.5, 1.5, 0.0 - 1.5, 2.5, 0.0 - 2.5,
+                0.49999999999999994, 4503599627370497.0, 0.0 - 4503599627370497.5, 1.0e300, 0.0 / 0.0,
+                1.0 / 0.0, 0.0 - 1.0 / 0.0, 123456789.987654321]
+            var i = 0
+            while i < xs.len() {
+                const x = xs[i]
+                print(x.sqrt())
+                print(x.floor())
+                print(x.ceil())
+                print(x.round())
+                i += 1
+            }
+        }",
+    );
+}
+
 /// A zero float constant that a hoisted instruction reads stays where the loop can see it.
 #[test]
 fn licm_keeps_a_zero_constant_a_hoisted_op_reads() {
@@ -2355,11 +2377,11 @@ fn float32_rounds_after_every_operation() {
 
 #[test]
 fn float_to_int_saturates() {
-    // `floor` goes through the conversion to an integer and back.
+    // `floor` and `ceil` are exact now (NaN stays NaN); only printing a huge float saturates.
     let src = "fn main() { const z = 0.0\n const big = 1e30\n print(big.floor(), (-big).floor(), (z / z).floor(), 2.9.floor(), (-2.9).floor(), 1e19.ceil(), (-1e19).ceil()) }";
     assert_eq!(
         output_of(src),
-        "9223372036854775807 -9223372036854775807 0 2 -3 9223372036854775807 -9223372036854775807\n"
+        "9223372036854775807 -9223372036854775807 nan 2 -3 9223372036854775807 -9223372036854775807\n"
     );
 }
 

@@ -286,6 +286,38 @@ impl VBin {
     }
 }
 
+/// One-operand float operations that the hardware does exactly: the result is the correctly rounded
+/// (square root) or exact (rounding to a whole number) value, the same on every target.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FUn {
+    /// Square root; a negative number gives NaN.
+    Sqrt,
+    /// The largest whole number not above the operand.
+    Floor,
+    /// The smallest whole number not below the operand.
+    Ceil,
+}
+
+impl FUn {
+    pub fn name(self) -> &'static str {
+        match self {
+            FUn::Sqrt => "fsqrt",
+            FUn::Floor => "ffloor",
+            FUn::Ceil => "fceil",
+        }
+    }
+
+    /// The value for an `f64` operand (an `f32` is widened first and narrowed after: both steps are exact
+    /// for these operations).
+    pub fn apply(self, x: f64) -> f64 {
+        match self {
+            FUn::Sqrt => x.sqrt(),
+            FUn::Floor => x.floor(),
+            FUn::Ceil => x.ceil(),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Op {
     Const(IrTy, Const),
@@ -301,6 +333,8 @@ pub enum Op {
     /// `a * b + c` with a single rounding (floats only): the same result on every target.
     Fma(Value, Value, Value),
     Neg(Value),
+    /// A float square root or rounding to a whole number (see `FUn`).
+    FUn(FUn, Value),
     Not(Value),
     VUn(VUn, Value),
     VBin(VBin, Value, Value),
