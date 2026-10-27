@@ -123,6 +123,23 @@ impl float {
 
     fn round(self) -> float = self < 0.0 ? 0.0 - (0.0 - self + 0.5).floor() : (self + 0.5).floor()
 
+    //~ The whole number below `self` toward zero. Stops the program when `self` is NaN or does not fit an `int`.
+    fn truncInt(self) -> int {
+        if !(self >= -9223372036854775808.0 && self < 9223372036854775808.0) {
+            panic("float does not fit an int")
+        }
+        rt_to_int(self)
+    }
+
+    //~ The largest whole number not above `self`, as an `int`.
+    fn floorInt(self) -> int = self.floor().truncInt()
+
+    //~ The smallest whole number not below `self`, as an `int`.
+    fn ceilInt(self) -> int = self.ceil().truncInt()
+
+    //~ The nearest whole number, halves away from zero, as an `int`.
+    fn roundInt(self) -> int = self.round().truncInt()
+
     fn pow(self, exponent: float) -> float {
         const n = rt_to_int(exponent)
         if (n to float) != exponent { panic("pow: only whole exponents are supported") }
