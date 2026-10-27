@@ -190,14 +190,21 @@ fn crossing(ranges: &[(u32, u32)], calls: &[Call]) -> Vec<usize> {
     out
 }
 
-/// Gives every virtual register of `f` a physical register or a slot and rewrites the code.
-/// `limit` keeps only the first registers of each class (tests use it to force spills).
-pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
-    let nphys = t.regs().len();
+/// What the passes over the code learn: live ranges, weights, calls and copies.
+struct Analysis {
+    ranges: Vec<Vec<(u32, u32)>>,
+    weight: Vec<u64>,
+    /// The physical registers live after each instruction: a reload must not use them.
+    live_phys: Vec<RegSet>,
+    calls: Vec<Call>,
+    hints: Vec<Vec<(Reg, u64)>>,
+    /// Copies between two virtual registers: weight, destination, source.
+    copies: Vec<(u64, u32, u32)>,
+}
+
+fn analyse(f: &MFunc, nphys: usize) -> Analysis {
     let nv = f.vclass.len();
     let nb = f.blocks.len();
-    let mut stats = Stats::default();
-
     // Positions, loop depths and weights.
     let mut start = vec![0u32; nb];
     let mut end = vec![0u32; nb];
@@ -227,6 +234,7 @@ pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
     let ninst: usize = f.blocks.iter().map(|b| b.insts.len()).sum();
     let mut live_phys: Vec<RegSet> = vec![RegSet::default(); ninst];
     let mut calls: Vec<Call> = Vec::new();
+    let mut copies: Vec<(u64, u32, u32)> = Vec::new();
     let mut hints: Vec<Vec<(Reg, u64)>> = vec![Vec::new(); nv];
     let first_inst: Vec<usize> = {
         let mut n = 0;
@@ -311,6 +319,9 @@ pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
             };
             for (d, s) in pairs {
                 if let (Operand::Reg(d, _), Operand::Reg(s, _)) = (d, s) {
+                    if let (Reg::Virt(a), Reg::Virt(b)) = (d, s) {
+                        copies.push((w, *a, *b));
+                    }
                     if let Reg::Virt(v) = d {
                         hints[*v as usize].push((*s, w));
                     }
@@ -325,6 +336,125 @@ pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
         r.reverse();
     }
     calls.sort_by_key(|c| c.pos);
+    Analysis {
+        ranges,
+        weight,
+        live_phys,
+        calls,
+        hints,
+        copies,
+    }
+}
+
+fn find(rep: &mut [u32], mut x: u32) -> u32 {
+    while rep[x as usize] != x {
+        rep[x as usize] = rep[rep[x as usize] as usize];
+        x = rep[x as usize];
+    }
+    x
+}
+
+/// Joins virtual registers that a copy connects when their live ranges never meet (the copy is where
+/// one ends and the other begins): they get one name, so they get one register and the copy goes.
+/// Heaviest copies first. Returns whether anything was joined (the code is renamed then).
+fn coalesce(f: &mut MFunc, nphys: usize, an: &Analysis) -> bool {
+    let nv = f.vclass.len();
+    let mut rep: Vec<u32> = (0..nv as u32).collect();
+    let mut ranges: Vec<Vec<(u32, u32)>> = an.ranges[nphys..].to_vec();
+    let mut copies = an.copies.clone();
+    copies.sort_by_key(|c| (std::cmp::Reverse(c.0), c.1, c.2));
+    let mut joined = false;
+    for (_, a, b) in copies {
+        if f.vclass[a as usize] != f.vclass[b as usize] {
+            continue;
+        }
+        let (ra, rb) = (find(&mut rep, a), find(&mut rep, b));
+        if ra == rb || overlaps(&ranges[ra as usize], &ranges[rb as usize]) {
+            continue;
+        }
+        let (keep, gone) = (ra.min(rb), ra.max(rb));
+        let mut g = std::mem::take(&mut ranges[gone as usize]);
+        ranges[keep as usize].append(&mut g);
+        ranges[keep as usize].sort_unstable();
+        rep[gone as usize] = keep;
+        joined = true;
+    }
+    if !joined {
+        return false;
+    }
+    let mut root = |r: &mut Reg| {
+        if let Reg::Virt(v) = *r {
+            *r = Reg::Virt(find(&mut rep, v));
+        }
+    };
+    for b in &mut f.blocks {
+        for inst in &mut b.insts {
+            for o in &mut inst.ops {
+                match o {
+                    Operand::Reg(r, _) => root(r),
+                    Operand::Mem { base, index, .. } => {
+                        if let MemBase::Reg(r) = base {
+                            root(r);
+                        }
+                        if let Some((r, _)) = index {
+                            root(r);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // A copy of a register to itself is gone.
+        let old = std::mem::take(&mut b.insts);
+        for inst in old {
+            if inst.op == COPY && inst.ops[0] == inst.ops[1] {
+                continue;
+            }
+            if inst.op == PARCOPY {
+                let n = inst.ops.len() / 2;
+                let pairs: Vec<(Reg, Operand)> = (0..n)
+                    .filter(|&k| inst.ops[k] != inst.ops[n + k])
+                    .map(|k| {
+                        let Operand::Reg(d, _) = inst.ops[k] else {
+                            unreachable!("a parallel copy writes registers")
+                        };
+                        (d, inst.ops[n + k].clone())
+                    })
+                    .collect();
+                match pairs.len() {
+                    0 => {}
+                    1 => b.insts.push(MInst::copy(pairs[0].0, pairs[0].1.clone())),
+                    _ if pairs.len() == n => b.insts.push(inst),
+                    _ => b.insts.push(MInst::parcopy(pairs)),
+                }
+                continue;
+            }
+            b.insts.push(inst);
+        }
+    }
+    true
+}
+
+/// Gives every virtual register of `f` a physical register or a slot and rewrites the code.
+/// `limit` keeps only the first registers of each class (tests use it to force spills).
+pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
+    let nphys = t.regs().len();
+    let nv = f.vclass.len();
+    let nb = f.blocks.len();
+    let mut stats = Stats::default();
+
+    let mut an = analyse(f, nphys);
+    if coalesce(f, nphys, &an) {
+        an = analyse(f, nphys);
+    }
+    let Analysis {
+        ranges,
+        weight,
+        live_phys,
+        calls,
+        hints,
+        ..
+    } = an;
 
     // Assignment, heaviest first.
     let mut occupied: Vec<Vec<(u32, u32)>> = ranges[..nphys].to_vec();
@@ -332,7 +462,17 @@ pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
     let mut slot: Vec<Option<FrameId>> = vec![None; nv];
     let mut used_callee = RegSet::default();
     let mut order: Vec<usize> = (0..nv).filter(|v| !ranges[nphys + v].is_empty()).collect();
-    order.sort_by_key(|v| (std::cmp::Reverse(weight[*v]), *v));
+    // Densest first: a short value that is used often beats a long one used as often, because the
+    // long one blocks a register for longer. (A plain weight starved the temporaries of loops whose
+    // invariants took every register.)
+    let len = |v: usize| -> u64 {
+        ranges[nphys + v]
+            .iter()
+            .map(|r| u64::from(r.1 - r.0))
+            .sum::<u64>()
+            .max(1)
+    };
+    order.sort_by_key(|v| (std::cmp::Reverse(weight[*v] * 4096 / len(*v)), *v));
     let mut splits: Vec<(u32, PReg, Vec<usize>)> = Vec::new();
     for v in order {
         let c = f.vclass[v];
@@ -499,7 +639,9 @@ pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
                     });
                 picked.push((v, s));
                 let fr = slot[v as usize].expect("a spilled register has a slot");
-                if used {
+                // The store that ended the instruction before has left the value in this very
+                // register: no need to read it back.
+                if used && out.last() != Some(&t.store(c, fr, s)) {
                     out.push(t.load(c, s, fr));
                 }
                 if defd {
