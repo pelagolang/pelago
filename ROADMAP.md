@@ -70,6 +70,7 @@ A serious, self-hosting systems language:
 | Generics | `<T>` | decided |
 | Statements | Newlines end statements, no semicolons | decided |
 | Call sites | `inout` repeated at the call site; `copy` explicit for owning types | decided |
+| Index tests | Always on, never dropped: the optimiser settles them once in front of a loop (a guard, a test-free copy and the original loop as fallback), so a program that indexes out of range stops at the same pass with the same output. `@checkfree` on a function fails the build if a test is left on its fast path | decided (Dennis, 2026-10-27, Goose comparison item 2) |
 | Kernel / OS use | Parked for now | parked |
 | Name | Undecided | open |
 

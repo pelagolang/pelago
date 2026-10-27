@@ -2667,3 +2667,102 @@ fn sorting_integers_past_the_insertion_sort_limit() {
         "true true -9223372036854775807 9223372036854775807\n"
     );
 }
+
+/// Index tests settled by a guard in front of the loop: what the program prints and where it stops
+/// are what they were, whether the guard passes (the loop without tests runs) or fails (the loop as
+/// written runs, and stops at the same pass after the same output).
+#[test]
+fn guarded_loops_stop_where_the_checked_loop_did() {
+    // The guard passes: offsets on both sides, a loaded length, a store through another list.
+    agree(
+        "fn main() {
+            var a: [int] = []
+            var b: [int] = []
+            var c: [int] = []
+            for i in 0..50 { a.push!(i * 3); b.push!(i + 1); c.push!(0) }
+            c.push!(0)
+            for i in 0..a.len() { c[i + 1] = a[i] + b[i] }
+            var s = 0
+            for i in 1..c.len() { s += c[i] - c[i - 1] }
+            print(s, c[50])
+        }",
+    );
+    // The guard fails: the list is shorter than the loop, so the stop comes at pass 7 and after
+    // seven lines of output.
+    agree(
+        "fn main() {
+            var a: [int] = []
+            for i in 0..7 { a.push!(i) }
+            for i in 0..12 { print(a[i]) }
+        }",
+    );
+    // An offset below zero on the first pass; one past the end on the last.
+    agree(
+        "fn main() {
+            var a = [5; 20]
+            var s = 0
+            for i in 0..10 { s += a[i - 1]; print(s) }
+        }",
+    );
+    agree(
+        "fn main() {
+            var a = [5; 20]
+            var s = 0
+            for i in 10..20 { s += a[i + 1]; print(s) }
+        }",
+    );
+    // The length is read from memory the loop writes: a list of lists whose element is replaced.
+    agree(
+        "fn row(n: int, v: int) -> [int] {
+            var r: [int] = []
+            for k in 0..n { r.push!(v) }
+            return r
+        }
+        fn main() {
+            var rows: [[int]] = []
+            for i in 0..6 { rows.push!(row(4, i)) }
+            var s = 0
+            for i in 0..rows.len() { s += rows[i][2] }
+            print(s)
+            for i in 0..6 { rows[i] = row(9, i) }
+            for i in 0..rows.len() { s += rows[i][8] }
+            print(s)
+        }",
+    );
+    // A loop that grows the list it reads is left alone.
+    agree(
+        "fn main() {
+            var a: [int] = [1]
+            var s = 0
+            for i in 0..30 { a.push!(i); s += a[i] }
+            print(s)
+        }",
+    );
+}
+
+/// `@checkfree` is judged on the optimised code: a kernel whose tests all move into guards passes,
+/// one that indexes by an unknown value does not.
+#[test]
+fn checkfree_functions_are_judged_after_optimising() {
+    let kept = |src: &str, name: &str| {
+        let l = lowered(src);
+        let mut m = l.module.clone();
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        let f = m.funcs.iter().find(|f| f.name == name).unwrap();
+        assert!(f.checkfree.is_some(), "{name} should be marked");
+        crate::ir::opt::kept_checks(f)
+    };
+    let kernel = "@checkfree
+        fn dot(a: [int], b: [int]) -> int {
+            var s = 0
+            for i in 0..b.len() { s += a[i] * b[i] }
+            return s
+        }
+        fn main() { print(dot([1, 2, 3], [4, 5, 6])) }";
+    assert_eq!(kept(kernel, "dot"), 0);
+    agree(kernel);
+    let loose = "@checkfree
+        fn pick(a: [int], k: int) -> int { return a[k] }
+        fn main() { print(pick([1, 2, 3], 1)) }";
+    assert!(kept(loose, "pick") > 0);
+}

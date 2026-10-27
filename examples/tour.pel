@@ -74,6 +74,13 @@ const index = find(names, "Dennis") ?? -1
 
 @inline fn square(x: int) -> int = x * x
 
+@checkfree
+fn dot(a: [int], b: [int]) -> int {
+    var s = 0
+    for i in 0..b.len() { s += a[i] * b[i] }
+    return s
+}
+
 meta fn build_table() -> [int; 256] { table }
 const table = meta build_table()
 

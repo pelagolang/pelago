@@ -89,6 +89,10 @@ Size is S (hours), M (a day), L (several days). "Collides with" means the same f
 - **Depends on:** nothing. **Size:** M. It splits into two threads if wanted: (a) runtime and print buffering, (b) float semantics in interpreter and `cast`.
 - **Collides with:** W1 (`interp.rs`), W3/W5 (`gen.rs`, small hunks).
 
+### W12. Index tests settled in front of the loop (done: PR `claude/perf/bounds-check-elim`)
+- **What:** `ir/opt/bce.rs` versions a counted loop: a guard in front tests `start + k >= 0`, `n - 1 + k <u len` per distinct index test, and that no store of the loop reaches a length it reads; the loop then runs without the tests, with the original loop (`Block::slow`) as the fallback, so an out-of-range index stops at the same pass with the same output. `@checkfree` (a function attribute, `Func::checkfree`) fails the build if a test is left outside the fallback copies (`opt::kept_checks`). Loops known to run under 16 passes, or over 2^32, keep their tests. Measured (best of 8, noisy box): levenshtein -17%, kostya_matmul -28%, sieve -20%, spectralnorm -13%, rest within noise.
+- **Left:** strength reduction (pointer stepping) stays dropped: x86 addressing modes already fold `base + i * 8`. `loops` is bound by `j % u` with a variable `u`, not by tests. Loops with a call, a push or an unknown store address keep their tests when the length is read from memory.
+
 ### W9. Loop optimisations — done in PR #16 except alignment (open) and strength reduction (dropped)
 - **What:** loop-invariant code motion, strength reduction (`i * 8` into an add), alignment of loop heads, and branch layout (likely path falls through).
 - **Touches:** new `ir/opt/licm.rs`, `ir/opt/mod.rs`, `ir/opt/tests.rs`, `native/gen.rs` (alignment only, via a new `Asm::align`).

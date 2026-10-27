@@ -126,7 +126,7 @@ fn find_site(
             if g == fi || recursive[g] || seen_bad.contains(&g) {
                 continue;
             }
-            if m.funcs[g].name.ends_with(COLD_SUFFIX) {
+            if m.funcs[g].name.ends_with(COLD_SUFFIX) || m.funcs[g].checkfree.is_some() {
                 continue;
             }
             let c = cost(&m.funcs[g]);
@@ -214,6 +214,7 @@ fn inline_at(f: &mut Func, bi: usize, pos: usize, callee: &Func) {
     let mut bmap: Vec<BlockId> = Vec::new();
     for (i, b) in callee.blocks.iter().enumerate() {
         let id = f.new_block(&[]);
+        f.blocks[id.0 as usize].slow = b.slow;
         bmap.push(id);
         if i == 0 {
             continue;
