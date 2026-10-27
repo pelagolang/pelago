@@ -751,6 +751,36 @@ fn waiting_for_nobody_is_a_deadlock_stop() {
     assert!(o.result.is_err() && o.output.contains("deadlock"), "{o:?}");
 }
 
+/// A bounded channel enforces its capacity: the producer stops after two values until the consumer takes some.
+#[test]
+fn program_bounded_channel_blocks_when_full() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>(2)\n const p = spawn([sink tx] () ~> { for i of 0..5 { tx.send(i)\n  print(\"sent #i\") } })\n yield_now()\n print(\"main woke\")\n for v of rx.iter() { print(\"got #v\") }\n p.join!!()\n}\n";
+    assert_eq!(
+        output_of(src),
+        "sent 0\nsent 1\nmain woke\nsent 2\nsent 3\nsent 4\ngot 0\ngot 1\ngot 2\ngot 3\ngot 4\n"
+    );
+}
+
+/// An unbounded channel grows its ring, keeps the order, moves owning values and drops what is left queued.
+#[test]
+fn program_channel_ring_grows_and_owns() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>()\n for i of 0..100 { tx.send(i) }\n var total = 0\n for k of 0..40 { total += rx.recv() ?? 0 }\n for i of 100..130 { tx.send(i) }\n var n = 0\n while n < 90 { total += rx.recv() ?? 0\n n += 1 }\n print(total)\n const (ts, rs) = chan<string>(3)\n ts.send(\"a\")\n ts.send(\"bc\")\n print(rs.recv() ?? \"\")\n ts.send(\"def\")\n print(rs.tryRecv() ?? \"\")\n const (tl, rl) = chan<[int]>()\n tl.send([1, 2, 3])\n}\n";
+    assert_eq!(output_of(src), "8385\na\nbc\n");
+}
+
+#[test]
+fn sending_to_a_gone_receiver_is_closed() {
+    let src = "fn main() {\n const (tx, rx) = chan<string>()\n const t = spawn([sink rx] () ~> { 1 })\n t.join!!()\n const r = tx.send(\"x\")\n print(r.is_err())\n}\n";
+    assert_eq!(output_of(src), "true\n");
+}
+
+/// The holder of a lock waits inside `with`; another task asking for it waits too instead of using the value.
+#[test]
+fn program_lock_is_held_while_its_holder_waits() {
+    let src = "fn main() {\n const h = lock(0)\n const (tx, rx) = chan<int>()\n scope s {\n  s.spawn([sink rx] () ~> h.with(n ~> { n += rx.recv() ?? 0\n   print(\"first\") }))\n  s.spawn(() ~> h.with(n ~> { n += 10\n   print(\"second\") }))\n  yield_now()\n  yield_now()\n  print(\"sending\")\n  tx.send(1)\n }\n print(h.with(n ~> n))\n}\n";
+    assert_eq!(output_of(src), "sending\nfirst\nsecond\n11\n");
+}
+
 #[test]
 fn program_sp2() {
     let src = "fn main() { const (tx, rx) = chan<int>()\n const p = spawn([sink tx] ~> { for i of 0..3 { tx.send(i * 10) } })\n for v of rx.iter() { print(v) }\n p.join!!() }\n";

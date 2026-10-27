@@ -23,4 +23,5 @@ accepted, S-04 (async suspension).
 
 - C0 plan: done (#128).
 - C1 context switch (`CtxInit`, `CtxSwitch`, interpreter baton, x86-64 and AArch64): done (#131).
-- C2 scheduler and blocking tasks in `tasks.pel`: in review.
+- C2 scheduler and blocking tasks in `tasks.pel`: done (#147).
+- C3a flat ring-buffer channels with enforced capacity, `lock` that waits: in review. Left in C3: `condvar`, `once`, `barrier`, `semaphore`, wait queues instead of polling, `select` with a send arm on a bounded channel and a timeout (needs the clock), a way to share one `lock` between spawned tasks (`shared<lock<T>>` only clones today).
