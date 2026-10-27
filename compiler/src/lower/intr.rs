@@ -126,6 +126,18 @@ impl<'a> Lowerer<'a> {
                 };
                 self.wrap(Op::CtxInit(b, n, c, e), ptr, sp)
             }
+            "rt_fn_addr" => {
+                let Some(ExprKind::Name(id)) = args.first().map(|a| &a.value.kind) else {
+                    return self.unsupported(sp, "`rt_fn_addr` needs the name of a function");
+                };
+                let Some(def) = self.res.use_at(self.f.file, id.span.start) else {
+                    return self.unsupported(sp, "`rt_fn_addr` of an unknown name");
+                };
+                let Some(f) = self.request_fn(def, &HashMap::new()) else {
+                    return self.unsupported(sp, "`rt_fn_addr` of this function");
+                };
+                self.wrap(Op::FuncAddr(f), ptr, sp)
+            }
             "rt_ctx_switch" => {
                 let (Some(s), Some(t)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {

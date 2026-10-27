@@ -21,4 +21,6 @@ accepted, S-04 (async suspension).
 
 # Progress
 
-- C0 plan: this card.
+- C0 plan: done (#128).
+- C1 context switch (`CtxInit`, `CtxSwitch`, interpreter baton, x86-64 and AArch64): done (#131).
+- C2 scheduler and blocking tasks in `tasks.pel`: in review.
