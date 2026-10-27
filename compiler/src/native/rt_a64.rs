@@ -31,6 +31,8 @@ pub use super::rt::STATE_SIZE;
 const PRINT_BUF: i64 = 64 * 1024;
 const CHUNK: i64 = 1 << 20;
 const STACK: i64 = 1 << 30;
+/// The top of the stack that is never advised to use huge pages (Linux).
+const STACK_SMALL: i64 = 2 << 20;
 /// The stack on Windows: reserved and committed in one go, 256 MiB.
 const STACK_WIN: i64 = 1 << 28;
 /// Windows: a `PAGE_GUARD` page this far above the base of our stack. The first touch clears the flag
@@ -286,8 +288,9 @@ pub fn emit_for(
     failed(a, os, X0, keep);
     a.mov_rr(X19, X0);
     if os == Os::Linux {
-        // Big frames (a 40 MB array in a local) fault in 2 MiB at a time when the kernel agrees.
-        a.mov_ri(X1, STACK);
+        // Big frames (a 40 MB array in a local) fault in 2 MiB at a time when the kernel agrees. The
+        // top 2 MiB stay on small pages, so a small program does not fault in a huge page at start.
+        a.mov_ri(X1, STACK - STACK_SMALL);
         a.mov_ri(X2, 14); // MADV_HUGEPAGE
         sys(a, os, Sys::Madvise);
     }
