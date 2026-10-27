@@ -19,7 +19,7 @@ use crate::ir::{FUn, Test, VBin, VUn};
 use std::collections::{HashMap, HashSet};
 
 const INT_REGS: [Reg; 6] = [RDI, RSI, RDX, RCX, R8, R9];
-const MAX_FLOAT_REGS: usize = 8;
+pub(super) const MAX_FLOAT_REGS: usize = 8;
 
 /// The SSE registers values can live in. `xmm0` and `xmm1` are the templates' scratch registers (and
 /// `xmm0` carries a float result); the rest belong to the caller, so a value that lives across a call
@@ -297,7 +297,7 @@ fn bits(t: IrTy) -> u32 {
 }
 
 /// A loop that stores at least this many bytes of one value is a `rep stos`: it starts slowly.
-const FILL_BYTES: i128 = 512;
+pub(super) const FILL_BYTES: i128 = 512;
 
 fn size_of_ty(t: IrTy) -> i32 {
     size(t) as i32
@@ -317,13 +317,13 @@ fn is_float(t: IrTy) -> bool {
 }
 
 /// Where an argument or parameter travels.
-enum Loc {
+pub(super) enum Loc {
     Int(usize),
     Float(usize),
     Stack(usize),
 }
 
-fn classify(tys: &[IrTy]) -> Vec<Loc> {
+pub(super) fn classify(tys: &[IrTy]) -> Vec<Loc> {
     let (mut i, mut f, mut s) = (0, 0, 0);
     tys.iter()
         .map(|t| {
@@ -739,6 +739,9 @@ impl<'m> Gen<'m> {
                 };
                 super::x86_emit::emit(&mut env, &mf, label);
                 return Ok(());
+            }
+            if std::env::var("PELAGO_MIR_DUMP").is_ok_and(|v| v == "1") {
+                eprintln!("mir: `{}` falls back to the old generator", f.name);
             }
         }
         self.layout(f);

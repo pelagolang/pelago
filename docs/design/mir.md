@@ -66,7 +66,7 @@ The IR and its optimiser, the encoders (`x86.rs`, `a64.rs` and their golden test
 
 ## 4. How we get there without a flag day
 
-**Status:** M0 merged (PR #116). M1 built: `native/mir.rs` (types, liveness, verifier, printer) and `native/ralloc.rs` (the allocator), tested in `native/ralloc_tests.rs` on a toy target with an interpreter that runs random programs before and after allocation with 0, 1, 2, 3, 4, 6 and all registers per class.
+**Status:** M0 merged (PR #116). M1 built: `native/mir.rs` (types, liveness, verifier, printer) and `native/ralloc.rs` (the allocator), tested in `native/ralloc_tests.rs` on a toy target with an interpreter that runs random programs before and after allocation with 0, 1, 2, 3, 4, 6 and all registers per class. M2 merged (#118). M3a built on `claude/perf/mir-floats`: floats, vectors, `CheckedIf` and fill loops through the MIR, with copy coalescing, density ordering and memory operands in the allocator; the whole suite passes with `PELAGO_MIR=1`. MIR stays opt-in: on instruction counts (valgrind, 41 bench programs) it is +3.6% geomean against the old generator, with the worst rows collatz, resultpath, nbody, matmul, crc32 and bf_mandel (+19 to +33%), and wins on lru, nqueen, graph, tak and strsplit. Loop-invariant register splitting was tried and dropped: it fixed matmul and broke levenshtein. The gap is the loop-invariant and addressing work of M6 (hoisting, load folding, pointer stepping, as asked for `structlist`), so M3 is closed at opt-in and M4 waits for the gate.
 
 The new path is built **beside** the old one and takes over function by function.
 

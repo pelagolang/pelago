@@ -307,6 +307,13 @@ pub trait Target {
     fn load(&self, c: Class, dst: PReg, f: FrameId) -> MInst;
     /// `[frame object] = src`, a spill store.
     fn store(&self, c: Class, f: FrameId, src: PReg) -> MInst;
+    /// `jmp block`: a branch that never falls through.
+    fn jump(&self, to: u32) -> MInst;
+    /// Can operand `idx` of the instruction be a memory operand (a spilled integer read from its slot
+    /// instead of being reloaded first)? Only plain register uses are asked about.
+    fn mem_operand(&self, _inst: &MInst, _idx: usize) -> bool {
+        false
+    }
 }
 
 // ---- Reading instructions --------------------------------------------------------------------------

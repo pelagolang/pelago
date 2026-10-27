@@ -25,7 +25,7 @@ mod divconst;
 mod dom;
 mod fill;
 mod fneg;
-mod fx;
+pub(crate) mod fx;
 mod ifconv;
 mod inline;
 mod ivopt;
