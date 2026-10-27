@@ -81,7 +81,8 @@ fn real_main() {
                 Some(path) => ir_or_run(path, cmd, &flags, out_name),
                 None => {
                     eprintln!("usage: pelago {cmd} [--opt|--no-opt] [--stats] <file or directory>");
-                    eprintln!("       pelago run --native <path>      build natively and run");
+                    eprintln!("       pelago run [--no-opt] <path>    build natively and run (the default where supported)");
+                    eprintln!("       pelago run --interp <path>      run in the IR interpreter (`--opt`, `--stats`)");
                     eprintln!("       pelago build [--no-opt] [--leak-check] [--target=linux|windows] [-o out] <path>");
                     std::process::exit(2);
                 }
@@ -124,7 +125,7 @@ fn usage() {
     eprintln!("  lex-bench <file>  time the lexer alone on a file");
     eprintln!("  parse [--no-docs] <file>  print the syntax tree and any errors (`-` reads standard input)");
     eprintln!("  ir <path>  check, lower to the IR, verify and print it");
-    eprintln!("  run <path>  lower to the IR and run `main` in the interpreter (`--native` builds and runs machine code)");
+    eprintln!("  run <path>  build machine code and run `main` (`--interp` uses the IR interpreter instead, `--stats` counts steps)");
     eprintln!("  build [-o out] <path>  build a native x86-64 Linux executable");
     eprintln!("  fmt [--check] <path>...  format `.pel` files in place (`-` formats standard input to standard output)");
     eprintln!("  check <path>  parse and resolve names of a file or a directory of `.pel` files");
@@ -351,7 +352,14 @@ fn check_path(path: &str) {
 fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
     let run = cmd == "run";
     let build = cmd == "build";
-    let native = build || flags.contains(&"--native");
+    // `run` is native where the backend can run the result here; `--interp` (and `--stats`, whose
+    // step count only the interpreter has) ask for the interpreter (docs/design/run-mode.md).
+    let interp = flags.contains(&"--interp") || flags.contains(&"--stats");
+    let can_native = matches!(
+        pelago::native::Os::host(),
+        Some(pelago::native::Os::Linux | pelago::native::Os::Windows)
+    ) && pelago::native::Arch::host().is_some();
+    let native = build || flags.contains(&"--native") || (run && !interp && can_native);
     let mut program = pelago::package::Program::with_core();
     if let Err(e) = program.add_package_from_path(std::path::Path::new(path)) {
         eprintln!("{e}");
