@@ -80,7 +80,7 @@ fn real_main() {
             match rest.iter().find(|a| !a.starts_with("--")) {
                 Some(path) => ir_or_run(path, cmd, &flags, out_name),
                 None => {
-                    eprintln!("usage: pelago {cmd} [--opt|--no-opt] [--stats] <file or directory>");
+                    eprintln!("usage: pelago {cmd} [--opt|--no-opt] [--stats] [--timings] <file or directory>");
                     eprintln!("       pelago run [--no-opt] <path>    build natively and run (the default where supported)");
                     eprintln!("       pelago run --interp <path>      run in the IR interpreter (`--opt`, `--stats`)");
                     eprintln!("       pelago build [--no-opt] [--leak-check] [--target=linux|windows] [-o out] <path>");
@@ -360,15 +360,21 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
         Some(pelago::native::Os::Linux | pelago::native::Os::Windows)
     ) && pelago::native::Arch::host().is_some();
     let native = build || flags.contains(&"--native") || (run && !interp && can_native);
+    let mut timer = PhaseTimer::new(flags.contains(&"--timings"));
     let mut program = pelago::package::Program::with_core();
+    timer.lap("load core (read, lex, parse)");
     if let Err(e) = program.add_package_from_path(std::path::Path::new(path)) {
         eprintln!("{e}");
         std::process::exit(2);
     }
+    timer.lap("load program (read, lex, parse)");
     let resolved = pelago::resolve::resolve(&program);
+    timer.lap("resolve names");
     let typed = pelago::typecheck::check(&program, &resolved);
+    timer.lap("type check");
     let mut diags = typed.diagnostics.clone();
     diags.extend(pelago::values::check(&program, &resolved, &typed));
+    timer.lap("value checks");
     let mut failed = false;
     for d in diags.iter().filter(|d| !d.warning) {
         let module = program.module(d.module);
@@ -381,6 +387,7 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
         std::process::exit(1);
     }
     let lowered = pelago::lower::lower(&program, &resolved, &typed);
+    timer.lap("lower to IR");
     for d in &lowered.diagnostics {
         let module = program.module(d.module);
         let index = LineIndex::new(&module.src);
@@ -395,6 +402,7 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
         eprintln!("ir error: {e}");
         failed = true;
     }
+    timer.lap("verify IR");
     let mut module = lowered.module;
     let before = pelago::ir::opt::stats_of(&module);
     // Native builds optimise unless `--no-opt`; the interpreter and `ir` only with `--opt`.
@@ -404,8 +412,37 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
         flags.contains(&"--opt")
     };
     if optimise {
+        if timer.on {
+            pelago::ir::opt::time_passes();
+        }
         pelago::ir::opt::optimize(&mut module, pelago::ir::opt::Options::default());
         pelago::ir::opt::prune(&mut module, &["main"]);
+        // `@checkfree` is judged on the optimised code.
+        for f in &module.funcs {
+            let Some((file, span)) = f.checkfree else {
+                continue;
+            };
+            let kept = pelago::ir::opt::kept_checks(f);
+            if kept > 0 {
+                let module = program.module(pelago::package::ModuleId(file));
+                let index = LineIndex::new(&module.src);
+                let (line, col) = index.line_col(&module.src, span.start);
+                eprintln!(
+                    "{}:{line}:{col}: error: `{}` is `@checkfree` but keeps {kept} index test(s) the optimiser could not prove",
+                    module.path, f.name
+                );
+                failed = true;
+            }
+        }
+        timer.lap("optimise IR");
+        if timer.on {
+            for (name, d, runs) in pelago::ir::opt::pass_times().iter().take(8) {
+                eprintln!(
+                    "{:>9.3} ms    pass {name} ({runs} runs)",
+                    d.as_secs_f64() * 1e3
+                );
+            }
+        }
     }
     if flags.contains(&"--stats") {
         let after = pelago::ir::opt::stats_of(&module);
@@ -416,7 +453,8 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
         if failed {
             std::process::exit(1);
         }
-        native_build(&module, path, build, flags, out_name);
+        native_build(&module, path, build, flags, out_name, &mut timer);
+        timer.report();
         return;
     }
     if run {
@@ -450,6 +488,7 @@ fn native_build(
     build: bool,
     flags: &[&str],
     out_name: Option<String>,
+    timer: &mut PhaseTimer,
 ) {
     let os = match flags.iter().find_map(|f| f.strip_prefix("--target=")) {
         Some("windows") => pelago::native::Os::Windows,
@@ -494,6 +533,7 @@ fn native_build(
             std::process::exit(1);
         }
     };
+    timer.lap("native code generation");
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let target = match (&out_name, build) {
@@ -526,6 +566,7 @@ fn native_build(
     {
         let _ = std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755));
     }
+    timer.lap("write executable");
     if build {
         println!("wrote {} ({} bytes)", target.display(), image.len());
         return;
@@ -538,6 +579,48 @@ fn native_build(
             eprintln!("cannot run the native program: {e} (native code runs on x86-64 Linux only for now)");
             std::process::exit(1);
         }
+    }
+}
+
+/// Prints how long each compiler phase took when `--timings` is given (to standard error, in milliseconds).
+struct PhaseTimer {
+    on: bool,
+    start: std::time::Instant,
+    last: std::time::Instant,
+    laps: Vec<(&'static str, std::time::Duration)>,
+}
+
+impl PhaseTimer {
+    fn new(on: bool) -> PhaseTimer {
+        let now = std::time::Instant::now();
+        PhaseTimer {
+            on,
+            start: now,
+            last: now,
+            laps: Vec::new(),
+        }
+    }
+
+    /// Ends the current phase under `name`.
+    fn lap(&mut self, name: &'static str) {
+        if self.on {
+            let now = std::time::Instant::now();
+            self.laps.push((name, now - self.last));
+            self.last = now;
+        }
+    }
+
+    fn report(&self) {
+        if !self.on {
+            return;
+        }
+        for (name, d) in &self.laps {
+            eprintln!("{:>9.3} ms  {name}", d.as_secs_f64() * 1e3);
+        }
+        eprintln!(
+            "{:>9.3} ms  total (inside main)",
+            self.start.elapsed().as_secs_f64() * 1e3
+        );
     }
 }
 

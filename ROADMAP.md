@@ -40,6 +40,7 @@ A serious, self-hosting systems language:
 | Collections | `docs/design/collections.md` decisions C1 to C8 recorded (must-exist indexing, negative indexes, insertion-ordered maps, `string`/`str`, `+` and spread); builders (own comprehension shape: `[x of xs if x > 0 ~> x * 2]`) added | decided |
 | Errors | `docs/design/errors.md` decisions E1 to E8: expected failures are `result`/`option`, bugs stop the program (no unwinding), overflow stops in every build with `+% -% *%` for wrapping, `converts` for `?` and `to` | decided |
 | Concurrency | `docs/design/concurrency.md` decisions CC1 to CC9: threads with `sink`/copy capture, scopes, `chan<T>` pairs, `select`, `shared`/`lock`/`atomic`; async still deferred; `par_for` helper; global `var` forbidden | decided |
+| Narrow links | `docs/design/narrow-links.md` NL1 to NL4: pool-relative `link<T, W>` into `pool<T, W>`, width always written, pool on its own card (A-14, after the arenas of A-13) | decided |
 | Naming | `docs/design/basics.md` B8: function and method names are camelCase by default (library and examples); snake_case still accepted | decided |
 | List patterns | `docs/design/list-patterns.md` LP1 to LP8: `[first, ...rest]` with `...`, rest is a view, `some(v)` for options, patterns over text, `sink` elements revisited later | decided |
 | Parser | `docs/design/parser.md` P1 to P10 decided: top-level statements, `loop` values, loop labels (`outer: for ...`, `break outer`), closure return types (`(x: int) -> int ~> ...`), doc comments kept, syntax checks pass | decided |
@@ -70,6 +71,7 @@ A serious, self-hosting systems language:
 | Generics | `<T>` | decided |
 | Statements | Newlines end statements, no semicolons | decided |
 | Call sites | `inout` repeated at the call site; `copy` explicit for owning types | decided |
+| Index tests | Always on, never dropped: the optimiser settles them once in front of a loop (a guard, a test-free copy and the original loop as fallback), so a program that indexes out of range stops at the same pass with the same output. `@checkfree` on a function fails the build if a test is left on its fast path | decided (Dennis, 2026-10-27, Goose comparison item 2) |
 | Kernel / OS use | Parked for now | parked |
 | Name | Undecided | open |
 

@@ -65,6 +65,8 @@ pub fn is_call_like(op: &Op, consts: &[Option<i64>]) -> bool {
                 | Op::Alloc(_)
                 | Op::Free(_)
                 | Op::Realloc(..)
+                | Op::CtxInit(..)
+                | Op::CtxSwitch(..)
                 | Op::Print(..)
         ),
     }
@@ -300,6 +302,7 @@ pub(super) fn inst_uses(op: &Op, out: &mut Vec<Value>) {
     match op {
         Op::Const(..) | Op::Slot(..) | Op::DataAddr(_) | Op::FuncAddr(_) => {}
         Op::Neg(a)
+        | Op::FUn(_, a)
         | Op::Not(a)
         | Op::VUn(_, a)
         | Op::Cast(_, a, _)
@@ -313,7 +316,9 @@ pub(super) fn inst_uses(op: &Op, out: &mut Vec<Value>) {
         | Op::PtrAdd(a, b)
         | Op::Store(a, b)
         | Op::Realloc(a, b)
+        | Op::CtxSwitch(a, b)
         | Op::Print(a, b) => out.extend([*a, *b]),
+        Op::CtxInit(a, b, c, d) => out.extend([*a, *b, *c, *d]),
         Op::CheckedIf(_, _, test, a, b) => {
             test.for_each_value(|v| out.push(v));
             out.extend([*a, *b]);

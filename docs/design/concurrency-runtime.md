@@ -76,13 +76,21 @@ If every task is parked, no timer is pending and no I/O is outstanding, the prog
 Bounded `send` parks when full (capacity is really enforced); `recv` parks when empty; closing wakes everyone.
 Capacity 0 stays "unbounded", as in `concurrency.md`. A rendezvous channel is `chan<T>(rendezvous)` later if wanted.
 
+**Flat typed channels, copy on send** (owner's choice, 2026-10-27, after the Goose design). A channel is a
+typed ring buffer of flat slots, one slot per `T`. `send` moves the value in with one `memcpy` of its flat bytes
+and `recv` copies it out, so nothing is shared between tasks or threads: no pointers into the sender's data, no
+refcounts, no lock on the payload. Values that own heap memory (`list`, `string`, `box`) cross as a move of their
+header (the sender loses them, as `sink` already says) and the bytes behind it are not copied; a read-only view
+never crosses. The ring buffer is plain memory guarded by the channel's lock, which keeps the later atomic
+(lock-free) version a drop-in change of the library only.
+
 **`select`.** Registers the task on every arm's waiter list with a shared "fired" word; the first arm to fire
 wins with an atomic compare-and-swap; the task unregisters the others. `default` does not park; a `timeout` arm
 adds a timer. With one worker the CAS is trivially uncontended.
 
 **Locks.** `lock<T>`: an atomic word (0 free, 1 held, 2 held with waiters) plus a wait queue; spin briefly with
 more than one worker, then park. `with` keeps its shape (closure gets `inout`). Also in the library, not the
-language: `condvar`, `once`, `barrier`, `semaphore`, `rwlock` (read-mostly `shared` data), built from the same
+language: `lock.withWhen` (in place of a `condvar`; no separate `once` type, a `lock` around an `option` does it), `barrier`, `semaphore`, `rwlock` (read-mostly `shared` data), built from the same
 word-and-queue pair.
 
 **`shared<T>`** gets an atomic count (`AtomicRmw add`); **`atomic<T>`** is the IR atomics with a plain method
@@ -138,7 +146,7 @@ for x of g { print(x) }                                              // iterator
 | C0 | This plan, card A-12, S-02 and S-04 updated | nothing |
 | C1 | Context switch: `ctx_*` IR ops, interpreter baton, x86-64 and AArch64 emission, `os_stack_alloc` | backend |
 | C2 | Scheduler and blocking tasks in `core.pel`: `spawn`, `join`, `yield`, `sleep`, deadlock stop; `scope` joins; detached semantics | C1, `os_clock_now` |
-| C3 | Blocking channels (bounded enforced), real `select` with timeout, `lock` with wait queue, `condvar`, `once`, `barrier`, `semaphore` | C2 |
+| C3 | Blocking channels (bounded enforced), real `select` with timeout, `lock` with wait queue and `withWhen`, `barrier`, `semaphore` (C3b, done: clonable handles, polling waits) | C2 |
 | C4 | Coroutines (`coroutine<T>`, generator iteration) and cancellation (`cancel`, `cancelled`, `select` arm) | C2 |
 | C5 | IR atomics, atomic `shared`, `atomic<T>`, memory-model note in `concurrency.md` | IR, interpreter, both backends |
 | C6 | Several workers: `os_thread_start`, futex park, thread register, per-worker allocator, work stealing, `par_for`/`par_map` | C5, runtime period OS layer |

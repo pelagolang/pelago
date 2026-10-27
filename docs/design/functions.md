@@ -265,8 +265,8 @@ at first, and has a step limit so a runaway loop becomes an error, not a hang.
   text as static data, lists as an allocation that is filled). Bakeable: numbers, `bool`, `char`, `string`, `str`, arrays, lists, tuples,
   structs, enums, `option`, `result`, `box`, maps and sets (the last two are rebuilt by inserting the entries when the code runs). Not bakeable
   (a clear error): closures, `obj`, `any`. Rules (checker): a `meta
-  fn` can be called only inside `meta`; compile-time code cannot `print` (use `meta_note("...")`), call `ext` functions of its own program
-  or read a `var`; `meta_error("...")` stops the compilation with a message. The step budget is 10 million, or `@meta_limit(n)` on the
+  fn` can be called only inside `meta`; compile-time code cannot `print` (use `metaNote("...")`), call `ext` functions of its own program
+  or read a `var`; `metaError("...")` stops the compilation with a message. The step budget is 10 million, or `@meta_limit(n)` on the
   declaration. Results are cached per expression; a constant that needs itself is an error. Owner answers (recommendations used): reflection
   later, budget 10 million with `@meta_limit`, baked data is built where it is used (a copy), `target` fields as listed above. A failing compile-time run reports its call chain
   (`... (in inner <- outer)`). Not built: static data with relocations (the code that builds the value is generated instead).
@@ -274,7 +274,7 @@ at first, and has a step limit so a runaway loop becomes an error, not a hang.
 ### Built so far: async at stage 0 (card A-07)
 
 `async fn f(...) -> T` is called like any function and gives a `future<T>`; `await e` (only inside an `async fn`) consumes the future and gives
-the `T`; `block_on(future)` does the same from ordinary code. At this stage a call **runs the body to the end** (like the cooperative tasks
+the `T`; `blockOn(future)` does the same from ordinary code. At this stage a call **runs the body to the end** (like the cooperative tasks
 of stage 0, IR18) and the future holds the result, so `await` never has to wait. `await f()?` means `(await f())?`. Futures have the layout
 of a `T`, and no executor exists. What is not built: suspension in the middle of a body (a state machine per `async fn`, with the rule
 that no view or `inout` lives across an `await`), `async` closures and blocks, `select` over futures. Those wait for real threads (S-02)
@@ -291,6 +291,28 @@ and the backend; the card is S-04.
 Hints are written as attributes (`@name`) in front of a declaration. They are
 requests: by default the compiler decides, and it usually knows better. `@inline`
 asks the compiler to expand the function at every call.
+
+`@checkfree` is the one hint that can fail the build. It marks a kernel that must run without
+index tests:
+
+```
+@checkfree
+fn dot(a: [int], b: [int]) -> int {
+    var s = 0
+    for i in 0..b.len() { s += a[i] * b[i] }
+    return s
+}
+```
+
+Index tests are never dropped. For a loop whose index is the counter plus a constant, the
+optimiser makes the test once, in front of the loop (`start + k >= 0` and `n - 1 + k < len`, plus
+a check that nothing the loop stores reaches a length it reads), and runs a copy of the loop
+without the tests when that guard holds. When it fails, the original loop runs, so an out-of-range
+index still stops at the same pass with the same output. Overflow traps are untouched.
+`@checkfree` asks for this to work on every index of the function: after optimising, a test left
+outside those fallback copies is a build error (`pelago build`, `run --opt`, `run --native`, `ir`),
+so a change that makes a kernel slow again is caught. A `@checkfree` function is never inlined.
+The guard is only made for loops that may run 16 passes or more and at most 2^32.
 
 ## 17. Async functions
 
@@ -387,3 +409,4 @@ The checker finds the consuming forms that are written out (`sink x` argument, `
 
 - **Consuming a value is marked `!!`:** `c.close!!()`. Changing stays `c.bump!()`.
 - `sink` arguments are repeated at the call site like `inout` ones: `finish(sink scores)`.
+- **`@checkfree` fails the build** when the optimiser leaves an index test on the fast path of the function; the checked fallback copy of a guarded loop does not count (section 16, `docs/design/ir.md`).

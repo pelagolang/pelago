@@ -161,6 +161,8 @@ pub fn golden() -> Vec<Case> {
         ("fcvt d0, s1", "20c0221e", |a| { a.fcvt(true, V(0), V(1)) }),
         ("fcvt s0, d1", "2040621e", |a| { a.fcvt(false, V(0), V(1)) }),
         ("fsqrt d0, d1", "20c0611e", |a| { a.fsqrt(true, V(0), V(1)) }),
+        ("frintm d0, d1", "2040651e", |a| { a.frintm(true, V(0), V(1)) }),
+        ("frintp d0, d1", "20c0641e", |a| { a.frintp(true, V(0), V(1)) }),
         ("dup v0.2d, x1", "200c084e", |a| { a.vdup(V(0), X1) }),
         ("add v0.2d, v1.2d, v2.2d", "2084e24e", |a| { a.vadd(V(0), V(1), V(2)) }),
         ("sub v0.2d, v1.2d, v2.2d", "2084e26e", |a| { a.vsub(V(0), V(1), V(2)) }),

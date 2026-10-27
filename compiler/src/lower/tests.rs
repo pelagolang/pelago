@@ -712,6 +712,102 @@ fn program_sp1() {
     assert_eq!(output_of(src), "42\n");
 }
 
+/// Two contexts passing control back and forth (`rt_ctx_init`, `rt_ctx_switch`), the base of tasks and coroutines.
+#[test]
+fn program_ctx1() {
+    let src = "var g_main: ptr = rt_null()\nvar g_co: ptr = rt_null()\nfn body() {\n for k of 0..3 {\n  print(\"co #k\")\n  rt_ctx_switch(g_co, rt_load_ptr(g_main))\n }\n print(\"co done\")\n rt_ctx_switch(g_co, rt_load_ptr(g_main))\n}\nfn main() {\n const stack = rt_alloc(65536)\n g_main = rt_alloc(8)\n g_co = rt_alloc(8)\n const blk = rt_alloc(16)\n const f: once fn() = () ~> body()\n rt_write<once fn()>(blk, sink f)\n var co = rt_ctx_init(stack, 65536, rt_load_ptr(blk), rt_load_ptr(rt_offset(blk, 8)))\n for k of 0..4 {\n  print(\"main #k\")\n  rt_ctx_switch(g_main, co)\n  co = rt_load_ptr(g_co)\n }\n const back = rt_read<once fn()>(blk)\n rt_free(stack)\n rt_free(g_main)\n rt_free(g_co)\n rt_free(blk)\n}\n";
+    assert_eq!(
+        output_of(src),
+        "main 0\nco 0\nmain 1\nco 1\nmain 2\nco 2\nmain 3\nco done\n"
+    );
+}
+
+/// Two tasks talking back and forth: impossible while tasks ran one after another to the end.
+#[test]
+fn program_tasks_ping_pong() {
+    let src = "fn main() {\n const (to_b, from_a) = chan<int>()\n const (to_a, from_b) = chan<int>()\n const b = spawn([sink from_a, sink to_a] () ~> { for i of 0..3 { const v = from_a.recv() ?? 0\n  to_a.send(v + 1) } })\n var x = 0\n for i of 0..3 {\n  to_b.send(x)\n  x = from_b.recv() ?? 0\n  print(x)\n }\n b.join!!()\n}\n";
+    assert_eq!(output_of(src), "1\n2\n3\n");
+}
+
+#[test]
+fn program_tasks_join_in_any_order_and_detach() {
+    let src = "fn main() {\n const a = spawn(() ~> 1)\n const b = spawn(() ~> 20)\n const c = spawn(() ~> 300)\n spawn(() ~> print(\"detached\"))\n print(c.join!!() + b.join!!() + a.join!!())\n print(\"end\")\n}\n";
+    assert_eq!(output_of(src), "detached\n321\nend\n");
+}
+
+#[test]
+fn a_task_that_starts_tasks() {
+    let src = "fn main() {\n const t = spawn(() ~> {\n  const u = spawn(() ~> 5)\n  u.join!!() * 2 })\n print(t.join!!())\n}\n";
+    assert_eq!(output_of(src), "10\n");
+}
+
+#[test]
+fn waiting_for_nobody_is_a_deadlock_stop() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>()\n print(rx.recv() ?? 0)\n}\n";
+    let o = run_main(src);
+    assert!(o.result.is_err() && o.output.contains("deadlock"), "{o:?}");
+    let src = "fn main() {\n const (tx, rx) = chan<int>()\n const t = spawn([sink rx] () ~> rx.recv() ?? 0)\n print(t.join!!())\n}\n";
+    let o = run_main(src);
+    assert!(o.result.is_err() && o.output.contains("deadlock"), "{o:?}");
+}
+
+/// A bounded channel enforces its capacity: the producer stops after two values until the consumer takes some.
+#[test]
+fn program_bounded_channel_blocks_when_full() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>(2)\n const p = spawn([sink tx] () ~> { for i of 0..5 { tx.send(i)\n  print(\"sent #i\") } })\n yield_now()\n print(\"main woke\")\n for v of rx.iter() { print(\"got #v\") }\n p.join!!()\n}\n";
+    assert_eq!(
+        output_of(src),
+        "sent 0\nsent 1\nmain woke\nsent 2\nsent 3\nsent 4\ngot 0\ngot 1\ngot 2\ngot 3\ngot 4\n"
+    );
+}
+
+/// An unbounded channel grows its ring, keeps the order, moves owning values and drops what is left queued.
+#[test]
+fn program_channel_ring_grows_and_owns() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>()\n for i of 0..100 { tx.send(i) }\n var total = 0\n for k of 0..40 { total += rx.recv() ?? 0 }\n for i of 100..130 { tx.send(i) }\n var n = 0\n while n < 90 { total += rx.recv() ?? 0\n n += 1 }\n print(total)\n const (ts, rs) = chan<string>(3)\n ts.send(\"a\")\n ts.send(\"bc\")\n print(rs.recv() ?? \"\")\n ts.send(\"def\")\n print(rs.tryRecv() ?? \"\")\n const (tl, rl) = chan<[int]>()\n tl.send([1, 2, 3])\n}\n";
+    assert_eq!(output_of(src), "8385\na\nbc\n");
+}
+
+#[test]
+fn sending_to_a_gone_receiver_is_closed() {
+    let src = "fn main() {\n const (tx, rx) = chan<string>()\n const t = spawn([sink rx] () ~> { 1 })\n t.join!!()\n const r = tx.send(\"x\")\n print(r.is_err())\n}\n";
+    assert_eq!(output_of(src), "true\n");
+}
+
+/// The holder of a lock waits inside `with`; another task asking for it waits too instead of using the value.
+#[test]
+fn program_lock_is_held_while_its_holder_waits() {
+    let src = "fn main() {\n const h = lock(0)\n const (tx, rx) = chan<int>()\n scope s {\n  s.spawn([sink rx] () ~> h.with(n ~> { n += rx.recv() ?? 0\n   print(\"first\") }))\n  s.spawn(() ~> h.with(n ~> { n += 10\n   print(\"second\") }))\n  yield_now()\n  yield_now()\n  print(\"sending\")\n  tx.send(1)\n }\n print(h.with(n ~> n))\n}\n";
+    assert_eq!(output_of(src), "sending\nfirst\nsecond\n11\n");
+}
+
+#[test]
+fn program_lock_shared_across_spawned_tasks() {
+    let src = "fn main() {\n const h = lock(0)\n scope s {\n  for i of 1..4 {\n   const g = copy h\n   s.spawn(() ~> g.with(n ~> { n += i }))\n  }\n }\n print(h.with(n ~> n))\n}\n";
+    assert_eq!(output_of(src), "6\n");
+}
+
+#[test]
+fn program_lock_with_when_waits_for_the_condition() {
+    let src = "fn main() {\n const h = lock(0)\n scope s {\n  const g = copy h\n  s.spawn(() ~> g.withWhen(n ~> n >= 2, n ~> { print(\"got #n\") }))\n  yield_now()\n  h.with(n ~> { n += 1 })\n  yield_now()\n  h.with(n ~> { n += 1 })\n }\n}\n";
+    assert_eq!(output_of(src), "got 2\n");
+}
+
+#[test]
+fn program_semaphore_limits_holders() {
+    let src = "fn main() {\n const sem = semaphore(1)\n scope s {\n  for i of 0..3 {\n   const m = copy sem\n   s.spawn(() ~> { m.acquire()\n    print(\"in #i\")\n    yield_now()\n    print(\"out #i\")\n    m.release() })\n  }\n }\n}\n";
+    assert_eq!(output_of(src), "in 0\nout 0\nin 1\nout 1\nin 2\nout 2\n");
+}
+
+#[test]
+fn program_barrier_releases_all_together() {
+    let src = "fn main() {\n const b = barrier(3)\n scope s {\n  for i of 0..3 {\n   const c = copy b\n   s.spawn(() ~> { print(\"before #i\")\n    c.wait()\n    print(\"after #i\") })\n  }\n }\n}\n";
+    assert_eq!(
+        output_of(src),
+        "before 0\nbefore 1\nbefore 2\nafter 2\nafter 0\nafter 1\n"
+    );
+}
+
 #[test]
 fn program_sp2() {
     let src = "fn main() { const (tx, rx) = chan<int>()\n const p = spawn([sink tx] ~> { for i of 0..3 { tx.send(i * 10) } })\n for v of rx.iter() { print(v) }\n p.join!!() }\n";
@@ -1490,6 +1586,28 @@ fn native_agrees_on_fused_multiply_add() {
                 i += 1
             }
             print(acc)
+        }",
+    );
+}
+
+/// `sqrt`, `floor`, `ceil` and `round` are single instructions natively; they agree with the interpreter
+/// on halves, negatives, huge numbers, NaN and infinities.
+#[test]
+fn native_agrees_on_sqrt_and_rounding() {
+    agree(
+        "fn main() {
+            var xs = [2.0, 0.0, 0.25, 1.0e300, 0.0 - 1.0, 0.5, 0.0 - 0.5, 1.5, 0.0 - 1.5, 2.5, 0.0 - 2.5,
+                0.49999999999999994, 4503599627370497.0, 0.0 - 4503599627370497.5, 1.0e300, 0.0 / 0.0,
+                1.0 / 0.0, 0.0 - 1.0 / 0.0, 123456789.987654321]
+            var i = 0
+            while i < xs.len() {
+                const x = xs[i]
+                print(x.sqrt())
+                print(x.floor())
+                print(x.ceil())
+                print(x.round())
+                i += 1
+            }
         }",
     );
 }
@@ -2316,11 +2434,11 @@ fn float32_rounds_after_every_operation() {
 
 #[test]
 fn float_to_int_saturates() {
-    // `floor` goes through the conversion to an integer and back.
+    // `floor` and `ceil` are exact now (NaN stays NaN); only printing a huge float saturates.
     let src = "fn main() { const z = 0.0\n const big = 1e30\n print(big.floor(), (-big).floor(), (z / z).floor(), 2.9.floor(), (-2.9).floor(), 1e19.ceil(), (-1e19).ceil()) }";
     assert_eq!(
         output_of(src),
-        "9223372036854775807 -9223372036854775807 0 2 -3 9223372036854775807 -9223372036854775807\n"
+        "9223372036854775807 -9223372036854775807 nan 2 -3 9223372036854775807 -9223372036854775807\n"
     );
 }
 
@@ -2666,4 +2784,148 @@ fn sorting_integers_past_the_insertion_sort_limit() {
         output_of(src),
         "true true -9223372036854775807 9223372036854775807\n"
     );
+}
+
+/// Index tests settled by a guard in front of the loop: what the program prints and where it stops
+/// are what they were, whether the guard passes (the loop without tests runs) or fails (the loop as
+/// written runs, and stops at the same pass after the same output).
+#[test]
+fn guarded_loops_stop_where_the_checked_loop_did() {
+    // The guard passes: offsets on both sides, a loaded length, a store through another list.
+    agree(
+        "fn main() {
+            var a: [int] = []
+            var b: [int] = []
+            var c: [int] = []
+            for i in 0..50 { a.push!(i * 3); b.push!(i + 1); c.push!(0) }
+            c.push!(0)
+            for i in 0..a.len() { c[i + 1] = a[i] + b[i] }
+            var s = 0
+            for i in 1..c.len() { s += c[i] - c[i - 1] }
+            print(s, c[50])
+        }",
+    );
+    // The guard fails: the list is shorter than the loop, so the stop comes at pass 7 and after
+    // seven lines of output.
+    agree(
+        "fn main() {
+            var a: [int] = []
+            for i in 0..7 { a.push!(i) }
+            for i in 0..12 { print(a[i]) }
+        }",
+    );
+    // An offset below zero on the first pass; one past the end on the last.
+    agree(
+        "fn main() {
+            var a = [5; 20]
+            var s = 0
+            for i in 0..10 { s += a[i - 1]; print(s) }
+        }",
+    );
+    agree(
+        "fn main() {
+            var a = [5; 20]
+            var s = 0
+            for i in 10..20 { s += a[i + 1]; print(s) }
+        }",
+    );
+    // The length is read from memory the loop writes: a list of lists whose element is replaced.
+    agree(
+        "fn row(n: int, v: int) -> [int] {
+            var r: [int] = []
+            for k in 0..n { r.push!(v) }
+            return r
+        }
+        fn main() {
+            var rows: [[int]] = []
+            for i in 0..6 { rows.push!(row(4, i)) }
+            var s = 0
+            for i in 0..rows.len() { s += rows[i][2] }
+            print(s)
+            for i in 0..6 { rows[i] = row(9, i) }
+            for i in 0..rows.len() { s += rows[i][8] }
+            print(s)
+        }",
+    );
+    // A loop that grows the list it reads is left alone.
+    agree(
+        "fn main() {
+            var a: [int] = [1]
+            var s = 0
+            for i in 0..30 { a.push!(i); s += a[i] }
+            print(s)
+        }",
+    );
+}
+
+/// `@checkfree` is judged on the optimised code: a kernel whose tests all move into guards passes,
+/// one that indexes by an unknown value does not.
+#[test]
+fn checkfree_functions_are_judged_after_optimising() {
+    let kept = |src: &str, name: &str| {
+        let l = lowered(src);
+        let mut m = l.module.clone();
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        let f = m.funcs.iter().find(|f| f.name == name).unwrap();
+        assert!(f.checkfree.is_some(), "{name} should be marked");
+        crate::ir::opt::kept_checks(f)
+    };
+    let kernel = "@checkfree
+        fn dot(a: [int], b: [int]) -> int {
+            var s = 0
+            for i in 0..b.len() { s += a[i] * b[i] }
+            return s
+        }
+        fn main() { print(dot([1, 2, 3], [4, 5, 6])) }";
+    assert_eq!(kept(kernel, "dot"), 0);
+    agree(kernel);
+    let loose = "@checkfree
+        fn pick(a: [int], k: int) -> int { return a[k] }
+        fn main() { print(pick([1, 2, 3], 1)) }";
+    assert!(kept(loose, "pick") > 0);
+}
+
+// ---- Arenas ------------------------------------------------------------------------------------
+
+#[test]
+fn arena_new_get_set_reset() {
+    let src = "struct pt { x: int, y: int }\nfn main() {\n var a = arena()\n const p = a.new!(pt { x: 1, y: 2 })\n const q = a.new!(7)\n print(a.get(p).x, a.get(p).y, a.get(q), a.used())\n a.set!(q, 9)\n print(a.get(q))\n a.reset!()\n print(a.used())\n const r = a.new!(5)\n print(a.get(r)) }\n";
+    assert_eq!(output_of(src), "1 2 7 24\n9\n0\n5\n");
+}
+
+#[test]
+fn arena_handles_survive_growth_and_a_move() {
+    let src = "fn fill(sink a: arena) -> arena { var b = a\n for i in 0..1000 { b.new!(i) }\n b }\nfn main() {\n var a = arena()\n const first = a.new!(41)\n const b = fill(a)\n print(b.get(first), b.used())\n var big = arena()\n const f = big.new!(1)\n for i in 0..20000 { big.new!(i) }\n print(big.get(f)) }\n";
+    assert_eq!(output_of(src), "41 8008\n1\n");
+}
+
+#[test]
+fn arena_tree_of_nodes() {
+    let src = "struct node { l: aref<node>?, r: aref<node>? }\nfn make(inout a: arena, d: int) -> aref<node> {\n if d == 0 { return a.new!(node { l: none, r: none }) }\n const l = make(inout a, d - 1)\n const r = make(inout a, d - 1)\n a.new!(node { l: l, r: r }) }\nfn check(a: arena, t: aref<node>) -> int {\n const n = a.get(t)\n var c = 1\n if n.l is some(l) { c += check(a, l) }\n if n.r is some(r) { c += check(a, r) }\n c }\nfn main() {\n var a = arena()\n for i in 0..3 {\n  const t = make(inout a, 4)\n  print(check(a, t))\n  a.reset!() } }\n";
+    assert_eq!(output_of(src), "31\n31\n31\n");
+}
+
+#[test]
+fn arena_native_agrees() {
+    let src = "struct node { l: aref<node>?, r: aref<node>? }\nfn make(inout a: arena, d: int) -> aref<node> {\n if d == 0 { return a.new!(node { l: none, r: none }) }\n const l = make(inout a, d - 1)\n const r = make(inout a, d - 1)\n a.new!(node { l: l, r: r }) }\nfn check(a: arena, t: aref<node>) -> int {\n const n = a.get(t)\n var c = 1\n if n.l is some(l) { c += check(a, l) }\n if n.r is some(r) { c += check(a, r) }\n c }\nfn main() {\n var a = arena()\n for i in 0..3 {\n  const t = make(inout a, 4)\n  print(check(a, t))\n  a.reset!() } }\n";
+    agree(src);
+}
+
+#[test]
+fn arena_stale_handle_and_drop_glue_stop() {
+    let stale =
+        "fn main() {\n var a = arena()\n const p = a.new!(1)\n a.reset!()\n print(a.get(p)) }\n";
+    let o = run_main(stale);
+    assert!(o.result.is_err());
+    assert!(
+        o.output.contains("used a handle after the arena was reset"),
+        "{}",
+        o.output
+    );
+    let other = "fn main() {\n var a = arena()\n var b = arena()\n const p = a.new!(1)\n print(b.get(p)) }\n";
+    assert!(run_main(other).result.is_err());
+    let glue = "fn main() {\n var a = arena()\n a.new!(\"hi\") }\n";
+    let o = run_main(glue);
+    assert!(o.result.is_err());
+    assert!(o.output.contains("without drop glue"), "{}", o.output);
 }

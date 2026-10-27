@@ -8,7 +8,7 @@ Usage (from the repository root; needs python 3.11+ and at least one of gcc, cla
 
 Each program is a directory bench/programs/<name>/ with pelago.pel, c.c, cpp.cpp, rs.rs (a twin may be missing), sizes.toml
 (optional) and expected*.txt (written by --bless). The harness builds one executable per available contestant, checks that all
-print the same output, then reports run time (median and minimum of N runs after discarded warm-ups, with the spread), compile
+print the same output, then reports run time (median of N or more samples after discarded warm-ups, more while a row is noisy, with the spread), compile
 time (median of M builds), binary size and peak memory. The goal row is Pelago at or below the best of all other rows.
 
 Contestants (a missing compiler just drops its rows; override a command with CC, CXX, CLANG, CLANGXX, TCC, RUSTC):
@@ -144,21 +144,51 @@ def peak_rss_kib(path, timeout):
     return best or None
 
 
+STARTUP_BOUND = 0.002  # seconds: below this a run is mostly process start-up, so a ratio between rows says nothing
+TRIM = 0.2             # fraction of the fastest and the slowest samples dropped before the spread is judged
+SETTLE = 0.10          # spread (max-min)/median of the kept samples at which a row counts as settled
+BUDGET = 4.0           # seconds of extra sampling allowed per row while it is still noisy
+MAX_SAMPLES = 41
+
+
+def trimmed(times):
+    """The samples without the fastest and slowest TRIM of them (at least three are kept)."""
+    ts = sorted(times)
+    k = min(int(len(ts) * TRIM), (len(ts) - 3) // 2)
+    return ts[k:len(ts) - k]
+
+
+def spread_of(times):
+    kept = trimmed(times)
+    med = statistics.median(kept)
+    return (kept[-1] - kept[0]) / med if med else 0.0
+
+
 def measure(path, runs, warmups, timeout, pin):
+    """Time `path`: `runs` samples, then more (up to MAX_SAMPLES, BUDGET seconds) while the middle of the samples is still
+    spread over more than SETTLE. The median and spread are those of the samples with the outliers trimmed, so one scheduler
+    hiccup does not mark a row noisy and a stable row costs no extra runs."""
     for _ in range(warmups):
         run_once(path, timeout, pin)
     times, rss, text = [], [], b""
-    for _ in range(runs):
+    spent = 0.0
+    while True:
         s, r, text = run_once(path, timeout, pin)
         times.append(s)
+        spent += s
         if r is not None:
             rss.append(r)
+        if len(times) < runs:
+            continue
+        if spread_of(times) <= SETTLE or len(times) >= max(runs, MAX_SAMPLES) or spent > BUDGET + runs * 0.5:
+            break
     hwm = peak_rss_kib(path, timeout)
     if hwm is not None:
         rss = [hwm]
-    med = statistics.median(times)
-    spread = (max(times) - min(times)) / med if med else 0.0
-    return {"median": med, "min": min(times), "spread": spread, "rss_kib": max(rss) if rss else None, "text": text}
+    kept = trimmed(times)
+    med = statistics.median(kept)
+    return {"median": med, "min": min(times), "spread": spread_of(times), "samples": len(times), "rss_kib": max(rss) if rss else None,
+            "text": text}
 
 
 def build(cmd, out, compile_runs):
@@ -259,12 +289,23 @@ def run_size(size, names, cons, repl, a, tmp):
     return results, bad
 
 
+def secs(v):
+    """Seconds with three significant decimals; the sub-10 ms rows get four so they do not print as 0.000."""
+    return f"{v:.4f}" if v < 0.01 else f"{v:.3f}"
+
+
+def startup_bound(row):
+    """True when the fastest row of a program runs in under STARTUP_BOUND: it measures process start-up, not code."""
+    meds = [m["median"] for m in row.values() if "median" in m]
+    return bool(meds) and min(meds) < STARTUP_BOUND
+
+
 def report(results, labels, a, size):
     others = [l for l in labels if l != "pelago"]
     lines = []
     emit = lines.append
     emit(f"### Size: {size}\n")
-    emit(f"Run time, median of {a.runs} after {a.warmups} warm-ups, seconds (`!` marks a spread over 10%: (max-min)/median)\n")
+    emit(f"Run time, median of at least {a.runs} samples after {a.warmups} warm-ups (more while noisy, fastest and slowest 20% dropped), seconds (`!` marks a spread over 10% that did not settle: (max-min)/median of the kept samples; start-up marks a program that runs in under 2 ms, so its ratio is left out of the mean and the tally)\n")
     emit("| program | " + " | ".join(labels) + " | pelago / best other |")
     emit("|---|" + "---:|" * (len(labels) + 1))
     ratios, below = [], 0
@@ -277,10 +318,13 @@ def report(results, labels, a, size):
             elif "error" in m:
                 cells.append("error")
             else:
-                cells.append(f"{m['median']:.3f}" + ("!" if m["spread"] > 0.10 else "") + (" DIFF" if m.get("mismatch") else ""))
+                cells.append(secs(m["median"]) + ("!" if m["spread"] > SETTLE else "") + (" DIFF" if m.get("mismatch") else ""))
         vals = [row[l]["median"] for l in others if l in row and "median" in row[l]]
         p = row.get("pelago", {}).get("median")
         r = p / min(vals) if p and vals else None
+        if r is not None and startup_bound(row):
+            emit(f"| {name} | " + " | ".join(cells) + f" | {r:.2f}x (start-up) |")
+            continue
         if r is not None:
             ratios.append(r)
             below += r <= 1.0
@@ -315,7 +359,7 @@ def site_json(results, env, a):
     rows, rc, rr = [], [], []
     for name, row in results.items():
         p, c2, rs = (row.get(k, {}).get("median") for k in ("pelago", "gcc-O2", "rustc-O"))
-        if not (p and c2):
+        if not (p and c2) or startup_bound(row):
             continue
         d = {"name": name, "pelago": round(p, 4), "c_o2": round(c2, 4), "ratio_o2": round(p / c2, 2)}
         rc.append(p / c2)

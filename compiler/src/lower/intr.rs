@@ -115,6 +115,37 @@ impl<'a> Lowerer<'a> {
                 self.emit(Op::Free(p), None, sp);
                 Res::Unit
             }
+            "rt_ctx_init" => {
+                let (Some(b), Some(n), Some(c), Some(e)) = (
+                    self.arg_scalar(args, 0),
+                    self.arg_scalar(args, 1),
+                    self.arg_scalar(args, 2),
+                    self.arg_scalar(args, 3),
+                ) else {
+                    return Res::Never;
+                };
+                self.wrap(Op::CtxInit(b, n, c, e), ptr, sp)
+            }
+            "rt_fn_addr" => {
+                let Some(ExprKind::Name(id)) = args.first().map(|a| &a.value.kind) else {
+                    return self.unsupported(sp, "`rt_fn_addr` needs the name of a function");
+                };
+                let Some(def) = self.res.use_at(self.f.file, id.span.start) else {
+                    return self.unsupported(sp, "`rt_fn_addr` of an unknown name");
+                };
+                let Some(f) = self.request_fn(def, &HashMap::new()) else {
+                    return self.unsupported(sp, "`rt_fn_addr` of this function");
+                };
+                self.wrap(Op::FuncAddr(f), ptr, sp)
+            }
+            "rt_ctx_switch" => {
+                let (Some(s), Some(t)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
+                else {
+                    return Res::Never;
+                };
+                self.emit(Op::CtxSwitch(s, t), None, sp);
+                Res::Unit
+            }
             "rt_offset" => {
                 let (Some(p), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {
@@ -225,6 +256,17 @@ impl<'a> Lowerer<'a> {
                 };
                 self.wrap(Op::Fma(a, b, c), IrTy::F64, sp)
             }
+            "rt_sqrt" | "rt_floor" | "rt_ceil" => {
+                let Some(x) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
+                let o = match name.as_str() {
+                    "rt_sqrt" => FUn::Sqrt,
+                    "rt_floor" => FUn::Floor,
+                    _ => FUn::Ceil,
+                };
+                self.wrap(Op::FUn(o, x), IrTy::F64, sp)
+            }
             "rt_to_int" => {
                 let Some(x) = self.arg_scalar(args, 0) else {
                     return Res::Never;
@@ -243,6 +285,13 @@ impl<'a> Lowerer<'a> {
                     return self.unsupported(sp, "`rt_is_int` of an unknown type");
                 };
                 let yes = matches!(self.kind(t), TyKind::Int(crate::types::IntKind::I64));
+                Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
+            }
+            "rt_needs_drop" => {
+                let Some(t) = self.intr_type(def, map) else {
+                    return self.unsupported(sp, "`rt_needs_drop` of an unknown type");
+                };
+                let yes = self.needs_drop(t);
                 Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
             }
             "rt_addr_of" => self.intr_addr_of(e, args),

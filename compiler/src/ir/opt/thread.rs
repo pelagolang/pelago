@@ -17,8 +17,8 @@
 //! loop passes.
 
 use super::dom::Dom;
+use super::fx::{HashMap, HashSet};
 use crate::ir::*;
-use std::collections::{HashMap, HashSet};
 
 /// The most real instructions (constants are free) in all the blocks one walk skips.
 const WORK: usize = 8;
@@ -137,8 +137,8 @@ fn walk(
     header: &[bool],
     edge: &Target,
 ) -> Option<Plan> {
-    let mut known: HashMap<Value, Val> = HashMap::new();
-    let mut seen: HashSet<usize> = HashSet::new();
+    let mut known: HashMap<Value, Val> = HashMap::default();
+    let mut seen: HashSet<usize> = HashSet::default();
     let mut steps: Vec<(usize, Pick)> = Vec::new();
     let mut last_decided = None;
     let mut work = 0;
@@ -232,7 +232,7 @@ fn apply(f: &mut Func, dom: &Dom, preds: &[Vec<BlockId>], a: usize, k: usize, pl
         return false;
     }
     // Values the skipped blocks make and blocks outside read.
-    let mut made: HashSet<Value> = HashSet::new();
+    let mut made: HashSet<Value> = HashSet::default();
     for &(b, _) in &plan.chain {
         made.extend(f.blocks[b].params.iter().copied());
         for &i in &f.blocks[b].insts {
@@ -242,7 +242,7 @@ fn apply(f: &mut Func, dom: &Dom, preds: &[Vec<BlockId>], a: usize, k: usize, pl
         }
     }
     // Where each is read outside the skipped blocks.
-    let mut readers: HashMap<Value, Vec<usize>> = HashMap::new();
+    let mut readers: HashMap<Value, Vec<usize>> = HashMap::default();
     for (bi, blk) in f.blocks.iter().enumerate() {
         if in_chain.contains(&bi) {
             continue;
@@ -343,7 +343,7 @@ fn apply(f: &mut Func, dom: &Dom, preds: &[Vec<BlockId>], a: usize, k: usize, pl
         }
     }
     // Make the skipped blocks' values in `a`, then go to the landing.
-    let mut env: HashMap<Value, Value> = HashMap::new();
+    let mut env: HashMap<Value, Value> = HashMap::default();
     let mut args = first.args;
     for &(b, p) in &plan.chain {
         let params = f.blocks[b].params.clone();

@@ -10,7 +10,7 @@
 use super::elf::Blob;
 use super::mir::*;
 use super::rt::Runtime;
-use super::x86::{self, Alu, Asm, Cc, Label, Sect, Shift};
+use super::x86::{self, Alu, Asm, Cc, Fp, Label, Sect, Shift, Sse, VAlu};
 use super::x86_mir::{cc_of, op, SYM_DIV0, SYM_FUNC, SYM_OVERFLOW, SYM_SHIFT};
 
 /// What the emitter takes from the generator.
@@ -99,11 +99,21 @@ fn layout(f: &MFunc) -> Frame {
     Frame { off, saves, size }
 }
 
+/// The out-of-line half of a `CheckedIf`: after the overflow jump, stop when the test holds, else go
+/// back to `resume`. Registers are as they were at the jump.
+struct Cold {
+    label: Label,
+    resume: Label,
+    stop: Label,
+    test: Vec<Operand>,
+}
+
 struct Em<'e, 'a> {
     env: &'e mut Env<'a>,
     fr: Frame,
     labels: Vec<Label>,
     strings: &'e [String],
+    cold: Vec<Cold>,
 }
 
 impl Em<'_, '_> {
@@ -236,6 +246,10 @@ impl Em<'_, '_> {
         let ra = gpr(phys(a));
         match b {
             Operand::Imm(n) => self.env.a.alu_ri(Alu::Cmp, ra, *n as i32, 8),
+            m @ Operand::Mem { .. } => {
+                let m = self.mem(m);
+                self.env.a.alu_rm(Alu::Cmp, ra, m, 8);
+            }
             b => self.env.a.alu_rr(Alu::Cmp, ra, gpr(phys(b)), 8),
         }
     }
@@ -291,6 +305,49 @@ impl Em<'_, '_> {
             a.rep_stosb();
             a.pop(x86::RDI);
         }
+    }
+
+    /// The jump taken on overflow. An instruction that carries a test (`tail`, from a `CheckedIf`)
+    /// jumps to a cold stub that stops only when the test holds.
+    fn ov_jump(&mut self, cc: Cc, stop: Label, tail: &[Operand]) {
+        if tail.is_empty() {
+            self.env.a.jcc(cc, stop);
+            return;
+        }
+        let (label, resume) = (self.env.a.new_label(), self.env.a.new_label());
+        self.env.a.jcc(cc, label);
+        self.env.a.bind(resume);
+        self.cold.push(Cold {
+            label,
+            resume,
+            stop,
+            test: tail.to_vec(),
+        });
+    }
+
+    fn cold_stubs(&mut self) {
+        for c in std::mem::take(&mut self.cold) {
+            self.env.a.bind(c.label);
+            match imm(&c.test[0]) {
+                // `[0, cond, when]`: stop when the bool equals `when`.
+                0 => {
+                    let r = gpr(phys(&c.test[1]));
+                    self.env.a.test_rr(r, r, 4);
+                    let cc = if imm(&c.test[2]) == 1 { Cc::E } else { Cc::Ne };
+                    self.env.a.jcc(cc, c.resume);
+                }
+                // `[1, cc, a, b]`: stop when the comparison holds.
+                _ => {
+                    self.cmp(&c.test[2], &c.test[3]);
+                    self.env.a.jcc(cc_of(imm(&c.test[1])).invert(), c.resume);
+                }
+            }
+            self.env.a.jmp(c.stop);
+        }
+    }
+
+    fn fmem_op(&self, o: &Operand) -> Fp {
+        Fp::Reg(xr(phys(o)))
     }
 
     fn inst(&mut self, i: &MInst) {
@@ -418,6 +475,10 @@ impl Em<'_, '_> {
                         };
                         match s {
                             Operand::Imm(n) => self.env.a.alu_ri(alu, d, *n as i32, 8),
+                            m @ Operand::Mem { .. } => {
+                                let m = self.mem(m);
+                                self.env.a.alu_rm(alu, d, m, 8);
+                            }
                             s => self.env.a.alu_rr(alu, d, gpr(phys(s)), 8),
                         }
                     }
@@ -425,12 +486,12 @@ impl Em<'_, '_> {
                 self.env.a.guard_jump(start, 6);
                 let cc = if kind <= op::CHK_MUL_S { Cc::O } else { Cc::B };
                 let l = self.env.stops[SYM_OVERFLOW as usize];
-                self.env.a.jcc(cc, l);
+                self.ov_jump(cc, l, &ops[3..]);
             }
             op::MULU_CHK => {
                 self.env.a.mul(gpr(phys(&ops[2])), 8);
                 let l = self.env.stops[SYM_OVERFLOW as usize];
-                self.env.a.jcc(Cc::B, l);
+                self.ov_jump(Cc::B, l, &ops[3..]);
             }
             op::DIV => {
                 let s = gpr(phys(&ops[2]));
@@ -500,6 +561,8 @@ impl Em<'_, '_> {
                     op::RT_ALLOC => rt.alloc,
                     op::RT_FREE => rt.free,
                     op::RT_REALLOC => rt.realloc,
+                    op::RT_CTX_INIT => rt.ctx_init,
+                    op::RT_CTX_SWITCH => rt.ctx_switch,
                     _ => rt.print,
                 };
                 self.env.a.call(l);
@@ -545,7 +608,7 @@ impl Em<'_, '_> {
             op::CMPSTOP => {
                 self.cmp(&ops[1], &ops[2]);
                 let l = self.stop_label(&ops[3]);
-                self.env.a.jcc(cc_of(imm(&ops[0])), l);
+                self.ov_jump(cc_of(imm(&ops[0])), l, &ops[4..]);
             }
             op::FLOAD => {
                 let m = self.mem(&ops[1]);
@@ -563,6 +626,176 @@ impl Em<'_, '_> {
                 let m = self.mem(&ops[0]);
                 self.env.a.movups_store(m, xr(phys(&ops[1])));
             }
+            op::FCONST => {
+                let d = xr(phys(&ops[0]));
+                match imm(&ops[1]) {
+                    0 => self.env.a.fxor(d, d),
+                    n => {
+                        self.env.a.mov_ri(x86::RAX, n);
+                        self.env.a.movq_to_xmm(d, x86::RAX, true);
+                    }
+                }
+            }
+            op::FLD => {
+                let m = self.mem(&ops[1]);
+                self.env.a.fload(xr(phys(&ops[0])), m, imm(&ops[2]) == 1);
+            }
+            op::FST => {
+                let m = self.mem(&ops[0]);
+                self.env.a.fstore(m, xr(phys(&ops[1])), imm(&ops[2]) == 1);
+            }
+            op::FARITH => {
+                let sse = [Sse::Add, Sse::Sub, Sse::Mul, Sse::Div][imm(&ops[2]) as usize];
+                self.env
+                    .a
+                    .farith(sse, xr(phys(&ops[0])), xr(phys(&ops[1])), imm(&ops[3]) == 1);
+            }
+            op::FNEG => {
+                let d = xr(phys(&ops[0]));
+                let m = x86::Xmm(15);
+                if imm(&ops[1]) == 1 {
+                    self.env.a.mov_ri(x86::RAX, i64::MIN);
+                    self.env.a.movq_to_xmm(m, x86::RAX, true);
+                } else {
+                    self.env.a.mov_ri(x86::RAX, 0x8000_0000);
+                    self.env.a.movq_to_xmm(m, x86::RAX, false);
+                }
+                self.env.a.fxor(d, m);
+            }
+            op::FCMPSET => {
+                let d = gpr(phys(&ops[0]));
+                let dbl = imm(&ops[4]) == 1;
+                self.env.a.fcmp(xr(phys(&ops[2])), xr(phys(&ops[3])), dbl);
+                match imm(&ops[1]) {
+                    // Equal needs the zero flag set and the parity flag clear (unordered sets both).
+                    op::FCMP_EQ => {
+                        self.env.a.setcc(Cc::E, d);
+                        self.env.a.setcc(Cc::Np, x86::RAX);
+                        self.env.a.alu_rr(Alu::And, d, x86::RAX, 1);
+                    }
+                    op::FCMP_NE => {
+                        self.env.a.setcc(Cc::Ne, d);
+                        self.env.a.setcc(Cc::P, x86::RAX);
+                        self.env.a.alu_rr(Alu::Or, d, x86::RAX, 1);
+                    }
+                    n => self.env.a.setcc(cc_of(n), d),
+                }
+                self.env.a.extend_rr(d, d, 1, false, false);
+            }
+            op::FCMPJCC => {
+                let start = self.env.a.here();
+                self.env
+                    .a
+                    .fcmp(xr(phys(&ops[1])), xr(phys(&ops[2])), imm(&ops[4]) == 1);
+                self.env.a.guard_jump(start, 6);
+                let l = self.block_label(&ops[3]);
+                self.env.a.jcc(cc_of(imm(&ops[0])), l);
+            }
+            op::ITOF => {
+                let d = xr(phys(&ops[0]));
+                // The conversion keeps the rest of its destination: clear it to break the dependency.
+                self.env.a.fxor(d, d);
+                self.env
+                    .a
+                    .cvt_int_to_float(d, gpr(phys(&ops[1])), true, imm(&ops[2]) == 1);
+            }
+            op::FTOI => {
+                let (d, x) = (gpr(phys(&ops[0])), xr(phys(&ops[1])));
+                let double = imm(&ops[2]) == 1;
+                self.env.a.cvt_float_to_int(d, x, true, double);
+                // `cvttsd2si` answers `i64::MIN` for NaN and anything out of range. Saturate like
+                // Rust's `as`: NaN gives 0, a positive overflow gives `i64::MAX`.
+                let (done, nan, big) = (
+                    self.env.a.new_label(),
+                    self.env.a.new_label(),
+                    self.env.a.new_label(),
+                );
+                self.env.a.mov_ri(x86::RAX, i64::MIN);
+                self.env.a.alu_rr(Alu::Cmp, d, x86::RAX, 8);
+                self.env.a.jcc(Cc::Ne, done);
+                let z = x86::Xmm(15);
+                self.env.a.fxor(z, z);
+                self.env.a.fcmp(x, z, double);
+                self.env.a.jcc(Cc::P, nan);
+                self.env.a.jcc(Cc::A, big);
+                self.env.a.jmp(done);
+                self.env.a.bind(nan);
+                self.env.a.alu_rr(Alu::Xor, d, d, 4);
+                self.env.a.jmp(done);
+                self.env.a.bind(big);
+                self.env.a.mov_ri(d, i64::MAX);
+                self.env.a.bind(done);
+                self.mask(d, imm(&ops[3]));
+            }
+            op::FRESIZE => {
+                let (d, x) = (xr(phys(&ops[0])), xr(phys(&ops[1])));
+                self.env.a.cvt_float_resize(d, x, imm(&ops[2]) == 1);
+            }
+            op::FUN => {
+                let (d, s, dbl) = (xr(phys(&ops[0])), xr(phys(&ops[1])), imm(&ops[3]) == 1);
+                match imm(&ops[2]) {
+                    0 => self.env.a.fsqrt(d, s, dbl),
+                    k => self.env.a.fround(d, s, k as u8, dbl),
+                }
+            }
+            op::FFMA => {
+                let dbl = imm(&ops[3]) == 1;
+                let b = self.fmem_op(&ops[2]);
+                self.env
+                    .a
+                    .vfmadd231(xr(phys(&ops[0])), xr(phys(&ops[1])), b, dbl);
+            }
+            op::FREM => {
+                // x87 `fprem` is exactly C's `fmod`: the sign of the dividend, NaN for a zero divisor.
+                // It reads memory: the operands wait in a frame object.
+                let Operand::Frame(id, disp) = ops[3] else {
+                    panic!("frem wants a frame object")
+                };
+                let dbl = imm(&ops[4]) == 1;
+                let (ma, mb) = (self.frame_mem(id, disp), self.frame_mem(id, disp + 8));
+                self.env.a.fstore(ma, xr(phys(&ops[1])), dbl);
+                self.env.a.fstore(mb, xr(phys(&ops[2])), dbl);
+                self.env.a.x87_load(mb, dbl);
+                self.env.a.x87_load(ma, dbl);
+                let again = self.env.a.new_label();
+                self.env.a.bind(again);
+                self.env.a.x87_prem();
+                self.env.a.x87_status_ax();
+                self.env.a.shift_imm(Shift::Shr, x86::RAX, 10, 4);
+                self.env.a.alu_ri(Alu::And, x86::RAX, 1, 4);
+                self.env.a.jcc(Cc::Ne, again);
+                self.env.a.x87_drop_second();
+                self.env.a.x87_store_pop(ma, dbl);
+                self.env.a.fload(xr(phys(&ops[0])), ma, dbl);
+            }
+            op::VSPLAT => {
+                let d = xr(phys(&ops[0]));
+                self.env.a.movq_to_xmm(d, gpr(phys(&ops[1])), true);
+                self.env.a.pshufd(d, d, 0x44);
+            }
+            op::VSHIFT => {
+                self.env
+                    .a
+                    .vshift(imm(&ops[1]) == 1, xr(phys(&ops[0])), imm(&ops[2]) as u8);
+            }
+            op::VREDUCE => {
+                let (s, t) = (xr(phys(&ops[1])), x86::Xmm(15));
+                self.env.a.pshufd(t, s, 0xEE);
+                self.env.a.valu(VAlu::Add, t, s);
+                self.env.a.movq_from_xmm(gpr(phys(&ops[0])), t, true);
+            }
+            op::VBUILD => {
+                let (d, t) = (xr(phys(&ops[0])), x86::Xmm(15));
+                self.env.a.movq_to_xmm(d, gpr(phys(&ops[1])), true);
+                self.env.a.movq_to_xmm(t, gpr(phys(&ops[2])), true);
+                self.env.a.punpcklqdq(d, t);
+            }
+            op::VALU => {
+                let k =
+                    [VAlu::Add, VAlu::Sub, VAlu::And, VAlu::Or, VAlu::Xor][imm(&ops[2]) as usize];
+                self.env.a.valu(k, xr(phys(&ops[0])), xr(phys(&ops[1])));
+            }
+            op::REP_STOS => self.env.a.rep_stos(imm(&ops[3]) as u8),
             o => panic!("the x86-64 emitter does not know opcode {o}"),
         }
     }
@@ -577,6 +810,7 @@ pub fn emit(env: &mut Env, f: &MFunc, label: Label) {
         fr,
         labels,
         strings: &f.strings,
+        cold: Vec::new(),
     };
     em.env.a.bind(label);
     em.prologue();
@@ -592,4 +826,5 @@ pub fn emit(env: &mut Env, f: &MFunc, label: Label) {
             em.inst(i);
         }
     }
+    em.cold_stubs();
 }

@@ -76,6 +76,8 @@ pub struct Uses {
     pub memcpy: bool,
     /// AArch64 only: float remainder.
     pub fmod: bool,
+    /// Context switching (`CtxInit`, `CtxSwitch`).
+    pub ctx: bool,
 }
 
 impl Uses {
@@ -88,6 +90,7 @@ impl Uses {
         realloc: true,
         memcpy: true,
         fmod: true,
+        ctx: true,
     };
 
     /// The routines the module's instructions can call (a little too many is fine, too few is not).
@@ -102,6 +105,7 @@ impl Uses {
                     Op::Free(_) => u.free = true,
                     Op::Realloc(..) => u.realloc = true,
                     Op::MemCopy(..) => u.memcpy = true,
+                    Op::CtxInit(..) | Op::CtxSwitch(..) => u.ctx = true,
                     Op::Bin(BinOp::Rem, a, _) if f.ty(*a).is_float() => u.fmod = true,
                     _ => {}
                 }

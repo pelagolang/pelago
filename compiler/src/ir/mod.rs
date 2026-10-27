@@ -286,6 +286,38 @@ impl VBin {
     }
 }
 
+/// One-operand float operations that the hardware does exactly: the result is the correctly rounded
+/// (square root) or exact (rounding to a whole number) value, the same on every target.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FUn {
+    /// Square root; a negative number gives NaN.
+    Sqrt,
+    /// The largest whole number not above the operand.
+    Floor,
+    /// The smallest whole number not below the operand.
+    Ceil,
+}
+
+impl FUn {
+    pub fn name(self) -> &'static str {
+        match self {
+            FUn::Sqrt => "fsqrt",
+            FUn::Floor => "ffloor",
+            FUn::Ceil => "fceil",
+        }
+    }
+
+    /// The value for an `f64` operand (an `f32` is widened first and narrowed after: both steps are exact
+    /// for these operations).
+    pub fn apply(self, x: f64) -> f64 {
+        match self {
+            FUn::Sqrt => x.sqrt(),
+            FUn::Floor => x.floor(),
+            FUn::Ceil => x.ceil(),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Op {
     Const(IrTy, Const),
@@ -301,6 +333,8 @@ pub enum Op {
     /// `a * b + c` with a single rounding (floats only): the same result on every target.
     Fma(Value, Value, Value),
     Neg(Value),
+    /// A float square root or rounding to a whole number (see `FUn`).
+    FUn(FUn, Value),
     Not(Value),
     VUn(VUn, Value),
     VBin(VBin, Value, Value),
@@ -329,6 +363,13 @@ pub enum Op {
     /// address is dead. A large block can move without copying.
     Realloc(Value, Value),
     Free(Value),
+    /// Prepares a context for `CtxSwitch`: a stack of `size` bytes at `base` (addresses grow down from the end
+    /// in compiled code) and the function it starts in, `code(env)`, which never returns. Gives the
+    /// context's handle. Nothing runs yet.
+    CtxInit(Value, Value, Value, Value),
+    /// Saves the running context's handle at the address in the first value and continues the context
+    /// whose handle is the second. Comes back when something switches to the saved handle.
+    CtxSwitch(Value, Value),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -364,6 +405,9 @@ pub struct Block {
     /// The header of a loop that finishes what a vectorised loop left over (or is the vector loop):
     /// the unroller and the vectoriser leave it alone.
     pub tail: bool,
+    /// The checked copy of a loop that `opt::bce` made a check-free copy of: it runs only when the
+    /// guard in front of the loops fails, so `@checkfree` does not count what it still tests.
+    pub slow: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -375,6 +419,10 @@ pub struct Func {
     pub values: Vec<IrTy>,
     pub blocks: Vec<Block>,
     pub insts: Vec<Inst>,
+    /// Set for a function written `@checkfree`: the module and the declaration it came from. The
+    /// optimiser keeps it a function of its own, and the build fails when an index test is left on
+    /// its fast path (`opt::kept_checks`).
+    pub checkfree: Option<(u32, Span)>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -416,6 +464,7 @@ impl Func {
             values: Vec::new(),
             blocks: Vec::new(),
             insts: Vec::new(),
+            checkfree: None,
         };
         let entry = f.new_block(params);
         debug_assert_eq!(entry, BlockId(0));

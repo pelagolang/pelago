@@ -115,6 +115,17 @@ impl<'p> Resolver<'p> {
 
     /// Looks a name up. `Err(Some(def))` means a local of an enclosing function (not usable here).
     fn lookup(&self, name: &str) -> Result<Option<DefId>, DefId> {
+        let found = self.lookup_exact(name)?;
+        if found.is_some() {
+            return Ok(found);
+        }
+        match crate::naming::other_style(name) {
+            Some(alt) => self.lookup_exact(&alt),
+            None => Ok(None),
+        }
+    }
+
+    fn lookup_exact(&self, name: &str) -> Result<Option<DefId>, DefId> {
         let mut crossed = false;
         for f in self.frames.iter().rev() {
             if let Some(&d) = f.names.get(name) {
