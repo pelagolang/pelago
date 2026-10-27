@@ -10,6 +10,11 @@ pub ext fn rt_alloc(size: int) -> ptr
 pub ext fn rt_free(p: ptr)
 //~ A block of `size` bytes holding the first bytes of `p` (null allocates), the rest zero; `p` is dead afterwards.
 pub ext fn rt_realloc(p: ptr, size: int) -> ptr
+//~ A context: a stack at `base` of `size` bytes that starts by calling `code(env)` (a closure's two words), which must never return.
+//~ Nothing runs until something switches to the handle it returns.
+pub ext fn rt_ctx_init(base: ptr, size: int, code: ptr, env: ptr) -> ptr
+//~ Saves where this context stands at `save` and continues the context `to`; comes back when something switches to the saved handle.
+pub ext fn rt_ctx_switch(save: ptr, to: ptr)
 pub ext fn rt_offset(p: ptr, bytes: int) -> ptr
 pub ext fn rt_copy(dst: ptr, src: ptr, bytes: int)
 pub ext fn rt_is_null(p: ptr) -> bool
@@ -38,6 +43,8 @@ pub ext fn rt_show_to<T>(src: ptr, out: ptr)
 pub ext fn rt_show_item_to<T>(src: ptr, out: ptr)
 pub ext fn rt_size_of<T>() -> int
 pub ext fn rt_is_int<T>() -> bool
+//~ Whether a `T` has drop glue (owns memory or has a `deinit`).
+pub ext fn rt_needs_drop<T>() -> bool
 pub ext fn rt_addr_of<T>(x: T) -> ptr
 pub ext fn rt_write<T>(dst: ptr, sink value: T)
 pub ext fn rt_read<T>(src: ptr) -> T

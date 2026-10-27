@@ -400,7 +400,9 @@ pub fn assign(f: &Func, imms: &[Option<i64>], uses: &[u32], fused: &[bool]) -> A
                 | Op::Print(..)
                 | Op::Alloc(..)
                 | Op::Free(..)
-                | Op::Realloc(..) => true,
+                | Op::Realloc(..)
+                | Op::CtxInit(..)
+                | Op::CtxSwitch(..) => true,
                 Op::Bin(BinOp::Rem, a, _) => matches!(f.ty(*a), IrTy::F32 | IrTy::F64),
                 _ => false,
             };

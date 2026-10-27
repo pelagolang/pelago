@@ -219,9 +219,16 @@ impl Op {
             | Op::PtrAdd(a, b)
             | Op::Print(a, b)
             | Op::Realloc(a, b)
+            | Op::CtxSwitch(a, b)
             | Op::Store(a, b) => {
                 f(*a);
                 f(*b);
+            }
+            Op::CtxInit(a, b, c, d) => {
+                f(*a);
+                f(*b);
+                f(*c);
+                f(*d);
             }
             Op::Neg(a)
             | Op::FUn(_, a)
@@ -260,9 +267,16 @@ impl Op {
             | Op::PtrAdd(a, b)
             | Op::Print(a, b)
             | Op::Realloc(a, b)
+            | Op::CtxSwitch(a, b)
             | Op::Store(a, b) => {
                 *a = f(*a);
                 *b = f(*b);
+            }
+            Op::CtxInit(a, b, c, d) => {
+                *a = f(*a);
+                *b = f(*b);
+                *c = f(*c);
+                *d = f(*d);
             }
             Op::Neg(a)
             | Op::FUn(_, a)

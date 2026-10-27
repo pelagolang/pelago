@@ -844,6 +844,15 @@ impl<'m> Sel<'m> {
                 let (a, b) = (self.src(*p), self.src(*n));
                 self.runtime(op::RT_PRINT, vec![(RSI, a), (RDX, b)], None);
             }
+            Op::CtxInit(b, n, c, e) => {
+                let (b, n, c, e) = (self.src(*b), self.src(*n), self.src(*c), self.src(*e));
+                let args = vec![(x::RDI, b), (RSI, n), (RDX, c), (x::RCX, e)];
+                self.runtime(op::RT_CTX_INIT, args, res);
+            }
+            Op::CtxSwitch(s, t) => {
+                let (a, b) = (self.src(*s), self.src(*t));
+                self.runtime(op::RT_CTX_SWITCH, vec![(x::RDI, a), (RSI, b)], None);
+            }
             Op::Fma(..) | Op::FUn(..) | Op::VUn(..) | Op::VBin(..) | Op::CheckedIf(..) => {
                 unreachable!("not selected")
             }

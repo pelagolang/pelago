@@ -363,6 +363,13 @@ pub enum Op {
     /// address is dead. A large block can move without copying.
     Realloc(Value, Value),
     Free(Value),
+    /// Prepares a context for `CtxSwitch`: a stack of `size` bytes at `base` (addresses grow down from the end
+    /// in compiled code) and the function it starts in, `code(env)`, which never returns. Gives the
+    /// context's handle. Nothing runs yet.
+    CtxInit(Value, Value, Value, Value),
+    /// Saves the running context's handle at the address in the first value and continues the context
+    /// whose handle is the second. Comes back when something switches to the saved handle.
+    CtxSwitch(Value, Value),
 }
 
 #[derive(Clone, PartialEq, Debug)]

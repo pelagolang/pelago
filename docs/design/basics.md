@@ -141,6 +141,8 @@ what the language *does*. Everything here is a deliberate choice, not a copy.
 - **[B8]** Function and method names are written in camelCase by default (`startsWith`, `isEmpty`, `parseInt`), for
   familiarity; snake_case is still accepted everywhere (B1). The standard library and the examples use camelCase
   (Dennis, 2026-10-27). Compiler-internal `rt_` intrinsics keep their prefix.
+  A name that is not found is tried once in the other style (`is_empty` finds `isEmpty`, `isEmpty` finds
+  `is_empty`); an exact match always wins. The formatter renames nothing.
 
 ## Still open
 

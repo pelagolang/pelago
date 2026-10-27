@@ -1,0 +1,85 @@
+/// Bump arenas (docs/design/arena.md).
+
+//~ A value placed in an `arena`, named by the byte offset in the low 32 bits and the arena's epoch above them.
+//~ It is plain data: copying it copies the name, dropping it does nothing. `arena.get` stops on a stale one.
+pub struct aref<T> {
+    bits: int
+}
+
+//~ Handed to each new arena and to each reset, so a handle from before a reset (or from another arena) is recognised.
+pub var rt_arena_epoch: int = 0
+
+const rt_arena_max: int = 4294967296
+
+//~ A block of memory where allocating is a bump of `top` and `reset!` frees every value with one store.
+//~ Values must not need dropping (numbers, `bool`, `char`, structs and enums of those, other `aref`s).
+pub struct arena {
+    base: ptr
+    top: int
+    cap: int
+    epoch: int
+
+    init() {
+        rt_arena_epoch = rt_arena_epoch + 1
+        self.base = rt_null()
+        self.top = 0
+        self.cap = 0
+        self.epoch = rt_arena_epoch & 2147483647
+    }
+
+    deinit {
+        if self.cap > 0 { rt_free(self.base) }
+    }
+}
+
+impl arena {
+    //~ Puts `value` in the arena and gives its handle. The block may move (handles are offsets, so they survive).
+    fn new<T>(inout self, sink value: T) -> aref<T> {
+        if rt_needs_drop<T>() { panic("an arena holds only types without drop glue") }
+        const at = self.top
+        const end = at + ((rt_size_of<T>() + 7) / 8) * 8
+        if end > self.cap { self.grow!(end) }
+        self.top = end
+        rt_write<T>(rt_offset(self.base, at), sink value)
+        aref<T> { bits: (self.epoch << 32) | at }
+    }
+
+    //~ Makes room for `needed` bytes. Small on purpose, so only a full block calls it.
+    fn grow(inout self, needed: int) {
+        if needed > rt_arena_max { panic("arena full") }
+        var ncap = self.cap * 2
+        if ncap < 4096 { ncap = 4096 }
+        if ncap < needed { ncap = needed }
+        if ncap > rt_arena_max { ncap = rt_arena_max }
+        if self.cap > 0 {
+            self.base = rt_realloc(self.base, ncap)
+        } else {
+            self.base = rt_alloc(ncap)
+        }
+        self.cap = ncap
+    }
+
+    //~ The byte offset of `r`; a handle from before a reset, or from another arena, stops the program.
+    fn offsetOf<T>(self, r: aref<T>) -> int {
+        if (r.bits >> 32) != self.epoch { panic("used a handle after the arena was reset") }
+        r.bits & 4294967295
+    }
+
+    //~ The value `r` names (a plain value, so this is a bit-for-bit copy).
+    fn get<T>(self, r: aref<T>) -> T = rt_clone<T>(rt_offset(self.base, self.offsetOf(r)))
+
+    //~ Overwrites the value `r` names.
+    fn set<T>(inout self, r: aref<T>, sink value: T) {
+        rt_write<T>(rt_offset(self.base, self.offsetOf(r)), sink value)
+    }
+
+    //~ Forgets every value at once; all handles made so far are stale.
+    fn reset(inout self) {
+        rt_arena_epoch = rt_arena_epoch + 1
+        self.epoch = rt_arena_epoch & 2147483647
+        self.top = 0
+    }
+
+    //~ Bytes handed out since the last reset.
+    fn used(self) -> int = self.top
+}
