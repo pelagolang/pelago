@@ -1,14 +1,14 @@
 fn sum_words(text: str) -> int ! parse_error {
     var t = 0
     for w of text.split(" ") {
-        if w.is_empty() { continue }
-        t += w.parse_int()? & 1023
+        if w.isEmpty() { continue }
+        t += w.parseInt()? & 1023
     }
     ok(t)
 }
 
 fn main() {
     var s = ""
-    for i in 0..300000 { s.push_str!("#i ") }
+    for i in 0..300000 { s.pushStr!("#i ") }
     print(s.len(), sum_words(s).or(0))
 }

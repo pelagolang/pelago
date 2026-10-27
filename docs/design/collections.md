@@ -120,9 +120,9 @@ xs.map!(~> it + 1)                  // the same, as a call
 ```
 
 - Chains are lazy and the compiler fuses them into one loop (no temporary lists).
-- An iterator is a temporary view, so it cannot be stored or returned. Return a list (`.to_list()`) or, later, use a
+- An iterator is a temporary view, so it cannot be stored or returned. Return a list (`.toList()`) or, later, use a
   generator (`yield`).
-- Collect with `.to_list()`, `.to_set()`, `.to_map()`.
+- Collect with `.toList()`, `.toSet()`, `.to_map()`.
 - Building a collection from a loop and a filter in one expression has its own shape, the *builder* (section 9).
 
 ## 9. Builders: collections from a loop, in our own shape

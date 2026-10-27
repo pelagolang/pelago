@@ -520,6 +520,7 @@ fn strings_and_methods() {
         "[str]"
     );
     assert_eq!(probe("const probe = \"x\".to_upper()"), "string");
+    assert_eq!(probe("const probe = \"x\".toUpper()"), "string");
     assert_eq!(
         probe("const probe = \"5\".parse_int()"),
         "int ! parse_error"
@@ -1448,4 +1449,12 @@ fn length_arithmetic_is_checked() {
             .any(|m| m.contains("[int; 4]") && m.contains("[int; 5]")),
         "{e:?}"
     );
+}
+
+#[test]
+fn naming_styles_find_each_other() {
+    clean("fn isEven(n: int) -> bool = n % 2 == 0\nfn t() -> bool = is_even(2)");
+    clean("fn big_sum(a: int, b: int) -> int = a + b\nfn t() -> int = bigSum(1, 2)");
+    clean("fn t(xs: [int]) -> bool = xs.is_empty() || xs.isEmpty()");
+    flagged("fn t() -> int = nothing_here()", "cannot find");
 }

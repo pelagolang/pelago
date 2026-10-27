@@ -77,7 +77,7 @@ if args is [cmd, ...rest] { run(cmd, rest) }
 
 guard args is [path] else { return err(usage()) }       // path is usable after the guard
 
-switch line.split(" ").to_list() {
+switch line.split(" ").toList() {
     case ["add", name]:            add!(name)
     case ["remove", name]:         remove!(name)
     case ["list"]:                 list()

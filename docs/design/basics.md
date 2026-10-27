@@ -132,6 +132,12 @@ what the language *does*. Everything here is a deliberate choice, not a copy.
 - **[B2]** `int` is always exactly 64 bits.
 - **[B3]** Type names are lowercase. (Open: your own types too?)
 - **[B4]** Conversions are written `x to float`.
+- **[B8]** The house naming style is `camelCase` for functions, methods, variables and fields (`isEmpty`,
+  `parseInt`, `wrappingAdd`); types keep lowercase (B3) and constants may be anything. The standard
+  library, docs and examples use it. B1 still holds: any style compiles, and a name that is not found is
+  tried once in the other style (`is_empty` finds `isEmpty`, `isEmpty` finds `is_empty`; an exact match
+  always wins). So snake_case code keeps working and calls the camelCase library unchanged. The `rt_*`
+  runtime hooks in `core.pel` are internal and keep their names. The formatter still renames nothing.
 
 - **[B5]** String interpolation uses `#name` and `#(expression)`.
 - **[B6]** Both lowercase and capitalized names are allowed for your own types. The compiler
