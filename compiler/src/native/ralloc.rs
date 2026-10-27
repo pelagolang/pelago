@@ -106,7 +106,11 @@ fn free_scratch(t: &dyn Target, c: Class, avoid: RegSet) -> [PReg; 2] {
 
 /// One move from `s` to `d`; a slot to a slot goes through the first scratch register.
 fn emit_one(t: &dyn Target, d: Loc, s: Loc, avoid: RegSet, out: &mut Vec<MInst>) {
-    let c = class_of_loc(t, d);
+    // A slot knows whether it holds a float or a vector; the registers of both are the same.
+    let c = match (d, s) {
+        (Loc::Slot(_, c), _) | (_, Loc::Slot(_, c)) => c,
+        _ => class_of_loc(t, d),
+    };
     match (d, s) {
         (Loc::Reg(a), Loc::Reg(b)) => {
             if a != b {

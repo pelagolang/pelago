@@ -135,7 +135,49 @@ pub mod op {
     pub const FSTORE: u16 = B + 41;
     pub const VLOAD: u16 = B + 42;
     pub const VSTORE: u16 = B + 43;
-    pub const COUNT: u16 = B + 44;
+    /// `d = the float bits Imm` (zero is `xorps`; any other value goes through `rax`).
+    pub const FCONST: u16 = B + 44;
+    /// A typed float load and store: `[d Def, Mem, Imm double]`, `[Mem, s Use, Imm double]`.
+    pub const FLD: u16 = B + 45;
+    pub const FST: u16 = B + 46;
+    /// `d = d op s`: `[d UseDef, s Use, Imm sse, Imm double]` (sse: 0 add, 1 sub, 2 mul, 3 div).
+    pub const FARITH: u16 = B + 47;
+    /// Flip the sign of `d`: `[d UseDef, Imm double]` (a mask through `rax` and `xmm15`).
+    pub const FNEG: u16 = B + 48;
+    /// `d = a ? b` as 0 or 1: `[d Def, Imm kind, a Use, b Use, Imm double]`. The kind is a condition
+    /// code that `ucomis` sets for an ordering (the selector swaps the operands for `<`), or one of
+    /// the two below, which need the parity flag as well.
+    pub const FCMPSET: u16 = B + 49;
+    pub const FCMP_EQ: i64 = 100;
+    pub const FCMP_NE: i64 = 101;
+    /// `ucomis a, b; jcc cc, target`: `[Imm cc, a Use, b Use, Block, Imm double]`.
+    pub const FCMPJCC: u16 = B + 50;
+    /// Int to float and back (saturating, NaN is 0): `[d Def, s Use, Imm double]` and
+    /// `[d Def, s Use, Imm double, Imm bits]`.
+    pub const ITOF: u16 = B + 51;
+    pub const FTOI: u16 = B + 52;
+    /// Between `f32` and `f64`: `[d Def, s Use, Imm to_double]`.
+    pub const FRESIZE: u16 = B + 53;
+    /// `d = a * b + d` in one rounding: `[d UseDef, a Use, b Use, Imm double]`.
+    pub const FFMA: u16 = B + 54;
+    /// `fmod` with the x87 `fprem`: `[d Def, a Use, b Use, Frame scratch (16 bytes), Imm double]`.
+    pub const FREM: u16 = B + 55;
+    /// Vector operations: splat an integer, shift both lanes (`[d UseDef, Imm left, Imm k]`), add the
+    /// lanes, build from two integers, a lane-wise `+ - & | ^`.
+    pub const VSPLAT: u16 = B + 56;
+    pub const VSHIFT: u16 = B + 57;
+    pub const VREDUCE: u16 = B + 58;
+    pub const VBUILD: u16 = B + 59;
+    /// `d = d op s`: `[d UseDef, s Use, Imm kind]` with the kinds below.
+    pub const VALU: u16 = B + 60;
+    pub const VALU_ADD: i64 = 0;
+    pub const VALU_SUB: i64 = 1;
+    pub const VALU_AND: i64 = 2;
+    pub const VALU_OR: i64 = 3;
+    pub const VALU_XOR: i64 = 4;
+    /// `rep stos` of `Imm` bytes per element: `[rdi UseDef, rax Use, rcx UseDef, Imm width]`.
+    pub const REP_STOS: u16 = B + 61;
+    pub const COUNT: u16 = B + 62;
 }
 
 /// Symbols: the shared stop routines, then the functions of the module.
@@ -265,7 +307,7 @@ impl Target for X86 {
     }
 
     fn op_name(&self, o: u16) -> &'static str {
-        const NAMES: [&str; 44] = [
+        const NAMES: [&str; 62] = [
             "add",
             "sub",
             "and",
@@ -310,6 +352,24 @@ impl Target for X86 {
             "fstore",
             "vload",
             "vstore",
+            "fconst",
+            "fld",
+            "fst",
+            "farith",
+            "fneg",
+            "fcmpset",
+            "fcmpjcc",
+            "itof",
+            "ftoi",
+            "fresize",
+            "ffma",
+            "frem",
+            "vsplat",
+            "vshift",
+            "vreduce",
+            "vbuild",
+            "valu",
+            "rep_stos",
         ];
         NAMES
             .get(o.wrapping_sub(op::ADD) as usize)
