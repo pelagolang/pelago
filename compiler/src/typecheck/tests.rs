@@ -1424,7 +1424,7 @@ fn meta_code_has_rules() {
 
 #[test]
 fn await_needs_a_future() {
-    clean("async fn f() -> int { 1 }\nasync fn g() -> int { await f() + 1 }\nfn t() -> int = block_on(g())");
+    clean("async fn f() -> int { 1 }\nasync fn g() -> int { await f() + 1 }\nfn t() -> int = blockOn(g())");
     let e = run("async fn g() -> int { await 5 }").errors();
     assert!(!e.is_empty(), "{e:?}");
     assert_eq!(

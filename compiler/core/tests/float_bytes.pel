@@ -1,0 +1,6 @@
+/// Float to int, and text as bytes.
+fn main() {
+    print(3.7.truncInt(), (-3.7).truncInt(), 3.2.ceilInt(), (-3.2).floorInt(), 2.5.roundInt(), (-2.5).roundInt())
+    const s = "héy"
+    print(s.bytes().toList(), s.byteAt(1), s.bytes().toList().toText())
+}

@@ -37,7 +37,7 @@ The IR interpreter already runs any lowered function and checks memory. A `meta`
 5. **Bake it in**: scalar results become literals; strings, lists, structs and arrays become **static data** in the output module plus a lowering of "load from that data".
 
 Restrictions enforced by the checker (a "meta context" flag on a function): calls only to other `meta` or plain pure functions; no `unsafe`; no `ext` functions except a whitelist of pure intrinsics (`rt_alloc`, `rt_read`, ...);
-no globals that are `var`; no `spawn`/channels; no `print` (a `meta` function that wants to say something uses `meta_note("...")`, a compile-time diagnostic). Allocation inside compile-time code is fine (it is freed there; leaks are an error as in tests).
+no globals that are `var`; no `spawn`/channels; no `print` (a `meta` function that wants to say something uses `metaNote("...")`, a compile-time diagnostic). Allocation inside compile-time code is fine (it is freed there; leaks are an error as in tests).
 
 ## 3.1 What counts as a compile-time value
 
@@ -77,7 +77,7 @@ ownership), structs and enums of bakeable values, `option`/`result`. Not bakeabl
 
 - Move one real thing to `meta`: for example the CRC or the decimal digit table the library needs, as the showcase.
 - Diagnostics: show a compile-time call stack ("in meta call `build_table` at line..., called from ...").
-- `meta_note(string)` and `meta_error(string)` for libraries that want to give custom messages.
+- `metaNote(string)` and `metaError(string)` for libraries that want to give custom messages.
 - Reflection is **not** part of this card (see questions).
 
 # 5. Design risks

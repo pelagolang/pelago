@@ -179,7 +179,7 @@ impl<'a> Lowerer<'a> {
         let cap = crate::ir::run_capture(&self.module, &name, size, limit);
         let panicked = matches!(&cap.outcome.result, Err(m) if m == "panic");
         let lines: Vec<&str> = cap.outcome.output.lines().collect();
-        // A `panic` (and so `meta_error`) prints its message; that message is the error.
+        // A `panic` (and so `metaError`) prints its message; that message is the error.
         let shown = if panicked {
             &lines[..lines.len().saturating_sub(1)]
         } else {

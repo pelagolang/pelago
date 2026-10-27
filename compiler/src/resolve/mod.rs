@@ -357,7 +357,17 @@ impl<'p> Resolver<'p> {
             return;
         };
         let root = self.package_roots[core.0 as usize];
-        let mods: Vec<usize> = self.scopes[root].children.values().copied().collect();
+        let Some(&index) = self.scopes[root].children.get("core") else {
+            return;
+        };
+        // The index module `core` and everything below it.
+        let mut mods = vec![index];
+        let mut at = 0;
+        while at < mods.len() {
+            let kids: Vec<usize> = self.scopes[mods[at]].children.values().copied().collect();
+            mods.extend(kids);
+            at += 1;
+        }
         let mut names: Vec<(String, DefId)> = Vec::new();
         for m in mods {
             names.extend(

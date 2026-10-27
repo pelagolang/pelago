@@ -777,7 +777,7 @@ impl<'p> Checker<'p> {
         if core && name == "print" {
             self.err(
                 e.span,
-                "`print` is not available at compile time; use `meta_note(\"...\")`",
+                "`print` is not available at compile time; use `metaNote(\"...\")`",
             );
         }
         let outside = matches!(

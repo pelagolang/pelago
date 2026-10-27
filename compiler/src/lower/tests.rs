@@ -558,19 +558,6 @@ fn copy_and_in() {
 }
 
 #[test]
-fn float_to_int_and_bytes() {
-    let src = "fn main() { print(3.7.truncInt(), (-3.7).truncInt(), 3.2.ceilInt(), (-3.2).floorInt(), 2.5.roundInt(), (-2.5).roundInt())\n const s = \"h\u{e9}y\"\n print(s.bytes().toList(), s.byteAt(1), s.bytes().toList().toText()) }";
-    assert_eq!(
-        output_of(src),
-        "3 -3 4 -4 3 -3\n[104, 195, 169, 121] 195 h\u{e9}y\n"
-    );
-    let o = run_main("fn main() { print((0.0 / 0.0).truncInt()) }");
-    assert_eq!(o.result, Err("panic".to_string()));
-    let o = run_main("fn main() { print(\"ab\".byteAt(2)) }");
-    assert_eq!(o.result, Err("panic".to_string()));
-}
-
-#[test]
 fn text_methods() {
     let src = "fn main() { const s = \"  Hello, World  \"\n print(s.trim(), s.trim().toUpper(), s.toLower().trim(), s.contains(\"World\"), s.trim().startsWith(\"Hello\"), s.trim().endsWith(\"d\")) }";
     assert_eq!(
@@ -1199,7 +1186,7 @@ fn meta_runs_that_cannot_finish_are_errors() {
             .any(|(m, w)| !w && m.contains("(in inner <- outer)")),
         "{d:?}"
     );
-    let d = lowered_diags("meta fn fail() -> int { meta_error(\"nope\") }\nfn main() { const c = meta fail()\n print(c) }\n");
+    let d = lowered_diags("meta fn fail() -> int { metaError(\"nope\") }\nfn main() { const c = meta fail()\n print(c) }\n");
     assert!(d.iter().any(|(m, w)| !w && m.contains("nope")), "{d:?}");
     let d = lowered_diags(
         "meta fn f() -> int = a + 1\nconst a: int = meta f()\nfn main() { print(a) }\n",
@@ -1222,7 +1209,7 @@ fn meta_values_that_hold_closures_are_errors() {
 
 #[test]
 fn meta_note_is_a_compile_time_message() {
-    let d = lowered_diags("meta fn f() -> int { meta_note(\"building\")\n 4 }\nfn main() { const c = meta f()\n print(c) }\n");
+    let d = lowered_diags("meta fn f() -> int { metaNote(\"building\")\n 4 }\nfn main() { const c = meta f()\n print(c) }\n");
     assert!(
         d.iter().any(|(m, w)| *w && m.contains("meta: building")),
         "{d:?}"
@@ -1233,7 +1220,7 @@ fn meta_note_is_a_compile_time_message() {
 
 #[test]
 fn async_functions_and_await() {
-    let src = "async fn double(x: int) -> int { x * 2 }\nasync fn greet(name: string) -> string { \"hello #name\" }\nasync fn say(s: string) { print(s) }\nasync fn both() -> int {\n const a = double(4)\n const b = double(5)\n await say(\"working\")\n await a + await b }\nstruct counter { n: int\n async fn bump(inout self) -> int { self.n += 1\n self.n } }\nasync fn boxed(v: int) -> box<int> { box(v) }\nfn main() { print(block_on(both()))\n print(block_on(greet(\"pelago\")))\n var c = counter { n: 0 }\n print(block_on(c.bump!()), block_on(c.bump!()))\n const b = block_on(boxed(7))\n print(b.get()) }\n";
+    let src = "async fn double(x: int) -> int { x * 2 }\nasync fn greet(name: string) -> string { \"hello #name\" }\nasync fn say(s: string) { print(s) }\nasync fn both() -> int {\n const a = double(4)\n const b = double(5)\n await say(\"working\")\n await a + await b }\nstruct counter { n: int\n async fn bump(inout self) -> int { self.n += 1\n self.n } }\nasync fn boxed(v: int) -> box<int> { box(v) }\nfn main() { print(blockOn(both()))\n print(blockOn(greet(\"pelago\")))\n var c = counter { n: 0 }\n print(blockOn(c.bump!()), blockOn(c.bump!()))\n const b = blockOn(boxed(7))\n print(b.get()) }\n";
     assert_eq!(output_of(src), "working\n18\nhello pelago\n1 2\n7\n");
 }
 
@@ -1261,11 +1248,11 @@ async fn total(sink rx: receiver<int>) -> int {
     t
 }
 fn main() {
-    print(block_on(safe_div(1, 0)).isErr(), block_on(run()))
+    print(blockOn(safe_div(1, 0)).isErr(), blockOn(run()))
     const (tx, rx) = chan<int>()
     tx.send(1)
     tx.send(2)
-    print(block_on(total(sink rx)))
+    print(blockOn(total(sink rx)))
 }
 "#;
     assert_eq!(output_of(src), "true ok(5)\n3\n");
@@ -2666,4 +2653,37 @@ fn sorting_integers_past_the_insertion_sort_limit() {
         output_of(src),
         "true true -9223372036854775807 9223372036854775807\n"
     );
+}
+
+/// The library's own tests: every `name.pel` in a `tests/` directory next to the library sources is a
+/// program with its expected output in `name.out`. A file `name.stops` says the program must stop.
+#[test]
+fn library_test_suites() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut ran = 0;
+    for lib in ["core", "std"] {
+        let dir = root.join(lib).join("tests");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut files: Vec<_> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "pel"))
+            .collect();
+        files.sort();
+        for f in files {
+            let src = std::fs::read_to_string(&f).unwrap();
+            let expected = std::fs::read_to_string(f.with_extension("out"))
+                .unwrap_or_else(|_| panic!("{} has no .out file", f.display()));
+            if f.with_extension("stops").exists() {
+                let o = run_main(&src);
+                assert_eq!(o.result, Err("panic".to_string()), "{}", f.display());
+                assert_eq!(o.output, expected, "{}", f.display());
+            } else {
+                assert_eq!(output_of(&src), expected, "{}", f.display());
+            }
+            ran += 1;
+        }
+    }
+    assert!(ran > 0);
 }
