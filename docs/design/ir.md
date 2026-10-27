@@ -163,7 +163,8 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
   (`CtxInit`) and queues it; a task starts and resumes when the running one waits: `join`, `recv` on an empty channel, a `select` with
   nothing ready, the end of a `scope` or of `main`, or `yield_now()`. Waiting switches (`CtxSwitch`) to the next live task in turn, so two
   tasks can talk back and forth. When every task has waited a full round with nothing happening the program stops with `deadlock: ...`.
-  Channels are queues with sender counts, `shared` is a counted box, `lock` runs its closure at once. `scope s { s.spawn(...) }` waits for
+  Channels are rings of flat slots (`send` moves a value's bytes in, `recv` moves them out; `chan<T>(n)` blocks `send` while `n` values are
+  queued, no argument grows the ring), `shared` is a counted box, `lock` has a held flag and a task that finds it held waits. `scope s { s.spawn(...) }` waits for
   the tasks at its end. A stack has no guard page yet: a task that recurses deeper than 256 KiB corrupts memory (an OS-layer item).
 - **IR19** `become f(...)` on the function itself with plain number parameters is a jump to the top (no stack growth); any other `become` is a
   call followed by `return`.

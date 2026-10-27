@@ -144,7 +144,7 @@ pub fn rt_run_one_pending() -> bool {
 }
 
 //~ Can a receive on this channel finish now: a value is queued, or no sender is left?
-pub fn rt_chan_ready(ch: ptr) -> bool = rt_hdr_len(ch) > 0 || rt_load_int(rt_offset(ch, 24)) == 0
+pub fn rt_chan_ready(ch: ptr) -> bool = rt_load_int(rt_offset(ch, 24)) > 0 || rt_load_int(rt_offset(ch, 32)) == 0
 
 pub fn rt_task_body<T>(s: ptr, sink f: once fn() -> T) {
     rt_write<T>(rt_offset(s, 64), f!!())
@@ -195,15 +195,18 @@ impl scope_handle {
     fn spawn<T>(self, sink f: once fn() -> T) -> task<T> = spawn(sink f)
 }
 
-/// A channel block: [queue: list 24 bytes][senders: int][receiver alive: int].
+/// A channel block: [buffer][capacity in slots][head][length][senders][receiver alive][bound][slot size].
+/// The buffer is a ring of flat slots, one per value: `send` moves the value's bytes into a slot, `recv` moves them
+/// out, so nothing is shared between tasks. `bound` is the capacity asked for (0: unbounded, the ring grows).
 
 pub struct sender<T> {
     ch: ptr
 
     deinit {
-        const n = rt_load_int(rt_offset(self.ch, 24)) - 1
-        rt_store_int(rt_offset(self.ch, 24), n)
-        if n == 0 && rt_load_int(rt_offset(self.ch, 32)) == 0 { rt_chan_free<T>(self.ch) }
+        const n = rt_load_int(rt_offset(self.ch, 32)) - 1
+        rt_store_int(rt_offset(self.ch, 32), n)
+        rt_idle = 0
+        if n == 0 && rt_load_int(rt_offset(self.ch, 40)) == 0 { rt_chan_free<T>(self.ch) }
     }
 }
 
@@ -211,60 +214,112 @@ pub struct receiver<T> {
     ch: ptr
 
     deinit {
-        rt_store_int(rt_offset(self.ch, 32), 0)
-        if rt_load_int(rt_offset(self.ch, 24)) == 0 { rt_chan_free<T>(self.ch) }
+        rt_store_int(rt_offset(self.ch, 40), 0)
+        rt_idle = 0
+        if rt_load_int(rt_offset(self.ch, 32)) == 0 { rt_chan_free<T>(self.ch) }
     }
 }
 
+//~ The address of the n-th queued slot.
+fn rt_chan_slot(ch: ptr, n: int) -> ptr {
+    const cap = rt_load_int(rt_offset(ch, 8))
+    const at = (rt_load_int(rt_offset(ch, 16)) + n) % cap
+    rt_offset(rt_load_ptr(ch), at * rt_load_int(rt_offset(ch, 56)))
+}
+
 pub fn rt_chan_free<T>(ch: ptr) {
-    rt_drop_at<list<T>>(ch)
+    var i = 0
+    const len = rt_load_int(rt_offset(ch, 24))
+    while i < len {
+        rt_drop_at<T>(rt_chan_slot(ch, i))
+        i += 1
+    }
+    rt_free(rt_load_ptr(ch))
     rt_free(ch)
 }
 
-//~ A channel: a sender end and a receiver end. A capacity of 0 means unbounded.
+//~ A channel: a sender end and a receiver end. With a capacity, `send` waits while that many values are queued;
+//~ a capacity of 0 means unbounded.
 pub fn chan<T>(capacity: int = 0) -> (sender<T>, receiver<T>) {
-    const ch = rt_alloc(48)
-    var q: list<T> = []
-    rt_write<list<T>>(ch, sink q)
-    rt_store_int(rt_offset(ch, 24), 1)
+    const ch = rt_alloc(64)
+    const slot = if rt_size_of<T>() == 0 { 8 } else { rt_size_of<T>() }
+    const cap = if capacity > 0 { capacity } else { 8 }
+    rt_store_ptr(ch, rt_alloc(cap * slot))
+    rt_store_int(rt_offset(ch, 8), cap)
     rt_store_int(rt_offset(ch, 32), 1)
+    rt_store_int(rt_offset(ch, 40), 1)
+    rt_store_int(rt_offset(ch, 48), capacity)
+    rt_store_int(rt_offset(ch, 56), slot)
     (sender<T> { ch: ch }, receiver<T> { ch: ch })
 }
 
+//~ Doubles the ring of an unbounded channel that is full, keeping the queued values in order.
+fn rt_chan_grow(ch: ptr) {
+    const cap = rt_load_int(rt_offset(ch, 8))
+    const slot = rt_load_int(rt_offset(ch, 56))
+    const len = rt_load_int(rt_offset(ch, 24))
+    const fresh = rt_alloc(cap * 2 * slot)
+    var i = 0
+    while i < len {
+        rt_copy(rt_offset(fresh, i * slot), rt_chan_slot(ch, i), slot)
+        i += 1
+    }
+    rt_free(rt_load_ptr(ch))
+    rt_store_ptr(ch, fresh)
+    rt_store_int(rt_offset(ch, 8), cap * 2)
+    rt_store_int(rt_offset(ch, 16), 0)
+}
+
 impl<T> sender<T> {
+    //~ Queues the value; waits while a bounded channel is full. `closed` when the receiver is gone.
     fn send(self, sink value: T) -> void ! closed {
-        if rt_load_int(rt_offset(self.ch, 32)) == 0 { return err(closed {}) }
-        var q = rt_read<list<T>>(self.ch)
-        q.push!(value)
-        rt_write<list<T>>(self.ch, sink q)
-        rt_idle = 0
+        const ch = self.ch
+        var sent = false
+        while !sent && rt_load_int(rt_offset(ch, 40)) != 0 {
+            const bound = rt_load_int(rt_offset(ch, 48))
+            if bound == 0 || rt_load_int(rt_offset(ch, 24)) < bound {
+                if rt_load_int(rt_offset(ch, 24)) == rt_load_int(rt_offset(ch, 8)) { rt_chan_grow(ch) }
+                const len = rt_load_int(rt_offset(ch, 24))
+                rt_write<T>(rt_chan_slot(ch, len), sink value)
+                rt_store_int(rt_offset(ch, 24), len + 1)
+                rt_idle = 0
+                sent = true
+            } else {
+                rt_wait("room in a channel")
+            }
+        }
+        if !sent {
+            return err(closed {})
+        }
     }
 }
 
 //~ More senders: `copy tx`.
 impl<T> clone for sender<T> {
     fn clone(self) -> sender<T> {
-        rt_store_int(rt_offset(self.ch, 24), rt_load_int(rt_offset(self.ch, 24)) + 1)
+        rt_store_int(rt_offset(self.ch, 32), rt_load_int(rt_offset(self.ch, 32)) + 1)
         sender<T> { ch: self.ch }
     }
 }
 
 impl<T> receiver<T> {
     fn tryRecv(self) -> T? {
-        if rt_hdr_len(self.ch) == 0 { return none }
-        var q = rt_read<list<T>>(self.ch)
-        const v = q.remove!(0)
-        rt_write<list<T>>(self.ch, sink q)
+        const ch = self.ch
+        const len = rt_load_int(rt_offset(ch, 24))
+        if len == 0 { return none }
+        const v = rt_read<T>(rt_chan_slot(ch, 0))
+        rt_store_int(rt_offset(ch, 16), (rt_load_int(rt_offset(ch, 16)) + 1) % rt_load_int(rt_offset(ch, 8)))
+        rt_store_int(rt_offset(ch, 24), len - 1)
+        rt_idle = 0
         return v
     }
 
     //~ Waits for a value: other tasks run while the queue is empty. `none` when every sender is gone.
     fn recv(self) -> T? {
-        while rt_hdr_len(self.ch) == 0 {
-            if rt_load_int(rt_offset(self.ch, 24)) == 0 { return none }
+        while rt_load_int(rt_offset(self.ch, 24)) == 0 {
+            if rt_load_int(rt_offset(self.ch, 32)) == 0 { return none }
             rt_wait("a value")
         }
-        rt_idle = 0
         return self.tryRecv()
     }
 
@@ -319,22 +374,31 @@ pub struct lock<T> {
     p: ptr
 
     init(sink value: T) {
-        const p = rt_alloc(rt_size_of<T>() + 1)
-        rt_write<T>(p, sink value)
+        /// The block: [held: 0 or 1][pad][value].
+        const p = rt_alloc(16 + rt_size_of<T>())
+        rt_write<T>(rt_offset(p, 16), sink value)
         self.p = p
     }
 
     deinit {
-        rt_drop_at<T>(self.p)
+        rt_drop_at<T>(rt_offset(self.p, 16))
         rt_free(self.p)
     }
 }
 
 impl<T> lock<T> {
+    //~ Runs `f` with the value, one task at a time: a task that finds the lock held waits, also when the holder
+    //~ itself waits inside `f` (on a channel, say).
     fn with<R>(self, f: fn(inout T) -> R) -> R {
-        var v = rt_read<T>(self.p)
+        while rt_load_int(self.p) != 0 {
+            rt_wait("a lock")
+        }
+        rt_store_int(self.p, 1)
+        var v = rt_read<T>(rt_offset(self.p, 16))
         const r = f(inout v)
-        rt_write<T>(self.p, sink v)
+        rt_write<T>(rt_offset(self.p, 16), sink v)
+        rt_store_int(self.p, 0)
+        rt_idle = 0
         r
     }
 }
