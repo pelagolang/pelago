@@ -311,6 +311,12 @@ pub trait Target {
     fn jump(&self, to: u32) -> MInst;
     /// Can operand `idx` of the instruction be a memory operand (a spilled integer read from its slot
     /// instead of being reloaded first)? Only plain register uses are asked about.
+    /// True when `inst` is a two-address `d op= s` (`ops[0]` use-def, `ops[1]` a register use) whose two
+    /// inputs can trade places.
+    fn commutes(&self, _inst: &MInst) -> bool {
+        false
+    }
+
     fn mem_operand(&self, _inst: &MInst, _idx: usize) -> bool {
         false
     }
