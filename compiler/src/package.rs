@@ -11,22 +11,23 @@ use crate::span::Span;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// The modules of the `core` package: `(module name, source)`. The files live in `compiler/core/`.
+/// The modules of the `core` package: `(module path, source)`. `core.pel` is the front file (the index) of
+/// the modules in `compiler/core/core/`, which are its children (`core.lists`, ...).
 pub const CORE_MODULES: &[(&str, &str)] = &[
     ("core", include_str!("../core/core.pel")),
-    ("rt", include_str!("../core/rt.pel")),
-    ("lists", include_str!("../core/lists.pel")),
-    ("text", include_str!("../core/text.pel")),
-    ("maps", include_str!("../core/maps.pel")),
-    ("strings", include_str!("../core/strings.pel")),
-    ("iters", include_str!("../core/iters.pel")),
-    ("results", include_str!("../core/results.pel")),
-    ("numbers", include_str!("../core/numbers.pel")),
-    ("tasks", include_str!("../core/tasks.pel")),
-    ("boxes", include_str!("../core/boxes.pel")),
-    ("arena", include_str!("../core/arena.pel")),
-    ("columns", include_str!("../core/columns.pel")),
-    ("objects", include_str!("../core/objects.pel")),
+    ("core.rt", include_str!("../core/core/rt.pel")),
+    ("core.lists", include_str!("../core/core/lists.pel")),
+    ("core.text", include_str!("../core/core/text.pel")),
+    ("core.maps", include_str!("../core/core/maps.pel")),
+    ("core.strings", include_str!("../core/core/strings.pel")),
+    ("core.iters", include_str!("../core/core/iters.pel")),
+    ("core.results", include_str!("../core/core/results.pel")),
+    ("core.numbers", include_str!("../core/core/numbers.pel")),
+    ("core.tasks", include_str!("../core/core/tasks.pel")),
+    ("core.boxes", include_str!("../core/core/boxes.pel")),
+    ("core.arena", include_str!("../core/core/arena.pel")),
+    ("core.columns", include_str!("../core/core/columns.pel")),
+    ("core.objects", include_str!("../core/core/objects.pel")),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

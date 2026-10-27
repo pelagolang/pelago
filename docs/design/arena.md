@@ -68,7 +68,7 @@ The arena's own `deinit` is one `rt_free`.
 
 ## 4. The runtime boundary
 
-The arena is a **library type** (`compiler/core/arena.pel`) written over `rt_alloc`, `rt_realloc`, `rt_free` and the load/store
+The arena is a **library type** (`compiler/core/core/arena.pel`) written over `rt_alloc`, `rt_realloc`, `rt_free` and the load/store
 intrinsics. It adds no IR op and no native routine. Consequences:
 
 - It runs unchanged in the interpreter, natively, on every target.

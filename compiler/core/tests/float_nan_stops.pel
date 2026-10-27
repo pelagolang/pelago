@@ -1,0 +1,5 @@
+/// A NaN does not fit an int: the program stops.
+fn main() {
+    print("before")
+    print((0.0 / 0.0).truncInt())
+}
