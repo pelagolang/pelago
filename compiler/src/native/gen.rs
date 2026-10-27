@@ -48,7 +48,7 @@ thread_local! {
     pub static REG_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(usize::MAX) };
 }
 
-fn reg_limit() -> usize {
+pub(super) fn reg_limit() -> usize {
     #[cfg(test)]
     {
         REG_LIMIT.with(|l| l.get())
@@ -72,7 +72,7 @@ thread_local! {
     pub static MIR: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
-fn mir_mode() -> bool {
+pub(super) fn mir_mode() -> bool {
     MIR.with(|m| m.get()).unwrap_or_else(|| {
         static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         *ENV.get_or_init(|| std::env::var("PELAGO_MIR").is_ok_and(|v| v == "1"))
