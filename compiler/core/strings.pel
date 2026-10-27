@@ -36,6 +36,27 @@ impl str {
         rt_cast<list<char>, iter<char>>(sink out)
     }
 
+    //~ The bytes of the UTF-8 encoding.
+    fn bytes(self) -> iter<byte> {
+        var out: [byte] = []
+        const h = rt_addr_of(self)
+        const p = rt_hdr_data(h)
+        const n = rt_hdr_len(h)
+        var i = 0
+        while i < n {
+            out.push!(rt_load_byte(rt_offset(p, i)))
+            i += 1
+        }
+        rt_cast<list<byte>, iter<byte>>(sink out)
+    }
+
+    //~ The byte at `index`; stops the program when the index is out of range.
+    fn byteAt(self, index: int) -> byte {
+        const h = rt_addr_of(self)
+        if index < 0 || index >= rt_hdr_len(h) { panic("byteAt: index out of range") }
+        rt_load_byte(rt_offset(rt_hdr_data(h), index))
+    }
+
     fn split(self, separator: str) -> iter<str> {
         var out: [str] = []
         const n = self.len()
@@ -225,5 +246,15 @@ impl string {
 
     fn clear(inout self) {
         rt_hdr_set_len(rt_addr_of(self), 0)
+    }
+}
+
+impl list<byte> {
+    //~ The text these UTF-8 bytes spell. The bytes are not checked.
+    fn toText(self) -> string {
+        var out = ""
+        const h = rt_addr_of(self)
+        rt_str_push(rt_addr_of(out), rt_hdr_data(h), rt_hdr_len(h))
+        out
     }
 }

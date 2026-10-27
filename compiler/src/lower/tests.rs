@@ -558,6 +558,19 @@ fn copy_and_in() {
 }
 
 #[test]
+fn float_to_int_and_bytes() {
+    let src = "fn main() { print(3.7.truncInt(), (-3.7).truncInt(), 3.2.ceilInt(), (-3.2).floorInt(), 2.5.roundInt(), (-2.5).roundInt())\n const s = \"h\u{e9}y\"\n print(s.bytes().toList(), s.byteAt(1), s.bytes().toList().toText()) }";
+    assert_eq!(
+        output_of(src),
+        "3 -3 4 -4 3 -3\n[104, 195, 169, 121] 195 h\u{e9}y\n"
+    );
+    let o = run_main("fn main() { print((0.0 / 0.0).truncInt()) }");
+    assert_eq!(o.result, Err("panic".to_string()));
+    let o = run_main("fn main() { print(\"ab\".byteAt(2)) }");
+    assert_eq!(o.result, Err("panic".to_string()));
+}
+
+#[test]
 fn text_methods() {
     let src = "fn main() { const s = \"  Hello, World  \"\n print(s.trim(), s.trim().toUpper(), s.toLower().trim(), s.contains(\"World\"), s.trim().startsWith(\"Hello\"), s.trim().endsWith(\"d\")) }";
     assert_eq!(
