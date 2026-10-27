@@ -1,0 +1,64 @@
+/// The intrinsics the compiler expands in place.
+
+/// ---- Intrinsics: what the compiler expands in place ---------------------------------------------------
+///
+/// The library below is written in the language over these few operations. `ptr` is a raw address;
+/// nothing here is checked, so only this file uses them.
+
+pub ext fn rt_null() -> ptr
+pub ext fn rt_alloc(size: int) -> ptr
+pub ext fn rt_free(p: ptr)
+//~ A block of `size` bytes holding the first bytes of `p` (null allocates), the rest zero; `p` is dead afterwards.
+pub ext fn rt_realloc(p: ptr, size: int) -> ptr
+//~ A context: a stack at `base` of `size` bytes that starts by calling `code(env)` (a closure's two words), which must never return.
+//~ Nothing runs until something switches to the handle it returns.
+pub ext fn rt_ctx_init(base: ptr, size: int, code: ptr, env: ptr) -> ptr
+//~ Saves where this context stands at `save` and continues the context `to`; comes back when something switches to the saved handle.
+pub ext fn rt_ctx_switch(save: ptr, to: ptr)
+pub ext fn rt_offset(p: ptr, bytes: int) -> ptr
+pub ext fn rt_copy(dst: ptr, src: ptr, bytes: int)
+pub ext fn rt_is_null(p: ptr) -> bool
+pub ext fn rt_addr_int(p: ptr) -> int
+pub ext fn rt_load_int(p: ptr) -> int
+pub ext fn rt_store_int(p: ptr, v: int)
+pub ext fn rt_load_byte(p: ptr) -> uint8
+pub ext fn rt_store_byte(p: ptr, v: uint8)
+pub ext fn rt_load_ptr(p: ptr) -> ptr
+pub ext fn rt_store_ptr(p: ptr, v: ptr)
+pub ext fn rt_load_float(p: ptr) -> float
+pub ext fn rt_store_float(p: ptr, v: float)
+pub ext fn rt_load_char(p: ptr) -> char
+pub ext fn rt_store_char(p: ptr, v: char)
+pub ext fn rt_load_bool(p: ptr) -> bool
+pub ext fn rt_store_bool(p: ptr, v: bool)
+pub ext fn rt_print(p: ptr, n: int)
+pub ext fn rt_to_byte(n: int) -> uint8
+pub ext fn rt_to_int(x: float) -> int
+pub ext fn rt_fma(a: float, b: float, c: float) -> float
+pub ext fn rt_to_char(n: int) -> char
+pub ext fn rt_show_to<T>(src: ptr, out: ptr)
+pub ext fn rt_show_item_to<T>(src: ptr, out: ptr)
+pub ext fn rt_size_of<T>() -> int
+pub ext fn rt_is_int<T>() -> bool
+pub ext fn rt_addr_of<T>(x: T) -> ptr
+pub ext fn rt_write<T>(dst: ptr, sink value: T)
+pub ext fn rt_read<T>(src: ptr) -> T
+pub ext fn rt_clone<T>(src: ptr) -> T
+pub ext fn rt_clone_to<T>(src: ptr, dst: ptr)
+pub ext fn rt_drop_at<T>(p: ptr)
+pub ext fn rt_cast<A, B>(sink x: A) -> B
+pub ext fn rt_drop_fn<T>() -> ptr
+pub ext fn rt_clone_fn<T>() -> ptr
+pub ext fn rt_eq_fn<T>() -> ptr
+pub ext fn rt_cmp_fn<T>() -> ptr
+pub ext fn rt_hash_fn<T>() -> ptr
+pub ext fn rt_show_fn<T>() -> ptr
+//~ The `show` slot of an `any show` table for a type that has no `show` method of its own (numbers, lists, ...).
+pub fn rt_any_show<T>(out: ptr, src: ptr) {
+    rt_show_to<T>(src, out)
+}
+pub ext fn rt_call_void1(f: ptr, a: ptr)
+pub ext fn rt_call_void2(f: ptr, a: ptr, b: ptr)
+pub ext fn rt_call_bool2(f: ptr, a: ptr, b: ptr) -> bool
+pub ext fn rt_call_int2(f: ptr, a: ptr, b: ptr) -> int
+pub ext fn rt_call_int1(f: ptr, a: ptr) -> int
