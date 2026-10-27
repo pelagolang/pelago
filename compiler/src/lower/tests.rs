@@ -722,6 +722,35 @@ fn program_ctx1() {
     );
 }
 
+/// Two tasks talking back and forth: impossible while tasks ran one after another to the end.
+#[test]
+fn program_tasks_ping_pong() {
+    let src = "fn main() {\n const (to_b, from_a) = chan<int>()\n const (to_a, from_b) = chan<int>()\n const b = spawn([sink from_a, sink to_a] () ~> { for i of 0..3 { const v = from_a.recv() ?? 0\n  to_a.send(v + 1) } })\n var x = 0\n for i of 0..3 {\n  to_b.send(x)\n  x = from_b.recv() ?? 0\n  print(x)\n }\n b.join!!()\n}\n";
+    assert_eq!(output_of(src), "1\n2\n3\n");
+}
+
+#[test]
+fn program_tasks_join_in_any_order_and_detach() {
+    let src = "fn main() {\n const a = spawn(() ~> 1)\n const b = spawn(() ~> 20)\n const c = spawn(() ~> 300)\n spawn(() ~> print(\"detached\"))\n print(c.join!!() + b.join!!() + a.join!!())\n print(\"end\")\n}\n";
+    assert_eq!(output_of(src), "detached\n321\nend\n");
+}
+
+#[test]
+fn a_task_that_starts_tasks() {
+    let src = "fn main() {\n const t = spawn(() ~> {\n  const u = spawn(() ~> 5)\n  u.join!!() * 2 })\n print(t.join!!())\n}\n";
+    assert_eq!(output_of(src), "10\n");
+}
+
+#[test]
+fn waiting_for_nobody_is_a_deadlock_stop() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>()\n print(rx.recv() ?? 0)\n}\n";
+    let o = run_main(src);
+    assert!(o.result.is_err() && o.output.contains("deadlock"), "{o:?}");
+    let src = "fn main() {\n const (tx, rx) = chan<int>()\n const t = spawn([sink rx] () ~> rx.recv() ?? 0)\n print(t.join!!())\n}\n";
+    let o = run_main(src);
+    assert!(o.result.is_err() && o.output.contains("deadlock"), "{o:?}");
+}
+
 #[test]
 fn program_sp2() {
     let src = "fn main() { const (tx, rx) = chan<int>()\n const p = spawn([sink tx] ~> { for i of 0..3 { tx.send(i * 10) } })\n for v of rx.iter() { print(v) }\n p.join!!() }\n";
