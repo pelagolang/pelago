@@ -31,6 +31,8 @@ pub use super::rt::STATE_SIZE;
 const PRINT_BUF: i64 = 64 * 1024;
 const CHUNK: i64 = 1 << 20;
 const STACK: i64 = 1 << 30;
+/// The top of the stack that is never advised to use huge pages (Linux).
+const STACK_SMALL: i64 = 2 << 20;
 /// The stack on Windows: reserved and committed in one go, 256 MiB.
 const STACK_WIN: i64 = 1 << 28;
 /// Windows: a `PAGE_GUARD` page this far above the base of our stack. The first touch clears the flag
@@ -108,6 +110,12 @@ pub struct Runtime {
     pub memcpy: Label,
     /// `rt_fmod(x = d0, y = d1) -> d0`: C's `fmod`, exactly.
     pub fmod: Label,
+    /// `rt_ctx_init(base = x0, size = x1, code = x2, env = x3) -> x0`: a context on that stack that starts by
+    /// calling `code(env)`; the result is what `rt_ctx_switch` takes.
+    pub ctx_init: Label,
+    /// `rt_ctx_switch(save = x0, to = x1)`: saves `x19` to `x30` on this stack, stores the stack pointer
+    /// at `save`, and continues the context `to`.
+    pub ctx_switch: Label,
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -256,6 +264,8 @@ pub fn emit_for(
         write_u64: a.new_label(),
         memcpy: a.new_label(),
         fmod: a.new_label(),
+        ctx_init: a.new_label(),
+        ctx_switch: a.new_label(),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -286,8 +296,9 @@ pub fn emit_for(
     failed(a, os, X0, keep);
     a.mov_rr(X19, X0);
     if os == Os::Linux {
-        // Big frames (a 40 MB array in a local) fault in 2 MiB at a time when the kernel agrees.
-        a.mov_ri(X1, STACK);
+        // Big frames (a 40 MB array in a local) fault in 2 MiB at a time when the kernel agrees. The
+        // top 2 MiB stay on small pages, so a small program does not fault in a huge page at start.
+        a.mov_ri(X1, STACK - STACK_SMALL);
         a.mov_ri(X2, 14); // MADV_HUGEPAGE
         sys(a, os, Sys::Madvise);
     }
@@ -910,6 +921,48 @@ pub fn emit_for(
         a.str(X9, X10, 0, 8);
         leave(a);
         a.ret();
+    }
+
+    if uses.ctx {
+        // ---- rt_ctx_switch / rt_ctx_init --------------------------------------------------------------
+        // A saved context is a stack pointer with 96 bytes above it: x19 to x28, x29, x30 (the return address).
+        a.bind(rt.ctx_switch);
+        a.stp_pre(X19, X20, SP, -96);
+        a.stp(X21, X22, SP, 16);
+        a.stp(X23, X24, SP, 32);
+        a.stp(X25, X26, SP, 48);
+        a.stp(X27, X28, SP, 64);
+        a.stp(FP, LR, SP, 80);
+        a.mov_from_sp(X9);
+        a.str(X9, X0, 0, 8);
+        a.mov_to_sp(X1);
+        a.ldp(FP, LR, SP, 80);
+        a.ldp(X27, X28, SP, 64);
+        a.ldp(X25, X26, SP, 48);
+        a.ldp(X23, X24, SP, 32);
+        a.ldp(X21, X22, SP, 16);
+        a.ldp_post(X19, X20, SP, 96);
+        a.ret();
+
+        let ctramp = a.new_label();
+        a.bind(rt.ctx_init);
+        a.add_rr(X9, X0, X1);
+        a.mov_ri(X10, -16);
+        a.and_rr(X9, X9, X10);
+        a.sub_ri(X9, X9, 96);
+        for k in 0..6 {
+            a.stp(XZR, XZR, X9, 16 * k);
+        }
+        a.str(X3, X9, 0, 8); // x19: the environment
+        a.str(X2, X9, 8, 8); // x20: the code
+        a.lea_label(X10, ctramp);
+        a.str(X10, X9, 88, 8); // x30: where the first switch returns
+        a.mov_rr(X0, X9);
+        a.ret();
+        a.bind(ctramp);
+        a.mov_rr(X0, X19);
+        a.blr(X20);
+        a.brk();
     }
 
     if free_used {

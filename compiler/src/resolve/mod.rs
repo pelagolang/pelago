@@ -160,7 +160,11 @@ impl Resolved {
 
     /// A field, method or enum case of a type, by name.
     pub fn member(&self, owner: DefId, name: &str) -> Option<DefId> {
-        self.members.get(&(owner, name.to_string())).copied()
+        let hit = self.members.get(&(owner, name.to_string())).copied();
+        hit.or_else(|| {
+            let alt = crate::naming::other_style(name)?;
+            self.members.get(&(owner, alt)).copied()
+        })
     }
 }
 

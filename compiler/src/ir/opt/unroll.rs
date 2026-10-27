@@ -181,6 +181,8 @@ fn unroll(f: &mut Func, h: BlockId, b: BlockId) -> bool {
                 | Op::Alloc(_)
                 | Op::Realloc(..)
                 | Op::Free(_)
+                | Op::CtxInit(..)
+                | Op::CtxSwitch(..)
                 | Op::Slot(..)
         ) {
             return false;

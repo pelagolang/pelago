@@ -80,7 +80,11 @@ impl<'p> Checker<'p> {
         if let Some(h) = self.head_of(r) {
             let candidates = self.impl_by_head.get(&h).cloned().unwrap_or_default();
             for idx in candidates {
-                let Some(&mdef) = self.impls[idx].methods.get(name) else {
+                let found = self.impls[idx].methods.get(name).copied().or_else(|| {
+                    let alt = crate::naming::other_style(name)?;
+                    self.impls[idx].methods.get(&alt).copied()
+                });
+                let Some(mdef) = found else {
                     continue;
                 };
                 let gens = self.impls[idx].generics.clone();

@@ -1278,6 +1278,21 @@ impl<'m> Gen<'m> {
                 self.a.bl(l);
                 self.st(res.unwrap(), X0);
             }
+            Op::CtxInit(b, n, c, e) => {
+                self.ld(X0, *b);
+                self.ld(X1, *n);
+                self.ld(X2, *c);
+                self.ld(X3, *e);
+                let l = self.rt().ctx_init;
+                self.a.bl(l);
+                self.st(res.unwrap(), X0);
+            }
+            Op::CtxSwitch(s, t) => {
+                self.ld(X0, *s);
+                self.ld(X1, *t);
+                let l = self.rt().ctx_switch;
+                self.a.bl(l);
+            }
         }
         Ok(())
     }

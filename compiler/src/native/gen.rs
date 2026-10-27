@@ -758,6 +758,8 @@ impl<'m> Gen<'m> {
                     | Op::Alloc(_)
                     | Op::Free(_)
                     | Op::Realloc(..)
+                    | Op::CtxInit(..)
+                    | Op::CtxSwitch(..)
                     | Op::Print(..)
             )
         });
@@ -1506,6 +1508,25 @@ impl<'m> Gen<'m> {
                 let re = self.rt().realloc;
                 self.a.call(re);
                 self.st(res.unwrap(), RAX);
+            }
+            Op::CtxInit(b, n, c, e) => {
+                let w = |v: &Value| self.loc[v.0 as usize];
+                let moves = [
+                    (Where::Reg(RDI), w(b)),
+                    (Where::Reg(RSI), w(n)),
+                    (Where::Reg(RDX), w(c)),
+                    (Where::Reg(RCX), w(e)),
+                ];
+                self.moves(&moves);
+                let l = self.rt().ctx_init;
+                self.a.call(l);
+                self.st(res.unwrap(), RAX);
+            }
+            Op::CtxSwitch(s, t) => {
+                let (ws, wt) = (self.loc[s.0 as usize], self.loc[t.0 as usize]);
+                self.moves(&[(Where::Reg(RDI), ws), (Where::Reg(RSI), wt)]);
+                let l = self.rt().ctx_switch;
+                self.a.call(l);
             }
         }
         Ok(())

@@ -76,6 +76,14 @@ If every task is parked, no timer is pending and no I/O is outstanding, the prog
 Bounded `send` parks when full (capacity is really enforced); `recv` parks when empty; closing wakes everyone.
 Capacity 0 stays "unbounded", as in `concurrency.md`. A rendezvous channel is `chan<T>(rendezvous)` later if wanted.
 
+**Flat typed channels, copy on send** (owner's choice, 2026-10-27, after the Goose design). A channel is a
+typed ring buffer of flat slots, one slot per `T`. `send` moves the value in with one `memcpy` of its flat bytes
+and `recv` copies it out, so nothing is shared between tasks or threads: no pointers into the sender's data, no
+refcounts, no lock on the payload. Values that own heap memory (`list`, `string`, `box`) cross as a move of their
+header (the sender loses them, as `sink` already says) and the bytes behind it are not copied; a read-only view
+never crosses. The ring buffer is plain memory guarded by the channel's lock, which keeps the later atomic
+(lock-free) version a drop-in change of the library only.
+
 **`select`.** Registers the task on every arm's waiter list with a shared "fired" word; the first arm to fire
 wins with an atomic compare-and-swap; the task unregisters the others. `default` does not park; a `timeout` arm
 adds a timer. With one worker the CAS is trivially uncontended.
