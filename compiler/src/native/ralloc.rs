@@ -436,7 +436,86 @@ fn coalesce(f: &mut MFunc, nphys: usize, an: &Analysis) -> bool {
 }
 /// Gives every virtual register of `f` a physical register or a slot and rewrites the code.
 /// `limit` keeps only the first registers of each class (tests use it to force spills).
+/// Turns `copy d, a; d op= b` into `copy d, b; d op= a` when `a` is read later and `b` is not, so that
+/// the copy can disappear into `b`'s register ([`coalesce`]) and `a` stays where it is.
+fn commute(f: &mut MFunc, t: &dyn Target) {
+    let nphys = t.regs().len();
+    let live = liveness(f, nphys);
+    // Where a block-parameter copy sends each value: `d -> p` for every `p <- d`.
+    let mut sent: HashMap<u32, u32> = HashMap::new();
+    for i in f
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|i| i.op == PARCOPY)
+    {
+        let n = i.ops.len() / 2;
+        for (d, s) in i.ops[..n].iter().zip(&i.ops[n..]) {
+            if let (Operand::Reg(Reg::Virt(d), _), Operand::Reg(Reg::Virt(s), _)) = (d, s) {
+                sent.insert(*s, *d);
+            }
+        }
+    }
+    // Through plain copies: a value that is a copy of a block parameter shares its register.
+    let mut origin: HashMap<u32, u32> = HashMap::new();
+    for i in f
+        .blocks
+        .iter()
+        .flat_map(|b| &b.insts)
+        .filter(|i| i.op == COPY)
+    {
+        if let [Operand::Reg(Reg::Virt(d), _), Operand::Reg(Reg::Virt(s), _)] = i.ops[..] {
+            origin.insert(d, s);
+        }
+    }
+    let root = |mut v: u32| {
+        for _ in 0..8 {
+            match origin.get(&v) {
+                Some(&s) => v = s,
+                None => break,
+            }
+        }
+        v
+    };
+    for bi in 0..f.blocks.len() {
+        let mut now = live.live_end[bi].clone();
+        let mut swaps = Vec::new();
+        for (k, i) in f.blocks[bi].insts.iter().enumerate().rev() {
+            if k > 0 && t.commutes(i) {
+                let prev = &f.blocks[bi].insts[k - 1];
+                if let (
+                    true,
+                    [Operand::Reg(Reg::Virt(d), Role::Def), Operand::Reg(Reg::Virt(a), Role::Use)],
+                    [Operand::Reg(Reg::Virt(d2), Role::UseDef), Operand::Reg(Reg::Virt(b), Role::Use), ..],
+                ) = (prev.op == COPY, &prev.ops[..], &i.ops[..])
+                {
+                    let (ia, ib) = (nphys + *a as usize, nphys + *b as usize);
+                    // The one that is read later keeps its register; when neither is, the copy goes
+                    // to the one the result is passed on to (`t = t + x` in a loop).
+                    let keep_a = now.contains(ia) && !now.contains(ib);
+                    let both_die = !now.contains(ia) && !now.contains(ib);
+                    if d == d2
+                        && a != b
+                        && b != d
+                        && (keep_a || (both_die && sent.get(d) == Some(&root(*b))))
+                    {
+                        swaps.push(k);
+                    }
+                }
+            }
+            step_back(i, &mut now, &live.live_in, nphys);
+        }
+        for k in swaps {
+            let insts = &mut f.blocks[bi].insts;
+            let (a, b) = (insts[k - 1].ops[1].clone(), insts[k].ops[1].clone());
+            insts[k - 1].ops[1] = b;
+            insts[k].ops[1] = a;
+        }
+    }
+}
+
 pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
+    commute(f, t);
     let nphys = t.regs().len();
     let nv = f.vclass.len();
     let nb = f.blocks.len();

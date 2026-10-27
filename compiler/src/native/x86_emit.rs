@@ -114,6 +114,23 @@ struct Em<'e, 'a> {
     labels: Vec<Label>,
     strings: &'e [String],
     cold: Vec<Cold>,
+    /// The two operands of the compare whose result the flags still hold (see `CMPCMOV`).
+    flags: Option<(Key, Key)>,
+}
+
+/// A compare operand that is easy to recognise again: a register or an immediate.
+#[derive(Clone, Copy, PartialEq)]
+enum Key {
+    Reg(PReg),
+    Imm(i64),
+}
+
+fn key(o: &Operand) -> Option<Key> {
+    match o {
+        Operand::Reg(Reg::Phys(p), _) => Some(Key::Reg(*p)),
+        Operand::Imm(n) => Some(Key::Imm(*n)),
+        _ => None,
+    }
 }
 
 impl Em<'_, '_> {
@@ -352,6 +369,22 @@ impl Em<'_, '_> {
 
     fn inst(&mut self, i: &MInst) {
         let ops = &i.ops;
+        // A register-to-register move leaves the flags alone; anything else may change them.
+        match (i.op, &self.flags) {
+            (COPY, Some((a, b))) if matches!(ops[1], Operand::Reg(..)) => {
+                let d = Key::Reg(phys(&ops[0]));
+                if d == *a || d == *b {
+                    self.flags = None;
+                }
+            }
+            (op::CMPCMOV, _) => {}
+            _ => self.flags = None,
+        }
+        self.inst_body(i);
+    }
+
+    fn inst_body(&mut self, i: &MInst) {
+        let ops = &i.ops;
         match i.op {
             COPY => {
                 let d = phys(&ops[0]);
@@ -442,13 +475,24 @@ impl Em<'_, '_> {
                 self.env.a.extend_rr(d, d, 1, false, false);
             }
             op::CMPCMOV => {
-                self.cmp(&ops[3], &ops[4]);
+                let k = key(&ops[3]).zip(key(&ops[4]));
+                if k.is_none() || self.flags != k {
+                    self.cmp(&ops[3], &ops[4]);
+                }
+                self.flags = k;
                 self.env.a.cmov(
                     cc_of(imm(&ops[2])),
                     gpr(phys(&ops[0])),
                     gpr(phys(&ops[1])),
                     8,
                 );
+                // The move changed its destination: a compare that read it is stale.
+                let d = Key::Reg(phys(&ops[0]));
+                if let Some((a, b)) = self.flags {
+                    if d == a || d == b {
+                        self.flags = None;
+                    }
+                }
             }
             op::TESTCMOV => {
                 let c = gpr(phys(&ops[3]));
@@ -811,6 +855,7 @@ pub fn emit(env: &mut Env, f: &MFunc, label: Label) {
         labels,
         strings: &f.strings,
         cold: Vec::new(),
+        flags: None,
     };
     em.env.a.bind(label);
     em.prologue();
@@ -822,6 +867,7 @@ pub fn emit(env: &mut Env, f: &MFunc, label: Label) {
         }
         let l = em.labels[bi];
         em.env.a.bind(l);
+        em.flags = None;
         for i in &b.insts {
             em.inst(i);
         }

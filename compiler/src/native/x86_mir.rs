@@ -387,6 +387,18 @@ impl Target for X86 {
             .nofall()
     }
 
+    fn commutes(&self, inst: &MInst) -> bool {
+        match inst.op {
+            op::ADD | op::AND | op::OR | op::XOR | op::IMUL => true,
+            // Overflow is as symmetric as the sum or product itself.
+            op::CHK => matches!(
+                inst.ops.get(2),
+                Some(Operand::Imm(op::CHK_ADD_S | op::CHK_ADD_U | op::CHK_MUL_S))
+            ),
+            _ => false,
+        }
+    }
+
     fn mem_operand(&self, i: &MInst, idx: usize) -> bool {
         match i.op {
             op::ADD | op::SUB | op::AND | op::OR | op::XOR => idx == 1,
