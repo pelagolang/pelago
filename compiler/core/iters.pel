@@ -9,7 +9,7 @@ impl<T> iter<T> {
         return rt_clone<T>(rt_hdr_data(h))
     }
 
-    fn to_list(self) -> list<T> = rt_cast<iter<T>, list<T>>(rt_clone<iter<T>>(rt_addr_of(self)))
+    fn toList(self) -> list<T> = rt_cast<iter<T>, list<T>>(rt_clone<iter<T>>(rt_addr_of(self)))
     fn map<U>(self, f: fn(T) -> U) -> iter<U> {
         const h = rt_addr_of(self)
         const size = rt_size_of<T>()
@@ -48,7 +48,7 @@ impl<T> iter<T> {
             i += 1
         }
     }
-    fn to_set(self) -> set<T> {
+    fn toSet(self) -> set<T> {
         const h = rt_addr_of(self)
         const size = rt_size_of<T>()
         var out: set<T> = set {}

@@ -49,19 +49,19 @@ impl int {
         result
     }
 
-    fn checked_add(self, other: int) -> int? {
+    fn checkedAdd(self, other: int) -> int? {
         if other > 0 && self > 9223372036854775807 - other { return none }
         if other < 0 && self < -9223372036854775808 - other { return none }
         return self + other
     }
 
-    fn checked_sub(self, other: int) -> int? {
+    fn checkedSub(self, other: int) -> int? {
         if other < 0 && self > 9223372036854775807 + other { return none }
         if other > 0 && self < -9223372036854775808 + other { return none }
         return self - other
     }
 
-    fn checked_mul(self, other: int) -> int? {
+    fn checkedMul(self, other: int) -> int? {
         if self == 0 || other == 0 { return 0 }
         const product = self *% other
         if product / other != self ||
@@ -70,20 +70,20 @@ impl int {
         return product
     }
 
-    fn wrapping_add(self, other: int) -> int = self +% other
-    fn wrapping_sub(self, other: int) -> int = self -% other
-    fn wrapping_mul(self, other: int) -> int = self *% other
+    fn wrappingAdd(self, other: int) -> int = self +% other
+    fn wrappingSub(self, other: int) -> int = self -% other
+    fn wrappingMul(self, other: int) -> int = self *% other
 
-    fn saturating_add(self, other: int) -> int {
-        const r = self.checked_add(other)
+    fn saturatingAdd(self, other: int) -> int {
+        const r = self.checkedAdd(other)
         switch r {
             case some(v): v
             case none: other > 0 ? 9223372036854775807 : -9223372036854775808
         }
     }
 
-    fn saturating_sub(self, other: int) -> int {
-        const r = self.checked_sub(other)
+    fn saturatingSub(self, other: int) -> int {
+        const r = self.checkedSub(other)
         switch r {
             case some(v): v
             case none: other > 0 ? -9223372036854775808 : 9223372036854775807
@@ -138,11 +138,11 @@ impl float {
 }
 
 impl char {
-    fn is_digit(self) -> bool = (self to int) >= 48 && (self to int) <= 57
-    fn is_upper(self) -> bool = (self to int) >= 65 && (self to int) <= 90
-    fn is_lower(self) -> bool = (self to int) >= 97 && (self to int) <= 122
-    fn is_alpha(self) -> bool = self.is_upper() || self.is_lower()
-    fn is_space(self) -> bool = rt_is_space(self to int)
-    fn to_upper(self) -> char = self.is_lower() ? rt_to_char((self to int) - 32) : self
-    fn to_lower(self) -> char = self.is_upper() ? rt_to_char((self to int) + 32) : self
+    fn isDigit(self) -> bool = (self to int) >= 48 && (self to int) <= 57
+    fn isUpper(self) -> bool = (self to int) >= 65 && (self to int) <= 90
+    fn isLower(self) -> bool = (self to int) >= 97 && (self to int) <= 122
+    fn isAlpha(self) -> bool = self.isUpper() || self.isLower()
+    fn isSpace(self) -> bool = rt_is_space(self to int)
+    fn toUpper(self) -> char = self.isLower() ? rt_to_char((self to int) - 32) : self
+    fn toLower(self) -> char = self.isUpper() ? rt_to_char((self to int) + 32) : self
 }

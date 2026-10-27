@@ -99,12 +99,12 @@ const (q, r) = divmod(7, 2)           // q is 3, r is 1
 ## 7. When something can fail
 
 ```
-fn parse_int(s: string) -> result<int, parse_error> {
+fn parseInt(s: string) -> result<int, parse_error> {
     ...
 }
 
 fn double_input(s: string) -> result<int, parse_error> {
-    const n = parse_int(s)?           // on an error, return it right now
+    const n = parseInt(s)?           // on an error, return it right now
     ok(n * 2)
 }
 ```

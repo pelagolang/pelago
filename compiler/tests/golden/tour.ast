@@ -53,7 +53,7 @@
       (if (== n 0) (block (tail (return acc))))
       (tail (become (call sum_to (- n 1) (+ acc n))))))
   (fn
-    parse_int
+    parseInt
     ((s : string))
     ->
     (result int parse_error)
@@ -141,9 +141,9 @@
   (const hash (+% (*% a 31) b))
   (*%= h 31)
   (+%= h c)
-  (const safe (call (. a checked_add) b))
-  (const capped (call (. a saturating_add) b))
-  (const wrapped (call (. a wrapping_add) b))
+  (const safe (call (. a checkedAdd) b))
+  (const capped (call (. a saturatingAdd) b))
+  (const wrapped (call (. a wrappingAdd) b))
   (fn
     sum_list
     ((xs : (list int)))
@@ -187,7 +187,7 @@
     (block
       (tail
         (switch
-          (call (. (call (. line split) (str " ")) to_list))
+          (call (. (call (. line split) (str " ")) toList))
           (case ((list (str "add") name)) (block (tail (call! add name))))
           (case ((list (str "rename") old new)) (block (tail (call! rename old new))))
           (case ((list cmd (...))) (block (tail (call print (str "unknown command " (# cmd))))))
@@ -360,7 +360,7 @@
   (const first_ok (?? (?? a b) c))
   (const
     chain
-    (call (. (call (. (call (. items filter) (~> () (> it 0))) map) (~> () (* it 2))) to_list)))
+    (call (. (call (. (call (. items filter) (~> () (> it 0))) map) (~> () (* it 2))) toList)))
   (const piped (|> (|> raw trim) parse))
   (const verdict (?: (> score 90) (str "A") (?: (> score 80) (str "B") (str "C"))))
   (const nested (list (list 1 2) (list 3 4)))

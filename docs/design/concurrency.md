@@ -98,7 +98,7 @@ for x of rx { print("got #x") }       // loop ends when every sender is gone
 - `tx.send(v)` moves `v` in. If the receiver is gone it returns `result<void, closed>` (an expected failure,
   not a bug); `tx.send(v)?` propagates it.
 - `rx.recv()` waits and returns `option<T>`: `none` means the channel is empty **and** every sender is gone.
-  `rx.try_recv()` never waits.
+  `rx.tryRecv()` never waits.
 - `for x of rx` is `recv` in a loop.
 - Many senders: `copy tx` (explicit, as for every owning type; `copy` is a keyword, so it is not a method). One receiver; a receiver is moved, not copied.
   (A many-receiver work queue is a library type later.)

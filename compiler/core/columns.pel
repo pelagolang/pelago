@@ -63,7 +63,7 @@ pub fn rt_col_clear<F>(h: ptr) {
 
 impl<T> soa<T> {
     fn len(self) -> int = rt_soa_len<T>(rt_addr_of(self))
-    fn is_empty(self) -> bool = rt_soa_len<T>(rt_addr_of(self)) == 0
+    fn isEmpty(self) -> bool = rt_soa_len<T>(rt_addr_of(self)) == 0
 
     fn push(inout self, sink item: T) {
         rt_soa_push<T>(rt_addr_of(self), sink item)
