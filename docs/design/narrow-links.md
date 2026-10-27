@@ -1,8 +1,7 @@
-# Narrow links, byte types and small executables (draft 1)
+# Narrow links, byte types and small executables (decided: NL1 to NL4)
 
 Goal (owner, 2026-10-27): executables and data as small as `tcc`'s. This page is the size audit
-(measured on x86-64 Linux with `pelago build`) and a proposal for narrow links. Nothing here is decided;
-the numbered questions at the end are for the owner.
+(measured on x86-64 Linux with `pelago build`) and a proposal for narrow links. Decisions NL1 to NL4 are at the end.
 
 ## 1. Audit: where the bytes go
 
@@ -81,12 +80,10 @@ What needs building, in order (separate PRs):
 3. **Packed enum/struct layout**, if today's layout pads the 12-byte payload (not yet checked).
 4. **Tests and a bench twin** (`bintrees`, `graph`, `lru` with links), reported by peak memory, not time.
 
-## 3. Open questions for the owner
+## 3. Decisions (owner, 2026-10-27)
 
-1. Pool-relative links as above (recommended), or Goose-style self-relative offsets inside one allocation?
-2. Names: `pool` and `link`, or `arena` and `ref`? (`ref` suggests a reference, which this language
-   keeps second-class, so `link` is safer.)
-3. Should `link` default its width from the pool (`link<node>` takes `uint32` unless the pool says
-   otherwise), or always be written?
-4. The pool allocator is its own feature (Goose list item 3). Do it first as a separate card, or only as
-   much of it as links need?
+- **NL1** Pool-relative links, not self-relative offsets.
+- **NL2** The names are `pool` and `link` (the owner marked the question answered without a different name).
+- **NL3** The width is always written: `link<node, uint16>`, `pool<node, uint16>`. No default width.
+- **NL4** The pool is its own card, after the bump arenas of A-13 ([A-14](../plans/cards/A-14-pool-and-links.md), stage P1); links
+  are stage P2 of the same card plan, started after P1.
