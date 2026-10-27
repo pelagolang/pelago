@@ -223,7 +223,7 @@ struct Gen<'m> {
     stubs: Vec<Stub>,
     slot_off: HashMap<usize, i32>,
     /// Big slots that a loop fills completely before anything else touches them: not cleared.
-    filled: HashSet<usize>,
+    filled: crate::ir::opt::FxHashSet<usize>,
     /// Loops that fill memory with one value, done by a string store instead.
     fills: Vec<crate::ir::opt::FillLoop>,
     frame: i32,
@@ -376,7 +376,7 @@ impl<'m> Gen<'m> {
             stored: HashSet::new(),
             stubs: Vec::new(),
             slot_off: HashMap::new(),
-            filled: HashSet::new(),
+            filled: Default::default(),
             fills: Vec::new(),
             frame: 0,
             block_labels: Vec::new(),
