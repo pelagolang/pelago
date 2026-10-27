@@ -1,6 +1,6 @@
 # `pelago run`: the fast run mode
 
-Status: decided by the thread that built it (2026-10-27); source: the Goose comparison list, item 6.
+Status: built (2026-10-27): native default and in-process loading on Linux; source: the Goose comparison list, item 6.
 
 ## Problem
 
@@ -33,7 +33,8 @@ Goose's bundled runner shows the target: type `run`, get near-native speed, no s
    program simply finishes the process with its own exit status. Steps: map the image at its fixed
    address (`0x400000`) with `MAP_FIXED_NOREPLACE`, copy the segments in, `mprotect` code to
    read+execute and data to read+write, and call the entry. If the address is taken or any call
-   fails, fall back to the temporary-file path, so the failure is never visible. Windows keeps the
+   fails, fall back to the temporary-file path, so the failure is never visible (`PELAGO_VERBOSE=1`
+   prints why). `--spawn` forces the temporary-file path. Windows keeps the
    temporary file for now (its image needs the import table filled in by the OS loader).
 5. **Not a JIT.** There is no second code generator and no tiering: the in-process mode runs the same
    machine code `build` writes, so a program means the same thing everywhere and `build` output can be
