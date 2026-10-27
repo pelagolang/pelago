@@ -246,6 +246,10 @@ impl Em<'_, '_> {
         let ra = gpr(phys(a));
         match b {
             Operand::Imm(n) => self.env.a.alu_ri(Alu::Cmp, ra, *n as i32, 8),
+            m @ Operand::Mem { .. } => {
+                let m = self.mem(m);
+                self.env.a.alu_rm(Alu::Cmp, ra, m, 8);
+            }
             b => self.env.a.alu_rr(Alu::Cmp, ra, gpr(phys(b)), 8),
         }
     }
@@ -471,6 +475,10 @@ impl Em<'_, '_> {
                         };
                         match s {
                             Operand::Imm(n) => self.env.a.alu_ri(alu, d, *n as i32, 8),
+                            m @ Operand::Mem { .. } => {
+                                let m = self.mem(m);
+                                self.env.a.alu_rm(alu, d, m, 8);
+                            }
                             s => self.env.a.alu_rr(alu, d, gpr(phys(s)), 8),
                         }
                     }

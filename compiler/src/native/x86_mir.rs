@@ -377,6 +377,22 @@ impl Target for X86 {
             .unwrap_or("?")
     }
 
+    fn jump(&self, to: u32) -> MInst {
+        MInst::new(op::JMP, vec![Operand::Block(to)])
+            .branch()
+            .nofall()
+    }
+
+    fn mem_operand(&self, i: &MInst, idx: usize) -> bool {
+        match i.op {
+            op::ADD | op::SUB | op::AND | op::OR | op::XOR => idx == 1,
+            op::CMPJCC | op::CMPSTOP => idx == 2,
+            op::CMPSET => idx == 3,
+            op::CHK => idx == 1 && i.ops[2] != Operand::Imm(op::CHK_MUL_S),
+            _ => false,
+        }
+    }
+
     fn mov(&self, _c: Class, dst: PReg, src: PReg) -> MInst {
         MInst::copy(Reg::Phys(dst), Operand::use_(Reg::Phys(src)))
     }

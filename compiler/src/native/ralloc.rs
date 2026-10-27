@@ -434,7 +434,6 @@ fn coalesce(f: &mut MFunc, nphys: usize, an: &Analysis) -> bool {
     }
     true
 }
-
 /// Gives every virtual register of `f` a physical register or a slot and rewrites the code.
 /// `limit` keeps only the first registers of each class (tests use it to force spills).
 pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
@@ -616,6 +615,36 @@ pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
                     }
                 },
             });
+            // A spilled integer that the instruction only reads, once, where the target takes a memory
+            // operand, is read from its slot directly.
+            let mut k = 0;
+            while k < spilled.len() {
+                let (v, used, defd) = spilled[k];
+                if used && !defd && f.vclass[v as usize] == Class::Int {
+                    let is_v = |r: &Reg| *r == Reg::Virt(v);
+                    let at: Vec<usize> = (0..inst.ops.len())
+                        .filter(|&i| matches!(&inst.ops[i], Operand::Reg(r, _) if is_v(r)))
+                        .collect();
+                    let in_mem = inst.ops.iter().any(|o| match o {
+                        Operand::Mem { base, index, .. } => {
+                            matches!(base, MemBase::Reg(r) if is_v(r))
+                                || matches!(index, Some((r, _)) if is_v(r))
+                        }
+                        _ => false,
+                    });
+                    if at.len() == 1 && !in_mem && t.mem_operand(&inst, at[0]) {
+                        let fr = slot[v as usize].expect("a spilled register has a slot");
+                        inst.ops[at[0]] = Operand::Mem {
+                            base: MemBase::Frame(fr),
+                            index: None,
+                            disp: 0,
+                        };
+                        spilled.remove(k);
+                        continue;
+                    }
+                }
+                k += 1;
+            }
             let mut picked: Vec<(u32, PReg)> = Vec::new();
             let mut after: Vec<MInst> = Vec::new();
             if let Some(list) = around.get(&idx) {
