@@ -20,3 +20,4 @@ An owned `arena` value with bump allocation, checked handles (`aref<T>`, 32-bit 
 # Progress
 
 - AR1 plan: this card and `docs/design/arena.md`.
+- AR2 library: `arena`, `aref<T>`, `rt_needs_drop<T>()`, tests in `lower/tests.rs` (interpreter, optimiser, native).

@@ -264,6 +264,13 @@ impl<'a> Lowerer<'a> {
                 let yes = matches!(self.kind(t), TyKind::Int(crate::types::IntKind::I64));
                 Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
             }
+            "rt_needs_drop" => {
+                let Some(t) = self.intr_type(def, map) else {
+                    return self.unsupported(sp, "`rt_needs_drop` of an unknown type");
+                };
+                let yes = self.needs_drop(t);
+                Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
+            }
             "rt_addr_of" => self.intr_addr_of(e, args),
             "rt_write" => {
                 let Some(t) = self.intr_type(def, map) else {
