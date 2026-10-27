@@ -27,6 +27,8 @@ pub const STATE_SIZE: usize = 176;
 const PRINT_BUF: i64 = 64 * 1024;
 const CHUNK: i64 = 1 << 20;
 const STACK: i64 = 1 << 30;
+/// The top of the stack that is never advised to use huge pages (Linux).
+const STACK_SMALL: i64 = 2 << 20;
 /// The stack on Windows is reserved up front and committed on demand.
 const STACK_WIN: i64 = 1 << 28;
 /// What is committed at start, and how much more each guard page hit commits.
@@ -101,6 +103,12 @@ pub struct Runtime {
     pub exit: Label,
     /// `rt_write_u64(fd = rdi, value = rsi)`: decimal digits.
     pub write_u64: Label,
+    /// `rt_ctx_init(base = rdi, size = rsi, code = rdx, env = rcx) -> rax`: a context on that stack that
+    /// starts by calling `code(env)`; the result is what `rt_ctx_switch` takes.
+    pub ctx_init: Label,
+    /// `rt_ctx_switch(save = rdi, to = rsi)`: saves the callee-saved registers on this stack, stores the
+    /// stack pointer at `save`, and continues the context `to`.
+    pub ctx_switch: Label,
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -147,6 +155,8 @@ pub fn emit_for(
         realloc: a.new_label(),
         exit: a.new_label(),
         write_u64: a.new_label(),
+        ctx_init: a.new_label(),
+        ctx_switch: a.new_label(),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -204,10 +214,12 @@ pub fn emit_for(
         a.syscall();
         a.alu_ri(Alu::Cmp, RAX, -4095, 8);
         a.jcc(Cc::Ae, keep);
-        // Big frames (a 40 MB array in a local) fault in 2 MiB at a time when the kernel agrees.
+        // Big frames (a 40 MB array in a local) fault in 2 MiB at a time when the kernel agrees. The
+        // top 2 MiB stay on small pages: a program that only uses a few KiB of stack would otherwise
+        // fault in a whole huge page on its first call.
         a.push(RAX);
         a.mov_rr(RDI, RAX, 8);
-        a.mov_ri(RSI, STACK);
+        a.mov_ri(RSI, STACK - STACK_SMALL);
         a.mov_ri(RDX, 14); // MADV_HUGEPAGE
         a.mov_ri(RAX, 28);
         a.syscall();
@@ -793,6 +805,40 @@ pub fn emit_for(
         a.pop(R12);
         a.pop(RBX);
         a.ret();
+    }
+
+    if uses.ctx {
+        // ---- rt_ctx_switch / rt_ctx_init --------------------------------------------------------------
+        // A saved context is a stack pointer with six registers above it, then the return address:
+        // r15, r14, r13, r12, rbp, rbx, ret.
+        a.bind(rt.ctx_switch);
+        for r in [RBX, RBP, R12, R13, R14, R15] {
+            a.push(r);
+        }
+        a.store(mem(RDI, 0), RSP, 8);
+        a.mov_rr(RSP, RSI, 8);
+        for r in [R15, R14, R13, R12, RBP, RBX] {
+            a.pop(r);
+        }
+        a.ret();
+
+        let tramp = a.new_label();
+        a.bind(rt.ctx_init);
+        a.mov_rr(RAX, RDI, 8);
+        a.alu_rr(Alu::Add, RAX, RSI, 8);
+        a.alu_ri(Alu::And, RAX, -16, 8);
+        a.lea_label(R8, tramp);
+        a.store(mem(RAX, -8), R8, 8);
+        a.store(mem(RAX, -16), RCX, 8); // rbx: the environment
+        a.store_imm(mem(RAX, -24), 0, 8); // rbp: 0 ends frame chains
+        a.store(mem(RAX, -32), RDX, 8); // r12: the code
+        a.alu_ri(Alu::Sub, RAX, 56, 8);
+        a.ret();
+        // The first switch into a context returns here with the stack 16-byte aligned.
+        a.bind(tramp);
+        a.mov_rr(RDI, RBX, 8);
+        a.call_reg(R12);
+        a.ud2();
     }
 
     if free_used {

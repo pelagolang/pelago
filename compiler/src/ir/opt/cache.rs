@@ -14,8 +14,8 @@
 //! it is given (a pointer stored somewhere, returned, or passed on to something that keeps it), so
 //! the first step is an escape analysis over the module's functions.
 
+use super::fx::{HashMap, HashSet};
 use crate::ir::*;
-use std::collections::{HashMap, HashSet};
 
 /// The biggest slot treated this way: the copies around each call cost a load and a store per piece.
 const MAX_SLOT: u32 = 32;
@@ -67,7 +67,7 @@ fn escape_analysis(m: &Module) -> Vec<Vec<bool>> {
 /// (a store of the address, a cast, a block argument, a return, an indirect call, a new operation added
 /// later) counts as keeping it, so a case the analysis does not know can only turn the pass off.
 fn param_escapes(f: &Func, p: Value, esc: &[Vec<bool>]) -> bool {
-    let mut derived: HashSet<Value> = HashSet::from([p]);
+    let mut derived: HashSet<Value> = [p].into_iter().collect();
     loop {
         let before = derived.len();
         for b in &f.blocks {
@@ -124,7 +124,7 @@ fn param_escapes(f: &Func, p: Value, esc: &[Vec<bool>]) -> bool {
 }
 
 fn cache_slots(f: &mut Func, escapes: &[Vec<bool>]) -> bool {
-    let mut consts: HashMap<Value, i128> = HashMap::new();
+    let mut consts: HashMap<Value, i128> = HashMap::default();
     let mut slots: Vec<(Value, u32, u32)> = Vec::new();
     for b in &f.blocks {
         for &i in &b.insts {
@@ -161,7 +161,7 @@ fn plan_for(
     consts: &HashMap<Value, i128>,
     escapes: &[Vec<bool>],
 ) -> Option<Plan> {
-    let mut derived: HashSet<Value> = HashSet::from([s]);
+    let mut derived: HashSet<Value> = [s].into_iter().collect();
     loop {
         let before = derived.len();
         for b in &f.blocks {

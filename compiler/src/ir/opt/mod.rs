@@ -25,6 +25,7 @@ mod divconst;
 mod dom;
 mod fill;
 mod fneg;
+mod fx;
 mod ifconv;
 mod inline;
 mod ivopt;
@@ -49,6 +50,7 @@ mod vectorise;
 
 pub use bce::kept_checks;
 pub use fill::{fill_loops, filled_slots, FillLoop};
+pub use fx::{HashMap as FxHashMap, HashSet as FxHashSet};
 pub use inline::{drop_idle_task_drain, prune};
 pub use stats::{stats_of, Stats};
 
@@ -183,8 +185,46 @@ fn rounds(f: &mut Func, divs: bool) {
     }
 }
 
-fn step(f: &mut Func, name: &str, pass: fn(&mut Func) -> bool) -> bool {
+/// Per pass: its name, the time spent in it and how often it ran.
+pub type PassTimes = Vec<(&'static str, std::time::Duration, u32)>;
+
+thread_local! {
+    static PASS_TIMES: std::cell::RefCell<Option<PassTimes>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Starts counting the time spent in each optimiser pass (for `pelago build --timings`).
+pub fn time_passes() {
+    PASS_TIMES.with(|t| *t.borrow_mut() = Some(Vec::new()));
+}
+
+/// The time and number of runs per pass since `time_passes`, slowest first.
+pub fn pass_times() -> PassTimes {
+    let mut v = PASS_TIMES
+        .with(|t| t.borrow_mut().take())
+        .unwrap_or_default();
+    v.sort_by_key(|&(_, d, _)| std::cmp::Reverse(d));
+    v
+}
+
+fn step(f: &mut Func, name: &'static str, pass: fn(&mut Func) -> bool) -> bool {
+    let timed = PASS_TIMES.with(|t| t.borrow().is_some());
+    let start = timed.then(std::time::Instant::now);
     let changed = pass(f);
+    if let Some(start) = start {
+        let d = start.elapsed();
+        PASS_TIMES.with(|t| {
+            if let Some(v) = t.borrow_mut().as_mut() {
+                match v.iter_mut().find(|e| e.0 == name) {
+                    Some(e) => {
+                        e.1 += d;
+                        e.2 += 1;
+                    }
+                    None => v.push((name, d, 1)),
+                }
+            }
+        });
+    }
     #[cfg(debug_assertions)]
     if changed {
         let errs = verify_func(f);
@@ -222,9 +262,16 @@ impl Op {
             | Op::PtrAdd(a, b)
             | Op::Print(a, b)
             | Op::Realloc(a, b)
+            | Op::CtxSwitch(a, b)
             | Op::Store(a, b) => {
                 f(*a);
                 f(*b);
+            }
+            Op::CtxInit(a, b, c, d) => {
+                f(*a);
+                f(*b);
+                f(*c);
+                f(*d);
             }
             Op::Neg(a)
             | Op::Not(a)
@@ -262,9 +309,16 @@ impl Op {
             | Op::PtrAdd(a, b)
             | Op::Print(a, b)
             | Op::Realloc(a, b)
+            | Op::CtxSwitch(a, b)
             | Op::Store(a, b) => {
                 *a = f(*a);
                 *b = f(*b);
+            }
+            Op::CtxInit(a, b, c, d) => {
+                *a = f(*a);
+                *b = f(*b);
+                *c = f(*c);
+                *d = f(*d);
             }
             Op::Neg(a)
             | Op::Not(a)
@@ -354,7 +408,10 @@ impl Term {
 impl Func {
     /// Replaces every use of the values in `map` (following chains) in all instructions and
     /// terminators.
-    pub fn replace_uses(&mut self, map: &std::collections::HashMap<Value, Value>) {
+    pub fn replace_uses<S: std::hash::BuildHasher>(
+        &mut self,
+        map: &std::collections::HashMap<Value, Value, S>,
+    ) {
         if map.is_empty() {
             return;
         }

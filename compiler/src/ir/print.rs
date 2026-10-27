@@ -145,6 +145,8 @@ fn inst_text(f: &Func, i: &Inst, m: Option<&Module>) -> String {
         Op::Alloc(n) => format!("alloc {}", v(*n)),
         Op::Free(p) => format!("free {}", v(*p)),
         Op::Realloc(p, n) => format!("realloc {}, {}", v(*p), v(*n)),
+        Op::CtxInit(b, n, c, e) => format!("ctxinit {}, {}, {}, {}", v(*b), v(*n), v(*c), v(*e)),
+        Op::CtxSwitch(s, t) => format!("ctxswitch {}, {}", v(*s), v(*t)),
     };
     let _ = f;
     match i.result {

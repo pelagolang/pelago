@@ -4,8 +4,8 @@
 //! itself, one level. Slots of the callee become slots of the caller, so
 //! promotion can then turn them into registers.
 
+use super::fx::{HashMap, HashSet};
 use crate::ir::*;
-use std::collections::{HashMap, HashSet};
 
 /// A function whose name ends like this is the rarely taken half of a fast path (`rt_grow_slow`:
 /// the buffer is full). It stays a call, so the fast path around it stays small enough to be copied
@@ -116,7 +116,7 @@ fn find_site(
     sites: &[usize],
 ) -> Option<(usize, usize, usize)> {
     let f = &m.funcs[fi];
-    let mut seen_bad: HashSet<usize> = HashSet::new();
+    let mut seen_bad: HashSet<usize> = HashSet::default();
     for (bi, b) in f.blocks.iter().enumerate() {
         for (pos, &i) in b.insts.iter().enumerate() {
             let Op::Call(c, _) = &f.insts[i].op else {
@@ -207,7 +207,7 @@ fn inline_at(f: &mut Func, bi: usize, pos: usize, callee: &Func) {
     f.blocks[cont.0 as usize].insts = after;
     f.blocks[cont.0 as usize].term = term;
     // Copy the callee.
-    let mut vmap: HashMap<Value, Value> = HashMap::new();
+    let mut vmap: HashMap<Value, Value> = HashMap::default();
     for (p, a) in callee.blocks[0].params.iter().zip(&args) {
         vmap.insert(*p, *a);
     }

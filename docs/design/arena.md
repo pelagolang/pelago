@@ -29,20 +29,20 @@ it are named by a handle, `aref<T>`, and read through the arena:
 
 ```
 var a = arena()
-const n = a.new(node { value: 1, left: none, right: none })   // aref<node>
-a.get(n).value                                                  // a view, like box.get()
+const n = a.new!(node { value: 1, left: none, right: none })   // aref<node>
+a.get(n).value                                                  // a bit-for-bit copy (plain types)
 a.set!(n, node { ... })
 a.reset!()                                                      // every aref made so far is now stale
 ```
 
 Rules, all from rules the language already has:
 
-- **No lifetimes to check.** A handle is a plain 8-byte value: 32 bits of byte offset from the arena's base, 32 bits of epoch. It is not
+- **No lifetimes to check.** A handle is a plain 8-byte value: 32 bits of byte offset from the arena's base, 31 bits of epoch. It is not
   a pointer, so growing the block (`rt_realloc`, which on Linux moves pages without copying) cannot break it.
 - **`get` checks the epoch** (one load and one compare, predicted). A stale handle (after `reset!`, or from another arena) stops the program
   with `used a handle after the arena was reset`. Safe in release builds, no new checker rule, the same stance as the exact overflow traps.
-- **The reference `get` returns is a view** (second-class), as for `box.get()`. `new`, `set!` and `reset!` take the arena `inout`, so the
-  existing exclusivity rule already forbids growing the arena while a view of something in it is alive. This is why the base pointer may move.
+- **`get` returns a copy.** Plain types copy bit for bit, so no view is needed and nothing can point into a block that moves. `new!`, `set!` and
+  `reset!` take the arena `inout`; `grow!` may move the block, which only handles (offsets) survive.
 - **The arena can be moved** (sink, sent to a task) with handles alive; offsets do not care. It cannot be shared: one owner, as always.
 - **Epochs** come from a counter bumped at `arena()` and at every `reset!`, so two arenas do not accept each other's handles (except after
   2^32 bumps; a wrap is documented, not guarded). With real threads (A-12 C6) the counter becomes an atomic.
@@ -54,9 +54,8 @@ Rules, all from rules the language already has:
 This is the crux: an arena frees by forgetting, so anything in it that needs `deinit` would leak or double-drop.
 
 - **v1: only plain types.** `a.new(v)` requires `T` to need no drop (numbers, `bool`, `char`, structs and enums of those, other `aref`s).
-  A type with a `string`, `list`, `box` or a user `deinit` is a compile error: `arena.new` needs a type without drop glue; use `box`
-  or give the arena a drop list (AR6). The check is the lowering's existing `needs_drop(ty)`, exposed to the checker as a
-  bound-like rule on the call (an intrinsic `rt_needs_drop<T>()` gives the library the same fact, so the error is also in the library's hands).
+  A type with a `string`, `list`, `box` or a user `deinit` stops the program (`an arena holds only types without drop glue`; making it a compile error is a checker follow-up): `arena.new` needs a type without drop glue; use `box`
+  or give the arena a drop list (AR6). The check is the lowering's existing `needs_drop(ty)`, exposed to the library as `rt_needs_drop<T>()` (a constant per type, so the optimiser removes the test).
 - **An `aref<T>` is plain**: copying it copies the handle, dropping it does nothing. Two handles to one value are fine because `get` is a
   view and `set!` needs the arena `inout`; there is no way to hold two writers.
 - **v2 (AR6, optional): a drop list.** For a type with drop glue, `new` also links a 16-byte record (drop function, offset) into a list kept
@@ -94,7 +93,7 @@ intrinsics. It adds no IR op and no native routine. Consequences:
 | AR2 | `arena`, `aref<T>`, `new`, `get`, `set!`, `reset!`, `used`, `deinit`, `rt_needs_drop<T>()`; epoch check | interpreter and native: stale handle stops, move keeps handles, growth keeps handles, leak check clean, a type with drop glue is rejected | none yet |
 | AR3 | `bintrees` twin written with an arena (`arena_bintrees` under `bench/programs/`, same output) | one run of each, no suite | `bintrees` |
 | AR4 | Optimiser pass: inline `new`/`get` fast paths, keep header fields in registers in loops | IR tests; one before/after run | `bintrees` |
-| AR5 | Lazy `str.chars()`, no list; the short-lived buffers in `text.pel`/`objects.pel` use a function-local arena or stack slot | existing tests; `lexer` once | `lexer` |
+| AR5 | Lazy `str.chars()`, no list (needs a lowering rule for `for c of s.chars()` or a lazy iterator: `iter<T>` is an eager `list<T>` today); the short-lived buffers in `text.pel`/`objects.pel` use a function-local arena or stack slot | existing tests; `lexer` once | `lexer` |
 | AR6 | Drop lists for non-plain `T` (optional, Q1) | drop order, reset runs drops | none |
 
 Each stage is its own PR on its own branch. No stage runs the full benchmark suite; each names the single row it moves.
@@ -103,6 +102,6 @@ Each stage is its own PR on its own branch. No stage runs the full benchmark sui
 
 1. **Plain types only in v1, drop list later (AR6)?** Recommend yes: it keeps `reset!` one store and the rule easy to explain.
 2. **Mark/release?** Recommend not in v1. Scoped scratch is the one use for it (parse, then throw away) and a `reset!` of a short-lived arena does the same.
-3. **Handle width.** Recommend 32+32 now (4 GiB per arena). Alternative: 16 bytes (pointer plus epoch) with no size limit, slower to store in trees.
+3. **Handle width.** Recommend 32+31 now (4 GiB per arena). Alternative: 16 bytes (pointer plus epoch) with no size limit, slower to store in trees.
 4. **Names.** `arena`, `aref<T>`, `a.new(v)`, `a.get(r)`. Alternatives: `a.alloc(v)`, `region`. Recommend as written; `new` is not a keyword here.
 5. **Should `box(x)` ever pick an arena by itself** (an ambient arena in a scope)? Recommend no, see section 5.

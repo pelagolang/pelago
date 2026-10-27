@@ -3,8 +3,8 @@
 //! an SSA value; block parameters carry it across control flow. A read before any write gives zero,
 //! which is what a fresh slot holds in the interpreter.
 
+use super::fx::{HashMap, HashSet};
 use crate::ir::*;
-use std::collections::{HashMap, HashSet};
 
 pub fn run(f: &mut Func) -> bool {
     // A jump back to the entry block would need a parameter for the entry; leave such functions.
@@ -30,7 +30,7 @@ pub fn run(f: &mut Func) -> bool {
 
 /// The slots that can live in registers, with the type of their contents.
 fn promotable(f: &Func) -> HashMap<Value, IrTy> {
-    let mut slots: HashMap<Value, (u32, Option<IrTy>)> = HashMap::new();
+    let mut slots: HashMap<Value, (u32, Option<IrTy>)> = HashMap::default();
     for b in &f.blocks {
         for &i in &b.insts {
             if let (Op::Slot(size, _), Some(r)) = (&f.insts[i].op, f.insts[i].result) {
@@ -38,7 +38,7 @@ fn promotable(f: &Func) -> HashMap<Value, IrTy> {
             }
         }
     }
-    let mut bad: HashSet<Value> = HashSet::new();
+    let mut bad: HashSet<Value> = HashSet::default();
     fn note(
         s: Value,
         ty: IrTy,
@@ -115,11 +115,11 @@ impl<'f> Promoter<'f> {
             f,
             slots,
             preds,
-            last: HashMap::new(),
-            entry: HashMap::new(),
-            replace: HashMap::new(),
+            last: HashMap::default(),
+            entry: HashMap::default(),
+            replace: HashMap::default(),
             added: Vec::new(),
-            zero: HashMap::new(),
+            zero: HashMap::default(),
         }
     }
 
@@ -135,9 +135,9 @@ impl<'f> Promoter<'f> {
             }
         }
         // Loads become the value in force at that point.
-        let mut dead: HashSet<usize> = HashSet::new();
+        let mut dead: HashSet<usize> = HashSet::default();
         for bi in 0..self.f.blocks.len() {
-            let mut cur: HashMap<Value, Value> = HashMap::new();
+            let mut cur: HashMap<Value, Value> = HashMap::default();
             for &i in &self.f.blocks[bi].insts.clone() {
                 let (op, result) = (self.f.insts[i].op.clone(), self.f.insts[i].result);
                 match op {
@@ -238,7 +238,7 @@ impl<'f> Promoter<'f> {
         let ty = self.slots[&slot];
         // Walk up through blocks with one predecessor and no store of their own.
         let mut b = start;
-        let mut seen: HashSet<usize> = HashSet::new();
+        let mut seen: HashSet<usize> = HashSet::default();
         let v = loop {
             if let Some(v) = self.entry.get(&(slot, b)) {
                 break *v;
@@ -259,7 +259,7 @@ impl<'f> Promoter<'f> {
             let p = self.f.new_value(ty);
             self.entry.insert((slot, b), p);
             let mut args = Vec::new();
-            let mut done: HashSet<BlockId> = HashSet::new();
+            let mut done: HashSet<BlockId> = HashSet::default();
             for pred in &preds {
                 if !done.insert(*pred) {
                     continue;
@@ -289,7 +289,7 @@ impl<'f> Promoter<'f> {
     /// A parameter whose arguments are all one value (or itself) is that value.
     fn remove_trivial(&mut self) {
         loop {
-            let mut map: HashMap<Value, Value> = HashMap::new();
+            let mut map: HashMap<Value, Value> = HashMap::default();
             let mut changed: Vec<(usize, usize)> = Vec::new();
             for bi in 1..self.f.blocks.len() {
                 let params = self.f.blocks[bi].params.clone();

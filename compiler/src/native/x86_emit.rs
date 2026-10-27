@@ -500,6 +500,8 @@ impl Em<'_, '_> {
                     op::RT_ALLOC => rt.alloc,
                     op::RT_FREE => rt.free,
                     op::RT_REALLOC => rt.realloc,
+                    op::RT_CTX_INIT => rt.ctx_init,
+                    op::RT_CTX_SWITCH => rt.ctx_switch,
                     _ => rt.print,
                 };
                 self.env.a.call(l);

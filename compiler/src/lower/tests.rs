@@ -712,6 +712,45 @@ fn program_sp1() {
     assert_eq!(output_of(src), "42\n");
 }
 
+/// Two contexts passing control back and forth (`rt_ctx_init`, `rt_ctx_switch`), the base of tasks and coroutines.
+#[test]
+fn program_ctx1() {
+    let src = "var g_main: ptr = rt_null()\nvar g_co: ptr = rt_null()\nfn body() {\n for k of 0..3 {\n  print(\"co #k\")\n  rt_ctx_switch(g_co, rt_load_ptr(g_main))\n }\n print(\"co done\")\n rt_ctx_switch(g_co, rt_load_ptr(g_main))\n}\nfn main() {\n const stack = rt_alloc(65536)\n g_main = rt_alloc(8)\n g_co = rt_alloc(8)\n const blk = rt_alloc(16)\n const f: once fn() = () ~> body()\n rt_write<once fn()>(blk, sink f)\n var co = rt_ctx_init(stack, 65536, rt_load_ptr(blk), rt_load_ptr(rt_offset(blk, 8)))\n for k of 0..4 {\n  print(\"main #k\")\n  rt_ctx_switch(g_main, co)\n  co = rt_load_ptr(g_co)\n }\n const back = rt_read<once fn()>(blk)\n rt_free(stack)\n rt_free(g_main)\n rt_free(g_co)\n rt_free(blk)\n}\n";
+    assert_eq!(
+        output_of(src),
+        "main 0\nco 0\nmain 1\nco 1\nmain 2\nco 2\nmain 3\nco done\n"
+    );
+}
+
+/// Two tasks talking back and forth: impossible while tasks ran one after another to the end.
+#[test]
+fn program_tasks_ping_pong() {
+    let src = "fn main() {\n const (to_b, from_a) = chan<int>()\n const (to_a, from_b) = chan<int>()\n const b = spawn([sink from_a, sink to_a] () ~> { for i of 0..3 { const v = from_a.recv() ?? 0\n  to_a.send(v + 1) } })\n var x = 0\n for i of 0..3 {\n  to_b.send(x)\n  x = from_b.recv() ?? 0\n  print(x)\n }\n b.join!!()\n}\n";
+    assert_eq!(output_of(src), "1\n2\n3\n");
+}
+
+#[test]
+fn program_tasks_join_in_any_order_and_detach() {
+    let src = "fn main() {\n const a = spawn(() ~> 1)\n const b = spawn(() ~> 20)\n const c = spawn(() ~> 300)\n spawn(() ~> print(\"detached\"))\n print(c.join!!() + b.join!!() + a.join!!())\n print(\"end\")\n}\n";
+    assert_eq!(output_of(src), "detached\n321\nend\n");
+}
+
+#[test]
+fn a_task_that_starts_tasks() {
+    let src = "fn main() {\n const t = spawn(() ~> {\n  const u = spawn(() ~> 5)\n  u.join!!() * 2 })\n print(t.join!!())\n}\n";
+    assert_eq!(output_of(src), "10\n");
+}
+
+#[test]
+fn waiting_for_nobody_is_a_deadlock_stop() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>()\n print(rx.recv() ?? 0)\n}\n";
+    let o = run_main(src);
+    assert!(o.result.is_err() && o.output.contains("deadlock"), "{o:?}");
+    let src = "fn main() {\n const (tx, rx) = chan<int>()\n const t = spawn([sink rx] () ~> rx.recv() ?? 0)\n print(t.join!!())\n}\n";
+    let o = run_main(src);
+    assert!(o.result.is_err() && o.output.contains("deadlock"), "{o:?}");
+}
+
 #[test]
 fn program_sp2() {
     let src = "fn main() { const (tx, rx) = chan<int>()\n const p = spawn([sink tx] ~> { for i of 0..3 { tx.send(i * 10) } })\n for v of rx.iter() { print(v) }\n p.join!!() }\n";
@@ -2765,4 +2804,49 @@ fn checkfree_functions_are_judged_after_optimising() {
         fn pick(a: [int], k: int) -> int { return a[k] }
         fn main() { print(pick([1, 2, 3], 1)) }";
     assert!(kept(loose, "pick") > 0);
+}
+
+// ---- Arenas ------------------------------------------------------------------------------------
+
+#[test]
+fn arena_new_get_set_reset() {
+    let src = "struct pt { x: int, y: int }\nfn main() {\n var a = arena()\n const p = a.new!(pt { x: 1, y: 2 })\n const q = a.new!(7)\n print(a.get(p).x, a.get(p).y, a.get(q), a.used())\n a.set!(q, 9)\n print(a.get(q))\n a.reset!()\n print(a.used())\n const r = a.new!(5)\n print(a.get(r)) }\n";
+    assert_eq!(output_of(src), "1 2 7 24\n9\n0\n5\n");
+}
+
+#[test]
+fn arena_handles_survive_growth_and_a_move() {
+    let src = "fn fill(sink a: arena) -> arena { var b = a\n for i in 0..1000 { b.new!(i) }\n b }\nfn main() {\n var a = arena()\n const first = a.new!(41)\n const b = fill(a)\n print(b.get(first), b.used())\n var big = arena()\n const f = big.new!(1)\n for i in 0..20000 { big.new!(i) }\n print(big.get(f)) }\n";
+    assert_eq!(output_of(src), "41 8008\n1\n");
+}
+
+#[test]
+fn arena_tree_of_nodes() {
+    let src = "struct node { l: aref<node>?, r: aref<node>? }\nfn make(inout a: arena, d: int) -> aref<node> {\n if d == 0 { return a.new!(node { l: none, r: none }) }\n const l = make(inout a, d - 1)\n const r = make(inout a, d - 1)\n a.new!(node { l: l, r: r }) }\nfn check(a: arena, t: aref<node>) -> int {\n const n = a.get(t)\n var c = 1\n if n.l is some(l) { c += check(a, l) }\n if n.r is some(r) { c += check(a, r) }\n c }\nfn main() {\n var a = arena()\n for i in 0..3 {\n  const t = make(inout a, 4)\n  print(check(a, t))\n  a.reset!() } }\n";
+    assert_eq!(output_of(src), "31\n31\n31\n");
+}
+
+#[test]
+fn arena_native_agrees() {
+    let src = "struct node { l: aref<node>?, r: aref<node>? }\nfn make(inout a: arena, d: int) -> aref<node> {\n if d == 0 { return a.new!(node { l: none, r: none }) }\n const l = make(inout a, d - 1)\n const r = make(inout a, d - 1)\n a.new!(node { l: l, r: r }) }\nfn check(a: arena, t: aref<node>) -> int {\n const n = a.get(t)\n var c = 1\n if n.l is some(l) { c += check(a, l) }\n if n.r is some(r) { c += check(a, r) }\n c }\nfn main() {\n var a = arena()\n for i in 0..3 {\n  const t = make(inout a, 4)\n  print(check(a, t))\n  a.reset!() } }\n";
+    agree(src);
+}
+
+#[test]
+fn arena_stale_handle_and_drop_glue_stop() {
+    let stale =
+        "fn main() {\n var a = arena()\n const p = a.new!(1)\n a.reset!()\n print(a.get(p)) }\n";
+    let o = run_main(stale);
+    assert!(o.result.is_err());
+    assert!(
+        o.output.contains("used a handle after the arena was reset"),
+        "{}",
+        o.output
+    );
+    let other = "fn main() {\n var a = arena()\n var b = arena()\n const p = a.new!(1)\n print(b.get(p)) }\n";
+    assert!(run_main(other).result.is_err());
+    let glue = "fn main() {\n var a = arena()\n a.new!(\"hi\") }\n";
+    let o = run_main(glue);
+    assert!(o.result.is_err());
+    assert!(o.output.contains("without drop glue"), "{}", o.output);
 }

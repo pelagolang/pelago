@@ -5,81 +5,162 @@
 //~ What `send` returns when nobody is receiving any more.
 pub struct closed {}
 
-//~ A running thread that will produce a `T`. `join!!()` waits and consumes it.
+//~ A running task that will produce a `T`. `join!!()` waits and consumes it.
 //~
-//~ Stage 0 runs threads one after another: a spawned task waits until something needs it (a `join`, a
-//~ `recv` on an empty channel, or the end of `main`) and then runs to completion. Programs that need two
-//~ tasks to talk back and forth need real threads.
+//~ A task is a function on a stack of its own (`rt_ctx_init`). One worker runs the tasks in turn: a spawned task
+//~ starts when the running one waits (a `join`, a `recv` on an empty channel, a `select` with nothing ready, the
+//~ end of a `scope` or of `main`) or calls `yield_now()`. Waiting lets the others run, so tasks may talk back and
+//~ forth. Several workers come later (docs/design/concurrency-runtime.md).
 pub struct task<T> {
     state: ptr
 
     deinit {
-        /// The task block: [ran: int, fn, result]. Dropping the handle detaches the task.
-        if rt_load_int(self.state) == 0 {
-            rt_store_int(self.state, 3)
-        } else {
-            rt_drop_at<T>(rt_offset(self.state, 40))
+        /// Dropping the handle detaches the task; a task that is already done is freed here.
+        if rt_load_int(self.state) == 1 {
+            rt_drop_at<T>(rt_offset(self.state, 64))
             rt_free(self.state)
+        } else {
+            rt_store_int(rt_offset(self.state, 16), 1)
         }
     }
 }
 
-//~ Addresses of the task blocks that have not run yet.
-pub var rt_pending: [int] = []
+/// The task block: [state: 0 live, 1 done][saved context][detached][stack][closure: 16 bytes][pad][result].
+/// The running task is `rt_cur`; `rt_tasks` lists every live task, the one `main` runs in first.
 
-//~ Runs a task block once (the closure at offset 8 moves out and runs). A detached task frees itself.
-pub fn rt_task_run(s: ptr) {
-    const state = rt_load_int(s)
-    /// 0: waiting, 3: waiting and detached (the task frees itself when done); anything else already ran.
-    if state != 0 && state != 3 { return }
-    if state == 0 { rt_store_int(s, 1) }
-    const g = rt_read<once fn()>(rt_offset(s, 8))
+//~ Addresses of the live task blocks (0 is `main`'s, made on first use).
+pub var rt_tasks: [int] = []
+//~ The address of the running task's block.
+pub var rt_cur: int = 0
+//~ Switches since something last happened: enough of them with nothing happening is a deadlock.
+pub var rt_idle: int = 0
+//~ A finished task whose stack is freed by the next task to run.
+pub var rt_zombie: int = 0
+
+const RT_TASK_STACK = 262144
+
+fn rt_main_init() {
+    if rt_tasks.len() == 0 {
+        const s = rt_alloc(72)
+        rt_cur = rt_addr_int(s)
+        rt_tasks.push!(rt_cur)
+    }
+}
+
+//~ Frees the stack (and a detached task's block) of the task that just finished.
+fn rt_reap() {
+    if rt_zombie != 0 {
+        const z = rt_cast<int, ptr>(rt_zombie)
+        rt_zombie = 0
+        rt_free(rt_load_ptr(rt_offset(z, 24)))
+        rt_store_ptr(rt_offset(z, 24), rt_null())
+        if rt_load_int(rt_offset(z, 16)) == 1 {
+            rt_free(z)
+        }
+    }
+}
+
+fn rt_switch_to(t: int) {
+    const me = rt_cast<int, ptr>(rt_cur)
+    const next = rt_cast<int, ptr>(t)
+    rt_cur = t
+    rt_ctx_switch(rt_offset(me, 8), rt_load_ptr(rt_offset(next, 8)))
+    rt_reap()
+}
+
+//~ Lets the next task run; false when there is no other.
+fn rt_switch_next() -> bool {
+    rt_main_init()
+    var i = 0
+    while rt_tasks[i] != rt_cur { i += 1 }
+    const next = rt_tasks[(i + 1) % rt_tasks.len()]
+    if next == rt_cur { return false }
+    rt_switch_to(next)
+    true
+}
+
+//~ The running task cannot go on: lets the others run. Stops when nobody can make progress.
+fn rt_wait(what: string) {
+    rt_idle += 1
+    if rt_idle > 2 * rt_tasks.len() + 2 || !rt_switch_next() {
+        panic("deadlock: waiting for #what that nobody can provide")
+    }
+}
+
+//~ Lets the other tasks run for a while.
+pub fn yield_now() {
+    rt_idle = 0
+    rt_switch_next()
+}
+
+//~ The first code a task runs: the task block's closure, then the end of the task, which never returns.
+fn rt_task_entry() {
+    rt_reap()
+    rt_task_run_closure()
+    rt_task_exit()
+}
+
+//~ Its own function so the closure is dropped before the task ends: `rt_task_exit` never returns.
+fn rt_task_run_closure() {
+    const cur = rt_cast<int, ptr>(rt_cur)
+    const g = rt_read<once fn()>(rt_offset(cur, 32))
     g!!()
 }
 
-//~ Runs every task that has not run yet.
-pub fn rt_run_pending() {
-    while rt_pending.len() > 0 {
-        const addr = rt_pending.remove!(0)
-        const s = rt_cast<int, ptr>(addr)
-        rt_task_run(s)
-    }
-    rt_pending = []
+fn rt_task_exit() {
+    rt_idle = 0
+    const cur = rt_cast<int, ptr>(rt_cur)
+    rt_store_int(cur, 1)
+    var i = 0
+    while rt_tasks[i] != rt_cur { i += 1 }
+    rt_tasks.remove!(i)
+    rt_zombie = rt_cur
+    const next = rt_tasks[i % rt_tasks.len()]
+    rt_switch_to(next)
+    panic("a finished task ran again")
 }
 
-//~ Runs one task that is still waiting; false when there is none.
+//~ Runs every task that has not finished: the end of a `scope` and of `main`.
+pub fn rt_run_pending() {
+    if rt_tasks.len() == 0 { return }
+    /// `main` is always the first; a task that ends a scope leaves itself and `main` waiting.
+    const others = if rt_cur == rt_tasks[0] { 1 } else { 2 }
+    while rt_tasks.len() > others {
+        rt_wait("a task")
+    }
+    if rt_tasks.len() == 1 {
+        rt_free(rt_cast<int, ptr>(rt_tasks[0]))
+        rt_tasks = []
+        rt_cur = 0
+    }
+}
+
+//~ Lets another task run so something may change, for `select`; false when none can.
 pub fn rt_run_one_pending() -> bool {
-    if rt_pending.len() == 0 { return false }
-    const addr = rt_pending.remove!(0)
-    rt_task_run(rt_cast<int, ptr>(addr))
-    true
+    if rt_tasks.len() <= 1 { return false }
+    rt_idle += 1
+    if rt_idle > 2 * rt_tasks.len() + 2 { return false }
+    rt_switch_next()
 }
 
 //~ Can a receive on this channel finish now: a value is queued, or no sender is left?
 pub fn rt_chan_ready(ch: ptr) -> bool = rt_hdr_len(ch) > 0 || rt_load_int(rt_offset(ch, 24)) == 0
 
 pub fn rt_task_body<T>(s: ptr, sink f: once fn() -> T) {
-    rt_write<T>(rt_offset(s, 40), f!!())
-    if rt_load_int(s) == 3 {
-        rt_drop_at<T>(rt_offset(s, 40))
-        rt_free(s)
+    rt_write<T>(rt_offset(s, 64), f!!())
+    if rt_load_int(rt_offset(s, 16)) == 1 {
+        rt_drop_at<T>(rt_offset(s, 64))
     }
 }
 
 impl<T> task<T> {
     fn join(sink self) -> T {
         const s = self.state
-        const addr = rt_addr_int(s)
-        var i = 0
-        while i < rt_pending.len() {
-            if rt_pending[i] == addr { rt_pending.remove!(i) } else { i += 1 }
+        while rt_load_int(s) != 1 {
+            rt_wait("a task to finish")
         }
-        if rt_load_int(s) == 0 {
-            rt_task_run(s)
-        }
-        /// The task ran; its result is at offset 40. The handle's `deinit` must not free it twice.
-        rt_store_int(s, 2)
-        const r = rt_read<T>(rt_offset(s, 40))
+        rt_idle = 0
+        const r = rt_read<T>(rt_offset(s, 64))
         rt_free(s)
         rt_forget_task<T>(sink self)
         r
@@ -91,13 +172,17 @@ pub fn rt_forget_task<T>(sink t: task<T>) {
     rt_cast<task<T>, ptr>(sink t)
 }
 
-//~ Starts `f` on a new thread. What the closure uses must be copied or moved in (`sink x ~> ...`).
+//~ Starts `f` as a task. What the closure uses must be copied or moved in (`sink x ~> ...`).
 pub fn spawn<T>(sink f: once fn() -> T) -> task<T> {
-    const s = rt_alloc(48 + rt_size_of<T>())
-    rt_store_int(s, 0)
+    rt_main_init()
+    rt_idle = 0
+    const s = rt_alloc(64 + rt_size_of<T>())
+    const stack = rt_alloc(RT_TASK_STACK)
+    rt_store_ptr(rt_offset(s, 24), stack)
     const runner = [sink f, sink s] () ~> rt_task_body<T>(s, sink f)
-    rt_write<once fn()>(rt_offset(s, 8), sink runner)
-    rt_pending.push!(rt_addr_int(s))
+    rt_write<once fn()>(rt_offset(s, 32), sink runner)
+    rt_store_ptr(rt_offset(s, 8), rt_ctx_init(stack, RT_TASK_STACK, rt_fn_addr(rt_task_entry), rt_null()))
+    rt_tasks.push!(rt_addr_int(s))
     task<T> { state: s }
 }
 
@@ -152,6 +237,7 @@ impl<T> sender<T> {
         var q = rt_read<list<T>>(self.ch)
         q.push!(value)
         rt_write<list<T>>(self.ch, sink q)
+        rt_idle = 0
     }
 }
 
@@ -176,10 +262,9 @@ impl<T> receiver<T> {
     fn recv(self) -> T? {
         while rt_hdr_len(self.ch) == 0 {
             if rt_load_int(rt_offset(self.ch, 24)) == 0 { return none }
-            if rt_pending.len() == 0 { panic("deadlock: waiting for a value nobody can send") }
-            const addr = rt_pending.remove!(0)
-            rt_task_run(rt_cast<int, ptr>(addr))
+            rt_wait("a value")
         }
+        rt_idle = 0
         return self.tryRecv()
     }
 
