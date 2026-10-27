@@ -2654,3 +2654,48 @@ fn sorting_integers_past_the_insertion_sort_limit() {
         "true true -9223372036854775807 9223372036854775807\n"
     );
 }
+
+// ---- Arenas ------------------------------------------------------------------------------------
+
+#[test]
+fn arena_new_get_set_reset() {
+    let src = "struct pt { x: int, y: int }\nfn main() {\n var a = arena()\n const p = a.new!(pt { x: 1, y: 2 })\n const q = a.new!(7)\n print(a.get(p).x, a.get(p).y, a.get(q), a.used())\n a.set!(q, 9)\n print(a.get(q))\n a.reset!()\n print(a.used())\n const r = a.new!(5)\n print(a.get(r)) }\n";
+    assert_eq!(output_of(src), "1 2 7 24\n9\n0\n5\n");
+}
+
+#[test]
+fn arena_handles_survive_growth_and_a_move() {
+    let src = "fn fill(sink a: arena) -> arena { var b = a\n for i in 0..1000 { b.new!(i) }\n b }\nfn main() {\n var a = arena()\n const first = a.new!(41)\n const b = fill(a)\n print(b.get(first), b.used())\n var big = arena()\n const f = big.new!(1)\n for i in 0..20000 { big.new!(i) }\n print(big.get(f)) }\n";
+    assert_eq!(output_of(src), "41 8008\n1\n");
+}
+
+#[test]
+fn arena_tree_of_nodes() {
+    let src = "struct node { l: aref<node>?, r: aref<node>? }\nfn make(inout a: arena, d: int) -> aref<node> {\n if d == 0 { return a.new!(node { l: none, r: none }) }\n const l = make(inout a, d - 1)\n const r = make(inout a, d - 1)\n a.new!(node { l: l, r: r }) }\nfn check(a: arena, t: aref<node>) -> int {\n const n = a.get(t)\n var c = 1\n if n.l is some(l) { c += check(a, l) }\n if n.r is some(r) { c += check(a, r) }\n c }\nfn main() {\n var a = arena()\n for i in 0..3 {\n  const t = make(inout a, 4)\n  print(check(a, t))\n  a.reset!() } }\n";
+    assert_eq!(output_of(src), "31\n31\n31\n");
+}
+
+#[test]
+fn arena_native_agrees() {
+    let src = "struct node { l: aref<node>?, r: aref<node>? }\nfn make(inout a: arena, d: int) -> aref<node> {\n if d == 0 { return a.new!(node { l: none, r: none }) }\n const l = make(inout a, d - 1)\n const r = make(inout a, d - 1)\n a.new!(node { l: l, r: r }) }\nfn check(a: arena, t: aref<node>) -> int {\n const n = a.get(t)\n var c = 1\n if n.l is some(l) { c += check(a, l) }\n if n.r is some(r) { c += check(a, r) }\n c }\nfn main() {\n var a = arena()\n for i in 0..3 {\n  const t = make(inout a, 4)\n  print(check(a, t))\n  a.reset!() } }\n";
+    agree(&src);
+}
+
+#[test]
+fn arena_stale_handle_and_drop_glue_stop() {
+    let stale =
+        "fn main() {\n var a = arena()\n const p = a.new!(1)\n a.reset!()\n print(a.get(p)) }\n";
+    let o = run_main(stale);
+    assert!(o.result.is_err());
+    assert!(
+        o.output.contains("used a handle after the arena was reset"),
+        "{}",
+        o.output
+    );
+    let other = "fn main() {\n var a = arena()\n var b = arena()\n const p = a.new!(1)\n print(b.get(p)) }\n";
+    assert!(run_main(other).result.is_err());
+    let glue = "fn main() {\n var a = arena()\n a.new!(\"hi\") }\n";
+    let o = run_main(glue);
+    assert!(o.result.is_err());
+    assert!(o.output.contains("without drop glue"), "{}", o.output);
+}
