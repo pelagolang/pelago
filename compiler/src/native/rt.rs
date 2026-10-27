@@ -27,6 +27,8 @@ pub const STATE_SIZE: usize = 176;
 const PRINT_BUF: i64 = 64 * 1024;
 const CHUNK: i64 = 1 << 20;
 const STACK: i64 = 1 << 30;
+/// The top of the stack that is never advised to use huge pages (Linux).
+const STACK_SMALL: i64 = 2 << 20;
 /// The stack on Windows is reserved up front and committed on demand.
 const STACK_WIN: i64 = 1 << 28;
 /// What is committed at start, and how much more each guard page hit commits.
@@ -212,10 +214,12 @@ pub fn emit_for(
         a.syscall();
         a.alu_ri(Alu::Cmp, RAX, -4095, 8);
         a.jcc(Cc::Ae, keep);
-        // Big frames (a 40 MB array in a local) fault in 2 MiB at a time when the kernel agrees.
+        // Big frames (a 40 MB array in a local) fault in 2 MiB at a time when the kernel agrees. The
+        // top 2 MiB stay on small pages: a program that only uses a few KiB of stack would otherwise
+        // fault in a whole huge page on its first call.
         a.push(RAX);
         a.mov_rr(RDI, RAX, 8);
-        a.mov_ri(RSI, STACK);
+        a.mov_ri(RSI, STACK - STACK_SMALL);
         a.mov_ri(RDX, 14); // MADV_HUGEPAGE
         a.mov_ri(RAX, 28);
         a.syscall();
