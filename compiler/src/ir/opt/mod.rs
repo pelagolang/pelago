@@ -24,6 +24,7 @@ mod divconst;
 mod dom;
 mod fill;
 mod fneg;
+mod fx;
 mod ifconv;
 mod inline;
 mod ivopt;
@@ -47,6 +48,7 @@ mod unroll;
 mod vectorise;
 
 pub use fill::{fill_loops, filled_slots, FillLoop};
+pub use fx::{HashMap as FxHashMap, HashSet as FxHashSet};
 pub use inline::{drop_idle_task_drain, prune};
 pub use stats::{stats_of, Stats};
 
@@ -351,7 +353,10 @@ impl Term {
 impl Func {
     /// Replaces every use of the values in `map` (following chains) in all instructions and
     /// terminators.
-    pub fn replace_uses(&mut self, map: &std::collections::HashMap<Value, Value>) {
+    pub fn replace_uses<S: std::hash::BuildHasher>(
+        &mut self,
+        map: &std::collections::HashMap<Value, Value, S>,
+    ) {
         if map.is_empty() {
             return;
         }

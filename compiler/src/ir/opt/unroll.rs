@@ -17,9 +17,9 @@
 //! pass runs once per function, after inlining, so the copies are not unrolled again.
 
 use super::dom::Dom;
+use super::fx::{HashMap, HashSet};
 use super::loops;
 use crate::ir::*;
-use std::collections::{HashMap, HashSet};
 
 /// Instructions in the unrolled body.
 const BUDGET: usize = 64;
@@ -76,7 +76,7 @@ fn pays(f: &Func, params: &[Value], body: &Block, back: &Target, k: usize) -> bo
     // The longest chain from each loop-carried value back to itself.
     let mut rec: f64 = 1.0;
     for (idx, p) in params.iter().enumerate() {
-        let mut depth: HashMap<Value, f64> = HashMap::new();
+        let mut depth: HashMap<Value, f64> = HashMap::default();
         depth.insert(*p, 0.0);
         for (n, &ii) in body.insts.iter().enumerate() {
             let inst = &f.insts[ii];

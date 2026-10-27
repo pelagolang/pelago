@@ -12,10 +12,10 @@
 //! computation wraps.
 
 use super::dom::Dom;
+use super::fx::{HashMap, HashSet};
 use super::licm::preheader;
 use super::loops::{self, Loop};
 use crate::ir::*;
-use std::collections::{HashMap, HashSet};
 
 /// The counters of a formula with their coefficients.
 type Terms = Vec<(Value, u64)>;
@@ -72,17 +72,25 @@ pub fn run(f: &mut Func) -> bool {
 
 fn once(f: &mut Func) -> bool {
     let dom = Dom::new(f);
+    // Nothing changes until a loop is rewritten, so every loop shares these.
+    let preds = f.predecessors();
+    let defs = f.defs();
     for lp in loops::find(f, &dom) {
-        if lp.header.0 != 0 && try_loop(f, &lp) {
+        if lp.header.0 != 0 && try_loop(f, &lp, &dom, &preds, &defs) {
             return true;
         }
     }
     false
 }
 
-fn try_loop(f: &mut Func, lp: &Loop) -> bool {
+fn try_loop(
+    f: &mut Func,
+    lp: &Loop,
+    dom: &Dom,
+    preds: &[Vec<BlockId>],
+    defs: &[Option<usize>],
+) -> bool {
     let h = lp.header;
-    let preds = f.predecessors();
     let latches: Vec<BlockId> = preds[h.0 as usize]
         .iter()
         .copied()
@@ -96,7 +104,6 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
         return false;
     };
     let back = back.clone();
-    let defs = f.defs();
     let const_of = |v: Value| -> Option<u64> {
         match defs[v.0 as usize].map(|i| &f.insts[i].op) {
             Some(Op::Const(IrTy::Int(64), Const::Int(c))) => Some(*c as u64),
@@ -111,11 +118,11 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
         .copied()
         .filter(|p| f.ty(*p) == IrTy::Int(64))
         .collect();
-    let mut step: HashMap<Value, u64> = HashMap::new();
+    let mut step: HashMap<Value, u64> = HashMap::default();
 
     // Every value in the loop made from counters, as a formula.
-    let mut aff: HashMap<Value, Option<Aff>> = HashMap::new();
-    for &b in &Dom::new(f).rpo {
+    let mut aff: HashMap<Value, Option<Aff>> = HashMap::default();
+    for &b in &dom.rpo {
         if !lp.contains(b) {
             continue;
         }
@@ -184,8 +191,8 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
         }
     }
     // How each value is read, by instruction and by terminator.
-    let mut inst_uses: HashMap<Value, Vec<usize>> = HashMap::new();
-    let mut term_uses: HashMap<Value, usize> = HashMap::new();
+    let mut inst_uses: HashMap<Value, Vec<usize>> = HashMap::default();
+    let mut term_uses: HashMap<Value, usize> = HashMap::default();
     for b in &f.blocks {
         for &i in &b.insts {
             f.insts[i]
@@ -199,7 +206,7 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
 
     // Values with the same counters and coefficients differ by a constant, so they share one counter.
     let mut groups: Vec<(Terms, Vec<(Value, u64)>)> = Vec::new();
-    for &b in &Dom::new(f).rpo {
+    for &b in &dom.rpo {
         if !lp.contains(b) {
             continue;
         }
@@ -221,6 +228,9 @@ fn try_loop(f: &mut Func, lp: &Loop) -> bool {
         }
     }
     // Keep a group only when the loop ends up with fewer instructions.
+    if groups.is_empty() {
+        return false;
+    }
     let before = weight(f, lp);
     for (terms, members) in groups {
         let mut g = f.clone();
@@ -311,7 +321,7 @@ fn rewrite(
         t.args.push(next);
     }
     // Each member is the counter plus the constant that separates it from the first.
-    let mut rep = HashMap::new();
+    let mut rep = HashMap::default();
     for &(m, k) in members {
         if m == first || k == base_k {
             rep.insert(m, z);
@@ -329,7 +339,7 @@ fn rewrite(
 /// so a chain of additions (what an unrolled loop leaves) does not depend on its own earlier links.
 fn offsets(f: &mut Func, p: Value, members: &[(Value, u64)]) -> bool {
     let defs = f.defs();
-    let mut rep = HashMap::new();
+    let mut rep = HashMap::default();
     for &(m, k) in members {
         // Already `p + constant`: nothing to shorten.
         if let Some(Op::Bin(BinOp::Add, a, c)) = defs[m.0 as usize].map(|i| &f.insts[i].op) {
