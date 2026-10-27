@@ -93,7 +93,7 @@ intrinsics. It adds no IR op and no native routine. Consequences:
 | AR2 | `arena`, `aref<T>`, `new`, `get`, `set!`, `reset!`, `used`, `deinit`, `rt_needs_drop<T>()`; epoch check | interpreter and native: stale handle stops, move keeps handles, growth keeps handles, leak check clean, a type with drop glue is rejected | none yet |
 | AR3 | `bintrees` twin written with an arena (`arena_bintrees` under `bench/programs/`, same output) | one run of each, no suite | `bintrees` |
 | AR4 | Optimiser pass: inline `new`/`get` fast paths, keep header fields in registers in loops | IR tests; one before/after run | `bintrees` |
-| AR5 | Lazy `str.chars()`, no list; the short-lived buffers in `text.pel`/`objects.pel` use a function-local arena or stack slot | existing tests; `lexer` once | `lexer` |
+| AR5 | Lazy `str.chars()`, no list (needs a lowering rule for `for c of s.chars()` or a lazy iterator: `iter<T>` is an eager `list<T>` today); the short-lived buffers in `text.pel`/`objects.pel` use a function-local arena or stack slot | existing tests; `lexer` once | `lexer` |
 | AR6 | Drop lists for non-plain `T` (optional, Q1) | drop order, reset runs drops | none |
 
 Each stage is its own PR on its own branch. No stage runs the full benchmark suite; each names the single row it moves.
