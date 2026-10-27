@@ -90,7 +90,7 @@ adds a timer. With one worker the CAS is trivially uncontended.
 
 **Locks.** `lock<T>`: an atomic word (0 free, 1 held, 2 held with waiters) plus a wait queue; spin briefly with
 more than one worker, then park. `with` keeps its shape (closure gets `inout`). Also in the library, not the
-language: `condvar`, `once`, `barrier`, `semaphore`, `rwlock` (read-mostly `shared` data), built from the same
+language: `lock.withWhen` (in place of a `condvar`; no separate `once` type, a `lock` around an `option` does it), `barrier`, `semaphore`, `rwlock` (read-mostly `shared` data), built from the same
 word-and-queue pair.
 
 **`shared<T>`** gets an atomic count (`AtomicRmw add`); **`atomic<T>`** is the IR atomics with a plain method
@@ -146,7 +146,7 @@ for x of g { print(x) }                                              // iterator
 | C0 | This plan, card A-12, S-02 and S-04 updated | nothing |
 | C1 | Context switch: `ctx_*` IR ops, interpreter baton, x86-64 and AArch64 emission, `os_stack_alloc` | backend |
 | C2 | Scheduler and blocking tasks in `core.pel`: `spawn`, `join`, `yield`, `sleep`, deadlock stop; `scope` joins; detached semantics | C1, `os_clock_now` |
-| C3 | Blocking channels (bounded enforced), real `select` with timeout, `lock` with wait queue, `condvar`, `once`, `barrier`, `semaphore` | C2 |
+| C3 | Blocking channels (bounded enforced), real `select` with timeout, `lock` with wait queue and `withWhen`, `barrier`, `semaphore` (C3b, done: clonable handles, polling waits) | C2 |
 | C4 | Coroutines (`coroutine<T>`, generator iteration) and cancellation (`cancel`, `cancelled`, `select` arm) | C2 |
 | C5 | IR atomics, atomic `shared`, `atomic<T>`, memory-model note in `concurrency.md` | IR, interpreter, both backends |
 | C6 | Several workers: `os_thread_start`, futex park, thread register, per-worker allocator, work stealing, `par_for`/`par_map` | C5, runtime period OS layer |

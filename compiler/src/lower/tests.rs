@@ -782,6 +782,33 @@ fn program_lock_is_held_while_its_holder_waits() {
 }
 
 #[test]
+fn program_lock_shared_across_spawned_tasks() {
+    let src = "fn main() {\n const h = lock(0)\n scope s {\n  for i of 1..4 {\n   const g = copy h\n   s.spawn(() ~> g.with(n ~> { n += i }))\n  }\n }\n print(h.with(n ~> n))\n}\n";
+    assert_eq!(output_of(src), "6\n");
+}
+
+#[test]
+fn program_lock_with_when_waits_for_the_condition() {
+    let src = "fn main() {\n const h = lock(0)\n scope s {\n  const g = copy h\n  s.spawn(() ~> g.withWhen(n ~> n >= 2, n ~> { print(\"got #n\") }))\n  yield_now()\n  h.with(n ~> { n += 1 })\n  yield_now()\n  h.with(n ~> { n += 1 })\n }\n}\n";
+    assert_eq!(output_of(src), "got 2\n");
+}
+
+#[test]
+fn program_semaphore_limits_holders() {
+    let src = "fn main() {\n const sem = semaphore(1)\n scope s {\n  for i of 0..3 {\n   const m = copy sem\n   s.spawn(() ~> { m.acquire()\n    print(\"in #i\")\n    yield_now()\n    print(\"out #i\")\n    m.release() })\n  }\n }\n}\n";
+    assert_eq!(output_of(src), "in 0\nout 0\nin 1\nout 1\nin 2\nout 2\n");
+}
+
+#[test]
+fn program_barrier_releases_all_together() {
+    let src = "fn main() {\n const b = barrier(3)\n scope s {\n  for i of 0..3 {\n   const c = copy b\n   s.spawn(() ~> { print(\"before #i\")\n    c.wait()\n    print(\"after #i\") })\n  }\n }\n}\n";
+    assert_eq!(
+        output_of(src),
+        "before 0\nbefore 1\nbefore 2\nafter 2\nafter 0\nafter 1\n"
+    );
+}
+
+#[test]
 fn program_sp2() {
     let src = "fn main() { const (tx, rx) = chan<int>()\n const p = spawn([sink tx] ~> { for i of 0..3 { tx.send(i * 10) } })\n for v of rx.iter() { print(v) }\n p.join!!() }\n";
     assert_eq!(output_of(src), "0\n10\n20\n");
