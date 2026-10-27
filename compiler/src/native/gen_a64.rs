@@ -137,13 +137,13 @@ fn widen(n: i64, t: IrTy, signed: bool) -> i64 {
 }
 
 /// Where an argument or parameter travels.
-enum Loc {
+pub(super) enum Loc {
     Int(usize),
     Float(usize),
     Stack(usize),
 }
 
-fn classify(tys: &[IrTy]) -> Vec<Loc> {
+pub(super) fn classify(tys: &[IrTy]) -> Vec<Loc> {
     let (mut i, mut f, mut s) = (0, 0, 0);
     tys.iter()
         .map(|t| {
@@ -655,6 +655,39 @@ impl<'m> Gen<'m> {
     }
 
     fn function(&mut self, fi: usize, f: &Func) -> Result<(), String> {
+        if self.regalloc && super::gen::mir_mode() {
+            if let Some(mut mf) = super::a64_select::select(f) {
+                let target = super::a64_mir::A64::new();
+                if cfg!(debug_assertions) {
+                    super::mir::verify(&mf, &target)?;
+                }
+                let dump = std::env::var("PELAGO_MIR_DUMP").is_ok_and(|v| v == "1");
+                if dump {
+                    eprintln!("{}", mf.print(&target));
+                }
+                super::ralloc::allocate(&mut mf, &target, super::gen::reg_limit());
+                if dump {
+                    eprintln!("after allocation:\n{}", mf.print(&target));
+                }
+                let label = self.funcs[fi];
+                let stops = [
+                    self.a.new_label(),
+                    self.a.new_label(),
+                    self.a.new_label(),
+                    self.a.new_label(),
+                ];
+                let mut env = super::a64_emit::Env {
+                    a: &mut self.a,
+                    ro: &mut self.ro,
+                    funcs: &self.funcs,
+                    data_off: &self.data_off,
+                    stops,
+                    rt: self.rt.as_ref().expect("the runtime is emitted first"),
+                };
+                super::a64_emit::emit(&mut env, &mf, label);
+                return Ok(());
+            }
+        }
         self.layout(f);
         self.stops = [None; 4];
         self.block_labels = f.blocks.iter().map(|_| self.a.new_label()).collect();
