@@ -369,20 +369,26 @@ impl<T> clone for shared<T> {
     }
 }
 
-//~ Data changed from several threads one at a time: `lock(value)`. Access is through `with`.
+//~ Data changed from several threads one at a time: `lock(value)`. Access is through `with`; `copy handle` for
+//~ another handle to the same lock, which another task can own.
 pub struct lock<T> {
     p: ptr
 
     init(sink value: T) {
-        /// The block: [held: 0 or 1][pad][value].
+        /// The block: [held: 0 or 1][handles][value].
         const p = rt_alloc(16 + rt_size_of<T>())
+        rt_store_int(rt_offset(p, 8), 1)
         rt_write<T>(rt_offset(p, 16), sink value)
         self.p = p
     }
 
     deinit {
-        rt_drop_at<T>(rt_offset(self.p, 16))
-        rt_free(self.p)
+        const n = rt_load_int(rt_offset(self.p, 8)) - 1
+        rt_store_int(rt_offset(self.p, 8), n)
+        if n == 0 {
+            rt_drop_at<T>(rt_offset(self.p, 16))
+            rt_free(self.p)
+        }
     }
 }
 
@@ -400,5 +406,126 @@ impl<T> lock<T> {
         rt_store_int(self.p, 0)
         rt_idle = 0
         r
+    }
+
+    //~ Like `with`, but waits until `ready` accepts the value (the lock is free while it waits): a condition
+    //~ variable without the separate type.
+    fn withWhen<R>(self, ready: fn(T) -> bool, f: fn(inout T) -> R) -> R {
+        while true {
+            while rt_load_int(self.p) != 0 {
+                rt_wait("a lock")
+            }
+            rt_store_int(self.p, 1)
+            var v = rt_read<T>(rt_offset(self.p, 16))
+            if ready(v) {
+                const r = f(inout v)
+                rt_write<T>(rt_offset(self.p, 16), sink v)
+                rt_store_int(self.p, 0)
+                rt_idle = 0
+                return r
+            }
+            rt_write<T>(rt_offset(self.p, 16), sink v)
+            rt_store_int(self.p, 0)
+            rt_wait("a lock condition")
+        }
+        panic("unreachable")
+    }
+}
+
+impl<T> clone for lock<T> {
+    fn clone(self) -> lock<T> {
+        rt_store_int(rt_offset(self.p, 8), rt_load_int(rt_offset(self.p, 8)) + 1)
+        lock<T> { p: self.p }
+    }
+}
+
+//~ A count of permits: `semaphore(n)`; `acquire` waits for one, `release` returns one. `copy handle` shares it.
+pub struct semaphore {
+    p: ptr
+
+    init(permits: int) {
+        /// The block: [permits][handles].
+        const p = rt_alloc(16)
+        rt_store_int(p, permits)
+        rt_store_int(rt_offset(p, 8), 1)
+        self.p = p
+    }
+
+    deinit {
+        const n = rt_load_int(rt_offset(self.p, 8)) - 1
+        rt_store_int(rt_offset(self.p, 8), n)
+        if n == 0 {
+            rt_free(self.p)
+        }
+    }
+}
+
+impl semaphore {
+    fn acquire(self) {
+        while rt_load_int(self.p) <= 0 {
+            rt_wait("a semaphore permit")
+        }
+        rt_store_int(self.p, rt_load_int(self.p) - 1)
+        rt_idle = 0
+    }
+
+    fn release(self) {
+        rt_store_int(self.p, rt_load_int(self.p) + 1)
+        rt_idle = 0
+    }
+}
+
+impl clone for semaphore {
+    fn clone(self) -> semaphore {
+        rt_store_int(rt_offset(self.p, 8), rt_load_int(rt_offset(self.p, 8)) + 1)
+        semaphore { p: self.p }
+    }
+}
+
+//~ A meeting point for `n` tasks: `barrier(n)`; `wait` returns once all `n` have called it, and the barrier
+//~ can be used again. `copy handle` shares it.
+pub struct barrier {
+    p: ptr
+
+    init(n: int) {
+        /// The block: [n][arrived][generation][handles].
+        const p = rt_alloc(32)
+        rt_store_int(p, n)
+        rt_store_int(rt_offset(p, 8), 0)
+        rt_store_int(rt_offset(p, 16), 0)
+        rt_store_int(rt_offset(p, 24), 1)
+        self.p = p
+    }
+
+    deinit {
+        const n = rt_load_int(rt_offset(self.p, 24)) - 1
+        rt_store_int(rt_offset(self.p, 24), n)
+        if n == 0 {
+            rt_free(self.p)
+        }
+    }
+}
+
+impl barrier {
+    fn wait(self) {
+        const gen = rt_load_int(rt_offset(self.p, 16))
+        const arrived = rt_load_int(rt_offset(self.p, 8)) + 1
+        if arrived >= rt_load_int(self.p) {
+            rt_store_int(rt_offset(self.p, 8), 0)
+            rt_store_int(rt_offset(self.p, 16), gen + 1)
+            rt_idle = 0
+            return
+        }
+        rt_store_int(rt_offset(self.p, 8), arrived)
+        while rt_load_int(rt_offset(self.p, 16)) == gen {
+            rt_wait("a barrier")
+        }
+    }
+}
+
+impl clone for barrier {
+    fn clone(self) -> barrier {
+        rt_store_int(rt_offset(self.p, 24), rt_load_int(rt_offset(self.p, 24)) + 1)
+        barrier { p: self.p }
     }
 }
