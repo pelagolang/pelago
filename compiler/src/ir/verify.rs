@@ -222,9 +222,11 @@ fn inputs(op: &Op) -> Vec<Value> {
         | Op::Store(a, b)
         | Op::PtrAdd(a, b)
         | Op::Realloc(a, b)
+        | Op::CtxSwitch(a, b)
         | Op::Print(a, b) => {
             vec![*a, *b]
         }
+        Op::CtxInit(a, b, c, d) => vec![*a, *b, *c, *d],
         Op::Neg(a)
         | Op::Not(a)
         | Op::VUn(_, a)
@@ -530,6 +532,25 @@ fn check_inst(f: &Func, m: Option<&Module>, inst: &Inst) -> Vec<String> {
             }
             if result_ty != Some(IrTy::Ptr) {
                 e.push("`realloc` makes a ptr".to_string());
+            }
+        }
+        Op::CtxInit(b, n, c, env) => {
+            if t(*b) != Some(IrTy::Ptr)
+                || t(*n) != Some(IrTy::I64)
+                || t(*c) != Some(IrTy::Ptr)
+                || t(*env) != Some(IrTy::Ptr)
+            {
+                e.push(
+                    "`ctxinit` needs a ptr base, an i64 size, a ptr code and a ptr env".to_string(),
+                );
+            }
+            if result_ty != Some(IrTy::Ptr) {
+                e.push("`ctxinit` makes a ptr".to_string());
+            }
+        }
+        Op::CtxSwitch(s, to) => {
+            if t(*s) != Some(IrTy::Ptr) || t(*to) != Some(IrTy::Ptr) {
+                e.push("`ctxswitch` needs two ptrs".to_string());
             }
         }
     }

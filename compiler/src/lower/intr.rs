@@ -115,6 +115,25 @@ impl<'a> Lowerer<'a> {
                 self.emit(Op::Free(p), None, sp);
                 Res::Unit
             }
+            "rt_ctx_init" => {
+                let (Some(b), Some(n), Some(c), Some(e)) = (
+                    self.arg_scalar(args, 0),
+                    self.arg_scalar(args, 1),
+                    self.arg_scalar(args, 2),
+                    self.arg_scalar(args, 3),
+                ) else {
+                    return Res::Never;
+                };
+                self.wrap(Op::CtxInit(b, n, c, e), ptr, sp)
+            }
+            "rt_ctx_switch" => {
+                let (Some(s), Some(t)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
+                else {
+                    return Res::Never;
+                };
+                self.emit(Op::CtxSwitch(s, t), None, sp);
+                Res::Unit
+            }
             "rt_offset" => {
                 let (Some(p), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {
