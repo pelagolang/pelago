@@ -23,6 +23,7 @@ A serious, self-hosting systems language:
 | Backend | One backend, our own, from day one | decided |
 | Second native target | AArch64 Linux static ELF from a second generator beside the x86-64 one (`gen_a64.rs`, `rt_a64.rs`), same IR and same semantics, tested under `qemu-aarch64` and on ARM runners; Windows on ARM and macOS built (run in CI on ARM runners) (`docs/plans/cards/A-10-aarch64.md`) | decided |
 | First native target | x86-64 Linux static ELF, no libc, no linker, own encoder; Windows PE right after the test suite passes natively (tested in `windows-latest` CI); simple code generator first, register allocation later; System V-shaped internal calling convention (`docs/design/backend.md`, card A-09) | decided |
+| Run mode | `pelago run` runs native code by default (loaded in the compiler's own process on Linux, no temp file); `--interp` selects the IR interpreter (`docs/design/run-mode.md`) | decided |
 | Bootstrap | Stage 0 compiler in Rust, then rewritten in the language itself | decided |
 | OO | Structs and interfaces, plus an `obj` kind with single inheritance (written with `:`) from the start (heap-allocated, singly owned, closed unless `open`). First feature to cut if compile speed or the safety model suffers | decided |
 | Compile-time code | `meta` | decided |
