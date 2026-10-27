@@ -2,7 +2,7 @@
 
 impl str {
     fn len(self) -> int = rt_hdr_len(rt_addr_of(self))
-    fn is_empty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
+    fn isEmpty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
 
     //~ The characters, decoded from UTF-8.
     fn chars(self) -> iter<char> {
@@ -70,13 +70,13 @@ impl str {
         self[a..b]
     }
 
-    fn starts_with(self, prefix: str) -> bool {
+    fn startsWith(self, prefix: str) -> bool {
         const pn = prefix.len()
         if pn > self.len() { return false }
         rt_bytes_eq(rt_hdr_data(rt_addr_of(self)), rt_hdr_data(rt_addr_of(prefix)), pn)
     }
 
-    fn ends_with(self, suffix: str) -> bool {
+    fn endsWith(self, suffix: str) -> bool {
         const sn = suffix.len()
         const n = self.len()
         if sn > n { return false }
@@ -89,7 +89,7 @@ impl str {
 
     fn contains(self, part: str) -> bool = rt_find(self, part) >= 0
 
-    fn to_upper(self) -> string {
+    fn toUpper(self) -> string {
         var out = ""
         const p = rt_hdr_data(rt_addr_of(self))
         var i = 0
@@ -102,7 +102,7 @@ impl str {
         out
     }
 
-    fn to_lower(self) -> string {
+    fn toLower(self) -> string {
         var out = ""
         const p = rt_hdr_data(rt_addr_of(self))
         var i = 0
@@ -137,7 +137,7 @@ impl str {
         out
     }
 
-    fn parse_int(self) -> int ! parse_error {
+    fn parseInt(self) -> int ! parse_error {
         const p = rt_hdr_data(rt_addr_of(self))
         const n = self.len()
         if n == 0 { return err(parse_error { message: "empty text is not a number" }) }
@@ -166,7 +166,7 @@ impl str {
         ok(value)
     }
 
-    fn parse_float(self) -> float ! parse_error {
+    fn parseFloat(self) -> float ! parse_error {
         const p = rt_hdr_data(rt_addr_of(self))
         const n = self.len()
         if n == 0 { return err(parse_error { message: "empty text is not a number" }) }
@@ -219,7 +219,7 @@ pub fn rt_find(text: str, part: str) -> int {
 }
 
 impl string {
-    fn push_str(inout self, text: str) {
+    fn pushStr(inout self, text: str) {
         rt_str_push(rt_addr_of(self), rt_hdr_data(rt_addr_of(text)), rt_hdr_len(rt_addr_of(text)))
     }
 

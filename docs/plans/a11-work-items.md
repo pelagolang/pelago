@@ -105,7 +105,7 @@ Best of 5, seconds. Five programs added in `claude/perf/more-benchmarks`; the fi
 |---|---|---|---|---|---|
 | resultpath | 0.030-0.040 | 0.015 | 0.017 | 2-2.6x | `result` slots are split into registers and `?` no longer tests a tag: `opt/thread.rs` lets a predecessor that knows the tag skip the join's test (was 0.058, 3.7x), and `ranges` decides signed compares of small values (the `h * 3 > 1e9` bound check). What is left is the three `jo` checks on counters that C does not have and the `ok`/`bad` counters that the trip count would bound |
 | structlist | 0.019 | 0.008 | 0.008 | 2.4x | `list<struct>` field update: per-element address recomputed, two `add_checked`, no vectorisation (the checked C build is 3.3x faster too) |
-| strsplit | 0.039 | 0.018 | 0.012 | 2.2x | `split` builds an `iter<str>` list and `parse_int` returns a `result`; the twins parse in place |
+| strsplit | 0.039 | 0.018 | 0.012 | 2.2x | `split` builds an `iter<str>` list and `parseInt` returns a `result`; the twins parse in place |
 | switchwork | 0.048 | 0.045 | 0.035 | 1.08x | enum payload loads and the jump table; Rust is 1.4x faster here |
 | sortwork | 0.035 | 0.169 | 0.039 | 0.21x | done: `list<int>::sort` is a radix sort (insertion sort up to 48 elements); other element types still use the byte-wise merge sort with an indirect compare (was 0.156) |
 - **Size:** each M to L. `resultpath` (return small `result`/`option` in registers, inline across `?`) and `sortwork` (monomorphic compare, typed element moves) look like the best first targets.

@@ -138,6 +138,10 @@ what the language *does*. Everything here is a deliberate choice, not a copy.
   accepts either, like variable names (B1). The formatter and standard library use a capital
   for types you define, so they stand out. A type and a value in the same scope can't share a name.
 
+- **[B8]** Function and method names are written in camelCase by default (`startsWith`, `isEmpty`, `parseInt`), for
+  familiarity; snake_case is still accepted everywhere (B1). The standard library and the examples use camelCase
+  (Dennis, 2026-10-27). Compiler-internal `rt_` intrinsics keep their prefix.
+
 ## Still open
 
 **[B7] The `let` keyword.** Currently reserved and unused. Leading candidate for later:

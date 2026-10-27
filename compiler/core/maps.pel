@@ -374,7 +374,7 @@ pub fn rt_set_show<T>(h: ptr, out: ptr) {
 
 impl<K, V> map<K, V> {
     fn len(self) -> int = rt_hdr_len(rt_addr_of(self))
-    fn is_empty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
+    fn isEmpty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
 
     fn get(self, key: K) -> V? {
         const h = rt_addr_of(self)
@@ -384,7 +384,7 @@ impl<K, V> map<K, V> {
         return rt_clone<V>(rt_map_val_at(h, i, ks, rt_size_of<V>()))
     }
 
-    fn contains_key(self, key: K) -> bool {
+    fn containsKey(self, key: K) -> bool {
         rt_map_find(
             rt_addr_of(self),
             rt_addr_of(key),
@@ -473,7 +473,7 @@ impl<K, V> map<K, V> {
 
 impl<T> set<T> {
     fn len(self) -> int = rt_hdr_len(rt_addr_of(self))
-    fn is_empty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
+    fn isEmpty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
 
     fn contains(self, item: T) -> bool {
         rt_map_find(

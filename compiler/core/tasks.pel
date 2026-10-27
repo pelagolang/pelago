@@ -164,7 +164,7 @@ impl<T> clone for sender<T> {
 }
 
 impl<T> receiver<T> {
-    fn try_recv(self) -> T? {
+    fn tryRecv(self) -> T? {
         if rt_hdr_len(self.ch) == 0 { return none }
         var q = rt_read<list<T>>(self.ch)
         const v = q.remove!(0)
@@ -180,7 +180,7 @@ impl<T> receiver<T> {
             const addr = rt_pending.remove!(0)
             rt_task_run(rt_cast<int, ptr>(addr))
         }
-        return self.try_recv()
+        return self.tryRecv()
     }
 
     fn iter(self) -> iter<T> {

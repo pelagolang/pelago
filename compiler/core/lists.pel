@@ -213,7 +213,7 @@ impl<T: order> list<T> {
 
 impl<T> list<T> {
     fn len(self) -> int = rt_hdr_len(rt_addr_of(self))
-    fn is_empty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
+    fn isEmpty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
 
     fn get(self, index: int) -> T? {
         const h = rt_addr_of(self)
@@ -338,7 +338,7 @@ impl<T> list<T> {
     }
 
     fn iter(self) -> iter<T> = rt_cast<list<T>, iter<T>>(rt_clone<list<T>>(rt_addr_of(self)))
-    fn to_list(self) -> list<T> = rt_clone<list<T>>(rt_addr_of(self))
+    fn toList(self) -> list<T> = rt_clone<list<T>>(rt_addr_of(self))
     fn map<U>(self, f: fn(T) -> U) -> iter<U> {
         const h = rt_addr_of(self)
         const size = rt_size_of<T>()

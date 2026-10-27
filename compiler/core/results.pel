@@ -1,16 +1,16 @@
 /// `option` and `result`.
 
 impl<T> option<T> {
-    fn is_some(self) -> bool {
+    fn isSome(self) -> bool {
         switch self {
             case some(_): true
             case none: false
         }
     }
 
-    fn is_none(self) -> bool = !self.is_some()
+    fn isNone(self) -> bool = !self.isSome()
 
-    fn unwrap_or(self, fallback: T) -> T {
+    fn unwrapOr(self, fallback: T) -> T {
         switch self {
             case some(v): rt_clone<T>(rt_addr_of(v))
             case none: rt_clone<T>(rt_addr_of(fallback))
@@ -24,7 +24,7 @@ impl<T> option<T> {
         }
     }
 
-    fn or_err<E>(self, e: E) -> T ! E {
+    fn orErr<E>(self, e: E) -> T ! E {
         switch self {
             case some(v): ok(rt_clone<T>(rt_addr_of(v)))
             case none: err(rt_clone<E>(rt_addr_of(e)))
@@ -40,14 +40,14 @@ impl<T, E> result<T, E> {
         }
     }
 
-    fn is_ok(self) -> bool {
+    fn isOk(self) -> bool {
         switch self {
             case ok(_): true
             case err(_): false
         }
     }
 
-    fn is_err(self) -> bool = !self.is_ok()
+    fn isErr(self) -> bool = !self.isOk()
 
     fn or(self, fallback: T) -> T {
         switch self {
@@ -56,7 +56,7 @@ impl<T, E> result<T, E> {
         }
     }
 
-    fn map_err<F>(self, f: fn(E) -> F) -> T ! F {
+    fn mapErr<F>(self, f: fn(E) -> F) -> T ! F {
         switch self {
             case ok(v): ok(rt_clone<T>(rt_addr_of(v)))
             case err(e): err(f(rt_clone<E>(rt_addr_of(e))))

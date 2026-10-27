@@ -3,8 +3,8 @@
 fn count_words(text: str) -> map<string, int> {
     var counts: map<string, int> = {:}
     for word of text.split(" ") {
-        if word.is_empty() { continue }
-        const key = word.to_lower()
+        if word.isEmpty() { continue }
+        const key = word.toLower()
         const current = counts.get(key) ?? 0
         counts.insert!(sink key, current + 1)
     }
@@ -14,7 +14,7 @@ fn count_words(text: str) -> map<string, int> {
 fn parse_all(items: [str]) -> [int] ! parse_error {
     var out: [int] = []
     for item of items {
-        out.push!(item.parse_int()?)
+        out.push!(item.parseInt()?)
     }
     ok(out)
 }

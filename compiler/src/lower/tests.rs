@@ -535,7 +535,7 @@ fn owning_values_are_dropped_exactly_once() {
 
 #[test]
 fn question_mark_and_defaults() {
-    let src = "fn quarter(n: int) -> int ! parse_error {\n const h = parse(\"8\")?\n ok(h + n)\n}\nfn parse(s: str) -> int ! parse_error = s.parse_int()\nfn main() { print(quarter(1), parse(\"x\")) }";
+    let src = "fn quarter(n: int) -> int ! parse_error {\n const h = parse(\"8\")?\n ok(h + n)\n}\nfn parse(s: str) -> int ! parse_error = s.parseInt()\nfn main() { print(quarter(1), parse(\"x\")) }";
     assert_eq!(output_of(src), "ok(9) err(bad digit at position 0)\n");
     let src =
         "fn f(o: int?) -> int? {\n const v = o?\n v + 1\n}\nfn main() { print(f(5), f(none)) }";
@@ -544,7 +544,7 @@ fn question_mark_and_defaults() {
     assert_eq!(output_of(src), "9 4\n");
     let src = "fn main() { const names: [string?] = [\"a\", none]\n print(names[0] ?? \"-\", names[1] ?? \"-\") }";
     assert_eq!(output_of(src), "a -\n");
-    let src = "fn load(s: str) -> int ! error {\n const n = s.parse_int()?\n ok(n * 2)\n}\nfn main() { print(load(\"21\"), load(\"zz\")) }";
+    let src = "fn load(s: str) -> int ! error {\n const n = s.parseInt()?\n ok(n * 2)\n}\nfn main() { print(load(\"21\"), load(\"zz\")) }";
     assert_eq!(output_of(src), "ok(42) err(bad digit at position 0)\n");
 }
 
@@ -559,18 +559,18 @@ fn copy_and_in() {
 
 #[test]
 fn text_methods() {
-    let src = "fn main() { const s = \"  Hello, World  \"\n print(s.trim(), s.trim().to_upper(), s.to_lower().trim(), s.contains(\"World\"), s.trim().starts_with(\"Hello\"), s.trim().ends_with(\"d\")) }";
+    let src = "fn main() { const s = \"  Hello, World  \"\n print(s.trim(), s.trim().toUpper(), s.toLower().trim(), s.contains(\"World\"), s.trim().startsWith(\"Hello\"), s.trim().endsWith(\"d\")) }";
     assert_eq!(
         output_of(src),
         "Hello, World HELLO, WORLD hello, world true true true\n"
     );
     let src =
-        "fn main() { const parts = \"a,b,,c\".split(\",\").to_list()\n print(parts, parts.len()) }";
+        "fn main() { const parts = \"a,b,,c\".split(\",\").toList()\n print(parts, parts.len()) }";
     assert_eq!(output_of(src), "[\"a\", \"b\", \"\", \"c\"] 4\n");
     let src =
         "fn main() { print(\"hello world\".replace(\"o\", \"0\"), \"héllo\".chars().count()) }";
     assert_eq!(output_of(src), "hell0 w0rld 5\n");
-    let src = "fn main() { print(\"42\".parse_int(), \"-7\".parse_int(), \"4x\".parse_int(), \"3.5\".parse_float()) }";
+    let src = "fn main() { print(\"42\".parseInt(), \"-7\".parseInt(), \"4x\".parseInt(), \"3.5\".parseFloat()) }";
     assert_eq!(
         output_of(src),
         "ok(42) ok(-7) err(bad digit at position 1) ok(3.5)\n"
@@ -590,19 +590,19 @@ fn function_values() {
 
 #[test]
 fn list_closures_and_option_map() {
-    let src = "fn main() {\n const xs = [1, 2, 3, 4]\n print(xs.map(x ~> x * 10).to_list(), xs.filter(x ~> x % 2 == 0).to_list())\n var total = 0\n xs.each(x ~> { total += x })\n print(total) }";
+    let src = "fn main() {\n const xs = [1, 2, 3, 4]\n print(xs.map(x ~> x * 10).toList(), xs.filter(x ~> x % 2 == 0).toList())\n var total = 0\n xs.each(x ~> { total += x })\n print(total) }";
     assert_eq!(output_of(src), "[10, 20, 30, 40] [2, 4]\n10\n");
-    let src = "fn main() {\n const names = [\"a\", \"bb\"]\n print(names.map(s ~> s.len()).to_list())\n const o: int? = 4\n print(o.map(x ~> x + 1), o.or_err(\"no\"))\n const r: int ! string = err(\"e\")\n print(r.map_err(s ~> s.len())) }";
+    let src = "fn main() {\n const names = [\"a\", \"bb\"]\n print(names.map(s ~> s.len()).toList())\n const o: int? = 4\n print(o.map(x ~> x + 1), o.orErr(\"no\"))\n const r: int ! string = err(\"e\")\n print(r.mapErr(s ~> s.len())) }";
     assert_eq!(output_of(src), "[1, 2]\nsome(5) ok(4)\nerr(1)\n");
 }
 
 #[test]
 fn maps_and_sets() {
-    let src = "fn main() {\n var m = map { \"a\": 1, \"b\": 2 }\n m.insert!(\"c\", 3)\n m.insert!(\"a\", 10)\n print(m, m.len(), m.get(\"a\"), m.get(\"z\"), m[\"b\"])\n m.remove!(\"b\")\n print(m, m.contains_key(\"b\"))\n for k, v of m { print(k, v) }\n for k in m { print(k) } }";
+    let src = "fn main() {\n var m = map { \"a\": 1, \"b\": 2 }\n m.insert!(\"c\", 3)\n m.insert!(\"a\", 10)\n print(m, m.len(), m.get(\"a\"), m.get(\"z\"), m[\"b\"])\n m.remove!(\"b\")\n print(m, m.containsKey(\"b\"))\n for k, v of m { print(k, v) }\n for k in m { print(k) } }";
     assert_eq!(output_of(src), "{\"a\": 10, \"b\": 2, \"c\": 3} 3 some(10) none 2\n{\"a\": 10, \"c\": 3} false\na 10\nc 3\na\nc\n");
     let src = "fn main() {\n var s = set { 3, 1, 3, 2 }\n s.insert!(9)\n s.remove!(1)\n print(s, s.len(), 2 in s, 5 in s)\n const t = copy s\n print(t == s, set { 1 } == set { 2 }) }";
     assert_eq!(output_of(src), "{3, 2, 9} 3 true false\ntrue false\n");
-    let src = "fn main() { var total = 0\n for (var i = 0; i < 4; i += 1) { total += i }\n print(total, [1, 2].iter().to_set(), [\"a\", \"b\"].join(\"-\"), [0, ...[1, 2], 3]) }";
+    let src = "fn main() { var total = 0\n for (var i = 0; i < 4; i += 1) { total += i }\n print(total, [1, 2].iter().toSet(), [\"a\", \"b\"].join(\"-\"), [0, ...[1, 2], 3]) }";
     assert_eq!(output_of(src), "6 {1, 2} a-b [0, 1, 2, 3]\n");
 }
 
@@ -620,7 +620,7 @@ fn program_conv() {
 
 #[test]
 fn program_init() {
-    let src = "struct acct { id: int, bal: int = 100\n init(id: int) { self.id = id } }\nstruct rng { lo: int, hi: int\n init(lo: int, hi: int) -> Self ! string {\n  if lo > hi { return err(\"bad\") }\n  self.lo = lo\n  self.hi = hi } }\nobj res { n: int\n init(n: int) { self.n = n }\n deinit { print(\"closed #(self.n)\") } }\nfn main() { const a = acct(5)\n print(a.id, a.bal)\n print(rng(1, 5).is_ok(), rng(5, 1).is_ok())\n const r = res(7)\n print(r.n) }\n";
+    let src = "struct acct { id: int, bal: int = 100\n init(id: int) { self.id = id } }\nstruct rng { lo: int, hi: int\n init(lo: int, hi: int) -> Self ! string {\n  if lo > hi { return err(\"bad\") }\n  self.lo = lo\n  self.hi = hi } }\nobj res { n: int\n init(n: int) { self.n = n }\n deinit { print(\"closed #(self.n)\") } }\nfn main() { const a = acct(5)\n print(a.id, a.bal)\n print(rng(1, 5).isOk(), rng(5, 1).isOk())\n const r = res(7)\n print(r.n) }\n";
     assert_eq!(output_of(src), "5 100\ntrue false\n7\nclosed 7\n");
 }
 
@@ -635,7 +635,7 @@ fn program_optchain() {
 
 #[test]
 fn program_range() {
-    let src = "fn main() { const r = 1..5\n print(r.contains(3), r.contains(5), (1..=5).contains(5), r.iter().to_list(), 2.5.min(1.0))\n for i of (1..4).iter() { print(i) } }\n";
+    let src = "fn main() { const r = 1..5\n print(r.contains(3), r.contains(5), (1..=5).contains(5), r.iter().toList(), 2.5.min(1.0))\n for i of (1..4).iter() { print(i) } }\n";
     assert_eq!(output_of(src), "true false true [1, 2, 3, 4] 1\n1\n2\n3\n");
 }
 
@@ -689,7 +689,7 @@ fn program_once_fn() {
 
 #[test]
 fn program_builder() {
-    let src = "fn main() { const xs = [1, 2, 3, 4, 5, 6]\n print([x of xs if x % 2 == 0 ~> x * 10])\n print([x of xs if x > 4])\n print([i, x of xs if i < 2 ~> \"#i:#x\"])\n print([x of 0..3, y of 0..2 ~> (x, y)])\n print(set { x of xs ~> x % 3 })\n print(map { x of 1..4 ~> x : x * x })\n print(xs.map(x ~> x + 1).to_list()) }\n";
+    let src = "fn main() { const xs = [1, 2, 3, 4, 5, 6]\n print([x of xs if x % 2 == 0 ~> x * 10])\n print([x of xs if x > 4])\n print([i, x of xs if i < 2 ~> \"#i:#x\"])\n print([x of 0..3, y of 0..2 ~> (x, y)])\n print(set { x of xs ~> x % 3 })\n print(map { x of 1..4 ~> x : x * x })\n print(xs.map(x ~> x + 1).toList()) }\n";
     assert_eq!(output_of(src), "[20, 40, 60]\n[5, 6]\n[\"0:1\", \"1:2\"]\n[(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1)]\n{1, 2, 0}\n{1: 1, 2: 4, 3: 9}\n[2, 3, 4, 5, 6, 7]\n");
 }
 
@@ -762,7 +762,7 @@ fn program_f4() {
 
 #[test]
 fn program_e4c() {
-    let src = "fn p(s: str) -> int ! parse_error = s.parse_int()\nfn run2() -> int ! error { const b = p(\"x\")?\n ok(b) }\nfn main() { switch run2() { case ok(_): print(\"ok\")\n case err(e): { print(e)\n  print(\"failed: #e\") } }\n const r = run2()\n switch r { case err(e): print(e)\n default: print(\"?\") } }\n";
+    let src = "fn p(s: str) -> int ! parse_error = s.parseInt()\nfn run2() -> int ! error { const b = p(\"x\")?\n ok(b) }\nfn main() { switch run2() { case ok(_): print(\"ok\")\n case err(e): { print(e)\n  print(\"failed: #e\") } }\n const r = run2()\n switch r { case err(e): print(e)\n default: print(\"?\") } }\n";
     assert_eq!(
         output_of(src),
         "bad digit at position 0\nfailed: bad digit at position 0\nbad digit at position 0\n"
@@ -862,7 +862,7 @@ fn program_g1() {
 #[test]
 fn map_keeps_every_key_across_growth_and_removal() {
     // Keys a power-of-two stride apart collide in the low bits; removals shift the entries down.
-    let src = "fn main() { var m: map<int, int> = {:}\n for i in 0..300 { m.insert!(i * 4096, i) }\n for i in 0..300 { m.insert!(-i * 65536 - 1, i) }\n m.remove!(8 * 4096)\n m.remove!(0)\n var t = 0\n for i in 0..300 { t += m.get(i * 4096) ?? 1000 }\n for i in 0..300 { t += m.get(-i * 65536 - 1) ?? 1000 }\n print(m.len(), t, m.contains_key(0), m.contains_key(299 * 4096)) }\n";
+    let src = "fn main() { var m: map<int, int> = {:}\n for i in 0..300 { m.insert!(i * 4096, i) }\n for i in 0..300 { m.insert!(-i * 65536 - 1, i) }\n m.remove!(8 * 4096)\n m.remove!(0)\n var t = 0\n for i in 0..300 { t += m.get(i * 4096) ?? 1000 }\n for i in 0..300 { t += m.get(-i * 65536 - 1) ?? 1000 }\n print(m.len(), t, m.containsKey(0), m.containsKey(299 * 4096)) }\n";
     assert_eq!(output_of(src), "598 91692 false true\n");
 }
 
@@ -877,7 +877,7 @@ fn program_g2() {
 
 #[test]
 fn program_g3() {
-    let src = "fn maybe(n: int) -> int? { if n > 0 { n } else { none } }\nfn both(a: int, b: int) -> int? { const x = maybe(a)?\n const y = maybe(b)?\n x + y }\nfn main() { print(both(1, 2), both(0, 2))\n var o: int? = 3\n if o is some(v) { print(v) }\n o = none\n print(o ?? -1, o.is_none()) \n const nested = [[1, 2], [3]]\n print(nested, nested[0][1])\n var grid = [[0; 2]; 2]\n print(grid) }\n";
+    let src = "fn maybe(n: int) -> int? { if n > 0 { n } else { none } }\nfn both(a: int, b: int) -> int? { const x = maybe(a)?\n const y = maybe(b)?\n x + y }\nfn main() { print(both(1, 2), both(0, 2))\n var o: int? = 3\n if o is some(v) { print(v) }\n o = none\n print(o ?? -1, o.isNone()) \n const nested = [[1, 2], [3]]\n print(nested, nested[0][1])\n var grid = [[0; 2]; 2]\n print(grid) }\n";
     assert_eq!(
         output_of(src),
         "some(3) none\n3\n-1 true\n[[1, 2], [3]] 2\n[[0, 0], [0, 0]]\n"
@@ -936,7 +936,7 @@ fn box_compares_and_keys_a_map() {
 
 #[test]
 fn box_inside_an_option_field() {
-    let src = "struct pt { x: int }\nstruct holder { next: box<pt>? }\nfn main() { const h = holder { next: box(pt { x: 5 }) }\n if h.next is some(q) { print(q.x) }\n const e = holder { next: none }\n print(e.next.is_none()) }\n";
+    let src = "struct pt { x: int }\nstruct holder { next: box<pt>? }\nfn main() { const h = holder { next: box(pt { x: 5 }) }\n if h.next is some(q) { print(q.x) }\n const e = holder { next: none }\n print(e.next.isNone()) }\n";
     assert_eq!(output_of(src), "5\ntrue\n");
 }
 
@@ -1017,7 +1017,7 @@ fn main() {
     print(g())
     var i = 0
     while make_dog("cond").name.len() > i { i += 1 }
-    print(find(true).is_some())
+    print(find(true).isSome())
     var m: map<string, dog> = map {}
     m.insert!("x", make_dog("m"))
     print(m.len())
@@ -1104,7 +1104,7 @@ fn main() {
     print(gone.name, people.len(), people.name, people.age)
     people.insert!(0, person { name: "zed", age: 1 })
     print(people.name)
-    print(people.pop!().is_some(), people.len())
+    print(people.pop!().isSome(), people.len())
     people.clear!()
     print(people.len())
     const copy_of = copy ps
@@ -1248,7 +1248,7 @@ async fn total(sink rx: receiver<int>) -> int {
     t
 }
 fn main() {
-    print(block_on(safe_div(1, 0)).is_err(), block_on(run()))
+    print(block_on(safe_div(1, 0)).isErr(), block_on(run()))
     const (tx, rx) = chan<int>()
     tx.send(1)
     tx.send(2)
@@ -2621,7 +2621,7 @@ fn cloning_and_sorting_an_empty_list() {
     // Cloning copies zero bytes between two null addresses; the interpreter must accept that.
     assert_eq!(
         output_of(
-            "fn main() { var xs: [int] = []\n xs.sort!()\n const ys = xs.sorted()\n var zs: [string] = []\n const ws = zs.to_list()\n print(xs.len(), ys.len(), ws.len()) }"
+            "fn main() { var xs: [int] = []\n xs.sort!()\n const ys = xs.sorted()\n var zs: [string] = []\n const ws = zs.toList()\n print(xs.len(), ys.len(), ws.len()) }"
         ),
         "0 0 0\n"
     );
