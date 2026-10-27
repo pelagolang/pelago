@@ -183,18 +183,18 @@ enum ParseError {
     BadDigit(at: int)
 }
 
-fn parse_int(s: string) -> result<int, ParseError> {
-    if s.is_empty() { return Err(ParseError.Empty) }
+fn parseInt(s: string) -> result<int, ParseError> {
+    if s.isEmpty() { return Err(ParseError.Empty) }
     var n = 0
     for i, ch of s.chars() {
-        if !ch.is_digit() { return Err(ParseError.BadDigit(at: i)) }
+        if !ch.isDigit() { return Err(ParseError.BadDigit(at: i)) }
         n = n * 10 + ch.digit_value()
     }
     Ok(n)
 }
 
 fn double_input(s: string) -> result<int, ParseError> {
-    const n = parse_int(s)?                 // `?` returns early on Err
+    const n = parseInt(s)?                 // `?` returns early on Err
     Ok(n * 2)
 }
 ```

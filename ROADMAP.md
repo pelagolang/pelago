@@ -39,6 +39,7 @@ A serious, self-hosting systems language:
 | Collections | `docs/design/collections.md` decisions C1 to C8 recorded (must-exist indexing, negative indexes, insertion-ordered maps, `string`/`str`, `+` and spread); builders (own comprehension shape: `[x of xs if x > 0 ~> x * 2]`) added | decided |
 | Errors | `docs/design/errors.md` decisions E1 to E8: expected failures are `result`/`option`, bugs stop the program (no unwinding), overflow stops in every build with `+% -% *%` for wrapping, `converts` for `?` and `to` | decided |
 | Concurrency | `docs/design/concurrency.md` decisions CC1 to CC9: threads with `sink`/copy capture, scopes, `chan<T>` pairs, `select`, `shared`/`lock`/`atomic`; async still deferred; `par_for` helper; global `var` forbidden | decided |
+| Naming | `docs/design/basics.md` B8: function and method names are camelCase by default (library and examples); snake_case still accepted | decided |
 | List patterns | `docs/design/list-patterns.md` LP1 to LP8: `[first, ...rest]` with `...`, rest is a view, `some(v)` for options, patterns over text, `sink` elements revisited later | decided |
 | Parser | `docs/design/parser.md` P1 to P10 decided: top-level statements, `loop` values, loop labels (`outer: for ...`, `break outer`), closure return types (`(x: int) -> int ~> ...`), doc comments kept, syntax checks pass | decided |
 | Checker | `docs/design/checker.md`: all five stages built (names, types, interfaces, exhaustiveness, value semantics); TC1 to TC13 decided, VS1 to VS6 chosen (literals, two implicit conversions, no same-scope redeclaration, `fn` types are views, empty literals need context, integer division, equality) | decided |
@@ -58,7 +59,7 @@ A serious, self-hosting systems language:
 | Functions | `fn` (chosen because `fnc` splits into two tokens in most tokenizers) | decided |
 | Variables | `var` (changeable) and `const` (truly immutable) | decided |
 | Types | Lowercase names; sized ints `int8` to `int64`, `uint8` to `uint64` | decided |
-| Naming | The compiler accepts any identifier style; house style is camelCase for functions, methods, variables and fields (`isEmpty`); a missed name is retried in the other style (`is_empty` finds `isEmpty`); see `basics.md` B8 | decided |
+| Naming | The compiler accepts any identifier style; the standard library and formatter pick one | decided |
 | Comments | `/// line`, `///* block *///` (nests); documentation `//~ line`, `//~* block *~//`; `//` and `/* */` are errors with a hint (`docs/design/comments.md`) | decided |
 | Brand | Monoline capital P + dot + wave mark; lowercase `pelago` in Comfortaa Bold, text in Outfit; teal `#0E7C86`, lagoon `#5FD0C8`, deep sea `#0B2239`; assets in `assets/brand/` (`docs/design/brand.md`) | decided |
 | `int` | Always exactly 64 bits; sized types for dense data | decided |

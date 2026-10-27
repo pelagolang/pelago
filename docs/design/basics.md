@@ -132,17 +132,17 @@ what the language *does*. Everything here is a deliberate choice, not a copy.
 - **[B2]** `int` is always exactly 64 bits.
 - **[B3]** Type names are lowercase. (Open: your own types too?)
 - **[B4]** Conversions are written `x to float`.
-- **[B8]** The house naming style is `camelCase` for functions, methods, variables and fields (`isEmpty`,
-  `parseInt`, `wrappingAdd`); types keep lowercase (B3) and constants may be anything. The standard
-  library, docs and examples use it. B1 still holds: any style compiles, and a name that is not found is
-  tried once in the other style (`is_empty` finds `isEmpty`, `isEmpty` finds `is_empty`; an exact match
-  always wins). So snake_case code keeps working and calls the camelCase library unchanged. The `rt_*`
-  runtime hooks in `core.pel` are internal and keep their names. The formatter still renames nothing.
 
 - **[B5]** String interpolation uses `#name` and `#(expression)`.
 - **[B6]** Both lowercase and capitalized names are allowed for your own types. The compiler
   accepts either, like variable names (B1). The formatter and standard library use a capital
   for types you define, so they stand out. A type and a value in the same scope can't share a name.
+
+- **[B8]** Function and method names are written in camelCase by default (`startsWith`, `isEmpty`, `parseInt`), for
+  familiarity; snake_case is still accepted everywhere (B1). The standard library and the examples use camelCase
+  (Dennis, 2026-10-27). Compiler-internal `rt_` intrinsics keep their prefix.
+  A name that is not found is tried once in the other style (`is_empty` finds `isEmpty`, `isEmpty` finds
+  `is_empty`); an exact match always wins. The formatter renames nothing.
 
 ## Still open
 
