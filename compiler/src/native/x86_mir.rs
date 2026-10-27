@@ -395,6 +395,8 @@ impl Target for X86 {
                 inst.ops.get(2),
                 Some(Operand::Imm(op::CHK_ADD_S | op::CHK_ADD_U | op::CHK_MUL_S))
             ),
+            // Add and multiply; subtract and divide are not.
+            op::FARITH => matches!(inst.ops.get(2), Some(Operand::Imm(0 | 2))),
             _ => false,
         }
     }
