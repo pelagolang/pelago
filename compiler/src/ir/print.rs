@@ -105,6 +105,7 @@ fn inst_text(f: &Func, i: &Inst, m: Option<&Module>) -> String {
         }
         Op::Cmp(op, a, b) => format!("{} {}, {}", op.name(), v(*a), v(*b)),
         Op::Neg(a) => format!("neg {}", v(*a)),
+        Op::FUn(o, a) => format!("{} {}", o.name(), v(*a)),
         Op::Not(a) => format!("not {}", v(*a)),
         Op::VUn(o, a) => match o {
             VUn::Splat => format!("vsplat {}", v(*a)),

@@ -30,6 +30,9 @@ pub ext fn rt_print(p: ptr, n: int)
 pub ext fn rt_to_byte(n: int) -> uint8
 pub ext fn rt_to_int(x: float) -> int
 pub ext fn rt_fma(a: float, b: float, c: float) -> float
+pub ext fn rt_sqrt(a: float) -> float
+pub ext fn rt_floor(a: float) -> float
+pub ext fn rt_ceil(a: float) -> float
 pub ext fn rt_to_char(n: int) -> char
 pub ext fn rt_show_to<T>(src: ptr, out: ptr)
 pub ext fn rt_show_item_to<T>(src: ptr, out: ptr)

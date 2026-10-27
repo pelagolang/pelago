@@ -123,7 +123,7 @@ fn supported(f: &Func) -> bool {
         .iter()
         .flat_map(|b| &b.insts)
         .all(|&i| match &f.insts[i].op {
-            Op::Fma(..) | Op::VUn(..) | Op::VBin(..) | Op::CheckedIf(..) => false,
+            Op::Fma(..) | Op::FUn(..) | Op::VUn(..) | Op::VBin(..) | Op::CheckedIf(..) => false,
             Op::Cast(k, ..) => !matches!(
                 k,
                 CastKind::IntToFloat | CastKind::FloatToInt | CastKind::FloatResize
@@ -844,7 +844,7 @@ impl<'m> Sel<'m> {
                 let (a, b) = (self.src(*p), self.src(*n));
                 self.runtime(op::RT_PRINT, vec![(RSI, a), (RDX, b)], None);
             }
-            Op::Fma(..) | Op::VUn(..) | Op::VBin(..) | Op::CheckedIf(..) => {
+            Op::Fma(..) | Op::FUn(..) | Op::VUn(..) | Op::VBin(..) | Op::CheckedIf(..) => {
                 unreachable!("not selected")
             }
         }

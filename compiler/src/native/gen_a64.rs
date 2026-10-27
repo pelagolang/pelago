@@ -23,7 +23,7 @@ use super::regs_a64;
 use super::rt_a64::{self, Runtime};
 use super::Os;
 use crate::ir::{
-    BinOp, CastKind, CmpOp, Const, Func, FuncId, Inst, IrTy, Module, Op, Target as JumpTarget,
+    BinOp, CastKind, CmpOp, Const, FUn, Func, FuncId, Inst, IrTy, Module, Op, Target as JumpTarget,
     Term, Test, VBin, VUn, Value,
 };
 use std::collections::HashMap;
@@ -1065,6 +1065,17 @@ impl<'m> Gen<'m> {
                 );
                 let xd = self.wrf(res.unwrap(), V(0));
                 self.a.fmadd(dbl, xd, xa, xb, xc);
+                self.finf(res.unwrap(), xd, f);
+            }
+            Op::FUn(o, a) => {
+                let dbl = f.ty(*a) == IrTy::F64;
+                let xa = self.rdf(*a, V(0), f);
+                let xd = self.wrf(res.unwrap(), V(0));
+                match o {
+                    FUn::Sqrt => self.a.fsqrt(dbl, xd, xa),
+                    FUn::Floor => self.a.frintm(dbl, xd, xa),
+                    FUn::Ceil => self.a.frintp(dbl, xd, xa),
+                }
                 self.finf(res.unwrap(), xd, f);
             }
             Op::Bin(..) if self.madd.contains_key(&id) => {

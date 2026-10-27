@@ -224,6 +224,7 @@ impl Op {
                 f(*b);
             }
             Op::Neg(a)
+            | Op::FUn(_, a)
             | Op::Not(a)
             | Op::VUn(_, a)
             | Op::Cast(_, a, _)
@@ -264,6 +265,7 @@ impl Op {
                 *b = f(*b);
             }
             Op::Neg(a)
+            | Op::FUn(_, a)
             | Op::Not(a)
             | Op::VUn(_, a)
             | Op::Cast(_, a, _)
@@ -296,6 +298,7 @@ impl Op {
             | Op::Select(..)
             | Op::Fma(..)
             | Op::Neg(_)
+            | Op::FUn(..)
             | Op::Not(_)
             | Op::VUn(..)
             | Op::VBin(..)

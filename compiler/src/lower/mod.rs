@@ -36,7 +36,8 @@ mod ty;
 
 use crate::ast::*;
 use crate::ir::{
-    BinOp, BlockId, CastKind, CmpOp, Const, Func, FuncId, IrTy, Module, Op, Target, Term, Value,
+    BinOp, BlockId, CastKind, CmpOp, Const, FUn, Func, FuncId, IrTy, Module, Op, Target, Term,
+    Value,
 };
 use crate::package::{Diagnostic, ModuleId, Program};
 use crate::resolve::{DefId, DefKind, Resolved};

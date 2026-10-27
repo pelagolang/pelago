@@ -226,6 +226,7 @@ fn inputs(op: &Op) -> Vec<Value> {
             vec![*a, *b]
         }
         Op::Neg(a)
+        | Op::FUn(_, a)
         | Op::Not(a)
         | Op::VUn(_, a)
         | Op::Cast(_, a, _)
@@ -358,6 +359,11 @@ fn check_inst(f: &Func, m: Option<&Module>, inst: &Inst) -> Vec<String> {
         Op::Neg(a) => {
             if !t(*a).is_some_and(|x| x.is_int() || x.is_float()) {
                 e.push("`neg` needs a number".to_string());
+            }
+        }
+        Op::FUn(_, a) => {
+            if !t(*a).is_some_and(|x| x.is_float()) || result_ty != t(*a) {
+                e.push("a float operation needs a float and makes the same type".to_string());
             }
         }
         Op::Not(a) => {

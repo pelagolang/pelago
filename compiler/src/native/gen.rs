@@ -15,7 +15,7 @@ use super::{pe, Os};
 use crate::ir::{
     BinOp, CastKind, CmpOp, Const, Func, FuncId, Inst, IrTy, Module, Op, Target, Term, Value,
 };
-use crate::ir::{Test, VBin, VUn};
+use crate::ir::{FUn, Test, VBin, VUn};
 use std::collections::{HashMap, HashSet};
 
 const INT_REGS: [Reg; 6] = [RDI, RSI, RDX, RCX, R8, R9];
@@ -1278,6 +1278,18 @@ impl<'m> Gen<'m> {
                 };
                 self.a.vfmadd231(Xmm(0), xa, mb, dbl);
                 self.stf(res.unwrap(), Xmm(0), f);
+            }
+            Op::FUn(o, a) => {
+                let dbl = f.ty(*a) == IrTy::F64;
+                let r = res.unwrap();
+                let s = self.fsrc(*a, f, Xmm(1));
+                let d = self.fdst(r);
+                match o {
+                    FUn::Sqrt => self.a.fsqrt(d, s, dbl),
+                    FUn::Floor => self.a.fround(d, s, 1, dbl),
+                    FUn::Ceil => self.a.fround(d, s, 2, dbl),
+                }
+                self.stf(r, d, f);
             }
             Op::Cmp(op, a, b) => self.cmp(f, *op, *a, *b, res.unwrap()),
             Op::Neg(a) => {
