@@ -87,3 +87,7 @@ A value that is made but never named (a function result you ignore, the object b
 - **M2** Column access (`points.x`, a read-only `[float]`) is in.
 - **M3** Compiler-chosen layouts stay a later optimisation.
 - **M4** `linear` is an opt-in modifier, staged after the type checker. The word is reserved now as a soft keyword.
+
+## Arenas
+
+Short-lived values that all die together can live in an `arena`: allocation is a pointer bump and `reset!` frees everything with one store. Only types without drop glue in v1. See `arena.md`.

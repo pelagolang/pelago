@@ -45,6 +45,7 @@ A serious, self-hosting systems language:
 | Checker | `docs/design/checker.md`: all five stages built (names, types, interfaces, exhaustiveness, value semantics); TC1 to TC13 decided, VS1 to VS6 chosen (literals, two implicit conversions, no same-scope redeclaration, `fn` types are views, empty literals need context, integer division, equality) | decided |
 | Imports | Imports are bindings: `import std.io`, `import fmt = std.io`, `import { a, b: c, ... } = path`; cycles allowed, top-level only, `pub pkg` middle visibility, orphan rule (`docs/design/modules.md`). A file is a module named after the file; relative paths with leading dots stay | decided |
 | Config | `pelago.toml` is the general config file for everything language-related; the formatter reads its `[fmt]` section (`indent`, `width`), found by walking up from the file (`docs/plans/cards/S-07-formatter.md`) | decided |
+| Arenas | Library `arena` with checked 32+32-bit `aref<T>` handles, plain types only in v1; no hidden region that redirects `box` (`docs/design/arena.md`) | proposed, awaiting owner |
 | Maps | `map { "a": 1 }`, empty map `{:}` | decided |
 | Closures | `x ~> x * 2` and `~> it * 2` | decided |
 | One-shot closures | A closure that consumes a `[sink]` capture has the type `once fn(...)` (inferred, never written on the closure); calling it is `f!!()` and uses it up; `fn` may stand where `once fn` is wanted; `spawn` takes `once fn` (`functions.md` section 19) | decided, built |
