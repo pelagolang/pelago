@@ -2678,7 +2678,7 @@ fn arena_tree_of_nodes() {
 #[test]
 fn arena_native_agrees() {
     let src = "struct node { l: aref<node>?, r: aref<node>? }\nfn make(inout a: arena, d: int) -> aref<node> {\n if d == 0 { return a.new!(node { l: none, r: none }) }\n const l = make(inout a, d - 1)\n const r = make(inout a, d - 1)\n a.new!(node { l: l, r: r }) }\nfn check(a: arena, t: aref<node>) -> int {\n const n = a.get(t)\n var c = 1\n if n.l is some(l) { c += check(a, l) }\n if n.r is some(r) { c += check(a, r) }\n c }\nfn main() {\n var a = arena()\n for i in 0..3 {\n  const t = make(inout a, 4)\n  print(check(a, t))\n  a.reset!() } }\n";
-    agree(&src);
+    agree(src);
 }
 
 #[test]
