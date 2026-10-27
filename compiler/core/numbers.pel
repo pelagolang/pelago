@@ -1,0 +1,148 @@
+/// `range`, `int`, `float` and `char`.
+
+impl<T> range<T> {
+    fn contains(self, item: T) -> bool {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        const cmp = rt_cmp_fn<T>()
+        const probe = rt_addr_of(item)
+        if rt_load_bool(rt_offset(h, size * 2 + 1)) {
+            if rt_call_int2(cmp, probe, h) < 0 { return false }
+        }
+        if rt_load_bool(rt_offset(h, size * 2 + 2)) {
+            const c = rt_call_int2(cmp, probe, rt_offset(h, size))
+            return if rt_load_bool(rt_offset(h, size * 2)) { c <= 0 } else { c < 0 }
+        }
+        true
+    }
+}
+
+impl range<int> {
+    fn iter(self) -> iter<int> {
+        const h = rt_addr_of(self)
+        if !rt_load_bool(rt_offset(h, 17)) { panic("an open range with no start cannot be iterated") }
+        if !rt_load_bool(rt_offset(h, 18)) { panic("an open range with no end cannot be iterated") }
+        var out: list<int> = []
+        var i = rt_load_int(h)
+        var end = rt_load_int(rt_offset(h, 8))
+        if rt_load_bool(rt_offset(h, 16)) { end += 1 }
+        while i < end {
+            out.push!(i)
+            i += 1
+        }
+        rt_cast<list<int>, iter<int>>(sink out)
+    }
+}
+
+impl int {
+    fn abs(self) -> int = self < 0 ? 0 - self : self
+    fn min(self, other: int) -> int = self < other ? self : other
+    fn max(self, other: int) -> int = self > other ? self : other
+
+    fn pow(self, exponent: int) -> int {
+        var result = 1
+        var i = 0
+        while i < exponent {
+            result *= self
+            i += 1
+        }
+        result
+    }
+
+    fn checkedAdd(self, other: int) -> int? {
+        if other > 0 && self > 9223372036854775807 - other { return none }
+        if other < 0 && self < -9223372036854775808 - other { return none }
+        return self + other
+    }
+
+    fn checkedSub(self, other: int) -> int? {
+        if other < 0 && self > 9223372036854775807 + other { return none }
+        if other > 0 && self < -9223372036854775808 + other { return none }
+        return self - other
+    }
+
+    fn checkedMul(self, other: int) -> int? {
+        if self == 0 || other == 0 { return 0 }
+        const product = self *% other
+        if product / other != self ||
+            (self == -1 && other == -9223372036854775808) ||
+            (other == -1 && self == -9223372036854775808) { return none }
+        return product
+    }
+
+    fn wrappingAdd(self, other: int) -> int = self +% other
+    fn wrappingSub(self, other: int) -> int = self -% other
+    fn wrappingMul(self, other: int) -> int = self *% other
+
+    fn saturatingAdd(self, other: int) -> int {
+        const r = self.checkedAdd(other)
+        switch r {
+            case some(v): v
+            case none: other > 0 ? 9223372036854775807 : -9223372036854775808
+        }
+    }
+
+    fn saturatingSub(self, other: int) -> int {
+        const r = self.checkedSub(other)
+        switch r {
+            case some(v): v
+            case none: other > 0 ? -9223372036854775808 : 9223372036854775807
+        }
+    }
+}
+
+impl float {
+    fn abs(self) -> float = self < 0.0 ? 0.0 - self : self
+    //~ `self * b + c` rounded once, not twice: the same result on every target and in the interpreter.
+    //~ Plain `a * b + c` is never fused, so it keeps rounding after the product.
+    fn fma(self, b: float, c: float) -> float = rt_fma(self, b, c)
+    fn min(self, other: float) -> float = self < other ? self : other
+    fn max(self, other: float) -> float = self > other ? self : other
+
+    fn sqrt(self) -> float {
+        if self < 0.0 { return 0.0 / 0.0 }
+        if self == 0.0 { return 0.0 }
+        var x = self > 1.0 ? self : 1.0
+        var i = 0
+        while i < 80 {
+            x = (x + self / x) / 2.0
+            i += 1
+        }
+        x
+    }
+
+    fn floor(self) -> float {
+        const t = rt_to_int(self) to float
+        t > self ? t - 1.0 : t
+    }
+
+    fn ceil(self) -> float {
+        const t = rt_to_int(self) to float
+        t < self ? t + 1.0 : t
+    }
+
+    fn round(self) -> float = self < 0.0 ? 0.0 - (0.0 - self + 0.5).floor() : (self + 0.5).floor()
+
+    fn pow(self, exponent: float) -> float {
+        const n = rt_to_int(exponent)
+        if (n to float) != exponent { panic("pow: only whole exponents are supported") }
+        var result = 1.0
+        var i = 0
+        const count = n < 0 ? 0 - n : n
+        while i < count {
+            result *= self
+            i += 1
+        }
+        n < 0 ? 1.0 / result : result
+    }
+}
+
+impl char {
+    fn isDigit(self) -> bool = (self to int) >= 48 && (self to int) <= 57
+    fn isUpper(self) -> bool = (self to int) >= 65 && (self to int) <= 90
+    fn isLower(self) -> bool = (self to int) >= 97 && (self to int) <= 122
+    fn isAlpha(self) -> bool = self.isUpper() || self.isLower()
+    fn isSpace(self) -> bool = rt_is_space(self to int)
+    fn toUpper(self) -> char = self.isLower() ? rt_to_char((self to int) - 32) : self
+    fn toLower(self) -> char = self.isUpper() ? rt_to_char((self to int) + 32) : self
+}

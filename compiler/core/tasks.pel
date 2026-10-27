@@ -1,0 +1,255 @@
+/// Concurrency: tasks, channels, shared values and locks (docs/design/concurrency.md).
+
+/// ---- Concurrency (docs/design/concurrency.md) ----------------------------------------------------
+
+//~ What `send` returns when nobody is receiving any more.
+pub struct closed {}
+
+//~ A running thread that will produce a `T`. `join!!()` waits and consumes it.
+//~
+//~ Stage 0 runs threads one after another: a spawned task waits until something needs it (a `join`, a
+//~ `recv` on an empty channel, or the end of `main`) and then runs to completion. Programs that need two
+//~ tasks to talk back and forth need real threads.
+pub struct task<T> {
+    state: ptr
+
+    deinit {
+        /// The task block: [ran: int, fn, result]. Dropping the handle detaches the task.
+        if rt_load_int(self.state) == 0 {
+            rt_store_int(self.state, 3)
+        } else {
+            rt_drop_at<T>(rt_offset(self.state, 40))
+            rt_free(self.state)
+        }
+    }
+}
+
+//~ Addresses of the task blocks that have not run yet.
+pub var rt_pending: [int] = []
+
+//~ Runs a task block once (the closure at offset 8 moves out and runs). A detached task frees itself.
+pub fn rt_task_run(s: ptr) {
+    const state = rt_load_int(s)
+    /// 0: waiting, 3: waiting and detached (the task frees itself when done); anything else already ran.
+    if state != 0 && state != 3 { return }
+    if state == 0 { rt_store_int(s, 1) }
+    const g = rt_read<once fn()>(rt_offset(s, 8))
+    g!!()
+}
+
+//~ Runs every task that has not run yet.
+pub fn rt_run_pending() {
+    while rt_pending.len() > 0 {
+        const addr = rt_pending.remove!(0)
+        const s = rt_cast<int, ptr>(addr)
+        rt_task_run(s)
+    }
+    rt_pending = []
+}
+
+//~ Runs one task that is still waiting; false when there is none.
+pub fn rt_run_one_pending() -> bool {
+    if rt_pending.len() == 0 { return false }
+    const addr = rt_pending.remove!(0)
+    rt_task_run(rt_cast<int, ptr>(addr))
+    true
+}
+
+//~ Can a receive on this channel finish now: a value is queued, or no sender is left?
+pub fn rt_chan_ready(ch: ptr) -> bool = rt_hdr_len(ch) > 0 || rt_load_int(rt_offset(ch, 24)) == 0
+
+pub fn rt_task_body<T>(s: ptr, sink f: once fn() -> T) {
+    rt_write<T>(rt_offset(s, 40), f!!())
+    if rt_load_int(s) == 3 {
+        rt_drop_at<T>(rt_offset(s, 40))
+        rt_free(s)
+    }
+}
+
+impl<T> task<T> {
+    fn join(sink self) -> T {
+        const s = self.state
+        const addr = rt_addr_int(s)
+        var i = 0
+        while i < rt_pending.len() {
+            if rt_pending[i] == addr { rt_pending.remove!(i) } else { i += 1 }
+        }
+        if rt_load_int(s) == 0 {
+            rt_task_run(s)
+        }
+        /// The task ran; its result is at offset 40. The handle's `deinit` must not free it twice.
+        rt_store_int(s, 2)
+        const r = rt_read<T>(rt_offset(s, 40))
+        rt_free(s)
+        rt_forget_task<T>(sink self)
+        r
+    }
+}
+
+//~ Gives up a task handle without running its `deinit`.
+pub fn rt_forget_task<T>(sink t: task<T>) {
+    rt_cast<task<T>, ptr>(sink t)
+}
+
+//~ Starts `f` on a new thread. What the closure uses must be copied or moved in (`sink x ~> ...`).
+pub fn spawn<T>(sink f: once fn() -> T) -> task<T> {
+    const s = rt_alloc(48 + rt_size_of<T>())
+    rt_store_int(s, 0)
+    const runner = [sink f, sink s] () ~> rt_task_body<T>(s, sink f)
+    rt_write<once fn()>(rt_offset(s, 8), sink runner)
+    rt_pending.push!(rt_addr_int(s))
+    task<T> { state: s }
+}
+
+//~ The handle of `scope s { ... }`. `s.spawn(task)` starts a task that is finished when the scope ends.
+pub struct scope_handle {
+    id: int
+}
+
+impl scope_handle {
+    fn spawn<T>(self, sink f: once fn() -> T) -> task<T> = spawn(sink f)
+}
+
+/// A channel block: [queue: list 24 bytes][senders: int][receiver alive: int].
+
+pub struct sender<T> {
+    ch: ptr
+
+    deinit {
+        const n = rt_load_int(rt_offset(self.ch, 24)) - 1
+        rt_store_int(rt_offset(self.ch, 24), n)
+        if n == 0 && rt_load_int(rt_offset(self.ch, 32)) == 0 { rt_chan_free<T>(self.ch) }
+    }
+}
+
+pub struct receiver<T> {
+    ch: ptr
+
+    deinit {
+        rt_store_int(rt_offset(self.ch, 32), 0)
+        if rt_load_int(rt_offset(self.ch, 24)) == 0 { rt_chan_free<T>(self.ch) }
+    }
+}
+
+pub fn rt_chan_free<T>(ch: ptr) {
+    rt_drop_at<list<T>>(ch)
+    rt_free(ch)
+}
+
+//~ A channel: a sender end and a receiver end. A capacity of 0 means unbounded.
+pub fn chan<T>(capacity: int = 0) -> (sender<T>, receiver<T>) {
+    const ch = rt_alloc(48)
+    var q: list<T> = []
+    rt_write<list<T>>(ch, sink q)
+    rt_store_int(rt_offset(ch, 24), 1)
+    rt_store_int(rt_offset(ch, 32), 1)
+    (sender<T> { ch: ch }, receiver<T> { ch: ch })
+}
+
+impl<T> sender<T> {
+    fn send(self, sink value: T) -> void ! closed {
+        if rt_load_int(rt_offset(self.ch, 32)) == 0 { return err(closed {}) }
+        var q = rt_read<list<T>>(self.ch)
+        q.push!(value)
+        rt_write<list<T>>(self.ch, sink q)
+    }
+}
+
+//~ More senders: `copy tx`.
+impl<T> clone for sender<T> {
+    fn clone(self) -> sender<T> {
+        rt_store_int(rt_offset(self.ch, 24), rt_load_int(rt_offset(self.ch, 24)) + 1)
+        sender<T> { ch: self.ch }
+    }
+}
+
+impl<T> receiver<T> {
+    fn tryRecv(self) -> T? {
+        if rt_hdr_len(self.ch) == 0 { return none }
+        var q = rt_read<list<T>>(self.ch)
+        const v = q.remove!(0)
+        rt_write<list<T>>(self.ch, sink q)
+        return v
+    }
+
+    //~ Waits for a value: other tasks run while the queue is empty. `none` when every sender is gone.
+    fn recv(self) -> T? {
+        while rt_hdr_len(self.ch) == 0 {
+            if rt_load_int(rt_offset(self.ch, 24)) == 0 { return none }
+            if rt_pending.len() == 0 { panic("deadlock: waiting for a value nobody can send") }
+            const addr = rt_pending.remove!(0)
+            rt_task_run(rt_cast<int, ptr>(addr))
+        }
+        return self.tryRecv()
+    }
+
+    fn iter(self) -> iter<T> {
+        var out: list<T> = []
+        var more = true
+        while more {
+            const v = self.recv()
+            switch v {
+                case some(x): out.push!(x)
+                case none: more = false
+            }
+        }
+        rt_cast<list<T>, iter<T>>(sink out)
+    }
+}
+
+//~ Read-only data counted across threads: `shared(value)`, and `copy handle` for another handle.
+pub struct shared<T> {
+    p: ptr
+
+    init(sink value: T) {
+        const p = rt_alloc(8 + rt_size_of<T>())
+        rt_store_int(p, 1)
+        rt_write<T>(rt_offset(p, 8), sink value)
+        self.p = p
+    }
+
+    deinit {
+        const n = rt_load_int(self.p) - 1
+        rt_store_int(self.p, n)
+        if n == 0 {
+            rt_drop_at<T>(rt_offset(self.p, 8))
+            rt_free(self.p)
+        }
+    }
+}
+
+impl<T> shared<T> {
+    fn get(self) -> T = rt_clone<T>(rt_offset(self.p, 8))
+}
+
+impl<T> clone for shared<T> {
+    fn clone(self) -> shared<T> {
+        rt_store_int(self.p, rt_load_int(self.p) + 1)
+        shared<T> { p: self.p }
+    }
+}
+
+//~ Data changed from several threads one at a time: `lock(value)`. Access is through `with`.
+pub struct lock<T> {
+    p: ptr
+
+    init(sink value: T) {
+        const p = rt_alloc(rt_size_of<T>() + 1)
+        rt_write<T>(p, sink value)
+        self.p = p
+    }
+
+    deinit {
+        rt_drop_at<T>(self.p)
+        rt_free(self.p)
+    }
+}
+
+impl<T> lock<T> {
+    fn with<R>(self, f: fn(inout T) -> R) -> R {
+        var v = rt_read<T>(self.p)
+        const r = f(inout v)
+        rt_write<T>(self.p, sink v)
+        r
+    }
+}

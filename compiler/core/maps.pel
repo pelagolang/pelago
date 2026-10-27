@@ -1,0 +1,537 @@
+/// Insertion-ordered tables: `map` and `set`.
+
+/// ---- Maps and sets: insertion-ordered tables ---------------------------------------------------
+///
+/// The header has four words: the entries block, the length, the capacity and the index table. The
+/// block holds `cap` keys, then (for maps) `cap` values starting at an 8-byte boundary. The index
+/// table has `rt_tab_size(cap)` slots; see `rt_map_tag` for what a slot holds.
+
+//~ A capacity is always 4, 8, 16, ...: twice that is the power of two the table needs.
+pub fn rt_tab_size(cap: int) -> int = cap << 1
+
+pub fn rt_vals_off(cap: int, ksize: int) -> int = (cap *% ksize +% 7) & -8
+pub fn rt_map_index(h: ptr) -> ptr = rt_load_ptr(rt_offset(h, 24))
+pub fn rt_map_key_at(h: ptr, i: int, ksize: int) -> ptr = rt_offset(rt_hdr_data(h), i *% ksize)
+
+pub fn rt_map_val_at(h: ptr, i: int, ksize: int, vsize: int) -> ptr {
+    rt_offset(rt_hdr_data(h), rt_vals_off(rt_hdr_cap(h), ksize) +% i *% vsize)
+}
+
+//~ The 32-bit tag of a key: its hash with the high bits folded in. An index slot holds the tag in
+//~ its upper half and the entry's position plus one in its lower half (0 when empty), so a table
+//~ can be rebuilt without hashing again and a probe skips `eq` for keys with another tag. `size` is
+//~ a power of two. The first slot probed is `tag & (size - 1)`, so nearby keys stay in nearby slots;
+//~ the next ones are `5 * slot + 1 + perturb` with `perturb` the tag shifted right 5 more each step
+//~ (as CPython does), which pulls the higher bits in when keys collide in the low ones.
+pub fn rt_map_tag(hash: ptr, key: ptr) -> int {
+    const h = rt_call_int1(hash, key)
+    (h ^ (h >> 17)) & 4294967295
+}
+
+pub fn rt_slot_pos(v: int) -> int = v & 4294967295
+pub fn rt_slot_tag(v: int) -> int = (v >> 32) & 4294967295
+
+pub fn rt_map_zeroed(size: int) -> ptr {
+    const tab = rt_alloc(size << 3)
+    var i = 0
+    while i < size {
+        rt_store_int(rt_offset(tab, i << 3), 0)
+        i += 1
+    }
+    tab
+}
+
+//~ Puts an entry in the first free slot of its probe sequence.
+pub fn rt_map_place(tab: ptr, size: int, tag: int, e: int) {
+    const mask = size -% 1
+    var s = tag & mask
+    var perturb = tag
+    while rt_load_int(rt_offset(tab, s << 3)) != 0 {
+        perturb = perturb >> 5
+        s = (s *% 5 +% perturb +% 1) & mask
+    }
+    rt_store_int(rt_offset(tab, s << 3), (tag << 32) | (e +% 1))
+}
+
+//~ Rebuilds the index table from the entries.
+pub fn rt_map_reindex(h: ptr, ksize: int, hash: ptr) {
+    const old = rt_map_index(h)
+    if !rt_is_null(old) { rt_free(old) }
+    const cap = rt_hdr_cap(h)
+    if cap == 0 {
+        rt_store_ptr(rt_offset(h, 24), rt_null())
+        return
+    }
+    const size = rt_tab_size(cap)
+    const tab = rt_map_zeroed(size)
+    var e = 0
+    const n = rt_hdr_len(h)
+    while e < n {
+        rt_map_place(tab, size, rt_map_tag(hash, rt_map_key_at(h, e, ksize)), e)
+        e += 1
+    }
+    rt_store_ptr(rt_offset(h, 24), tab)
+}
+
+pub fn rt_map_find(h: ptr, key: ptr, ksize: int, eq: ptr, hash: ptr) -> int {
+    if rt_hdr_len(h) == 0 { return -1 }
+    return rt_map_find_tag(h, key, ksize, eq, rt_map_tag(hash, key))
+}
+
+//~ The position of the entry whose key (tag `tag`) equals the one at `key`, or -1. The first slot is
+//~ tried here, so that this stays small enough to be copied into its callers (where `eq` is known);
+//~ a collision goes on in `rt_map_probe_slow`.
+pub fn rt_map_find_tag(h: ptr, key: ptr, ksize: int, eq: ptr, tag: int) -> int {
+    if rt_hdr_len(h) == 0 { return -1 }
+    const mask = rt_tab_size(rt_hdr_cap(h)) -% 1
+    const s = tag & mask
+    const v = rt_load_int(rt_offset(rt_map_index(h), s << 3))
+    if v == 0 { return -1 }
+    if rt_slot_tag(v) == tag && rt_call_bool2(
+        eq,
+        rt_map_key_at(h, rt_slot_pos(v) -% 1, ksize),
+        key,
+    ) {
+        return rt_slot_pos(v) -% 1
+    }
+    return rt_map_probe_slow(h, key, ksize, eq, tag, s)
+}
+
+//~ The rest of the probe sequence of `rt_map_find_tag`, after the first slot `s` held another key.
+pub fn rt_map_probe_slow(h: ptr, key: ptr, ksize: int, eq: ptr, tag: int, first: int) -> int {
+    const tab = rt_map_index(h)
+    const mask = rt_tab_size(rt_hdr_cap(h)) -% 1
+    var s = first
+    var perturb = tag
+    var v = rt_load_int(rt_offset(tab, s << 3))
+    while v != 0 {
+        if s != first && rt_slot_tag(v) == tag && rt_call_bool2(
+            eq,
+            rt_map_key_at(h, rt_slot_pos(v) -% 1, ksize),
+            key,
+        ) {
+            return rt_slot_pos(v) -% 1
+        }
+        perturb = perturb >> 5
+        s = (s *% 5 +% perturb +% 1) & mask
+        v = rt_load_int(rt_offset(tab, s << 3))
+    }
+    -1
+}
+
+pub fn rt_map_grow(h: ptr, ksize: int, vsize: int, hash: ptr) {
+    const cap = rt_hdr_cap(h)
+    var ncap = cap * 2
+    if ncap < 4 { ncap = 4 }
+    const len = rt_hdr_len(h)
+    const data = rt_alloc(rt_vals_off(ncap, ksize) + ncap * vsize)
+    const old = rt_hdr_data(h)
+    if len > 0 {
+        rt_copy(data, old, len * ksize)
+        if vsize > 0 { rt_copy(rt_offset(data, rt_vals_off(ncap, ksize)), rt_offset(old, rt_vals_off(cap, ksize)), len * vsize) }
+    }
+    if cap > 0 { rt_free(old) }
+    rt_store_ptr(h, data)
+    rt_store_int(rt_offset(h, 16), ncap)
+    const oldtab = rt_map_index(h)
+    if rt_is_null(oldtab) {
+        rt_map_reindex(h, ksize, hash)
+        return
+    }
+    /// The tags are in the old table: move them over without hashing the keys again.
+    const osize = rt_tab_size(cap)
+    const size = rt_tab_size(ncap)
+    const tab = rt_map_zeroed(size)
+    var j = 0
+    while j < osize {
+        const v = rt_load_int(rt_offset(oldtab, j << 3))
+        if v != 0 { rt_map_place(tab, size, rt_slot_tag(v), rt_slot_pos(v) -% 1) }
+        j += 1
+    }
+    rt_free(oldtab)
+    rt_store_ptr(rt_offset(h, 24), tab)
+}
+
+//~ Makes room for one more entry; the next entry goes at the length.
+pub fn rt_map_reserve(h: ptr, ksize: int, vsize: int, hash: ptr) {
+    if rt_hdr_len(h) == rt_hdr_cap(h) { rt_map_grow(h, ksize, vsize, hash) }
+}
+
+//~ Counts the entry just written at the length: it becomes visible and is indexed.
+pub fn rt_map_commit(h: ptr, ksize: int, tag: int) {
+    const n = rt_hdr_len(h)
+    rt_hdr_set_len(h, n + 1)
+    const tab = rt_map_index(h)
+    const size = rt_tab_size(rt_hdr_cap(h))
+    rt_map_place(tab, size, tag, n)
+}
+
+//~ Removes the entry at `i` (its key and value must already be dropped or moved out).
+pub fn rt_map_remove_at(h: ptr, i: int, ksize: int, vsize: int, hash: ptr) {
+    const n = rt_hdr_len(h)
+    var j = i
+    while j + 1 < n {
+        rt_copy(rt_map_key_at(h, j, ksize), rt_map_key_at(h, j + 1, ksize), ksize)
+        if vsize > 0 { rt_copy(rt_map_val_at(h, j, ksize, vsize), rt_map_val_at(h, j + 1, ksize, vsize), vsize) }
+        j += 1
+    }
+    rt_hdr_set_len(h, n - 1)
+    /// Entries after `i` moved down one place: rebuild the table from its tags, without hashing.
+    const oldtab = rt_map_index(h)
+    const size = rt_tab_size(rt_hdr_cap(h))
+    const tab = rt_map_zeroed(size)
+    var k = 0
+    while k < size {
+        const v = rt_load_int(rt_offset(oldtab, k * 8))
+        const p = rt_slot_pos(v) - 1
+        if v != 0 && p != i {
+            rt_map_place(tab, size, rt_slot_tag(v), if p > i { p - 1 } else { p })
+        }
+        k += 1
+    }
+    rt_free(oldtab)
+    rt_store_ptr(rt_offset(h, 24), tab)
+}
+
+//~ Used by literals: moves the key at `k` and the value at `v` in (the old value of an equal key is dropped).
+pub fn rt_map_put<K, V>(h: ptr, k: ptr, v: ptr) {
+    const ks = rt_size_of<K>()
+    const vs = rt_size_of<V>()
+    const hash = rt_hash_fn<K>()
+    const tag = rt_map_tag(hash, k)
+    const i = rt_map_find_tag(h, k, ks, rt_eq_fn<K>(), tag)
+    if i >= 0 {
+        rt_drop_at<K>(k)
+        rt_drop_at<V>(rt_map_val_at(h, i, ks, vs))
+        rt_copy(rt_map_val_at(h, i, ks, vs), v, vs)
+        return
+    }
+    rt_map_reserve(h, ks, vs, hash)
+    const n = rt_hdr_len(h)
+    rt_copy(rt_map_key_at(h, n, ks), k, ks)
+    rt_copy(rt_map_val_at(h, n, ks, vs), v, vs)
+    rt_map_commit(h, ks, tag)
+}
+
+pub fn rt_set_put<T>(h: ptr, k: ptr) {
+    const ks = rt_size_of<T>()
+    const hash = rt_hash_fn<T>()
+    const tag = rt_map_tag(hash, k)
+    if rt_map_find_tag(h, k, ks, rt_eq_fn<T>(), tag) >= 0 {
+        rt_drop_at<T>(k)
+        return
+    }
+    rt_map_reserve(h, ks, 0, hash)
+    rt_copy(rt_map_key_at(h, rt_hdr_len(h), ks), k, ks)
+    rt_map_commit(h, ks, tag)
+}
+
+pub fn rt_map_drop<K, V>(h: ptr) {
+    const ks = rt_size_of<K>()
+    const vs = rt_size_of<V>()
+    var i = 0
+    const n = rt_hdr_len(h)
+    while i < n {
+        rt_drop_at<K>(rt_map_key_at(h, i, ks))
+        rt_drop_at<V>(rt_map_val_at(h, i, ks, vs))
+        i += 1
+    }
+    if rt_hdr_cap(h) > 0 { rt_free(rt_hdr_data(h)) }
+    if !rt_is_null(rt_map_index(h)) { rt_free(rt_map_index(h)) }
+}
+
+pub fn rt_set_drop<T>(h: ptr) {
+    const ks = rt_size_of<T>()
+    var i = 0
+    const n = rt_hdr_len(h)
+    while i < n {
+        rt_drop_at<T>(rt_map_key_at(h, i, ks))
+        i += 1
+    }
+    if rt_hdr_cap(h) > 0 { rt_free(rt_hdr_data(h)) }
+    if !rt_is_null(rt_map_index(h)) { rt_free(rt_map_index(h)) }
+}
+
+//~ Copies the table: same capacity, same positions, so the index can be copied as it is.
+pub fn rt_map_clone_to<K, V>(src: ptr, dst: ptr, vsize: int) {
+    const ks = rt_size_of<K>()
+    const cap = rt_hdr_cap(src)
+    const n = rt_hdr_len(src)
+    rt_store_int(rt_offset(dst, 8), n)
+    rt_store_int(rt_offset(dst, 16), cap)
+    if cap == 0 {
+        rt_store_ptr(dst, rt_null())
+        rt_store_ptr(rt_offset(dst, 24), rt_null())
+        return
+    }
+    rt_store_ptr(dst, rt_alloc(rt_vals_off(cap, ks) + cap * vsize))
+    var i = 0
+    while i < n {
+        rt_clone_to<K>(rt_map_key_at(src, i, ks), rt_map_key_at(dst, i, ks))
+        i += 1
+    }
+    const size = rt_tab_size(cap)
+    const tab = rt_alloc(size * 8)
+    rt_copy(tab, rt_map_index(src), size * 8)
+    rt_store_ptr(rt_offset(dst, 24), tab)
+}
+
+pub fn rt_map_clone<K, V>(src: ptr, dst: ptr) {
+    rt_map_clone_to<K, V>(src, dst, rt_size_of<V>())
+    const ks = rt_size_of<K>()
+    const vs = rt_size_of<V>()
+    var i = 0
+    const n = rt_hdr_len(src)
+    while i < n {
+        rt_clone_to<V>(rt_map_val_at(src, i, ks, vs), rt_map_val_at(dst, i, ks, vs))
+        i += 1
+    }
+}
+
+pub fn rt_set_clone<T>(src: ptr, dst: ptr) {
+    rt_map_clone_to<T, int>(src, dst, 0)
+}
+
+pub fn rt_map_eq<K, V>(a: ptr, b: ptr) -> bool {
+    const n = rt_hdr_len(a)
+    if n != rt_hdr_len(b) { return false }
+    const ks = rt_size_of<K>()
+    const vs = rt_size_of<V>()
+    const eq = rt_eq_fn<K>()
+    const hash = rt_hash_fn<K>()
+    const veq = rt_eq_fn<V>()
+    var i = 0
+    while i < n {
+        const tag = rt_map_tag(hash, rt_map_key_at(a, i, ks))
+        const j = rt_map_find_tag(b, rt_map_key_at(a, i, ks), ks, eq, tag)
+        if j < 0 { return false }
+        if !rt_call_bool2(
+            veq,
+            rt_map_val_at(a, i, ks, vs),
+            rt_map_val_at(b, j, ks, vs),
+        ) { return false }
+        i += 1
+    }
+    true
+}
+
+pub fn rt_set_eq<T>(a: ptr, b: ptr) -> bool {
+    const n = rt_hdr_len(a)
+    if n != rt_hdr_len(b) { return false }
+    const ks = rt_size_of<T>()
+    const eq = rt_eq_fn<T>()
+    const hash = rt_hash_fn<T>()
+    var i = 0
+    while i < n {
+        const tag = rt_map_tag(hash, rt_map_key_at(a, i, ks))
+        if rt_map_find_tag(b, rt_map_key_at(a, i, ks), ks, eq, tag) < 0 { return false }
+        i += 1
+    }
+    true
+}
+
+pub fn rt_map_show<K, V>(h: ptr, out: ptr) {
+    const ks = rt_size_of<K>()
+    const vs = rt_size_of<V>()
+    const n = rt_hdr_len(h)
+    if n == 0 {
+        rt_push_char(out, '{')
+        rt_push_char(out, ':')
+        rt_push_char(out, '}')
+        return
+    }
+    rt_push_char(out, '{')
+    var i = 0
+    while i < n {
+        if i > 0 {
+            rt_push_char(out, ',')
+            rt_push_char(out, ' ')
+        }
+        rt_show_item_to<K>(rt_map_key_at(h, i, ks), out)
+        rt_push_char(out, ':')
+        rt_push_char(out, ' ')
+        rt_show_item_to<V>(rt_map_val_at(h, i, ks, vs), out)
+        i += 1
+    }
+    rt_push_char(out, '}')
+}
+
+pub fn rt_set_show<T>(h: ptr, out: ptr) {
+    const ks = rt_size_of<T>()
+    const n = rt_hdr_len(h)
+    rt_push_char(out, '{')
+    var i = 0
+    while i < n {
+        if i > 0 {
+            rt_push_char(out, ',')
+            rt_push_char(out, ' ')
+        }
+        rt_show_item_to<T>(rt_map_key_at(h, i, ks), out)
+        i += 1
+    }
+    rt_push_char(out, '}')
+}
+
+impl<K, V> map<K, V> {
+    fn len(self) -> int = rt_hdr_len(rt_addr_of(self))
+    fn isEmpty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
+
+    fn get(self, key: K) -> V? {
+        const h = rt_addr_of(self)
+        const ks = rt_size_of<K>()
+        const i = rt_map_find(h, rt_addr_of(key), ks, rt_eq_fn<K>(), rt_hash_fn<K>())
+        if i < 0 { return none }
+        return rt_clone<V>(rt_map_val_at(h, i, ks, rt_size_of<V>()))
+    }
+
+    fn containsKey(self, key: K) -> bool {
+        rt_map_find(
+            rt_addr_of(self),
+            rt_addr_of(key),
+            rt_size_of<K>(),
+            rt_eq_fn<K>(),
+            rt_hash_fn<K>(),
+        ) >= 0
+    }
+
+    fn insert(inout self, sink key: K, sink value: V) -> V? {
+        const h = rt_addr_of(self)
+        const ks = rt_size_of<K>()
+        const vs = rt_size_of<V>()
+        const hash = rt_hash_fn<K>()
+        const tag = rt_map_tag(hash, rt_addr_of(key))
+        const i = rt_map_find_tag(h, rt_addr_of(key), ks, rt_eq_fn<K>(), tag)
+        if i >= 0 {
+            const old = rt_read<V>(rt_map_val_at(h, i, ks, vs))
+            rt_write<V>(rt_map_val_at(h, i, ks, vs), sink value)
+            return old
+        }
+        rt_map_reserve(h, ks, vs, hash)
+        const n = rt_hdr_len(h)
+        rt_write<K>(rt_map_key_at(h, n, ks), sink key)
+        rt_write<V>(rt_map_val_at(h, n, ks, vs), sink value)
+        rt_map_commit(h, ks, tag)
+        none
+    }
+
+    fn remove(inout self, key: K) -> V? {
+        const h = rt_addr_of(self)
+        const ks = rt_size_of<K>()
+        const vs = rt_size_of<V>()
+        const hash = rt_hash_fn<K>()
+        const tag = rt_map_tag(hash, rt_addr_of(key))
+        const i = rt_map_find_tag(h, rt_addr_of(key), ks, rt_eq_fn<K>(), tag)
+        if i < 0 { return none }
+        const old = rt_read<V>(rt_map_val_at(h, i, ks, vs))
+        rt_drop_at<K>(rt_map_key_at(h, i, ks))
+        rt_map_remove_at(h, i, ks, vs, hash)
+        return old
+    }
+
+    fn clear(inout self) {
+        const h = rt_addr_of(self)
+        const ks = rt_size_of<K>()
+        const vs = rt_size_of<V>()
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            rt_drop_at<K>(rt_map_key_at(h, i, ks))
+            rt_drop_at<V>(rt_map_val_at(h, i, ks, vs))
+            i += 1
+        }
+        rt_hdr_set_len(h, 0)
+        rt_map_reindex(h, ks, rt_hash_fn<K>())
+    }
+
+    fn keys(self) -> iter<K> {
+        const h = rt_addr_of(self)
+        const ks = rt_size_of<K>()
+        var out: list<K> = []
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            out.push!(rt_clone<K>(rt_map_key_at(h, i, ks)))
+            i += 1
+        }
+        rt_cast<list<K>, iter<K>>(sink out)
+    }
+
+    fn values(self) -> iter<V> {
+        const h = rt_addr_of(self)
+        const ks = rt_size_of<K>()
+        const vs = rt_size_of<V>()
+        var out: list<V> = []
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            out.push!(rt_clone<V>(rt_map_val_at(h, i, ks, vs)))
+            i += 1
+        }
+        rt_cast<list<V>, iter<V>>(sink out)
+    }
+}
+
+impl<T> set<T> {
+    fn len(self) -> int = rt_hdr_len(rt_addr_of(self))
+    fn isEmpty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
+
+    fn contains(self, item: T) -> bool {
+        rt_map_find(
+            rt_addr_of(self),
+            rt_addr_of(item),
+            rt_size_of<T>(),
+            rt_eq_fn<T>(),
+            rt_hash_fn<T>(),
+        ) >= 0
+    }
+
+    fn insert(inout self, sink item: T) -> bool {
+        const h = rt_addr_of(self)
+        const ks = rt_size_of<T>()
+        const hash = rt_hash_fn<T>()
+        const tag = rt_map_tag(hash, rt_addr_of(item))
+        if rt_map_find_tag(h, rt_addr_of(item), ks, rt_eq_fn<T>(), tag) >= 0 { return false }
+        rt_map_reserve(h, ks, 0, hash)
+        rt_write<T>(rt_map_key_at(h, rt_hdr_len(h), ks), sink item)
+        rt_map_commit(h, ks, tag)
+        true
+    }
+
+    fn remove(inout self, item: T) -> bool {
+        const h = rt_addr_of(self)
+        const ks = rt_size_of<T>()
+        const hash = rt_hash_fn<T>()
+        const tag = rt_map_tag(hash, rt_addr_of(item))
+        const i = rt_map_find_tag(h, rt_addr_of(item), ks, rt_eq_fn<T>(), tag)
+        if i < 0 { return false }
+        rt_drop_at<T>(rt_map_key_at(h, i, ks))
+        rt_map_remove_at(h, i, ks, 0, hash)
+        true
+    }
+
+    fn clear(inout self) {
+        const h = rt_addr_of(self)
+        const ks = rt_size_of<T>()
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            rt_drop_at<T>(rt_map_key_at(h, i, ks))
+            i += 1
+        }
+        rt_hdr_set_len(h, 0)
+        rt_map_reindex(h, ks, rt_hash_fn<T>())
+    }
+
+    fn iter(self) -> iter<T> {
+        const h = rt_addr_of(self)
+        const ks = rt_size_of<T>()
+        var out: list<T> = []
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            out.push!(rt_clone<T>(rt_map_key_at(h, i, ks)))
+            i += 1
+        }
+        rt_cast<list<T>, iter<T>>(sink out)
+    }
+}
