@@ -120,6 +120,8 @@ pub mod elf;
 pub mod exec;
 pub mod gen;
 pub mod gen_a64;
+#[cfg(target_os = "linux")]
+pub mod load;
 pub mod macho;
 pub mod mir;
 pub mod pe;

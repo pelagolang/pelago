@@ -534,6 +534,17 @@ fn native_build(
         }
     };
     timer.lap("native code generation");
+    // On Linux `run` loads the image into this process (no file, no child); if that is not possible
+    // (address taken, mapping refused) the temporary-file path below runs it.
+    #[cfg(target_os = "linux")]
+    if !build && out_name.is_none() && !flags.contains(&"--spawn") {
+        // `run` only returns on failure; report the phases first, the program ends the process.
+        timer.report();
+        let Err(e) = pelago::native::load::run(&image);
+        if std::env::var_os("PELAGO_VERBOSE").is_some() {
+            eprintln!("in-process run unavailable: {e}");
+        }
+    }
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     let target = match (&out_name, build) {
