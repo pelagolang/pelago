@@ -8,6 +8,7 @@ Two packages ship with the compiler.
 | Module | What it is |
 |---|---|
 | `std.big` | `bigint`: integers of any size (sign and base 10^9 limbs). `+ - * / %` (rounding toward zero), `pow`, `divRem`, `negate`, `abs`, `sign`, `toInt`, comparisons, `show`. `big.fromInt(n)` and `big.parse(text)` build one. |
+| `std.json` | `json.parse(text)` reads a document into a `json.value` (`nothing`, `flag`, `number`, `text`, `items`, `fields`); `encode()`, `pretty(indent)`, `get(key)`, `at(i)`, `asNumber`, `asText`, `asBool`, `size`. Numbers are floats, objects keep key order, `\u` escapes and surrogate pairs work. Typed decoding into your own structs waits for `meta` reflection. |
 
 Use:
 

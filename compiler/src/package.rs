@@ -32,7 +32,10 @@ pub const CORE_MODULES: &[(&str, &str)] = &[
 
 /// The modules of the `std` package: `(module name, source)`. The files live in `compiler/std/`.
 /// Unlike `core`, the package is added only when a program imports `std.<module>`.
-pub const STD_MODULES: &[(&str, &str)] = &[("big", include_str!("../std/big.pel"))];
+pub const STD_MODULES: &[(&str, &str)] = &[
+    ("big", include_str!("../std/big.pel")),
+    ("json", include_str!("../std/json.pel")),
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleId(pub u32);

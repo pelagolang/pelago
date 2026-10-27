@@ -197,24 +197,61 @@ impl str {
             negative = true
             i = 1
         }
-        var value = 0.0
+        /// Digits are gathered as one integer (the first 18) and a power of ten; for up to 15
+        /// digits and a small power the result is the correctly rounded float.
+        var mantissa = 0
+        var kept = 0
+        var scale10 = 0
         var digits = 0
         while i < n && rt_is_digit(rt_load_byte(rt_offset(p, i)) to int) {
-            value = value * 10.0 + (((rt_load_byte(rt_offset(p, i)) to int) - 48) to float)
+            if kept < 18 {
+                mantissa = mantissa * 10 + ((rt_load_byte(rt_offset(p, i)) to int) - 48)
+                if mantissa > 0 { kept += 1 }
+            } else {
+                scale10 += 1
+            }
             digits += 1
             i += 1
         }
         if i < n && rt_load_byte(rt_offset(p, i)) == 46 {
             i += 1
-            var scale = 0.1
             while i < n && rt_is_digit(rt_load_byte(rt_offset(p, i)) to int) {
-                value = value + scale * (((rt_load_byte(rt_offset(p, i)) to int) - 48) to float)
-                scale = scale / 10.0
+                if kept < 18 {
+                    mantissa = mantissa * 10 + ((rt_load_byte(rt_offset(p, i)) to int) - 48)
+                    if mantissa > 0 { kept += 1 }
+                    scale10 -= 1
+                }
                 digits += 1
                 i += 1
             }
         }
-        if digits == 0 || i != n { return err(parse_error { message: "bad number" }) }
+        if digits == 0 { return err(parse_error { message: "bad number" }) }
+        if i < n && (rt_load_byte(rt_offset(p, i)) == 101 || rt_load_byte(rt_offset(p, i)) == 69) {
+            i += 1
+            var expNegative = false
+            if i < n && (rt_load_byte(rt_offset(p, i)) == 43 || rt_load_byte(rt_offset(p, i)) == 45) {
+                expNegative = rt_load_byte(rt_offset(p, i)) == 45
+                i += 1
+            }
+            var exp = 0
+            var expDigits = 0
+            while i < n && rt_is_digit(rt_load_byte(rt_offset(p, i)) to int) {
+                if exp < 100000 { exp = exp * 10 + ((rt_load_byte(rt_offset(p, i)) to int) - 48) }
+                expDigits += 1
+                i += 1
+            }
+            if expDigits == 0 { return err(parse_error { message: "bad number" }) }
+            scale10 += expNegative ? 0 - exp : exp
+        }
+        if i != n { return err(parse_error { message: "bad number" }) }
+        var value = mantissa to float
+        var k = scale10 < 0 ? 0 - scale10 : scale10
+        var power = 1.0
+        while k > 0 {
+            power *= 10.0
+            k -= 1
+        }
+        value = scale10 < 0 ? value / power : value * power
         ok(negative ? 0.0 - value : value)
     }
 }
@@ -242,6 +279,16 @@ pub fn rt_find(text: str, part: str) -> int {
 impl string {
     fn pushStr(inout self, text: str) {
         rt_str_push(rt_addr_of(self), rt_hdr_data(rt_addr_of(text)), rt_hdr_len(rt_addr_of(text)))
+    }
+
+    //~ Appends a character, encoded as UTF-8.
+    fn pushChar(inout self, c: char) {
+        rt_push_char(rt_addr_of(self), c)
+    }
+
+    //~ Appends one byte as it is.
+    fn pushByte(inout self, b: byte) {
+        rt_push_byte(rt_addr_of(self), b to int)
     }
 
     fn clear(inout self) {

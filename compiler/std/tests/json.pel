@@ -1,0 +1,17 @@
+/// Reading and writing JSON, and the float parsing it relies on.
+import std.json
+
+fn run(text: str) -> int ! parse_error {
+    const doc = json.parse(text)?
+    print(doc.encode())
+    print(doc.get("name"), doc.at(0), doc.size())
+    ok(0)
+}
+
+fn main() {
+    print(run(" {\"name\": \"P\\u00e9\\n\\ud83d\\ude00\", \"tags\": [1, 2.5, -3e2, true, null], \"o\": {}} "))
+    print(run("[1, 2"), run("{\"a\" 1}"), run("tru"), run("[1] x"), run("\"\\ud83d\""))
+    print("0.1".parseFloat(), "1e3".parseFloat(), "-2.5E-2".parseFloat(), "1e".parseFloat())
+    const deep = json.parse("[[1, [2]], {\"k\": [true]}]")
+    print(deep.or(json.value.nothing).pretty(3))
+}
