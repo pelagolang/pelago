@@ -1,0 +1,91 @@
+/// `iter` and its adapters.
+
+impl<T> iter<T> {
+    fn count(self) -> int = rt_hdr_len(rt_addr_of(self))
+
+    fn first(self) -> T? {
+        const h = rt_addr_of(self)
+        if rt_hdr_len(h) == 0 { return none }
+        return rt_clone<T>(rt_hdr_data(h))
+    }
+
+    fn to_list(self) -> list<T> = rt_cast<iter<T>, list<T>>(rt_clone<iter<T>>(rt_addr_of(self)))
+    fn map<U>(self, f: fn(T) -> U) -> iter<U> {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var out: list<U> = []
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            out.push!(f(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size))))
+            i += 1
+        }
+        rt_cast<list<U>, iter<U>>(sink out)
+    }
+
+    fn filter(self, f: fn(T) -> bool) -> iter<T> {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var out: list<T> = []
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            if f(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size))) {
+                out.push!(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size)))
+            }
+            i += 1
+        }
+        rt_cast<list<T>, iter<T>>(sink out)
+    }
+
+    fn each(self, f: fn(T)) {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            f(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size)))
+            i += 1
+        }
+    }
+    fn to_set(self) -> set<T> {
+        const h = rt_addr_of(self)
+        const size = rt_size_of<T>()
+        var out: set<T> = set {}
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            out.insert!(rt_clone<T>(rt_offset(rt_hdr_data(h), i * size)))
+            i += 1
+        }
+        out
+    }
+}
+
+impl iter<int> {
+    fn sum(self) -> int {
+        const h = rt_addr_of(self)
+        var total = 0
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            total += rt_load_int(rt_offset(rt_hdr_data(h), i * 8))
+            i += 1
+        }
+        total
+    }
+}
+
+impl iter<float> {
+    fn sum(self) -> float {
+        const h = rt_addr_of(self)
+        var total = 0.0
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            total += rt_load_float(rt_offset(rt_hdr_data(h), i * 8))
+            i += 1
+        }
+        total
+    }
+}

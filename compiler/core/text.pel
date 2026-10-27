@@ -1,0 +1,207 @@
+/// Text building and showing: `str`/`string` helpers and `show` for scalars.
+
+/// ---- Text: strings are a pointer, a length and a capacity (0 means borrowed or static) ---------
+
+pub fn rt_bytes_eq(a: ptr, b: ptr, n: int) -> bool {
+    var i = 0
+    while i < n {
+        if rt_load_byte(rt_offset(a, i)) != rt_load_byte(rt_offset(b, i)) { return false }
+        i += 1
+    }
+    true
+}
+
+//~ Equal text. Both arguments are headers (`string` or `str`: pointer, then length).
+pub fn rt_str_eq(a: ptr, b: ptr) -> bool {
+    const n = rt_hdr_len(a)
+    if n != rt_hdr_len(b) { return false }
+    rt_bytes_eq(rt_hdr_data(a), rt_hdr_data(b), n)
+}
+
+//~ Orders text by bytes: negative, zero or positive.
+pub fn rt_str_cmp(a: ptr, b: ptr) -> int {
+    const na = rt_hdr_len(a)
+    const nb = rt_hdr_len(b)
+    var i = 0
+    while i < na && i < nb {
+        const x = rt_load_byte(rt_offset(rt_hdr_data(a), i)) to int
+        const y = rt_load_byte(rt_offset(rt_hdr_data(b), i)) to int
+        if x != y { return x < y ? -1 : 1 }
+        i += 1
+    }
+    if na == nb { return 0 }
+    na < nb ? -1 : 1
+}
+
+pub fn rt_str_hash(a: ptr) -> int {
+    var h = 1469598103934665603
+    var i = 0
+    const n = rt_hdr_len(a)
+    while i < n {
+        h = (h ^ (rt_load_byte(rt_offset(rt_hdr_data(a), i)) to int)) *% 1099511628211
+        i += 1
+    }
+    h
+}
+
+//~ Appends bytes to the string whose header is `dst`.
+pub fn rt_str_push(dst: ptr, data: ptr, n: int) {
+    if n == 0 { return }
+    const len = rt_hdr_len(dst)
+    rt_grow(dst, 1, len + n)
+    rt_copy(rt_offset(rt_hdr_data(dst), len), data, n)
+    rt_hdr_set_len(dst, len + n)
+}
+
+pub fn rt_str_concat(dst: ptr, a: ptr, b: ptr) {
+    rt_store_ptr(dst, rt_null())
+    rt_store_int(rt_offset(dst, 8), 0)
+    rt_store_int(rt_offset(dst, 16), 0)
+    rt_str_push(dst, rt_hdr_data(a), rt_hdr_len(a))
+    rt_str_push(dst, rt_hdr_data(b), rt_hdr_len(b))
+}
+
+pub fn rt_push_byte(out: ptr, b: int) {
+    const len = rt_hdr_len(out)
+    rt_grow(out, 1, len + 1)
+    rt_store_byte(rt_offset(rt_hdr_data(out), len), rt_to_byte(b))
+    rt_hdr_set_len(out, len + 1)
+}
+
+//~ Appends a character as UTF-8.
+pub fn rt_push_char(out: ptr, c: char) {
+    const n = c to int
+    if n < 128 {
+        rt_push_byte(out, n)
+    } else if n < 2048 {
+        rt_push_byte(out, 192 | (n >> 6))
+        rt_push_byte(out, 128 | (n & 63))
+    } else if n < 65536 {
+        rt_push_byte(out, 224 | (n >> 12))
+        rt_push_byte(out, 128 | ((n >> 6) & 63))
+        rt_push_byte(out, 128 | (n & 63))
+    } else {
+        rt_push_byte(out, 240 | (n >> 18))
+        rt_push_byte(out, 128 | ((n >> 12) & 63))
+        rt_push_byte(out, 128 | ((n >> 6) & 63))
+        rt_push_byte(out, 128 | (n & 63))
+    }
+}
+
+pub fn rt_show_int(out: ptr, n: int) {
+    if n == 0 {
+        rt_push_byte(out, 48)
+        return
+    }
+    /// Digits are produced from the end, using negative numbers so the smallest int works.
+    var digits = rt_alloc(24)
+    var count = 0
+    var m = n > 0 ? 0 - n : n
+    while m != 0 {
+        const d = 0 - (m % 10)
+        rt_store_byte(rt_offset(digits, count), rt_to_byte(48 + d))
+        count += 1
+        m = m / 10
+    }
+    if n < 0 { rt_push_byte(out, 45) }
+    while count > 0 {
+        count -= 1
+        rt_push_byte(out, rt_load_byte(rt_offset(digits, count)) to int)
+    }
+    rt_free(digits)
+}
+
+//~ Writes the digits of `n` and a newline into `buf`, right-aligned in 32 bytes (a number takes at
+//~ most 21 with the sign); gives the offset of the first one. Used by `print` of one integer, which
+//~ then needs no heap.
+pub fn rt_fmt_int_line(buf: ptr, n: int) -> int {
+    var at = 31
+    rt_store_byte(rt_offset(buf, at), rt_to_byte(10))
+    if n == 0 {
+        at -= 1
+        rt_store_byte(rt_offset(buf, at), rt_to_byte(48))
+        return at
+    }
+    /// From the end, using negative numbers so the smallest int works.
+    var m = n > 0 ? 0 - n : n
+    while m != 0 {
+        const d = 0 - (m % 10)
+        at -= 1
+        rt_store_byte(rt_offset(buf, at), rt_to_byte(48 + d))
+        m = m / 10
+    }
+    if n < 0 {
+        at -= 1
+        rt_store_byte(rt_offset(buf, at), rt_to_byte(45))
+    }
+    at
+}
+
+pub fn rt_show_bool(out: ptr, b: bool) {
+    if b {
+        rt_push_char(out, 't')
+        rt_push_char(out, 'r')
+        rt_push_char(out, 'u')
+        rt_push_char(out, 'e')
+    } else {
+        rt_push_char(out, 'f')
+        rt_push_char(out, 'a')
+        rt_push_char(out, 'l')
+        rt_push_char(out, 's')
+        rt_push_char(out, 'e')
+    }
+}
+
+//~ Prints a float with up to six decimals and no trailing zeros.
+pub fn rt_show_float(out: ptr, x: float) {
+    if x != x {
+        rt_push_char(out, 'n')
+        rt_push_char(out, 'a')
+        rt_push_char(out, 'n')
+        return
+    }
+    var v = x
+    if v < 0.0 {
+        rt_push_char(out, '-')
+        v = 0.0 - v
+    }
+    if v >= 9.0e18 {
+        rt_show_int(out, 9223372036854775807)
+        return
+    }
+    var whole = rt_to_int(v)
+    var frac = v - (whole to float)
+    /// Six decimals, rounded.
+    var scaled = rt_to_int((frac * 1000000.0) + 0.5)
+    if scaled >= 1000000 {
+        whole += 1
+        scaled -= 1000000
+    }
+    rt_show_int(out, whole)
+    if scaled > 0 {
+        rt_push_char(out, '.')
+        var place = 100000
+        while place > 0 && scaled > 0 {
+            const d = scaled / place
+            rt_push_byte(out, 48 + d)
+            scaled -= d * place
+            place /= 10
+        }
+    }
+}
+
+impl list<string> {
+    fn join(self, separator: str) -> string {
+        var out = ""
+        const h = rt_addr_of(self)
+        var i = 0
+        const n = rt_hdr_len(h)
+        while i < n {
+            if i > 0 { rt_str_push(rt_addr_of(out), rt_hdr_data(rt_addr_of(separator)), rt_hdr_len(rt_addr_of(separator))) }
+            const item = rt_offset(rt_hdr_data(h), i * 24)
+            rt_str_push(rt_addr_of(out), rt_hdr_data(item), rt_hdr_len(item))
+            i += 1
+        }
+        out
+    }
+}

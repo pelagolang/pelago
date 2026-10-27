@@ -1,0 +1,229 @@
+/// `str` and `string` methods.
+
+impl str {
+    fn len(self) -> int = rt_hdr_len(rt_addr_of(self))
+    fn is_empty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
+
+    //~ The characters, decoded from UTF-8.
+    fn chars(self) -> iter<char> {
+        var out: [char] = []
+        const h = rt_addr_of(self)
+        const p = rt_hdr_data(h)
+        const n = rt_hdr_len(h)
+        var i = 0
+        while i < n {
+            const b = rt_load_byte(rt_offset(p, i)) to int
+            var c = b
+            var width = 1
+            if b >= 240 {
+                c = b & 7
+                width = 4
+            } else if b >= 224 {
+                c = b & 15
+                width = 3
+            } else if b >= 192 {
+                c = b & 31
+                width = 2
+            }
+            var k = 1
+            while k < width && i + k < n {
+                c = (c << 6) | ((rt_load_byte(rt_offset(p, i + k)) to int) & 63)
+                k += 1
+            }
+            out.push!(rt_to_char(c))
+            i += width
+        }
+        rt_cast<list<char>, iter<char>>(sink out)
+    }
+
+    fn split(self, separator: str) -> iter<str> {
+        var out: [str] = []
+        const n = self.len()
+        const sn = separator.len()
+        if sn == 0 {
+            out.push!(self)
+            return rt_cast<list<str>, iter<str>>(sink out)
+        }
+        const p = rt_hdr_data(rt_addr_of(self))
+        const sp = rt_hdr_data(rt_addr_of(separator))
+        var start = 0
+        var i = 0
+        while i + sn <= n {
+            if rt_bytes_eq(rt_offset(p, i), sp, sn) {
+                out.push!(self[start..i])
+                i += sn
+                start = i
+            } else {
+                i += 1
+            }
+        }
+        out.push!(self[start..n])
+        rt_cast<list<str>, iter<str>>(sink out)
+    }
+
+    fn trim(self) -> str {
+        const p = rt_hdr_data(rt_addr_of(self))
+        var a = 0
+        var b = self.len()
+        while a < b && rt_is_space(rt_load_byte(rt_offset(p, a)) to int) { a += 1 }
+        while b > a && rt_is_space(rt_load_byte(rt_offset(p, b - 1)) to int) { b -= 1 }
+        self[a..b]
+    }
+
+    fn starts_with(self, prefix: str) -> bool {
+        const pn = prefix.len()
+        if pn > self.len() { return false }
+        rt_bytes_eq(rt_hdr_data(rt_addr_of(self)), rt_hdr_data(rt_addr_of(prefix)), pn)
+    }
+
+    fn ends_with(self, suffix: str) -> bool {
+        const sn = suffix.len()
+        const n = self.len()
+        if sn > n { return false }
+        rt_bytes_eq(
+            rt_offset(rt_hdr_data(rt_addr_of(self)), n - sn),
+            rt_hdr_data(rt_addr_of(suffix)),
+            sn,
+        )
+    }
+
+    fn contains(self, part: str) -> bool = rt_find(self, part) >= 0
+
+    fn to_upper(self) -> string {
+        var out = ""
+        const p = rt_hdr_data(rt_addr_of(self))
+        var i = 0
+        const n = self.len()
+        while i < n {
+            const b = rt_load_byte(rt_offset(p, i)) to int
+            rt_push_byte(rt_addr_of(out), b >= 97 && b <= 122 ? b - 32 : b)
+            i += 1
+        }
+        out
+    }
+
+    fn to_lower(self) -> string {
+        var out = ""
+        const p = rt_hdr_data(rt_addr_of(self))
+        var i = 0
+        const n = self.len()
+        while i < n {
+            const b = rt_load_byte(rt_offset(p, i)) to int
+            rt_push_byte(rt_addr_of(out), b >= 65 && b <= 90 ? b + 32 : b)
+            i += 1
+        }
+        out
+    }
+
+    fn replace(self, from: str, to: str) -> string {
+        var out = ""
+        const fnn = from.len()
+        const n = self.len()
+        const p = rt_hdr_data(rt_addr_of(self))
+        var i = 0
+        while i < n {
+            if fnn > 0 && i + fnn <= n && rt_bytes_eq(
+                rt_offset(p, i),
+                rt_hdr_data(rt_addr_of(from)),
+                fnn,
+            ) {
+                rt_str_push(rt_addr_of(out), rt_hdr_data(rt_addr_of(to)), to.len())
+                i += fnn
+            } else {
+                rt_push_byte(rt_addr_of(out), rt_load_byte(rt_offset(p, i)) to int)
+                i += 1
+            }
+        }
+        out
+    }
+
+    fn parse_int(self) -> int ! parse_error {
+        const p = rt_hdr_data(rt_addr_of(self))
+        const n = self.len()
+        if n == 0 { return err(parse_error { message: "empty text is not a number" }) }
+        var i = 0
+        var negative = false
+        if rt_load_byte(p) == 45 {
+            negative = true
+            i = 1
+        } else if rt_load_byte(p) == 43 {
+            i = 1
+        }
+        if i == n { return err(parse_error { message: "no digits" }) }
+        /// Accumulated as a negative number, so the smallest int fits.
+        var value = 0
+        while i < n {
+            const d = (rt_load_byte(rt_offset(p, i)) to int) - 48
+            if d < 0 || d > 9 { return err(parse_error { message: "bad digit at position #i" }) }
+            if value < (-9223372036854775808 + d) / 10 { return err(parse_error { message: "the number is too large" }) }
+            value = value * 10 - d
+            i += 1
+        }
+        if !negative {
+            if value == -9223372036854775808 { return err(parse_error { message: "the number is too large" }) }
+            return ok(0 - value)
+        }
+        ok(value)
+    }
+
+    fn parse_float(self) -> float ! parse_error {
+        const p = rt_hdr_data(rt_addr_of(self))
+        const n = self.len()
+        if n == 0 { return err(parse_error { message: "empty text is not a number" }) }
+        var i = 0
+        var negative = false
+        if rt_load_byte(p) == 45 {
+            negative = true
+            i = 1
+        }
+        var value = 0.0
+        var digits = 0
+        while i < n && rt_is_digit(rt_load_byte(rt_offset(p, i)) to int) {
+            value = value * 10.0 + (((rt_load_byte(rt_offset(p, i)) to int) - 48) to float)
+            digits += 1
+            i += 1
+        }
+        if i < n && rt_load_byte(rt_offset(p, i)) == 46 {
+            i += 1
+            var scale = 0.1
+            while i < n && rt_is_digit(rt_load_byte(rt_offset(p, i)) to int) {
+                value = value + scale * (((rt_load_byte(rt_offset(p, i)) to int) - 48) to float)
+                scale = scale / 10.0
+                digits += 1
+                i += 1
+            }
+        }
+        if digits == 0 || i != n { return err(parse_error { message: "bad number" }) }
+        ok(negative ? 0.0 - value : value)
+    }
+}
+
+pub fn rt_is_space(b: int) -> bool = b == 32 || b == 9 || b == 10 || b == 13
+pub fn rt_is_digit(b: int) -> bool = b >= 48 && b <= 57
+
+//~ The position of the first occurrence of `part` in `text`, or -1.
+pub fn rt_find(text: str, part: str) -> int {
+    const n = text.len()
+    const pn = part.len()
+    if pn == 0 { return 0 }
+    var i = 0
+    while i + pn <= n {
+        if rt_bytes_eq(
+            rt_offset(rt_hdr_data(rt_addr_of(text)), i),
+            rt_hdr_data(rt_addr_of(part)),
+            pn,
+        ) { return i }
+        i += 1
+    }
+    -1
+}
+
+impl string {
+    fn push_str(inout self, text: str) {
+        rt_str_push(rt_addr_of(self), rt_hdr_data(rt_addr_of(text)), rt_hdr_len(rt_addr_of(text)))
+    }
+
+    fn clear(inout self) {
+        rt_hdr_set_len(rt_addr_of(self), 0)
+    }
+}

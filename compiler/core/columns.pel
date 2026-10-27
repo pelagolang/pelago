@@ -1,0 +1,91 @@
+/// `soa`: struct-of-arrays.
+
+/// ---- soa: struct-of-arrays ---------------------------------------------------------------------
+
+pub ext fn rt_soa_len<T>(h: ptr) -> int
+pub ext fn rt_soa_push<T>(h: ptr, sink item: T)
+pub ext fn rt_soa_insert<T>(h: ptr, index: int, sink item: T)
+pub ext fn rt_soa_remove<T>(h: ptr, index: int) -> T
+pub ext fn rt_soa_clear<T>(h: ptr)
+
+//~ One column is a plain list: these work on its header at `h`, taking and giving the field by address.
+pub fn rt_col_push<F>(h: ptr, src: ptr) {
+    const size = rt_size_of<F>()
+    const len = rt_hdr_len(h)
+    rt_grow(h, size, len + 1)
+    rt_copy(rt_offset(rt_hdr_data(h), len * size), src, size)
+    rt_hdr_set_len(h, len + 1)
+}
+
+pub fn rt_col_insert<F>(h: ptr, index: int, src: ptr) {
+    const size = rt_size_of<F>()
+    const len = rt_hdr_len(h)
+    rt_grow(h, size, len + 1)
+    var i = len - 1
+    while i >= index {
+        rt_copy(
+            rt_offset(rt_hdr_data(h), (i + 1) * size),
+            rt_offset(rt_hdr_data(h), i * size),
+            size,
+        )
+        i -= 1
+    }
+    rt_copy(rt_offset(rt_hdr_data(h), index * size), src, size)
+    rt_hdr_set_len(h, len + 1)
+}
+
+pub fn rt_col_remove<F>(h: ptr, index: int, dst: ptr) {
+    const size = rt_size_of<F>()
+    const len = rt_hdr_len(h)
+    rt_copy(dst, rt_offset(rt_hdr_data(h), index * size), size)
+    var i = index
+    while i < len - 1 {
+        rt_copy(
+            rt_offset(rt_hdr_data(h), i * size),
+            rt_offset(rt_hdr_data(h), (i + 1) * size),
+            size,
+        )
+        i += 1
+    }
+    rt_hdr_set_len(h, len - 1)
+}
+
+pub fn rt_col_clear<F>(h: ptr) {
+    const size = rt_size_of<F>()
+    var i = 0
+    const len = rt_hdr_len(h)
+    while i < len {
+        rt_drop_at<F>(rt_offset(rt_hdr_data(h), i * size))
+        i += 1
+    }
+    rt_hdr_set_len(h, 0)
+}
+
+impl<T> soa<T> {
+    fn len(self) -> int = rt_soa_len<T>(rt_addr_of(self))
+    fn is_empty(self) -> bool = rt_soa_len<T>(rt_addr_of(self)) == 0
+
+    fn push(inout self, sink item: T) {
+        rt_soa_push<T>(rt_addr_of(self), sink item)
+    }
+
+    fn insert(inout self, index: int, sink item: T) {
+        if index < 0 || index > self.len() { panic("insert: index out of range") }
+        rt_soa_insert<T>(rt_addr_of(self), index, sink item)
+    }
+
+    fn remove(inout self, index: int) -> T {
+        if index < 0 || index >= self.len() { panic("remove: index out of range") }
+        rt_soa_remove<T>(rt_addr_of(self), index)
+    }
+
+    fn pop(inout self) -> T? {
+        const n = self.len()
+        if n == 0 { return none }
+        return self.remove!(n - 1)
+    }
+
+    fn clear(inout self) {
+        rt_soa_clear<T>(rt_addr_of(self))
+    }
+}

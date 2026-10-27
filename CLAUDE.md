@@ -38,7 +38,7 @@ CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pus
 
 ## Layout
 
-- `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `ast.rs`, `ast_print.rs`, `visit.rs`, `check.rs`, `fmt/`, `package.rs`, `parser/`, `resolve/`, `types.rs`, `typecheck/`, `values/`, `ir/`, `lower/`, `lsp/`, `native/`, `main.rs`; the library `compiler/core/core.pel`).
+- `compiler/src/`: the stage 0 compiler in Rust (`keyword.rs`, `token.rs`, `span.rs`, `lexer.rs`, `ast.rs`, `ast_print.rs`, `visit.rs`, `check.rs`, `fmt/`, `package.rs`, `parser/`, `resolve/`, `types.rs`, `typecheck/`, `values/`, `ir/`, `lower/`, `lsp/`, `native/`, `main.rs`; the library, the `core` package, in `compiler/core/*.pel`: one module per file, listed in `package.rs`).
 - `compiler/tests/`: integration tests. Every file in `examples/*.pel` must lex and parse without errors and match its golden tree.
 - `examples/`: sample source files. Keep `tour.pel` in step with the syntax decisions. `examples/programs/` holds real programs that must type check cleanly.
 - `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `lexer`, `parser`, `modules`, `checker`, `ir`, `memory`, `samples`).
