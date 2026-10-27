@@ -404,9 +404,20 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
         flags.contains(&"--opt")
     };
     if optimise {
+        if timer.on {
+            pelago::ir::opt::time_passes();
+        }
         pelago::ir::opt::optimize(&mut module, pelago::ir::opt::Options::default());
         pelago::ir::opt::prune(&mut module, &["main"]);
         timer.lap("optimise IR");
+        if timer.on {
+            for (name, d, runs) in pelago::ir::opt::pass_times().iter().take(8) {
+                eprintln!(
+                    "{:>9.3} ms    pass {name} ({runs} runs)",
+                    d.as_secs_f64() * 1e3
+                );
+            }
+        }
     }
     if flags.contains(&"--stats") {
         let after = pelago::ir::opt::stats_of(&module);

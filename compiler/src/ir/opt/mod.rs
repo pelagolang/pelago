@@ -180,8 +180,43 @@ fn rounds(f: &mut Func, divs: bool) {
     }
 }
 
-fn step(f: &mut Func, name: &str, pass: fn(&mut Func) -> bool) -> bool {
+thread_local! {
+    static PASS_TIMES: std::cell::RefCell<Option<Vec<(&'static str, std::time::Duration, u32)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Starts counting the time spent in each optimiser pass (for `pelago build --timings`).
+pub fn time_passes() {
+    PASS_TIMES.with(|t| *t.borrow_mut() = Some(Vec::new()));
+}
+
+/// The time and number of runs per pass since `time_passes`, slowest first.
+pub fn pass_times() -> Vec<(&'static str, std::time::Duration, u32)> {
+    let mut v = PASS_TIMES
+        .with(|t| t.borrow_mut().take())
+        .unwrap_or_default();
+    v.sort_by_key(|&(_, d, _)| std::cmp::Reverse(d));
+    v
+}
+
+fn step(f: &mut Func, name: &'static str, pass: fn(&mut Func) -> bool) -> bool {
+    let timed = PASS_TIMES.with(|t| t.borrow().is_some());
+    let start = timed.then(std::time::Instant::now);
     let changed = pass(f);
+    if let Some(start) = start {
+        let d = start.elapsed();
+        PASS_TIMES.with(|t| {
+            if let Some(v) = t.borrow_mut().as_mut() {
+                match v.iter_mut().find(|e| e.0 == name) {
+                    Some(e) => {
+                        e.1 += d;
+                        e.2 += 1;
+                    }
+                    None => v.push((name, d, 1)),
+                }
+            }
+        });
+    }
     #[cfg(debug_assertions)]
     if changed {
         let errs = verify_func(f);
