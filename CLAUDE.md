@@ -23,7 +23,7 @@ cargo run -- parse <file>        # print the syntax tree, report errors
 cargo run -- parse-bench <file>  # time lexing plus parsing
 cargo run -- check <path>        # parse, resolve names and check types of a file or a directory
 cargo run -- ir <path>           # check, lower to the IR, verify and print it
-cargo run -- run <path>          # lower and run `main` in the IR interpreter (`--opt` optimises first, `--stats` counts)
+cargo run -- run <path>          # build machine code and run `main` (`--interp` = IR interpreter, with `--opt` and `--stats`)
 # `ir`, `run` and `build` also take `--timings` (per-phase milliseconds on stderr)
 cargo run -- build [-o out] <path>   # native executable, optimised by default (`--no-opt`, `--target=windows`, `--arch=aarch64` (Linux and Windows), `--leak-check`); `run --native` builds and runs
 python3 bench/harness/run.py [--runs N] [--size small,medium,large] [--save] [name ...]   # full benchmark harness (gcc, clang, tcc, g++, rustc; time, compile time, size, memory); see bench/design.md
