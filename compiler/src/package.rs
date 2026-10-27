@@ -5,7 +5,7 @@
 //! and a front file `geometry.pel` next to the directory `geometry/` is the parent of what is
 //! inside it. A parent without a front file is an empty module made up for the occasion.
 
-use crate::ast::File;
+use crate::ast::{File, ItemKind, StmtKind};
 use crate::parser::{parse_and_check_with, ParseOptions};
 use crate::span::Span;
 use std::collections::HashMap;
@@ -29,6 +29,10 @@ pub const CORE_MODULES: &[(&str, &str)] = &[
     ("core.columns", include_str!("../core/core/columns.pel")),
     ("core.objects", include_str!("../core/core/objects.pel")),
 ];
+
+/// The modules of the `std` package: `(module name, source)`. The files live in `compiler/std/`.
+/// Unlike `core`, the package is added only when a program imports `std.<module>`.
+pub const STD_MODULES: &[(&str, &str)] = &[("big", include_str!("../std/big.pel"))];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleId(pub u32);
@@ -128,7 +132,31 @@ impl Program {
         for (path, src) in &ordered {
             self.ensure_module(pid, path, Some(src), &mut by_path);
         }
+        if name != "std" && self.find_package("std").is_none() && self.imports_std(pid) {
+            self.add_package("std", STD_MODULES);
+        }
         pid
+    }
+
+    /// Whether a top-level import of the package starts at `std`.
+    fn imports_std(&self, pid: PackageId) -> bool {
+        self.modules
+            .iter()
+            .filter(|m| m.package == pid)
+            .flat_map(|m| m.file.stmts.iter().map(move |s| (m, s)))
+            .any(|(m, s)| match &s.kind {
+                StmtKind::Item(item) => match &item.kind {
+                    ItemKind::Import(i) => {
+                        i.levels == 0
+                            && i.path
+                                .segments
+                                .first()
+                                .is_some_and(|seg| seg.text(&m.src) == "std")
+                    }
+                    _ => false,
+                },
+                _ => false,
+            })
     }
 
     fn ensure_module(

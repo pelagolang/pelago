@@ -1,0 +1,398 @@
+/// Integers of any size: `bigint`. A value is a sign and the digits of its size in base one billion.
+///
+/// ```
+/// import std.big
+/// import { bigint } = std.big
+///
+/// const a = big.parse("123456789012345678901234567890")?
+/// print(a * a, a.pow(3), big.fromInt(10).pow(30) / a)
+/// ```
+
+const BASE: int = 1000000000
+
+//~ A whole number of any size. `/` and `%` round toward zero, like the `int` ones.
+pub struct bigint {
+    neg: bool
+    limbs: [int]
+}
+
+/// ---- Magnitudes: little-endian limbs, no zero limb at the top, zero is empty ---------------------------
+
+fn trim(inout x: [int]) {
+    while x.len() > 0 && x[x.len() - 1] == 0 { x.pop!() }
+}
+
+fn magCmp(a: [int], b: [int]) -> int {
+    if a.len() != b.len() { return a.len() < b.len() ? -1 : 1 }
+    var i = a.len() - 1
+    while i >= 0 {
+        if a[i] != b[i] { return a[i] < b[i] ? -1 : 1 }
+        i -= 1
+    }
+    0
+}
+
+fn magAdd(a: [int], b: [int]) -> [int] {
+    var out: [int] = []
+    var carry = 0
+    var i = 0
+    while i < a.len() || i < b.len() || carry > 0 {
+        var s = carry
+        if i < a.len() { s += a[i] }
+        if i < b.len() { s += b[i] }
+        if s >= BASE {
+            out.push!(s - BASE)
+            carry = 1
+        } else {
+            out.push!(s)
+            carry = 0
+        }
+        i += 1
+    }
+    out
+}
+
+/// a - b, where a >= b.
+fn magSub(a: [int], b: [int]) -> [int] {
+    var out: [int] = []
+    var borrow = 0
+    var i = 0
+    while i < a.len() {
+        var d = a[i] - borrow
+        if i < b.len() { d -= b[i] }
+        if d < 0 {
+            d += BASE
+            borrow = 1
+        } else {
+            borrow = 0
+        }
+        out.push!(d)
+        i += 1
+    }
+    trim(inout out)
+    out
+}
+
+fn magMulSmall(a: [int], m: int) -> [int] {
+    var out: [int] = []
+    if m == 0 { return out }
+    var carry = 0
+    var i = 0
+    while i < a.len() || carry > 0 {
+        var p = carry
+        if i < a.len() { p += a[i] * m }
+        out.push!(p % BASE)
+        carry = p / BASE
+        i += 1
+    }
+    out
+}
+
+fn magMul(a: [int], b: [int]) -> [int] {
+    if a.len() == 0 || b.len() == 0 {
+        var empty: [int] = []
+        return empty
+    }
+    var out: [int] = []
+    var k = 0
+    while k < a.len() + b.len() {
+        out.push!(0)
+        k += 1
+    }
+    var i = 0
+    while i < a.len() {
+        var carry = 0
+        var j = 0
+        while j < b.len() || carry > 0 {
+            var cur = out[i + j] + carry
+            if j < b.len() { cur += a[i] * b[j] }
+            out[i + j] = cur % BASE
+            carry = cur / BASE
+            j += 1
+        }
+        i += 1
+    }
+    trim(inout out)
+    out
+}
+
+/// Divides by a number below the base; the second item is the remainder.
+fn magDivSmall(a: [int], d: int) -> ([int], int) {
+    var out: [int] = []
+    var k = 0
+    while k < a.len() {
+        out.push!(0)
+        k += 1
+    }
+    var rem = 0
+    var i = a.len() - 1
+    while i >= 0 {
+        const cur = rem * BASE + a[i]
+        out[i] = cur / d
+        rem = cur % d
+        i -= 1
+    }
+    trim(inout out)
+    (out, rem)
+}
+
+/// Long division, Knuth's algorithm D. `b` is not zero.
+fn magDivRem(a: [int], b: [int]) -> ([int], [int]) {
+    if magCmp(a, b) < 0 {
+        var zero: [int] = []
+        return (zero, copy a)
+    }
+    if b.len() == 1 {
+        const (q, r) = magDivSmall(a, b[0])
+        var rest: [int] = []
+        if r > 0 { rest.push!(r) }
+        return (q, rest)
+    }
+    const scale = BASE / (b[b.len() - 1] + 1)
+    var u = magMulSmall(a, scale)
+    const v = magMulSmall(b, scale)
+    while u.len() < a.len() + 1 { u.push!(0) }
+    const n = v.len()
+    const m = u.len() - n - 1
+    var q: [int] = []
+    var k = 0
+    while k <= m {
+        q.push!(0)
+        k += 1
+    }
+    var j = m
+    while j >= 0 {
+        const top = u[j + n] * BASE + u[j + n - 1]
+        var qhat = top / v[n - 1]
+        var rhat = top % v[n - 1]
+        while qhat >= BASE || qhat * v[n - 2] > rhat * BASE + u[j + n - 2] {
+            qhat -= 1
+            rhat += v[n - 1]
+            if rhat >= BASE { break }
+        }
+        /// u[j..j+n] -= qhat * v
+        var borrow = 0
+        var carry = 0
+        var i = 0
+        while i < n {
+            const p = qhat * v[i] + carry
+            carry = p / BASE
+            var d = u[i + j] - (p % BASE) - borrow
+            if d < 0 {
+                d += BASE
+                borrow = 1
+            } else {
+                borrow = 0
+            }
+            u[i + j] = d
+            i += 1
+        }
+        var d = u[j + n] - carry - borrow
+        if d < 0 {
+            d += BASE
+            borrow = 1
+        } else {
+            borrow = 0
+        }
+        u[j + n] = d
+        if borrow > 0 {
+            /// qhat was one too large: add v back
+            qhat -= 1
+            var c = 0
+            var t = 0
+            while t < n {
+                var s = u[t + j] + v[t] + c
+                if s >= BASE {
+                    s -= BASE
+                    c = 1
+                } else {
+                    c = 0
+                }
+                u[t + j] = s
+                t += 1
+            }
+            u[j + n] = (u[j + n] + c) % BASE
+        }
+        q[j] = qhat
+        j -= 1
+    }
+    trim(inout q)
+    trim(inout u)
+    const (r, _) = magDivSmall(u, scale)
+    (q, r)
+}
+
+fn make(neg: bool, sink limbs: [int]) -> bigint {
+    bigint { neg: limbs.len() > 0 && neg, limbs: limbs }
+}
+
+/// ---- Construction -------------------------------------------------------------------------------------
+
+//~ The `bigint` with the value of `n`.
+pub fn fromInt(n: int) -> bigint {
+    var limbs: [int] = []
+    /// Work with negative numbers so that the smallest `int` needs no special case.
+    var rest = n < 0 ? n : 0 - n
+    while rest != 0 {
+        limbs.push!(0 - (rest % BASE))
+        rest = rest / BASE
+    }
+    make(n < 0, sink limbs)
+}
+
+//~ Reads decimal digits with an optional leading `-` or `+`.
+pub fn parse(text: str) -> bigint ! parse_error {
+    var start = 0
+    var neg = false
+    if text.len() > 0 && (text.byteAt(0) == 45 || text.byteAt(0) == 43) {
+        neg = text.byteAt(0) == 45
+        start = 1
+    }
+    if start >= text.len() { return err(parse_error { message: "no digits in a bigint" }) }
+    var limbs: [int] = []
+    var end = text.len()
+    while end > start {
+        var from = end - 9
+        if from < start { from = start }
+        var v = 0
+        var i = from
+        while i < end {
+            const c = text.byteAt(i) to int
+            if c < 48 || c > 57 { return err(parse_error { message: "not a digit in a bigint" }) }
+            v = v * 10 + (c - 48)
+            i += 1
+        }
+        limbs.push!(v)
+        end = from
+    }
+    trim(inout limbs)
+    ok(make(neg, sink limbs))
+}
+
+/// ---- Methods ------------------------------------------------------------------------------------------
+
+impl bigint {
+    fn isZero(self) -> bool = self.limbs.len() == 0
+
+    //~ -1, 0 or 1.
+    fn sign(self) -> int = self.limbs.len() == 0 ? 0 : (self.neg ? -1 : 1)
+
+    fn abs(self) -> bigint = make(false, sink copy self.limbs)
+
+    fn negate(self) -> bigint = make(!self.neg, sink copy self.limbs)
+
+    fn pow(self, exponent: int) -> bigint {
+        if exponent < 0 { panic("bigint.pow: negative exponent") }
+        var result = fromInt(1)
+        var base = copy self
+        var e = exponent
+        while e > 0 {
+            if e % 2 == 1 { result = result * base }
+            e = e / 2
+            if e > 0 { base = base * base }
+        }
+        result
+    }
+
+    //~ Quotient and remainder, rounding toward zero; the remainder has the sign of `self`.
+    fn divRem(self, other: bigint) -> (bigint, bigint) {
+        if other.limbs.len() == 0 { panic("bigint: division by zero") }
+        const (q, r) = magDivRem(self.limbs, other.limbs)
+        (make(self.neg != other.neg, sink q), make(self.neg, sink r))
+    }
+
+    //~ The value as an `int`, or an error when it does not fit.
+    fn toInt(self) -> int ! parse_error {
+        /// Collect as a negative number, which can hold one more value than a positive one.
+        var acc = 0
+        var i = self.limbs.len() - 1
+        while i >= 0 {
+            if acc < (-9223372036854775807 - 1 + self.limbs[i]) / BASE {
+                return err(parse_error { message: "the bigint does not fit an int" })
+            }
+            acc = acc * BASE - self.limbs[i]
+            i -= 1
+        }
+        if !self.neg {
+            if acc == -9223372036854775807 -
+                1 { return err(parse_error { message: "the bigint does not fit an int" }) }
+            return ok(0 - acc)
+        }
+        ok(acc)
+    }
+}
+
+impl add for bigint {
+    fn add(self, other: bigint) -> bigint {
+        if self.neg == other.neg { return make(self.neg, sink magAdd(self.limbs, other.limbs)) }
+        const c = magCmp(self.limbs, other.limbs)
+        if c == 0 { return fromInt(0) }
+        if c > 0 { return make(self.neg, sink magSub(self.limbs, other.limbs)) }
+        make(other.neg, sink magSub(other.limbs, self.limbs))
+    }
+}
+
+impl sub for bigint {
+    fn sub(self, other: bigint) -> bigint = self + other.negate()
+}
+
+impl mul for bigint {
+    fn mul(self, other: bigint) -> bigint = make(
+        self.neg != other.neg,
+        sink magMul(self.limbs, other.limbs),
+    )
+}
+
+impl div for bigint {
+    fn div(self, other: bigint) -> bigint {
+        const (q, _) = self.divRem(other)
+        q
+    }
+}
+
+impl rem for bigint {
+    fn rem(self, other: bigint) -> bigint {
+        const (_, r) = self.divRem(other)
+        r
+    }
+}
+
+impl neg for bigint {
+    fn neg(self) -> bigint = self.negate()
+}
+
+impl eq for bigint {
+    fn eq(self, other: bigint) -> bool = self.neg == other.neg && magCmp(
+        self.limbs,
+        other.limbs,
+    ) == 0
+}
+
+impl order for bigint {
+    fn cmp(self, other: bigint) -> int {
+        if self.neg != other.neg { return self.neg ? -1 : 1 }
+        const c = magCmp(self.limbs, other.limbs)
+        self.neg ? 0 - c : c
+    }
+}
+
+impl show for bigint {
+    fn show(self) -> string {
+        if self.limbs.len() == 0 { return "0" }
+        var out = self.neg ? "-" : ""
+        var i = self.limbs.len() - 1
+        out.pushStr!("#(self.limbs[i])")
+        i -= 1
+        while i >= 0 {
+            const part = "#(self.limbs[i])"
+            var pad = 9 - part.len()
+            while pad > 0 {
+                out.pushStr!("0")
+                pad -= 1
+            }
+            out.pushStr!(part)
+            i -= 1
+        }
+        out
+    }
+}

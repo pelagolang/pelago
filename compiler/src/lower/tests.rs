@@ -2742,3 +2742,13 @@ fn arena_stale_handle_and_drop_glue_stop() {
     assert!(o.result.is_err());
     assert!(o.output.contains("without drop glue"), "{}", o.output);
 }
+
+#[test]
+fn std_is_added_only_when_imported() {
+    let mut program = Program::with_core();
+    program.add_package("app", &[("main", "fn main() { print(1) }")]);
+    assert!(program.find_package("std").is_none());
+    let mut program = Program::with_core();
+    program.add_package("app", &[("main", "import std.big\nfn main() { print(1) }")]);
+    assert!(program.find_package("std").is_some());
+}
