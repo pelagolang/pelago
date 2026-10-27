@@ -1,0 +1,79 @@
+/// Spreading into literals and the object tag test.
+
+/// ---- Spreading into literals ------------------------------------------------------------------
+
+//~ Appends copies of the elements of the list at `src` to the list at `h`.
+pub fn rt_list_spread<T>(h: ptr, src: ptr) {
+    const size = rt_size_of<T>()
+    var i = 0
+    const n = rt_hdr_len(src)
+    while i < n {
+        const len = rt_hdr_len(h)
+        rt_grow(h, size, len + 1)
+        rt_clone_to<T>(rt_offset(rt_hdr_data(src), i * size), rt_offset(rt_hdr_data(h), len * size))
+        rt_hdr_set_len(h, len + 1)
+        i += 1
+    }
+}
+
+pub fn rt_set_spread<T>(h: ptr, src: ptr) {
+    const size = rt_size_of<T>()
+    const tmp = rt_alloc(size + 1)
+    var i = 0
+    const n = rt_hdr_len(src)
+    while i < n {
+        rt_clone_to<T>(rt_map_key_at(src, i, size), tmp)
+        rt_set_put<T>(h, tmp)
+        i += 1
+    }
+    rt_free(tmp)
+}
+
+pub fn rt_map_spread<K, V>(h: ptr, src: ptr) {
+    const ks = rt_size_of<K>()
+    const vs = rt_size_of<V>()
+    const kt = rt_alloc(ks + 1)
+    const vt = rt_alloc(vs + 1)
+    var i = 0
+    const n = rt_hdr_len(src)
+    while i < n {
+        rt_clone_to<K>(rt_map_key_at(src, i, ks), kt)
+        rt_clone_to<V>(rt_map_val_at(src, i, ks, vs), vt)
+        rt_map_put<K, V>(h, kt, vt)
+        i += 1
+    }
+    rt_free(kt)
+    rt_free(vt)
+}
+
+//~ The address of the value stored under the key at `key`; a missing key stops the program.
+pub fn rt_map_at<K, V>(h: ptr, key: ptr) -> ptr {
+    const ks = rt_size_of<K>()
+    const i = rt_map_find(h, key, ks, rt_eq_fn<K>(), rt_hash_fn<K>())
+    if i < 0 { panic("key not found") }
+    rt_map_val_at(h, i, ks, rt_size_of<V>())
+}
+
+//~ Is there an entry whose key equals the one at `key`?
+pub fn rt_map_has(h: ptr, key: ptr, ksize: int, eq: ptr, hash: ptr) -> bool = rt_map_find(
+    h,
+    key,
+    ksize,
+    eq,
+    hash,
+) >= 0
+
+/// ---- Objects ---------------------------------------------------------------------------------
+
+//~ Is the object at `o` of the type with this id, or of a type that extends it? The table of an object
+//~ points (in its third slot) to the number of ancestors and then their ids, the object's own first.
+pub fn rt_obj_is(o: ptr, id: int) -> bool {
+    const table = rt_load_ptr(rt_offset(rt_load_ptr(o), 16))
+    const n = rt_load_int(table)
+    var i = 0
+    while i < n {
+        if rt_load_int(rt_offset(table, 8 + i * 8)) == id { return true }
+        i += 1
+    }
+    false
+}

@@ -11,6 +11,23 @@ use crate::span::Span;
 use std::collections::HashMap;
 use std::path::Path;
 
+/// The modules of the `core` package: `(module name, source)`. The files live in `compiler/core/`.
+pub const CORE_MODULES: &[(&str, &str)] = &[
+    ("core", include_str!("../core/core.pel")),
+    ("rt", include_str!("../core/rt.pel")),
+    ("lists", include_str!("../core/lists.pel")),
+    ("text", include_str!("../core/text.pel")),
+    ("maps", include_str!("../core/maps.pel")),
+    ("strings", include_str!("../core/strings.pel")),
+    ("iters", include_str!("../core/iters.pel")),
+    ("results", include_str!("../core/results.pel")),
+    ("numbers", include_str!("../core/numbers.pel")),
+    ("tasks", include_str!("../core/tasks.pel")),
+    ("boxes", include_str!("../core/boxes.pel")),
+    ("columns", include_str!("../core/columns.pel")),
+    ("objects", include_str!("../core/objects.pel")),
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleId(pub u32);
 
@@ -65,10 +82,10 @@ impl Program {
         Program::default()
     }
 
-    /// Adds the always-available library as the package `core`; its `pub` names are in scope
-    /// in every module.
+    /// Adds the always-available library as the package `core`; the `pub` names of all its modules
+    /// are in scope in every module.
     pub fn add_core(&mut self) -> PackageId {
-        self.add_package("core", &[("core", include_str!("../core/core.pel"))])
+        self.add_package("core", CORE_MODULES)
     }
 
     /// A program that already contains the core library.

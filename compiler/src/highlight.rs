@@ -767,7 +767,11 @@ mod tests {
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.extension().is_some_and(|x| x == "pel"))
             .collect();
-        files.push(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("core/core.pel"));
+        for e in std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("core"))
+            .unwrap()
+        {
+            files.push(e.unwrap().path());
+        }
         assert!(files.len() > 5);
         for f in files {
             let src = std::fs::read_to_string(&f).unwrap();

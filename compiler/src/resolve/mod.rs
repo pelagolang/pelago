@@ -351,21 +351,25 @@ impl<'p> Resolver<'p> {
         add(self, "some", DefKind::BuiltinCase);
     }
 
-    /// The `pub` names of the `core` package become part of the prelude.
+    /// The `pub` names of every module of the `core` package become part of the prelude.
     fn fill_prelude_from_core(&mut self) {
         let Some(core) = self.program.find_package("core") else {
             return;
         };
         let root = self.package_roots[core.0 as usize];
-        let Some(&m) = self.scopes[root].children.get("core") else {
-            return;
-        };
-        let names: Vec<(String, DefId)> = self.scopes[m]
-            .names
-            .iter()
-            .filter(|(_, e)| e.origin == Origin::Local && matches!(e.vis, Vis::Pub | Vis::Export))
-            .map(|(n, e)| (n.clone(), e.def))
-            .collect();
+        let mods: Vec<usize> = self.scopes[root].children.values().copied().collect();
+        let mut names: Vec<(String, DefId)> = Vec::new();
+        for m in mods {
+            names.extend(
+                self.scopes[m]
+                    .names
+                    .iter()
+                    .filter(|(_, e)| {
+                        e.origin == Origin::Local && matches!(e.vis, Vis::Pub | Vis::Export)
+                    })
+                    .map(|(n, e)| (n.clone(), e.def)),
+            );
+        }
         for (n, d) in names {
             self.prelude.insert(n, d);
         }
