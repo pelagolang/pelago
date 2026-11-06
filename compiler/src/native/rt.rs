@@ -86,14 +86,14 @@ const LARGE_CLASS: i32 = 255;
 const RESERVE_MIN: i32 = 1 << 20;
 
 /// Linux: the largest payload served from the region; bigger blocks get their own mapping.
-const REGION_MAX: i32 = 8192;
+pub(super) const REGION_MAX: i32 = 8192;
 /// Linux: the region is asked for this many bytes of address space (nothing is resident until used)
 /// and the request is halved until the system agrees, down to `REGION_MIN`.
-const REGION_BYTES: i64 = 1 << 36;
-const REGION_MIN: i32 = 1 << 24;
+pub(super) const REGION_BYTES: i64 = 1 << 36;
+pub(super) const REGION_MIN: i32 = 1 << 24;
 /// Linux: the region starts with the class table (`CLASSES` entries of 32 bytes: free list, bump
 /// pointer, bump limit, block size) and then the span table at this offset (one byte per 64 KiB span).
-const SPAN_TABLE: i32 = 2048;
+pub(super) const SPAN_TABLE: i32 = 2048;
 
 /// Emits the Linux small-block allocator for `rt_alloc` (payload size in `rdi`, `rbx` and `r12` saved
 /// by the caller): classes 16 to 256 bytes in steps of 16, then four per doubling up to
