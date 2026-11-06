@@ -1,0 +1,49 @@
+fn encode(src: [uint8], table: [uint8]) -> [uint8] {
+    var out: [uint8] = []
+    const full = src.len() - src.len() % 3
+    var i = 0
+    while i < full {
+        const v = ((src[i] to int) << 16) | ((src[i + 1] to int) << 8) | (src[i + 2] to int)
+        out.push!(table[(v >> 18) & 63])
+        out.push!(table[(v >> 12) & 63])
+        out.push!(table[(v >> 6) & 63])
+        out.push!(table[v & 63])
+        i += 3
+    }
+    return out
+}
+
+fn decode(src: [uint8], rev: [uint8]) -> [uint8] {
+    var size = src.len()
+    var out: [uint8] = []
+    var i = 0
+    while i + 4 <= size {
+        const v = ((rev[src[i] to int] to int) << 18) | ((rev[src[i + 1] to int] to int) << 12) | ((rev[src[i + 2] to int] to int) << 6) | (rev[src[i + 3] to int] to int)
+        out.push!(rt_to_byte((v >> 16) & 255))
+        out.push!(rt_to_byte((v >> 8) & 255))
+        out.push!(rt_to_byte(v & 255))
+        i += 4
+    }
+    return out
+}
+
+fn main() {
+    var table: [uint8] = []
+    for i in 0..26 { table.push!(rt_to_byte(65 + i)) }
+    for i in 0..26 { table.push!(rt_to_byte(97 + i)) }
+    for i in 0..10 { table.push!(rt_to_byte(48 + i)) }
+    table.push!(rt_to_byte(43))
+    table.push!(rt_to_byte(47))
+    var rev: [uint8] = []
+    for i in 0..256 { rev.push!(rt_to_byte(0)) }
+    for i in 0..64 { rev[table[i] to int] = rt_to_byte(i) }
+    var text: [uint8] = []
+    for i in 0..131072 { text.push!(97 to uint8) }
+    const encoded = encode(text, table)
+    const decoded = decode(encoded, rev)
+    var s_encoded = 0
+    var s_decoded = 0
+    for t in 0..256 { s_encoded += encode(text, table).len() }
+    for t in 0..256 { s_decoded += decode(encoded, rev).len() }
+    print(decoded.len(), s_encoded, s_decoded)
+}
