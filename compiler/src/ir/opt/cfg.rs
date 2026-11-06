@@ -1,8 +1,8 @@
 //! Simplify the control-flow graph: fold branches whose result is known without analysis, skip empty
 //! blocks, merge a block into its only predecessor, drop blocks nobody can reach.
 
+use super::fx::HashMap;
 use crate::ir::*;
-use std::collections::HashMap;
 
 pub fn run(f: &mut Func) -> bool {
     let mut changed = false;

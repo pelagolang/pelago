@@ -6,8 +6,8 @@
 //! `analyze` reads the exit off the function as the front end wrote it (before the tail-call pass
 //! changes the entry), `apply` rewrites the calls to the function from its own body.
 
+use super::fx::HashMap;
 use crate::ir::*;
-use std::collections::HashMap;
 
 /// What a call may skip.
 #[derive(Clone)]

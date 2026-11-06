@@ -7,8 +7,8 @@
 //! fresh call did, so the only thing to rule out is a call that was handed the address of one of
 //! this frame's slots: the next round would overwrite what the callee was reading.
 
+use super::fx::HashSet;
 use crate::ir::*;
-use std::collections::HashSet;
 
 /// How the sum is formed in an accumulator site: `Bin(Add)` or `Checked(Add, signed)`.
 #[derive(Clone, Copy, PartialEq)]
@@ -297,7 +297,7 @@ fn returned(f: &Func, b: &Block) -> Option<Option<Value>> {
 
 /// Is the address of a slot of this frame passed to the call or stored somewhere?
 fn escapes(f: &Func, sites: &[Site]) -> bool {
-    let mut tainted: HashSet<Value> = HashSet::new();
+    let mut tainted: HashSet<Value> = HashSet::default();
     loop {
         let before = tainted.len();
         for b in &f.blocks {

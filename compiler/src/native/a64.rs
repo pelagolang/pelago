@@ -854,6 +854,16 @@ impl Asm {
         self.fp2(0x1E21_C000, d, vd, vn);
     }
 
+    /// `frintm`: round toward minus infinity (floor).
+    pub fn frintm(&mut self, d: bool, vd: V, vn: V) {
+        self.fp2(0x1E25_4000, d, vd, vn);
+    }
+
+    /// `frintp`: round toward plus infinity (ceil).
+    pub fn frintp(&mut self, d: bool, vd: V, vn: V) {
+        self.fp2(0x1E24_C000, d, vd, vn);
+    }
+
     // ---- Vectors (two 64-bit lanes) --------------------------------------------------------------
 
     fn vec3(&mut self, base: u32, vd: V, vn: V, vm: V) {

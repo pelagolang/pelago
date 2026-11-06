@@ -99,29 +99,21 @@ impl float {
     fn min(self, other: float) -> float = self < other ? self : other
     fn max(self, other: float) -> float = self > other ? self : other
 
-    fn sqrt(self) -> float {
-        if self < 0.0 { return 0.0 / 0.0 }
-        if self == 0.0 { return 0.0 }
-        var x = self > 1.0 ? self : 1.0
-        var i = 0
-        while i < 80 {
-            x = (x + self / x) / 2.0
-            i += 1
-        }
-        x
-    }
+    //~ The square root, correctly rounded (`sqrtsd` on x86-64, `fsqrt` on AArch64). A negative number gives NaN.
+    fn sqrt(self) -> float = rt_sqrt(self)
 
-    fn floor(self) -> float {
-        const t = rt_to_int(self) to float
-        t > self ? t - 1.0 : t
-    }
+    //~ The largest whole number not above `self`; exact for every float, and NaN and infinities stay as they are.
+    fn floor(self) -> float = rt_floor(self)
 
-    fn ceil(self) -> float {
-        const t = rt_to_int(self) to float
-        t < self ? t + 1.0 : t
-    }
+    //~ The smallest whole number not below `self`.
+    fn ceil(self) -> float = rt_ceil(self)
 
-    fn round(self) -> float = self < 0.0 ? 0.0 - (0.0 - self + 0.5).floor() : (self + 0.5).floor()
+    //~ The nearest whole number; a half goes away from zero. `self - floor` is exact, so no rounding error creeps in.
+    fn round(self) -> float {
+        const f = rt_floor(self)
+        const d = self - f
+        (self < 0.0 ? d > 0.5 : d >= 0.5) ? f + 1.0 : f
+    }
 
     //~ The whole number below `self` toward zero. Stops the program when `self` is NaN or does not fit an `int`.
     fn truncInt(self) -> int {

@@ -24,9 +24,9 @@ struct Info {
 
 pub fn run(f: &mut Func) -> bool {
     // Constants that are integers, and the slots.
-    let mut consts: HashMap<Value, i128> = HashMap::new();
-    let mut info: HashMap<Value, Info> = HashMap::new();
-    let mut slot_inst: HashMap<Value, usize> = HashMap::new();
+    let mut consts: HashMap<Value, i128> = HashMap::default();
+    let mut info: HashMap<Value, Info> = HashMap::default();
+    let mut slot_inst: HashMap<Value, usize> = HashMap::default();
     for b in &f.blocks {
         for &i in &b.insts {
             let inst = &f.insts[i];
@@ -43,7 +43,7 @@ pub fn run(f: &mut Func) -> bool {
                             bad: false,
                             copies: Vec::new(),
                             ranges: Vec::new(),
-                            wide: HashSet::new(),
+                            wide: HashSet::default(),
                         },
                     );
                     slot_inst.insert(r, i);
@@ -262,8 +262,8 @@ pub fn run(f: &mut Func) -> bool {
     todo.sort();
     let todo_set: HashSet<Value> = todo.iter().copied().collect();
     // New slots, one per piece.
-    let mut piece_slot: HashMap<(Value, u32), Value> = HashMap::new();
-    let mut new_insts: HashMap<usize, Vec<usize>> = HashMap::new();
+    let mut piece_slot: HashMap<(Value, u32), Value> = HashMap::default();
+    let mut new_insts: HashMap<usize, Vec<usize>> = HashMap::default();
     for s in &todo {
         let inf = &info[s];
         let at = slot_inst[s];

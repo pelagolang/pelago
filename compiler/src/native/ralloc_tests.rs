@@ -104,6 +104,9 @@ impl Target for Toy {
             _ => &self.float_scratch,
         }
     }
+    fn jump(&self, to: u32) -> MInst {
+        MInst::new(JMP, vec![Operand::Block(to)]).branch().nofall()
+    }
     fn op_name(&self, op: u16) -> &'static str {
         match op {
             LI => "li",

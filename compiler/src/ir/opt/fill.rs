@@ -15,15 +15,15 @@
 //! that is, after the loop has run to its end. `X` has no other way in, so the loop cannot be skipped.
 
 use super::dom::Dom;
+use super::fx::HashSet;
 use crate::ir::*;
-use std::collections::HashSet;
 
 /// Clearing a small slot is a few moves; only big ones are worth looking at.
 const BIG: u32 = 4096;
 
 /// The `Slot` instructions (by instruction number) whose clearing is not needed.
 pub fn filled_slots(f: &Func) -> HashSet<usize> {
-    let mut out = HashSet::new();
+    let mut out = HashSet::default();
     let mut slots = Vec::new();
     for b in &f.blocks {
         for &i in &b.insts {
@@ -73,7 +73,7 @@ fn fills(
     size: i128,
 ) -> bool {
     // The addresses made from the slot.
-    let mut derived: HashSet<Value> = HashSet::from([s]);
+    let mut derived: HashSet<Value> = [s].into_iter().collect();
     loop {
         let before = derived.len();
         for inst in &f.insts {

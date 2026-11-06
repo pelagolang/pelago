@@ -15,6 +15,8 @@ pub ext fn rt_realloc(p: ptr, size: int) -> ptr
 pub ext fn rt_ctx_init(base: ptr, size: int, code: ptr, env: ptr) -> ptr
 //~ Saves where this context stands at `save` and continues the context `to`; comes back when something switches to the saved handle.
 pub ext fn rt_ctx_switch(save: ptr, to: ptr)
+//~ The address of a function declared with no parameters, for `rt_ctx_init`.
+pub ext fn rt_fn_addr<F>(f: F) -> ptr
 pub ext fn rt_offset(p: ptr, bytes: int) -> ptr
 pub ext fn rt_copy(dst: ptr, src: ptr, bytes: int)
 pub ext fn rt_is_null(p: ptr) -> bool
@@ -35,6 +37,9 @@ pub ext fn rt_print(p: ptr, n: int)
 pub ext fn rt_to_byte(n: int) -> uint8
 pub ext fn rt_to_int(x: float) -> int
 pub ext fn rt_fma(a: float, b: float, c: float) -> float
+pub ext fn rt_sqrt(a: float) -> float
+pub ext fn rt_floor(a: float) -> float
+pub ext fn rt_ceil(a: float) -> float
 pub ext fn rt_to_char(n: int) -> char
 pub ext fn rt_show_to<T>(src: ptr, out: ptr)
 pub ext fn rt_show_item_to<T>(src: ptr, out: ptr)

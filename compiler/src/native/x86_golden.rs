@@ -387,6 +387,18 @@ pub fn golden() -> Vec<Case> {
             a.cvt_float_resize(Xmm(1), Xmm(2), false)
         }),
         ("xorps xmm0, xmm0", "0f 57 c0", |a| a.fxor(Xmm(0), Xmm(0))),
+        ("sqrtsd xmm0, xmm1", "f2 0f 51 c1", |a| {
+            a.fsqrt(Xmm(0), Xmm(1), true)
+        }),
+        ("sqrtss xmm9, xmm2", "f3 44 0f 51 ca", |a| {
+            a.fsqrt(Xmm(9), Xmm(2), false)
+        }),
+        ("roundsd xmm0, xmm1, 9", "66 0f 3a 0b c1 09", |a| {
+            a.fround(Xmm(0), Xmm(1), 1, true)
+        }),
+        ("roundss xmm3, xmm10, 10", "66 41 0f 3a 0a da 0a", |a| {
+            a.fround(Xmm(3), Xmm(10), 2, false)
+        }),
         ("movq xmm0, rax", "66 48 0f 6e c0", |a| {
             a.movq_to_xmm(Xmm(0), RAX, true)
         }),

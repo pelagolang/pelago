@@ -292,6 +292,28 @@ Hints are written as attributes (`@name`) in front of a declaration. They are
 requests: by default the compiler decides, and it usually knows better. `@inline`
 asks the compiler to expand the function at every call.
 
+`@checkfree` is the one hint that can fail the build. It marks a kernel that must run without
+index tests:
+
+```
+@checkfree
+fn dot(a: [int], b: [int]) -> int {
+    var s = 0
+    for i in 0..b.len() { s += a[i] * b[i] }
+    return s
+}
+```
+
+Index tests are never dropped. For a loop whose index is the counter plus a constant, the
+optimiser makes the test once, in front of the loop (`start + k >= 0` and `n - 1 + k < len`, plus
+a check that nothing the loop stores reaches a length it reads), and runs a copy of the loop
+without the tests when that guard holds. When it fails, the original loop runs, so an out-of-range
+index still stops at the same pass with the same output. Overflow traps are untouched.
+`@checkfree` asks for this to work on every index of the function: after optimising, a test left
+outside those fallback copies is a build error (`pelago build`, `run --opt`, `run --native`, `ir`),
+so a change that makes a kernel slow again is caught. A `@checkfree` function is never inlined.
+The guard is only made for loops that may run 16 passes or more and at most 2^32.
+
 ## 17. Async functions
 
 ```
@@ -387,3 +409,4 @@ The checker finds the consuming forms that are written out (`sink x` argument, `
 
 - **Consuming a value is marked `!!`:** `c.close!!()`. Changing stays `c.bump!()`.
 - `sink` arguments are repeated at the call site like `inout` ones: `finish(sink scores)`.
+- **`@checkfree` fails the build** when the optimiser leaves an index test on the fast path of the function; the checked fallback copy of a guarded loop does not count (section 16, `docs/design/ir.md`).

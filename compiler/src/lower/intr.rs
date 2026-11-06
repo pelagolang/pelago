@@ -126,6 +126,18 @@ impl<'a> Lowerer<'a> {
                 };
                 self.wrap(Op::CtxInit(b, n, c, e), ptr, sp)
             }
+            "rt_fn_addr" => {
+                let Some(ExprKind::Name(id)) = args.first().map(|a| &a.value.kind) else {
+                    return self.unsupported(sp, "`rt_fn_addr` needs the name of a function");
+                };
+                let Some(def) = self.res.use_at(self.f.file, id.span.start) else {
+                    return self.unsupported(sp, "`rt_fn_addr` of an unknown name");
+                };
+                let Some(f) = self.request_fn(def, &HashMap::new()) else {
+                    return self.unsupported(sp, "`rt_fn_addr` of this function");
+                };
+                self.wrap(Op::FuncAddr(f), ptr, sp)
+            }
             "rt_ctx_switch" => {
                 let (Some(s), Some(t)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {
@@ -243,6 +255,17 @@ impl<'a> Lowerer<'a> {
                     return Res::Never;
                 };
                 self.wrap(Op::Fma(a, b, c), IrTy::F64, sp)
+            }
+            "rt_sqrt" | "rt_floor" | "rt_ceil" => {
+                let Some(x) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
+                let o = match name.as_str() {
+                    "rt_sqrt" => FUn::Sqrt,
+                    "rt_floor" => FUn::Floor,
+                    _ => FUn::Ceil,
+                };
+                self.wrap(Op::FUn(o, x), IrTy::F64, sp)
             }
             "rt_to_int" => {
                 let Some(x) = self.arg_scalar(args, 0) else {

@@ -10,8 +10,8 @@
 //! wrapping operations pass demand on bit by bit; checked ones (`add_checked`, ...) demand every
 //! bit, so a trap still happens exactly when it did.
 
+use super::fx::HashMap;
 use crate::ir::*;
-use std::collections::HashMap;
 
 fn full(f: &Func, v: Value) -> u64 {
     match f.values[v.0 as usize] {
@@ -32,7 +32,7 @@ fn low(d: u64) -> u64 {
 
 pub fn run(f: &mut Func) -> bool {
     let n = f.values.len();
-    let mut consts: HashMap<Value, u64> = HashMap::new();
+    let mut consts: HashMap<Value, u64> = HashMap::default();
     for b in &f.blocks {
         for &i in &b.insts {
             let inst = &f.insts[i];
@@ -109,7 +109,7 @@ pub fn run(f: &mut Func) -> bool {
             break;
         }
     }
-    let mut rep: HashMap<Value, Value> = HashMap::new();
+    let mut rep: HashMap<Value, Value> = HashMap::default();
     for b in &f.blocks {
         for &i in &b.insts {
             let inst = &f.insts[i];

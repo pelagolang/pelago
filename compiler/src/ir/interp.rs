@@ -658,6 +658,14 @@ impl Machine<'_> {
                 Val::Int(n) => Val::Int(mask(0u128.wrapping_sub(n), bits_of(ty(a)))),
                 other => other,
             },
+            Op::FUn(o, a) => match get(a) {
+                Val::Float(x) => Val::Float(if ty(a) == IrTy::F32 {
+                    o.apply(x as f32 as f64) as f32 as f64
+                } else {
+                    o.apply(x)
+                }),
+                other => other,
+            },
             Op::Not(a) => match get(a) {
                 Val::Bool(b) => Val::Bool(!b),
                 Val::Int(n) => Val::Int(mask(!n, bits_of(ty(a)))),

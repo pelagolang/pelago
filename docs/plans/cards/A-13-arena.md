@@ -21,3 +21,5 @@ An owned `arena` value with bump allocation, checked handles (`aref<T>`, 32-bit 
 
 - AR1 plan: this card and `docs/design/arena.md`.
 - AR2 library: `arena`, `aref<T>`, `rt_needs_drop<T>()`, tests in `lower/tests.rs` (interpreter, optimiser, native).
+- AR3: `bench/programs/bintrees/pelago_arena.pel` (same output, 1310700). Native, medium size, 3 runs each in a cloud container: box 0.10 to 0.15 s, arena 0.066 to 0.079 s (about 1.6x). One quick run, not the harness.
+- AR5 finding: `iter<T>` is the same eager buffer as `list<T>` (`iters.pel`), so a lazy `chars()` is not a library change. It needs a lowering rule for `for c of s.chars()` (decode in place) or a real lazy iterator; that is a separate, larger card.

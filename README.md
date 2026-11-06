@@ -70,7 +70,7 @@ The tool is called `pelago`; on Windows (PowerShell) use `cargo run -- ...` the 
 | Command | What it does |
 |---|---|
 | `pelago check <path>` | parse, resolve names and check types of a file or a directory |
-| `pelago run <path>` | lower and run `main` in the IR interpreter (`--opt` optimises first, `--stats` counts, `--native` builds and runs machine code) |
+| `pelago run <path>` | build machine code and run `main` (optimised; `--no-opt`, `--leak-check`); `--interp` runs the IR interpreter instead (`--opt` optimises first, `--stats` counts steps) |
 | `pelago build [-o out] <path>` | build a native executable (x86-64, or AArch64 Linux with `--arch=aarch64`), optimised by default (`--no-opt`, `--target=linux\|windows`, `--leak-check`) |
 | `pelago ir <path>` | check, lower to the IR, verify and print it |
 | `pelago fmt [--check] <path>...` | format `.pel` files in place; `-` filters standard input to standard output |

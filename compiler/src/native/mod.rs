@@ -116,10 +116,15 @@ impl Uses {
 }
 
 pub mod a64;
+pub mod a64_emit;
+pub mod a64_mir;
+pub mod a64_select;
 pub mod elf;
 pub mod exec;
 pub mod gen;
 pub mod gen_a64;
+#[cfg(target_os = "linux")]
+pub mod load;
 pub mod macho;
 pub mod mir;
 pub mod pe;
