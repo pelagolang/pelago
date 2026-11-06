@@ -36,9 +36,9 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 | [S-07](cards/S-07-formatter.md) | `pelago fmt` and LSP formatting: token layout, `[fmt]` in `pelago.toml`, wrapping, import sorting, tree-based indentation | `compiler/src/fmt/` |
 | [S-05](cards/S-05-zed-and-tree-sitter.md) | Tree-sitter grammar (`pelagolang/tree-sitter-pelago`) and Zed extension (`pelagolang/zed-pelago`), the VS Code extension split out to `pelagolang/vscode-pelago`; done (owner) | the three repositories |
 | [A-01](cards/A-01-cleanup.md) | `stubs.rs` removed | `compiler/src/lower/` |
-| [A-07](cards/A-07-async.md) | `async fn` / `await` / `future<T>` / `block_on` at stage 0 (eager); suspension is S-04 | `core.pel`, IR26 |
+| [A-07](cards/A-07-async.md) | `async fn` / `await` / `future<T>` / `blockOn` at stage 0 (eager); suspension is S-04 | `core.pel`, IR26 |
 | [B-03](cards/B-03-highlighter.md) | Highlighter: `pelago highlight`, generated TextMate grammar, VS Code extension | `compiler/src/highlight.rs`, `editors/` |
-| [A-05](cards/A-05-meta.md) | `meta`: `meta if` and `target`, `meta N`, `meta expr`, `meta fn`, `meta_note`/`meta_error`, `@meta_limit`; example `tables.pel` (CRC table at compile time) | `lower/meta.rs`, `meta.rs`, IR25 |
+| [A-05](cards/A-05-meta.md) | `meta`: `meta if` and `target`, `meta N`, `meta expr`, `meta fn`, `metaNote`/`metaError`, `@meta_limit`; example `tables.pel` (CRC table at compile time) | `lower/meta.rs`, `meta.rs`, IR25 |
 | [A-06](cards/A-06-soa.md) | `soa<T>`: columns per field, element views, loops, library operations (IR24); blocked layout left for the backend | `lower/soa.rs` |
 | [A-04](cards/A-04-ir-optimiser.md) | IR optimiser: CFG, DCE, mem2reg, SROA, SCCP, inlining, `--opt`; steps down 30 to 40 percent on the samples (IR23). Remaining: default on, check removal, copies between slots | `compiler/src/ir/opt/` |
 | [A-03](cards/A-03-temporaries-ledger.md) | The ledger for owning scalar temporaries (objects, boxes); IR22. Memory temporaries already ended with their statement; removing the flags is A-04's job | `lower/func.rs`, IR22 |

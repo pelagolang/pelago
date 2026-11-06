@@ -22,7 +22,7 @@ The words `async` and `await` are reserved and parse. Using them today is an err
 If the owner reopens it, the least costly design that fits this language:
 
 1. **Stackless coroutines by state machine**, generated in the lowering: an `async fn` becomes a struct holding its locals and a state number; `await` is a state boundary. The checker rule: *nothing that is a view or `inout` may live across an `await`* (this is exactly the existing "view escape" analysis, applied to the await point). Everything else is an ordinary owned local and is saved in the state struct.
-2. **No built-in executor.** `async fn` returns `future<T>`; the library offers `block_on(f)` and a small single-threaded executor written in the language. The program chooses its executor. This keeps "no runtime" true: the runtime is a library, like `chan` today.
+2. **No built-in executor.** `async fn` returns `future<T>`; the library offers `blockOn(f)` and a small single-threaded executor written in the language. The program chooses its executor. This keeps "no runtime" true: the runtime is a library, like `chan` today.
 3. **`await` inside loops and `?`** must work with the ledger (A-03) and drop rules: every live owned local at an `await` is part of the saved state and is dropped if the future is dropped before it finishes (cancel by drop).
 4. **Interaction with `select`:** `select` over futures instead of channels; the cooperative `select` already written is the scalar form of this.
 5. **Cost model:** a future's size is known at compile time (sum of the largest live set), so it can live on the stack or in a `box`. No hidden allocation, in line with rule TC4.
