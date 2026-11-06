@@ -2665,6 +2665,32 @@ fn big_blocks_grow_and_are_reused() {
     );
 }
 
+/// Counters bumped on one side of an `if` (a `select` or a join block of the optimiser) are bounded
+/// by the trip count too; a bump that can pass the maximum still stops the program.
+#[test]
+fn counters_behind_an_if_keep_their_traps() {
+    agree(
+        "fn main() {
+            var ok = 0
+            var bad = 0
+            var t = 0
+            for i in 0..5000 {
+                if i % 3 == 0 { bad += 1 } else { ok += 1; t += i & 255 }
+            }
+            print(ok, bad, t)
+        }",
+    );
+    agree(
+        "fn main() {
+            var t = 9223372036854775000
+            for i in 0..5000 {
+                if i % 3 == 0 { t += 1 }
+            }
+            print(t)
+        }",
+    );
+}
+
 /// A loop limit that is not a constant but has a known range bounds the trip count too; a limit
 /// that can be huge still traps.
 #[test]
