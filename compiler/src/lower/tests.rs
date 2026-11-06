@@ -2956,6 +2956,17 @@ fn arena_stale_handle_and_drop_glue_stop() {
     assert!(o.output.contains("without drop glue"), "{}", o.output);
 }
 
+#[test]
+fn for_over_chars_decodes_in_place() {
+    let src = "fn main() {\n var n = 0\n var last = 'a'\n for c of \"aé€😀z\".chars() { n += 1\n last = c\n if c == 'é' { continue }\n print(c) }\n print(n, last)\n const s = \"hi\".chars().toList()\n print(s.len())\n var t = \"abc\"\n for c of t.chars() { if c == 'b' { break }\n print(c) } }\n";
+    assert_eq!(output_of(src), "a\n€\n😀\nz\n5 z\n2\na\n");
+}
+
+#[test]
+fn for_over_chars_native_agrees() {
+    agree("fn main() {\n var n = 0\n for c of \"aé€😀z\".chars() { n += 1\n if c == 'é' { continue }\n print(c) }\n print(n) }\n");
+}
+
 // ---- Pools and narrow links --------------------------------------------------------------------
 
 #[test]

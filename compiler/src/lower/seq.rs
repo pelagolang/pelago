@@ -3,6 +3,7 @@
 //! The work is done by library functions written in the language (`rt_str_push`, `rt_show_int`, ...)
 //! that the lowering calls by name.
 
+use super::expr::strip_parens;
 use super::*;
 
 /// The buffer `print` of one integer uses: the digits, a sign and a newline, right-aligned.
@@ -890,6 +891,11 @@ impl<'a> Lowerer<'a> {
         body: &mut LoopBody<'a, '_>,
         keys_only: bool,
     ) -> Res {
+        if let ([p], false) = (pats, keys_only) {
+            if let Some(base) = self.chars_base(iter) {
+                return self.for_chars(label, p, base, iter.span, body);
+            }
+        }
         let Some(it) = self.ty_of(iter) else {
             return self.unsupported(iter.span, "looping over a value of unknown type");
         };
@@ -1049,6 +1055,111 @@ impl<'a> Lowerer<'a> {
         }
         let one = self.i64c(1);
         if let Some(next) = self.emit(Op::Bin(BinOp::Add, i, one), Some(IrTy::I64), iter.span) {
+            self.jump(head, vec![next]);
+        }
+        self.start(exit);
+        self.pop_scope();
+        Res::Unit
+    }
+}
+
+impl<'a> Lowerer<'a> {
+    /// `s.chars()` on a `str` or `string`: the text `s`.
+    fn chars_base(&mut self, e: &'a Expr) -> Option<&'a Expr> {
+        let ExprKind::Call { callee, args, .. } = &e.kind else {
+            return None;
+        };
+        let ExprKind::Field {
+            base,
+            name,
+            optional: false,
+        } = &strip_parens(callee).kind
+        else {
+            return None;
+        };
+        if !args.is_empty() || self.src_text(name.span) != "chars" {
+            return None;
+        }
+        let bt = self.ty_of(base)?;
+        matches!(self.kind(bt), TyKind::Str | TyKind::String).then_some(&**base)
+    }
+
+    /// `for c of s.chars() { body }`: decodes one character per turn from the text itself, so no list is built.
+    /// The library function `rt_char_at` gives the code point and the width; the width is kept in a slot for the step.
+    fn for_chars(
+        &mut self,
+        label: Option<String>,
+        pat: &'a Pattern,
+        base: &'a Expr,
+        span: Span,
+        body: &mut LoopBody<'a, '_>,
+    ) -> Res {
+        self.push_scope();
+        let Res::Val(h) = self.expr(base) else {
+            self.f.scopes.pop();
+            return Res::Never;
+        };
+        let len = self.load_at(h, 8, IrTy::I64);
+        let data = self.load_at(h, 0, IrTy::Ptr);
+        let int = self.types.int;
+        let char_ty = self.types.char_;
+        let wslot = self.slot_for(int);
+        let cslot = self.slot_for(char_ty);
+        let head = self.new_block(&[IrTy::I64]);
+        let body_b = self.new_block(&[]);
+        let step = self.new_block(&[]);
+        let exit = self.new_block(&[]);
+        let zero = self.i64c(0);
+        self.jump(head, vec![zero]);
+        self.start(head);
+        let i = self.f.func.block_params(head)[0];
+        if let Some(c) = self.emit(Op::Cmp(CmpOp::Lt, i, len), Some(IrTy::Bool), span) {
+            self.branch(c, body_b, exit);
+        }
+        self.start(body_b);
+        let Some(r) = self.call_core("rt_char_at", vec![data, i, len]) else {
+            self.f.scopes.pop();
+            return Res::Never;
+        };
+        let three = self.i64c(3);
+        let seven = self.i64c(7);
+        let code = self
+            .emit(Op::Bin(BinOp::Shr, r, three), Some(IrTy::I64), span)
+            .unwrap_or(r);
+        let width = self
+            .emit(Op::Bin(BinOp::And, r, seven), Some(IrTy::I64), span)
+            .unwrap_or(r);
+        self.store_scalar_ty(wslot, width);
+        let ch = self
+            .emit(
+                Op::Cast(CastKind::Trunc, code, IrTy::Int(32)),
+                Some(IrTy::Int(32)),
+                span,
+            )
+            .unwrap_or(code);
+        self.store_scalar_ty(cslot, ch);
+        let bind_fail = self.stop_block("pattern did not match");
+        let depth = self.f.scopes.len();
+        if !self.pat_test(pat, cslot, char_ty, bind_fail) {
+            return Res::Never;
+        }
+        self.f.loops.push(LoopCtx {
+            label,
+            cont: step,
+            exit,
+            break_ty: None,
+            break_dst: None,
+            scope_depth: depth,
+        });
+        let void = self.types.void;
+        let r = self.run_body(body, void);
+        if !matches!(r, Res::Never) {
+            self.jump(step, vec![]);
+        }
+        self.f.loops.pop();
+        self.start(step);
+        let w = self.load_at(wslot, 0, IrTy::I64);
+        if let Some(next) = self.emit(Op::Bin(BinOp::Add, i, w), Some(IrTy::I64), span) {
             self.jump(head, vec![next]);
         }
         self.start(exit);
