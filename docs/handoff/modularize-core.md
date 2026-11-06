@@ -10,23 +10,15 @@ Modularize the `core` package, add the features that killed the benchmarks (bigi
 - #132 camelCase library (B8 in docs/design/basics.md, ROADMAP "Naming" row)
 - #133 float to int, byte types
 
-## Open PR
-- #136 `claude/refactor/core-index-and-library-tests`: `core.pel` as an index file (like `index.ts`/`mod.rs`), library tests moved out of the source files into `compiler/core/tests/` and `compiler/std/tests/` (`.pel` + `.out`, `.stops` marker = must panic), run by `library_test_suites` in `compiler/src/lower/tests.rs`. Needs `origin/main` merged in again (main moved), CI green, then squash merge. Tick every PR-template checkbox, assign C-EO.
+## Status (updated 2026-11-06): all merged
+- #136 core.pel index + library test suites (core/tests, std/tests)
+- #169 fix(lower): copy of an empty list/string (test `core/tests/copy_empty`)
+- #170 `std` package + `std.big`; #171 `std.json` + exact `parseFloat`; #172 `std.regex`
+No open PRs and no unpushed work remain for this thread. The old branches (`claude/fix/copy-of-empty-list`, `claude/feat/std-libs`, `claude/refactor/core-index-and-library-tests`) are merged or superseded and can be deleted.
 
-## Pushed branches without PRs (stacked, in this order)
-1. `claude/fix/copy-of-empty-list` (c7cb286, based on the #136 branch): fixes `copy` of an empty list/string then `push!` crashing ("used an address outside memory"). Fix is in `compiler/src/lower/glue.rs` (`clone_body`: cap = max(len,1)); test `compiler/core/tests/copy_empty`.
-2. `claude/feat/std-libs` (81f3cab) on top of 1. Three commits:
-   - 3a086fd `std` package (loaded only when a program has `import std.<module>`; `STD_MODULES` in `package.rs`) plus `std.big` (bigint, base 1e9 limbs, Knuth D), `examples/programs/factorial.pel`, test `std_is_added_only_when_imported`
-   - 7ca0e7e `std.json` plus exact `str.parseFloat` (exponents) and `pushChar`/`pushByte`
-   - 81f3cab `std.regex` (Pike VM over bytes, leftmost-first, verified against Python `re` on 44 patterns)
-   Plus `docs/design/std.md`.
-   (Older local branches std-bigint/std-json/std-regex were superseded and never pushed.)
-
-## Next steps
-1. Merge `origin/main` into #136, wait for CI, squash merge.
-2. Rebase the fix branch onto main, open a PR `fix(lower): ...`, merge.
-3. Split `std-libs` into three PRs (std+bigint, json, regex) rebased on main (squash merges make stacked branches need rebasing/cherry-picking), or open one PR. Commits are already separated.
-4. Use the PR template (`.github/pull_request_template.md`), all boxes ticked; Conventional Commit titles.
+## Next steps (optional follow-ups)
+1. Decide the open questions below (mainly `rt_*` camelCase).
+2. Typed JSON decoding via `meta` reflection; coroutines (concurrency thread); file/stdin/args in the runtime period.
 
 ## Build and test (PowerShell works the same)
 ```
