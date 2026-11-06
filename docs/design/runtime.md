@@ -100,6 +100,21 @@ In dependency order; each can be one PR.
 6. Allocator for several threads, then `concurrency-runtime.md` stages.
 7. Spans in `Stop` messages.
 
+## Related work already on the board
+
+- **Threads and OS table:** `concurrency-runtime.md` section 3 already fixes the thread-side `os_*` functions
+  (`os_clock_now`, `os_sleep_until`/`os_park_until`, `os_wake`, `os_thread_start`, `os_stack_alloc`/`os_stack_free`,
+  `os_cpu_count`, `os_thread_id`, `os_exit`). The first set in section 2 above must use those names and signatures;
+  this page adds the I/O, files, args, environment and random functions around them.
+- **Heap:** `heap.md` (H0 to H6) replaces the allocator with reserved address ranges and spans. Its open questions
+  (reservation size, zeroing rule, where the allocator is written, huge pages) belong to this period too.
+  `arena.md` (A-13) is merged and its own questions are open.
+- **`std`:** an unmerged branch `claude/feat/std-libs` (`std.big`, `std.json`, `std.regex`, `docs/design/std.md`)
+  already makes a `std` package. Section 3 must be reconciled with it before work package 4: `std.io`, `std.fs`,
+  `std.env`, `std.time` and `std.random` are the OS-facing modules, the branch has the pure-library ones.
+- **Open questions of the concurrency thread** (stackful tasks as the model, async on tasks, unwinding of cancelled
+  tasks, detached tasks at the end of `main`, the 256 KiB task stack) are in `docs/handoff/concurrency.md` on PR #157.
+
 ## Questions for the owner
 
 - **R1** Is the `core`/`std` split above right (prelude small, OS access in `std`)?
