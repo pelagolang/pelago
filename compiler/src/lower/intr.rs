@@ -539,11 +539,16 @@ impl<'a> Lowerer<'a> {
     }
 
     pub(crate) fn print_newline(&mut self) {
-        let d = self.module.add_data(b"\n");
+        self.print_static(b"\n");
+    }
+
+    /// Writes constant bytes.
+    pub(crate) fn print_static(&mut self, bytes: &[u8]) {
+        let d = self.module.add_data(bytes);
         let p = self.emit(Op::DataAddr(d), Some(IrTy::Ptr), Span::new(0, 0));
-        let one = self.i64c(1);
+        let n = self.i64c(bytes.len() as i64);
         if let Some(p) = p {
-            self.emit(Op::Print(p, one), None, Span::new(0, 0));
+            self.emit(Op::Print(p, n), None, Span::new(0, 0));
         }
     }
 

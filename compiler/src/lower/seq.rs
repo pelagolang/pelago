@@ -298,6 +298,9 @@ impl<'a> Lowerer<'a> {
                 return res;
             }
         }
+        if let Some(res) = self.print_texts(e, args) {
+            return res;
+        }
         // Each value is shown into one line.
         let line = self.slot_bytes(24, 8);
         let z = self.i64c(0);
@@ -328,6 +331,38 @@ impl<'a> Lowerer<'a> {
         let n = self.load_at(line, 8, IrTy::I64);
         self.emit(Op::Print(d, n), None, e.span);
         Res::Unit
+    }
+
+    /// `print` of text values only (`string` or `str`): every value is evaluated, then each is written
+    /// as it is, with a space between and a newline at the end, so the line needs no temporary string
+    /// (and a program that only prints text needs no allocator in its executable). `None` when any
+    /// argument is another type.
+    fn print_texts(&mut self, e: &'a Expr, args: &'a [Arg]) -> Option<Res> {
+        for a in args {
+            let t = self.ty_of(&a.value)?;
+            if !matches!(self.kind(t), TyKind::String | TyKind::Str)
+                || !matches!(self.repr(t), Repr::Mem(_))
+            {
+                return None;
+            }
+        }
+        let mut parts = Vec::new();
+        for a in args {
+            let Res::Val(p) = self.expr(&a.value) else {
+                return Some(Res::Never);
+            };
+            let d = self.load_at(p, 0, IrTy::Ptr);
+            let n = self.load_at(p, 8, IrTy::I64);
+            parts.push((d, n));
+        }
+        for (i, (d, n)) in parts.into_iter().enumerate() {
+            if i > 0 {
+                self.print_static(b" ");
+            }
+            self.emit(Op::Print(d, n), None, e.span);
+        }
+        self.print_newline();
+        Some(Res::Unit)
     }
 
     /// `print(n)` of one integer: the digits are made in a buffer on the stack and printed, so the
