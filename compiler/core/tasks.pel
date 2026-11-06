@@ -145,6 +145,11 @@ pub fn rt_run_one_pending() -> bool {
 
 //~ Can a receive on this channel finish now: a value is queued, or no sender is left?
 pub fn rt_chan_ready(ch: ptr) -> bool = rt_load_int(rt_offset(ch, 24)) > 0 || rt_load_int(rt_offset(ch, 32)) == 0
+//~ Whether a send into the channel would not wait: it has room, no bound, or nobody is receiving.
+pub fn rt_chan_room(ch: ptr) -> bool {
+    const bound = rt_load_int(rt_offset(ch, 48))
+    bound == 0 || rt_load_int(rt_offset(ch, 24)) < bound || rt_load_int(rt_offset(ch, 40)) == 0
+}
 
 pub fn rt_task_body<T>(s: ptr, sink f: once fn() -> T) {
     rt_write<T>(rt_offset(s, 64), f!!())
