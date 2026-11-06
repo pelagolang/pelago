@@ -2929,3 +2929,31 @@ fn arena_stale_handle_and_drop_glue_stop() {
     assert!(o.result.is_err());
     assert!(o.output.contains("without drop glue"), "{}", o.output);
 }
+
+// ---- Pools and narrow links --------------------------------------------------------------------
+
+#[test]
+fn pool_tree_of_nodes_with_two_byte_links() {
+    let src = "struct node { l: link<node, uint16>, r: link<node, uint16>, key: int32 }\nfn make(inout p: pool<node, uint16>, d: int32) -> link<node, uint16> {\n if d == 0 { return p.add!(node { l: p.noLink(), r: p.noLink(), key: 1 }) }\n const l = make(inout p, d - 1)\n const r = make(inout p, d - 1)\n p.add!(node { l: l, r: r, key: d }) }\nfn count(p: pool<node, uint16>, t: link<node, uint16>) -> int {\n if p.isNone(t) { return 0 }\n const n = p.get(t)\n 1 + count(p, n.l) + count(p, n.r) }\nfn main() {\n var p: pool<node, uint16> = pool()\n const t = make(inout p, 10)\n print(count(p, t), p.len())\n p.remove!(t)\n const u = p.add!(node { l: p.noLink(), r: p.noLink(), key: 5 })\n print(p.get(u).key, p.len())\n p.clear!()\n print(p.len()) }\n";
+    assert_eq!(output_of(src), "2047 2047\n5 2047\n0\n");
+}
+
+#[test]
+fn pool_native_agrees() {
+    let src = "struct node { l: link<node, uint16>, r: link<node, uint16>, key: int32 }\nfn make(inout p: pool<node, uint16>, d: int32) -> link<node, uint16> {\n if d == 0 { return p.add!(node { l: p.noLink(), r: p.noLink(), key: 1 }) }\n const l = make(inout p, d - 1)\n const r = make(inout p, d - 1)\n p.add!(node { l: l, r: r, key: d }) }\nfn count(p: pool<node, uint16>, t: link<node, uint16>) -> int {\n if p.isNone(t) { return 0 }\n const n = p.get(t)\n 1 + count(p, n.l) + count(p, n.r) }\nfn main() {\n var p: pool<node, uint16> = pool()\n const t = make(inout p, 10)\n print(count(p, t), p.len())\n p.remove!(t)\n const u = p.add!(node { l: p.noLink(), r: p.noLink(), key: 5 })\n print(p.get(u).key, p.len())\n p.clear!()\n print(p.len()) }\n";
+    agree(src);
+}
+
+#[test]
+fn pool_links_are_narrow_and_a_full_pool_stops() {
+    let size = "struct n { a: link<n, uint16>, b: link<n, uint16>, k: int32 }\nfn main() {\n print(rt_size_of<n>()) }\n";
+    assert_eq!(output_of(size), "8\n");
+    let full = "fn main() {\n var p: pool<int, uint8> = pool()\n for i in 0..300 { p.add!(i) } }\n";
+    let o = run_main(full);
+    assert!(o.result.is_err());
+    assert!(o.output.contains("pool full"), "{}", o.output);
+    let none = "fn main() {\n var p: pool<int, uint8> = pool()\n print(p.get(p.noLink())) }\n";
+    let o = run_main(none);
+    assert!(o.result.is_err());
+    assert!(o.output.contains("names no slot"), "{}", o.output);
+}
