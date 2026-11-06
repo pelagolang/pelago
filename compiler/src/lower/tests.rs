@@ -2652,6 +2652,32 @@ fn big_blocks_grow_and_are_reused() {
     );
 }
 
+/// Counters bumped on one side of an `if` (a `select` or a join block of the optimiser) are bounded
+/// by the trip count too; a bump that can pass the maximum still stops the program.
+#[test]
+fn counters_behind_an_if_keep_their_traps() {
+    agree(
+        "fn main() {
+            var ok = 0
+            var bad = 0
+            var t = 0
+            for i in 0..5000 {
+                if i % 3 == 0 { bad += 1 } else { ok += 1; t += i & 255 }
+            }
+            print(ok, bad, t)
+        }",
+    );
+    agree(
+        "fn main() {
+            var t = 9223372036854775000
+            for i in 0..5000 {
+                if i % 3 == 0 { t += 1 }
+            }
+            print(t)
+        }",
+    );
+}
+
 /// A loop limit that is not a constant but has a known range bounds the trip count too; a limit
 /// that can be huge still traps.
 #[test]
@@ -2948,6 +2974,17 @@ fn arena_stale_handle_and_drop_glue_stop() {
     let o = run_main(glue);
     assert!(o.result.is_err());
     assert!(o.output.contains("without drop glue"), "{}", o.output);
+}
+
+#[test]
+fn for_over_chars_decodes_in_place() {
+    let src = "fn main() {\n var n = 0\n var last = 'a'\n for c of \"aé€😀z\".chars() { n += 1\n last = c\n if c == 'é' { continue }\n print(c) }\n print(n, last)\n const s = \"hi\".chars().toList()\n print(s.len())\n var t = \"abc\"\n for c of t.chars() { if c == 'b' { break }\n print(c) } }\n";
+    assert_eq!(output_of(src), "a\n€\n😀\nz\n5 z\n2\na\n");
+}
+
+#[test]
+fn for_over_chars_native_agrees() {
+    agree("fn main() {\n var n = 0\n for c of \"aé€😀z\".chars() { n += 1\n if c == 'é' { continue }\n print(c) }\n print(n) }\n");
 }
 
 // ---- Pools and narrow links --------------------------------------------------------------------

@@ -1,5 +1,29 @@
 /// `str` and `string` methods.
 
+//~ Decodes the character at byte `i` of `n` bytes at `p`: its code point shifted left by 3, plus its width in bytes.
+//~ `for c of s.chars()` calls it in place, so the loop builds no list.
+pub fn rt_char_at(p: ptr, i: int, n: int) -> int {
+    const b = rt_load_byte(rt_offset(p, i)) to int
+    var c = b
+    var width = 1
+    if b >= 240 {
+        c = b & 7
+        width = 4
+    } else if b >= 224 {
+        c = b & 15
+        width = 3
+    } else if b >= 192 {
+        c = b & 31
+        width = 2
+    }
+    var k = 1
+    while k < width && i + k < n {
+        c = (c << 6) | ((rt_load_byte(rt_offset(p, i + k)) to int) & 63)
+        k += 1
+    }
+    (c << 3) | width
+}
+
 impl str {
     fn len(self) -> int = rt_hdr_len(rt_addr_of(self))
     fn isEmpty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
@@ -12,26 +36,9 @@ impl str {
         const n = rt_hdr_len(h)
         var i = 0
         while i < n {
-            const b = rt_load_byte(rt_offset(p, i)) to int
-            var c = b
-            var width = 1
-            if b >= 240 {
-                c = b & 7
-                width = 4
-            } else if b >= 224 {
-                c = b & 15
-                width = 3
-            } else if b >= 192 {
-                c = b & 31
-                width = 2
-            }
-            var k = 1
-            while k < width && i + k < n {
-                c = (c << 6) | ((rt_load_byte(rt_offset(p, i + k)) to int) & 63)
-                k += 1
-            }
-            out.push!(rt_to_char(c))
-            i += width
+            const r = rt_char_at(p, i, n)
+            out.push!(rt_to_char(r >> 3))
+            i += r & 7
         }
         rt_cast<list<char>, iter<char>>(sink out)
     }

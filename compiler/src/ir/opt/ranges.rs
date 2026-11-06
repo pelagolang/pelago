@@ -297,6 +297,10 @@ impl Ctx<'_> {
                 }
             }
             Op::Cast(CastKind::SExt, a, _) => known(rg!(*a)),
+            Op::Select(_, a, b) => {
+                let (x, y) = (some!(rg!(*a)), some!(rg!(*b)));
+                L::R((x.0.min(y.0), x.1.max(y.1)))
+            }
             Op::Bin(BinOp::And, a, b) => match (rg!(*a), rg!(*b)) {
                 (Some(x), Some(y)) => L::R((0, x.1.min(y.1))),
                 (Some(x), None) | (None, Some(x)) => L::R((0, x.1)),
@@ -370,6 +374,8 @@ impl Ctx<'_> {
         }
         match (acc, self.caps[self.f.blocks[b].params[k].0 as usize]) {
             (L::R((lo, hi)), Some(cap)) if lo <= cap => L::R((lo, hi.min(cap))),
+            // The start and every gain are non-negative, so the bound alone is a range.
+            (L::Top, Some(cap)) => L::R((0, cap)),
             _ => acc,
         }
     }
@@ -485,34 +491,88 @@ impl Ctx<'_> {
                 if kp == kc || !t.is_int() {
                     continue;
                 }
-                let (Some((a, b)), L::R(start)) =
-                    (sum(latch.1[kp]), self.range_at(entry.1[kp], entry.0))
-                else {
+                let L::R(start) = self.range_at(entry.1[kp], entry.0) else {
                     continue;
                 };
-                let d = if a == p {
-                    b
-                } else if b == p {
-                    a
-                } else {
-                    continue;
-                };
-                if d == p {
+                // What the way back can add to `p`: `p + d` adds `d`, `p` itself nothing, and a
+                // `select` of such values the most of its arms (a counter bumped on one side of
+                // an `if` after the branch became a `select`).
+                let mut ds = Vec::new();
+                if !self.gains(latch.1[kp], p, &mut ds, 0) {
                     continue;
                 }
-                let L::R(gain) = self.range_at(d, latch.0) else {
+                let mut top = 0u128;
+                let mut known = true;
+                for d in ds {
+                    if d == p {
+                        known = false;
+                        break;
+                    }
+                    match self.range_at(d, latch.0) {
+                        L::R(g) => top = top.max(g.1),
+                        _ => {
+                            known = false;
+                            break;
+                        }
+                    }
+                }
+                if !known {
                     continue;
-                };
-                let cap = gain
-                    .1
-                    .checked_mul(count)
-                    .and_then(|g| g.checked_add(start.1));
+                }
+                let cap = top.checked_mul(count).and_then(|g| g.checked_add(start.1));
                 if let Some(cap) = cap.filter(|c| *c <= smax(t)) {
                     caps[p.0 as usize] = Some(cap);
                 }
             }
         }
         caps
+    }
+
+    /// Collects the values `v` adds to the parameter `p`; false when `v` is not `p` plus something
+    /// (through `select`s).
+    fn gains(&self, v: Value, p: Value, out: &mut Vec<Value>, depth: u32) -> bool {
+        if v == p {
+            return true;
+        }
+        if depth > 4 {
+            return false;
+        }
+        match self.defs[v.0 as usize].map(|d| &self.f.insts[d].op) {
+            Some(Op::Bin(BinOp::Add, a, b) | Op::Checked(BinOp::Add, _, a, b)) => {
+                if *a == p {
+                    out.push(*b);
+                    true
+                } else if *b == p {
+                    out.push(*a);
+                    true
+                } else {
+                    false
+                }
+            }
+            Some(Op::Select(_, a, b)) => {
+                self.gains(*a, p, out, depth + 1) && self.gains(*b, p, out, depth + 1)
+            }
+            // The parameter of a join block (a counter bumped on one side of an `if`): what each
+            // way in hands over.
+            None => {
+                let Some((bi, k)) = self
+                    .f
+                    .blocks
+                    .iter()
+                    .enumerate()
+                    .find_map(|(bi, b)| b.params.iter().position(|q| *q == v).map(|k| (bi, k)))
+                else {
+                    return false;
+                };
+                bi != 0
+                    && self.dom.rpo.iter().any(|b| b.0 as usize == bi)
+                    && !self.edges[bi].is_empty()
+                    && self.edges[bi]
+                        .iter()
+                        .all(|(_, args)| self.gains(args[k], p, out, depth + 1))
+            }
+            _ => false,
+        }
     }
 
     /// Runs the analysis to a fixed point. False when it did not settle (then nothing may be used).
@@ -671,8 +731,10 @@ fn decide(op: CmpOp, x: Range, y: Range) -> Option<bool> {
 
 pub fn run(f: &mut Func) -> bool {
     if !f.insts.iter().any(|i| {
-        matches!(i.op, Op::Checked(..) | Op::Bin(BinOp::Div | BinOp::Rem, ..))
-            || is_bounds_test(&i.op)
+        matches!(
+            i.op,
+            Op::Checked(..) | Op::CheckedIf(..) | Op::Bin(BinOp::Div | BinOp::Rem, ..)
+        ) || is_bounds_test(&i.op)
     }) {
         return false;
     }
@@ -742,7 +804,9 @@ pub fn run(f: &mut Func) -> bool {
             }
             continue;
         }
-        let Op::Checked(o, signed, a, b) = f.insts[ii].op.clone() else {
+        let (Op::Checked(o, signed, a, b) | Op::CheckedIf(o, signed, _, a, b)) =
+            f.insts[ii].op.clone()
+        else {
             continue;
         };
         let (Some(r), blk) = (f.insts[ii].result, cx.block_of[ii]) else {
@@ -785,7 +849,7 @@ pub fn run(f: &mut Func) -> bool {
         }
     }
     for ii in safe {
-        if let Op::Checked(o, _, a, b) = f.insts[ii].op.clone() {
+        if let Op::Checked(o, _, a, b) | Op::CheckedIf(o, _, _, a, b) = f.insts[ii].op.clone() {
             f.insts[ii].op = Op::Bin(o, a, b);
         }
     }
