@@ -458,6 +458,19 @@ fn printing_one_integer_needs_no_heap() {
 }
 
 #[test]
+fn printing_only_text_needs_no_heap() {
+    let src = "fn main() {\n print(\"Hello, World!\")\n const s = \"two\"\n print(s, \"words\", \"\")\n print()\n}\n";
+    assert_eq!(output_of(src), "Hello, World!\ntwo words \n\n");
+    for src in ["fn main() { print(\"Hello, World!\") }", src] {
+        let mut m = lowered(src).module;
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        crate::ir::opt::prune(&mut m, &["main"]);
+        let u = crate::native::Uses::of(&m);
+        assert!(u.print && !u.alloc && !u.realloc, "{u:?}");
+    }
+}
+
+#[test]
 fn interpolation_and_joining() {
     assert_eq!(
         output_of("fn main() { const name = \"Ann\"\n print(\"hi #name, #(1 + 2)!\") }"),
