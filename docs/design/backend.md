@@ -40,9 +40,13 @@ The interpreter (`ir/interp.rs`) is the specification. Every row is a test (card
 
 - `rt_write(ptr, len)`: loops over `write` until everything is written or an error occurs.
 - `rt_stop(msg_ptr, msg_len)`: writes `stopped: `, the message and a newline to standard error, then `exit_group(1)`.
-- **Allocator**: size classes of 16, 32, 64, ... bytes up to 64 KiB, each with a free list; larger blocks go straight to `mmap`. Every block has a 16-byte header
-  holding its class (the IR's `Free` carries no size), so a block is 16-byte aligned. Chunks of 1 MiB are taken from `mmap`. Test builds add a live-block counter
-  reported at exit (`leaked N allocation(s)`, like the interpreter).
+- **Allocator, Linux x86-64** (`docs/design/heap.md`, stage H1): one region of address space (64 GiB, halved until the system agrees, `MAP_NORESERVE`, no huge pages) is
+  reserved at the first allocation. Blocks up to 8 KiB come from 64 KiB spans, each dedicated to one size class (16-byte steps up to 256 B, then four per doubling), carved by a
+  bump pointer; a one-byte-per-span table at the start of the region names a block's class, so a block has **no header**. Freed blocks go on the class's free list and are cleared on reuse.
+  Larger blocks get their own mapping with a 16-byte header, as before.
+- **Allocator, Windows (and the AArch64 runtime until H1 reaches it)**: size classes of 32, 64, 128, ... bytes up to 64 KiB, each with a free list; larger blocks go straight to `mmap`. Every block has a 16-byte header
+  holding its class (the IR's `Free` carries no size), so a block is 16-byte aligned. Chunks of 1 MiB are taken from `mmap`.
+- Test builds add a live-block counter reported at exit (`leaked N allocation(s)`, like the interpreter).
 
 ## 4. Status (N1 to N3)
 
