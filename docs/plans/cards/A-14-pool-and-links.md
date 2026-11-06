@@ -1,6 +1,6 @@
 Id: A-14
 Title: Pools and narrow links: smaller data for pointer-heavy programs
-Column: Next
+Column: Doing
 Order: 14
 Depends on: A-13 (bump arenas: `pool` reuses its block and reset); byte and narrow integer types (done)
 Size: L, in two stages
@@ -23,3 +23,9 @@ A-13's `aref<T>` is an 8-byte handle (offset plus epoch) into an untyped bump ar
 - Tests in the interpreter and natively (x86-64, aarch64, Windows) for each stage; `fmt`, `clippy`, `cargo test` green.
 - `examples/tour.pel` and the goldens updated for the new types.
 - The plan page and ROADMAP decisions row stay in step.
+
+# Progress
+
+- P1 and P2 as a library, `compiler/core/core/pool.pel`: `pool<T, W>` (`add!`, `get`, `set!`, `remove!`, `clear!`, `len`, `noLink`, `isNone`) and `link<T, W>`, a plain struct holding a `W`. The all-ones number means no slot, so a pool holds at most `2^bits - 1` slots; it stops with "pool full". `W` cannot be converted generically with `to`, so the pool bounces the slot number through an 8-byte buffer (`rt_write`/`rt_read`, little-endian). `none` is a keyword, hence `noLink`. A node of two `uint16` links and an `int32` is 8 bytes. Tests in `lower/tests.rs` (interpreter and native). Slots are rounded up to 8 bytes and a free slot keeps the next free number in its first 8 bytes.
+- P3: `bench/programs/bintrees/pelago_pool.pel` (same output, 1310700). Peak memory by `ru_maxrss`: box 8192 KiB, arena 4096 KiB, pool 1116 KiB (floor).
+- Not done: a niche so `option<link<T, W>>` costs nothing (use `noLink` for now), packing slots tighter than 8 bytes, a compile-time check that `W` is `uint8/16/32`.
