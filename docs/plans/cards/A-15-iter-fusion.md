@@ -21,3 +21,4 @@ Stages IT1 to IT5 are in the plan; IT1 (`chars()`) is merged.
 
 - IT1 done in PR 163.
 - Plan written (this card and `docs/design/iter.md`).
+- IT2 done: `for w of s.split(sep)` and `for b of s.bytes()` fused (`lower/seq.rs` `for_fused`, library `rt_split_end` and `rt_split_after`; the eager `split` uses the same helpers).

@@ -3065,6 +3065,17 @@ fn arena_no_ref_and_cold_grow() {
 }
 
 #[test]
+fn for_over_split_and_bytes_in_place() {
+    let src = "fn main() {\n var n = 0\n for w of \"a,bb,,c,\".split(\",\") { n += 1\n print(w.len()) }\n print(n)\n for w of \"abc\".split(\"\") { print(w) }\n for w of \"\".split(\"-\") { print(w.len()) }\n for w of \"x--y\".split(\"--\") { if w == \"x\" { continue }\n print(w) }\n var t = \"one two three\"\n for w of t.split(\" \") { if w == \"two\" { break }\n print(w) }\n var sum = 0\n for b of \"AbC\".bytes() { sum += b to int }\n print(sum)\n const l = \"p q\".split(\" \").toList()\n print(l.len()) }\n";
+    assert_eq!(output_of(src), "1\n2\n0\n1\n0\n5\nabc\n0\ny\none\n230\n2\n");
+}
+
+#[test]
+fn for_over_split_native_agrees() {
+    agree("fn main() {\n for w of \"a,bb,,c,\".split(\",\") { print(w.len()) }\n for b of \"hé\".bytes() { print(b to int) } }\n");
+}
+
+#[test]
 fn a_pool_with_a_bad_width_stops() {
     for w in ["int", "uint64", "float", "bool"] {
         let src = format!("fn main() {{\n var p: pool<int, {w}> = pool()\n print(p.len()) }}\n");
@@ -3072,4 +3083,12 @@ fn a_pool_with_a_bad_width_stops() {
         assert!(o.result.is_err(), "{w}");
         assert!(o.output.contains("width must be"), "{w}: {}", o.output);
     }
+}
+
+#[test]
+fn pool_slots_are_as_small_as_the_value_and_reuse_freed_ones() {
+    let src = "struct small { a: uint8, b: uint16 }\nfn main() {\n    var p: pool<small, uint8> = pool()\n    const x = p.add!(small { a: 1, b: 300 })\n    const y = p.add!(small { a: 2, b: 400 })\n    const z = p.add!(small { a: 3, b: 500 })\n    p.remove!(y)\n    p.remove!(x)\n    const u = p.add!(small { a: 9, b: 900 })\n    const v = p.add!(small { a: 8, b: 800 })\n    print(p.get(u).a, p.get(u).b, p.get(v).a, p.get(v).b, p.get(z).b, p.len(), p.slotBytes())\n}\n";
+    // The slot is the 4 bytes of the struct (a `uint8` and a `uint16` with alignment), not rounded up to 8.
+    assert_eq!(output_of(src), "9 900 8 800 500 3 4\n");
+    agree(src);
 }

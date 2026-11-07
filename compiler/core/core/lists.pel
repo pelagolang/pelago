@@ -233,6 +233,12 @@ impl<T> list<T> {
         rt_hdr_set_len(h, len + 1)
     }
 
+    //~ Makes room for `extra` more elements, so that pushing them never grows the buffer.
+    fn reserve(inout self, extra: int) {
+        const h = rt_addr_of(self)
+        rt_grow(h, rt_size_of<T>(), rt_hdr_len(h) + extra)
+    }
+
     fn pop(inout self) -> T? {
         const h = rt_addr_of(self)
         const len = rt_hdr_len(h)
