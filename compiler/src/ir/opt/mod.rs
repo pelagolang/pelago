@@ -244,6 +244,17 @@ fn step(f: &mut Func, name: &'static str, pass: fn(&mut Func) -> bool) -> bool {
             }
         });
     }
+    if changed && !f.frozen.is_empty() {
+        // A pass may delete or rewrite a marked load: its mark goes with it.
+        let placed: std::collections::HashSet<usize> = f
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter().copied())
+            .collect();
+        let insts = &f.insts;
+        f.frozen
+            .retain(|i| placed.contains(i) && matches!(insts[*i].op, Op::Load(..)));
+    }
     #[cfg(debug_assertions)]
     if changed {
         let errs = verify_func(f);
