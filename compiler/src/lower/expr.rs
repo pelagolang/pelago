@@ -990,8 +990,65 @@ impl<'a> Lowerer<'a> {
         self.wrap(Op::Cmp(o, a, b), IrTy::Bool, e.span)
     }
 
+    /// The value of a number or character literal, when `e` is one.
+    fn literal_int(&self, e: &Expr) -> Option<i128> {
+        match &strip_parens(e).kind {
+            ExprKind::Int => literal_value(self.src_text(strip_parens(e).span)).map(|n| n as i128),
+            ExprKind::Char => Some(self.char_value(strip_parens(e).span) as i128),
+            _ => None,
+        }
+    }
+
+    /// `x >= lo && x <= hi` with literal bounds on one variable: a single test, `(x - lo) <= (hi - lo)` read
+    /// as unsigned. It has no side effect and cannot trap, so it is the same answer as the two compares
+    /// (a character class such as `c >= 'a' && c <= 'z'` is the typical use).
+    fn range_test(&mut self, lhs: &'a Expr, rhs: &'a Expr) -> Option<Res> {
+        let (
+            ExprKind::Binary {
+                op: Punct::GtEq,
+                lhs: x1,
+                rhs: lo,
+            },
+            ExprKind::Binary {
+                op: Punct::LtEq,
+                lhs: x2,
+                rhs: hi,
+            },
+        ) = (&strip_parens(lhs).kind, &strip_parens(rhs).kind)
+        else {
+            return None;
+        };
+        let (ExprKind::Name(a), ExprKind::Name(b)) =
+            (&strip_parens(x1).kind, &strip_parens(x2).kind)
+        else {
+            return None;
+        };
+        let d1 = self.res.use_at(self.f.file, a.span.start)?;
+        let d2 = self.res.use_at(self.f.file, b.span.start)?;
+        let t = self.ty_of(x1)?;
+        if d1 != d2 || !matches!(self.kind(t), TyKind::Int(_) | TyKind::Char) {
+            return None;
+        }
+        let (lo, hi) = (self.literal_int(lo)?, self.literal_int(hi)?);
+        if lo > hi || hi - lo > i32::MAX as i128 {
+            return None;
+        }
+        let ty = self.scalar_of(t)?;
+        let x = self.scalar(x1)?;
+        let span = strip_parens(lhs).span;
+        let lo_v = self.konst(ty, Const::Int(lo), span);
+        let width = self.konst(ty, Const::Int(hi - lo), span);
+        let d = self.emit(Op::Bin(BinOp::Sub, x, lo_v), Some(ty), span)?;
+        Some(self.wrap(Op::Cmp(CmpOp::ULe, d, width), IrTy::Bool, span))
+    }
+
     fn short_circuit(&mut self, e: &'a Expr, and: bool, lhs: &'a Expr, rhs: &'a Expr) -> Res {
         let _ = e;
+        if and {
+            if let Some(r) = self.range_test(lhs, rhs) {
+                return r;
+            }
+        }
         let eval_rhs = self.new_block(&[]);
         let join = self.new_block(&[IrTy::Bool]);
         let a = match self.scalar(lhs) {

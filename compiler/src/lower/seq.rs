@@ -1203,7 +1203,7 @@ impl<'a> Lowerer<'a> {
         self.start(body_b);
         match src {
             Fused::Chars(_) => {
-                // ASCII is the common case: one load, one compare, no decoding. Anything else calls `rt_char_at`.
+                // ASCII is the common case: one load, one compare, no decoding. Anything else calls `rt_char_at_slow`.
                 let p = self
                     .emit(Op::PtrAdd(data, i), Some(IrTy::Ptr), span)
                     .unwrap_or(data);
@@ -1243,7 +1243,7 @@ impl<'a> Lowerer<'a> {
                 self.store_scalar_ty(eslot, ch);
                 self.jump(join_b, vec![]);
                 self.start(wide_b);
-                let Some(r) = self.call_core("rt_char_at", vec![data, i, len]) else {
+                let Some(r) = self.call_core("rt_char_at_slow", vec![data, i, len]) else {
                     self.f.scopes.pop();
                     return Res::Never;
                 };
