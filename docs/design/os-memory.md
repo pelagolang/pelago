@@ -1,6 +1,6 @@
 # OS memory intrinsics (M7)
 
-Status: part 1 (section 1) built; sections 2 to 4 are next. The four questions at the end were answered by the coordinator on the owner's delegation (2026-11-07): take the recommendations. Drafted for the owner. Asked for by the heap thread (H6); built on the machine IR (`mir.md`), which is now the default generator.
+Status: part 1 (section 1) and part 2 (section 2) built; sections 3 and 4 are next. The four questions at the end were answered by the coordinator on the owner's delegation (2026-11-07): take the recommendations. Drafted for the owner. Asked for by the heap thread (H6); built on the machine IR (`mir.md`), which is now the default generator.
 
 ## What the heap needs
 
@@ -31,7 +31,7 @@ How: one new IR op `Os(kind, args)` that the MIR carries as a call to a runtime 
 
 ## 2. Inline-always and zero-prologue
 
-An attribute `#inline` on a function (the word `inline` stays banned as a keyword; this is an attribute, not syntax) makes the IR inliner always take it, whatever its size, and refuse recursion. A function marked `#leaf` promises no calls and no stack frame beyond what the register allocator can keep in registers; the MIR emitter then skips the frame setup when the allocator spilled nothing (it already does this for frameless leaf functions; the attribute turns a silent optimisation into a checked promise: the build fails if the promise cannot be kept).
+**Built.** The language already has the `@name` attribute (`@checkfree`), so the markers are attributes: `@inline_always` makes the IR inliner copy the function into every call whatever its size (the word `inline` stays banned as a keyword). A recursive function is never copied, and the build fails if a call to an `@inline_always` function is left after optimising. `@leaf` is a checked promise: after optimising, the function makes no call and keeps no stack slot (`opt::is_leaf`), else the build fails. The MIR emitter already omits the frame when nothing is spilled. Both are checked in `main.rs` next to `@checkfree`; they are meant for `core` and the runtime, but nothing stops other code from using them. The answer to question 2 asked to wait for the attribute decision; since `@checkfree` exists, the attribute form costs nothing and the names stay `inline_always` and `leaf`.
 
 ## 3. Clobber rule
 

@@ -476,6 +476,12 @@ pub struct Func {
     /// optimiser keeps it a function of its own, and the build fails when an index test is left on
     /// its fast path (`opt::kept_checks`).
     pub checkfree: Option<(u32, Span)>,
+    /// Set for a function written `@inline_always`: the inliner copies it into every call whatever its
+    /// size; the build fails if a call to it is left (it is recursive).
+    pub inline_always: Option<(u32, Span)>,
+    /// Set for a function written `@leaf`: a promise that, once optimised, it makes no calls and keeps
+    /// no stack slot, so the code generator needs no frame for it; the build fails otherwise.
+    pub leaf: Option<(u32, Span)>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -518,6 +524,8 @@ impl Func {
             blocks: Vec::new(),
             insts: Vec::new(),
             checkfree: None,
+            inline_always: None,
+            leaf: None,
         };
         let entry = f.new_block(params);
         debug_assert_eq!(entry, BlockId(0));
