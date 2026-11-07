@@ -319,7 +319,7 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
             Op::PtrAdd(base, off)
                 if idx_muls.contains(off)
                     && !inside.contains(base)
-                    && uses.get(&inst.result?) == Some(&1) =>
+                    && uses.get(&inst.result?).is_some_and(|&n| n <= 2) =>
             {
                 addrs.insert(inst.result?);
                 bases.insert(*base);

@@ -2283,6 +2283,16 @@ fn a_branch_with_plain_sides_becomes_a_select() {
 }
 
 #[test]
+fn a_load_joins_an_earlier_load_only_when_no_store_or_call_lies_between() {
+    // `prev[j]` is read twice on the way to the minimum: the second read joins the first.
+    agree("fn best(prev: [int], j: int, b: int) -> int { var m = b\n if prev[j] + 1 < m { m = prev[j] + 1 }\n m }\nfn main() { var xs: [int] = []\n for i in 0..40 { xs.push!((i * 7919) % 31) }\n var t = 0\n for j in 0..39 { t += best(xs, j, 17) }\n print(t) }");
+    // A store between the two reads must keep the second one.
+    agree("fn main() { var a: [int] = [1, 2, 3]\n var t = 0\n for i in 0..3 { const x = a[i]\n a[i] = x + 10\n t += x * 100 + a[i] }\n print(t) }");
+    // So must a call that writes through its argument.
+    agree("fn bump(inout xs: [int]) { xs[0] += 5 }\nfn main() { var a: [int] = [1, 2]\n const x = a[0]\n bump(inout a)\n print(x, a[0]) }");
+}
+
+#[test]
 fn a_range_test_becomes_one_unsigned_compare() {
     let src = "fn digit(c: int) -> bool { c >= 48 && c <= 57 }\nfn main() { var n = 0\n for i in -5..120 { if digit(i) { n += 1 } }\n print(n) }";
     let l = lowered(src);

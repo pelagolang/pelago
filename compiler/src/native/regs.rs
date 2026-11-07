@@ -69,7 +69,7 @@ pub fn folds(f: &Func, uses: &[u32], consts: &[Option<i64>]) -> Vec<Fold> {
             match &f.insts[i].op {
                 Op::PtrAdd(..) => on[r.0 as usize] = true,
                 Op::Bin(op @ (BinOp::Mul | BinOp::Shl), x, y)
-                    if is64(r) && uses[r.0 as usize] == 1 =>
+                    if is64(r) && uses[r.0 as usize] <= 4 =>
                 {
                     let k = |c: Value| consts[c.0 as usize];
                     let (idx, scale) = match (op, k(*x), k(*y)) {

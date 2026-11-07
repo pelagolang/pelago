@@ -3,8 +3,9 @@
 //! become a high multiply and shifts; after this pass they share the multiply.
 //!
 //! Only operations that depend on nothing but their operands are joined: arithmetic (checked or not),
-//! comparisons, negation and casts. Loads, calls, slots and allocations are
-//! never joined. Joining a checked operation is exact: the earlier copy dominates, so if the later
+//! comparisons, negation, casts and address arithmetic. Calls, slots and allocations are
+//! never joined. A load is joined with an earlier load of the same address when nothing that may
+//! write memory lies between them on the only way in (a block with one predecessor continues from it). Joining a checked operation is exact: the earlier copy dominates, so if the later
 //! one would stop the program the earlier one already did. Equal constants count as the same
 //! operand, so `mulhi x, 0x6666..` written twice with two constants is one operation. Also
 //! `or x, x` and `and x, x` are `x`; so are `x + 0`, `x - 0`, `x * 1`, `x / 1`, `x | 0`, `x ^ 0` and `x << 0`
@@ -23,6 +24,7 @@ enum Key {
     Neg(u64),
     Not(u64),
     Cast(Discriminant<CastKind>, IrTy, u64),
+    PtrAdd(u64, u64),
 }
 
 /// A constant, as something that can be a hash key.
@@ -75,12 +77,36 @@ pub fn run(f: &mut Func) -> bool {
     let mut rep: HashMap<Value, Value> = HashMap::default();
     let mut gone: Vec<usize> = Vec::new();
     let mut seen: HashMap<Key, Vec<(Value, BlockId)>> = HashMap::default();
+    // The loads whose value is still known: a block with one way in starts with what that way
+    // ended with; any instruction that may write memory forgets them all.
+    let preds = f.predecessors();
+    let mut loads_out: Vec<Option<HashMap<(u64, IrTy), Value>>> = vec![None; f.blocks.len()];
     for &b in &dom.rpo {
+        let mut loads: HashMap<(u64, IrTy), Value> = match preds[b.0 as usize].as_slice() {
+            [p] => loads_out[p.0 as usize].clone().unwrap_or_default(),
+            _ => HashMap::default(),
+        };
         for pos in 0..f.blocks[b.0 as usize].insts.len() {
             let ii = f.blocks[b.0 as usize].insts[pos];
+            if writes_memory(&f.insts[ii].op) {
+                loads.clear();
+            }
             let Some(r) = f.insts[ii].result else {
                 continue;
             };
+            if let Op::Load(ty, a) = &f.insts[ii].op {
+                let a = get_name(*a, &rep, &name);
+                match loads.get(&(a, *ty)) {
+                    Some(&w) => {
+                        rep.insert(r, w);
+                        gone.push(ii);
+                    }
+                    None => {
+                        loads.insert((a, *ty), r);
+                    }
+                }
+                continue;
+            }
             let get = |v: Value, rep: &HashMap<Value, Value>| {
                 let v = *rep.get(&v).unwrap_or(&v);
                 (v, name[v.0 as usize])
@@ -147,6 +173,7 @@ pub fn run(f: &mut Func) -> bool {
                 Op::Neg(a) => Key::Neg(get(*a, &rep).1),
                 Op::Not(a) => Key::Not(get(*a, &rep).1),
                 Op::Cast(k, a, ty) => Key::Cast(discriminant(k), *ty, get(*a, &rep).1),
+                Op::PtrAdd(a, c) => Key::PtrAdd(get(*a, &rep).1, get(*c, &rep).1),
                 _ => continue,
             };
             let list = seen.entry(key).or_default();
@@ -157,6 +184,7 @@ pub fn run(f: &mut Func) -> bool {
                 list.push((r, b));
             }
         }
+        loads_out[b.0 as usize] = Some(loads);
     }
     if gone.is_empty() {
         return false;
@@ -167,4 +195,28 @@ pub fn run(f: &mut Func) -> bool {
         blk.insts.retain(|i| !gone_set.contains(i));
     }
     true
+}
+
+/// The name of an operand after replacements: a constant by its value, anything else by its number.
+fn get_name(v: Value, rep: &HashMap<Value, Value>, name: &[u64]) -> u64 {
+    let v = *rep.get(&v).unwrap_or(&v);
+    name[v.0 as usize]
+}
+
+/// May the instruction change memory (or hand control to code that may)?
+fn writes_memory(op: &Op) -> bool {
+    matches!(
+        op,
+        Op::Store(..)
+            | Op::Call(..)
+            | Op::CallPtr(..)
+            | Op::MemCopy(..)
+            | Op::Alloc(_)
+            | Op::Realloc(..)
+            | Op::Os(..)
+            | Op::Free(_)
+            | Op::CtxInit(..)
+            | Op::CtxSwitch(..)
+            | Op::Print(..)
+    )
 }
