@@ -151,7 +151,17 @@ pub mod op {
     pub const FUN: u16 = B + 49;
     /// `d = a * b + c`, fused: `[d Def, a Use, b Use, c Use, Imm dbl]`.
     pub const FFMA: u16 = B + 50;
-    pub const COUNT: u16 = B + 51;
+    /// A 16-byte vector: lane 0 set from an integer in each lane: `[d Def, s Use]`.
+    pub const VSPLAT: u16 = B + 51;
+    /// `[d UseDef, Imm left, Imm k]`: each lane shifted left (1) or logically right (0).
+    pub const VSHIFT: u16 = B + 52;
+    /// The wrapping sum of the lanes, an integer: `[d Def, s Use]`.
+    pub const VREDUCE: u16 = B + 53;
+    /// Two integers in lanes 0 and 1: `[d Def, a Use, b Use]`.
+    pub const VBUILD: u16 = B + 54;
+    /// `d = a op b` lane by lane, the kinds add 0, sub 1, and 2, or 3, xor 4: `[d Def, a Use, b Use, Imm kind]`.
+    pub const VALU: u16 = B + 55;
+    pub const COUNT: u16 = B + 56;
 }
 
 /// Symbols: the shared stop routines, then the functions of the module.
@@ -277,7 +287,7 @@ impl Target for A64 {
     }
 
     fn op_name(&self, o: u16) -> &'static str {
-        const NAMES: [&str; 51] = [
+        const NAMES: [&str; 56] = [
             "add",
             "sub",
             "and",
@@ -329,6 +339,11 @@ impl Target for A64 {
             "fresize",
             "fun",
             "ffma",
+            "vsplat",
+            "vshift",
+            "vreduce",
+            "vbuild",
+            "valu",
         ];
         NAMES
             .get(o.wrapping_sub(op::ADD) as usize)
@@ -364,7 +379,7 @@ impl Target for A64 {
         match c {
             Class::Int => MInst::new(op::LOAD, vec![d, mem_frame(f), Operand::Imm(8)]),
             Class::Float => MInst::new(op::FLD, vec![d, mem_frame(f), Operand::Imm(1)]),
-            Class::Vec => unreachable!("vectors stay in the old generator"),
+            Class::Vec => MInst::new(op::FLD, vec![d, mem_frame(f), Operand::Imm(2)]),
         }
     }
 
@@ -373,7 +388,7 @@ impl Target for A64 {
         match c {
             Class::Int => MInst::new(op::STORE, vec![mem_frame(f), s, Operand::Imm(8)]),
             Class::Float => MInst::new(op::FST, vec![mem_frame(f), s, Operand::Imm(1)]),
-            Class::Vec => unreachable!("vectors stay in the old generator"),
+            Class::Vec => MInst::new(op::FST, vec![mem_frame(f), s, Operand::Imm(2)]),
         }
     }
 }
