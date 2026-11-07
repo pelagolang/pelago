@@ -3037,3 +3037,10 @@ fn std_is_added_only_when_imported() {
     program.add_package("app", &[("main", "import std.big\nfn main() { print(1) }")]);
     assert!(program.find_package("std").is_some());
 }
+
+#[test]
+fn arena_no_ref_and_cold_grow() {
+    let src = "struct node { l: aref<node>, r: aref<node>, v: int }\nfn main() {\n var a = arena()\n const nothing = a.noRef()\n print(a.isNone(nothing))\n const x = a.new!(node { l: nothing, r: nothing, v: 7 })\n print(a.isNone(x), a.get(x).v, a.isNone(a.get(x).l), a.used())\n for i in 0..1000 { a.new!(node { l: x, r: nothing, v: i }) }\n print(a.get(x).v, a.used()) }\n";
+    assert_eq!(output_of(src), "true\nfalse 7 true 24\n7 24024\n");
+    agree(src);
+}

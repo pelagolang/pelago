@@ -11,7 +11,7 @@ pub var rt_arena_epoch: int = 0
 
 const rt_arena_max: int = 4294967296
 
-//~ A block of memory where allocating is a bump of `top` and `reset!` frees every value with one store.
+//~ A block of memory (its first 8 bytes are never handed out, so a handle is never zero) where allocating is a bump of `top` and `reset!` frees every value with one store.
 //~ Values must not need dropping (numbers, `bool`, `char`, structs and enums of those, other `aref`s).
 pub struct arena {
     base: ptr
@@ -22,7 +22,7 @@ pub struct arena {
     init() {
         rt_arena_epoch = rt_arena_epoch + 1
         self.base = rt_null()
-        self.top = 0
+        self.top = 8
         self.cap = 0
         self.epoch = rt_arena_epoch & 2147483647
     }
@@ -38,25 +38,10 @@ impl arena {
         if rt_needs_drop<T>() { panic("an arena holds only types without drop glue") }
         const at = self.top
         const end = at + ((rt_size_of<T>() + 7) / 8) * 8
-        if end > self.cap { self.grow!(end) }
+        if end > self.cap { rt_arena_grow_slow(inout self, end) }
         self.top = end
         rt_write<T>(rt_offset(self.base, at), sink value)
         aref<T> { bits: (self.epoch << 32) | at }
-    }
-
-    //~ Makes room for `needed` bytes. Small on purpose, so only a full block calls it.
-    fn grow(inout self, needed: int) {
-        if needed > rt_arena_max { panic("arena full") }
-        var ncap = self.cap * 2
-        if ncap < 4096 { ncap = 4096 }
-        if ncap < needed { ncap = needed }
-        if ncap > rt_arena_max { ncap = rt_arena_max }
-        if self.cap > 0 {
-            self.base = rt_realloc(self.base, ncap)
-        } else {
-            self.base = rt_alloc(ncap)
-        }
-        self.cap = ncap
     }
 
     //~ The byte offset of `r`; a handle from before a reset, or from another arena, stops the program.
@@ -77,9 +62,29 @@ impl arena {
     fn reset(inout self) {
         rt_arena_epoch = rt_arena_epoch + 1
         self.epoch = rt_arena_epoch & 2147483647
-        self.top = 0
+        self.top = 8
     }
 
     //~ Bytes handed out since the last reset.
-    fn used(self) -> int = self.top
+    fn used(self) -> int = self.top - 8
+
+    //~ A handle that names nothing (zero bits: the first 8 bytes of an arena are never handed out). Smaller than `aref<T>?`: 8 bytes, not 16.
+    fn noRef<T>(self) -> aref<T> = aref<T> { bits: 0 }
+
+    fn isNone<T>(self, r: aref<T>) -> bool = r.bits == 0
+}
+
+//~ Makes room for `needed` bytes. The rarely taken half of `arena.new` (`_slow`: the optimiser keeps it a call), so `new` stays small enough to be inlined.
+pub fn rt_arena_grow_slow(inout a: arena, needed: int) {
+    if needed > rt_arena_max { panic("arena full") }
+    var ncap = a.cap * 2
+    if ncap < 4096 { ncap = 4096 }
+    if ncap < needed { ncap = needed }
+    if ncap > rt_arena_max { ncap = rt_arena_max }
+    if a.cap > 0 {
+        a.base = rt_realloc(a.base, ncap)
+    } else {
+        a.base = rt_alloc(ncap)
+    }
+    a.cap = ncap
 }
