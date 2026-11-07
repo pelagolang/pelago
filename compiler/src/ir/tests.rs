@@ -703,6 +703,7 @@ fn vectors_agree_with_integers_natively() {
         let opts = gen::Options {
             leak_check: true,
             target: Os::Linux,
+            symbols: false,
         };
         let image = gen::compile(&m, "main", &opts);
         gen::REG_LIMIT.with(|l| l.set(usize::MAX));

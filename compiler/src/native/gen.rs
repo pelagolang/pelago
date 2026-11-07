@@ -42,6 +42,8 @@ pub struct Options {
     /// Report leaked blocks at exit (status 3): for tests.
     pub leak_check: bool,
     pub target: Os,
+    /// Keep the section headers and the symbol table (for gdb, objdump, callgrind and `perf`).
+    pub symbols: bool,
 }
 
 /// A loop that stores at least this many bytes of one value is a `rep stos`: it starts slowly.
@@ -127,7 +129,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         });
     }
     match opts.target {
-        Os::Linux => elf::write(&g.a, &g.ro, &g.data, bss, &syms),
+        Os::Linux => elf::write(&g.a, &g.ro, &g.data, bss, opts.symbols.then_some(&syms[..])),
         Os::Windows => pe::write(&g.a, &g.ro, &g.data, 0),
         Os::MacOs => Err("macOS programs are built for AArch64 only (use --arch=aarch64)".into()),
     }

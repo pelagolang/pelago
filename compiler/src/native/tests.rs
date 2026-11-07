@@ -84,7 +84,7 @@ mod run {
         );
         a.bind(main);
         body(&mut a, &mut ro, &rt);
-        elf::write(&a, &ro, &data, 0, &[]).unwrap()
+        elf::write(&a, &ro, &data, 0, Some(&[])).unwrap()
     }
 
     pub use super::super::exec::Ran;
@@ -373,6 +373,22 @@ mod native_run {
     }
 
     #[test]
+    fn no_symbols_means_no_section_headers() {
+        let mut a = Asm::new();
+        let (ro, data) = (
+            super::super::elf::Blob::default(),
+            super::super::elf::Blob::default(),
+        );
+        a.ret();
+        let with = super::super::elf::write(&a, &ro, &data, 0, Some(&[])).unwrap();
+        let without = super::super::elf::write(&a, &ro, &data, 0, None).unwrap();
+        // e_shnum is at offset 60.
+        assert_eq!(u16::from_le_bytes([with[60], with[61]]), 8);
+        assert_eq!(u16::from_le_bytes([without[60], without[61]]), 0);
+        assert!(without.len() + 500 < with.len());
+    }
+
+    #[test]
     fn the_file_is_readable_by_standard_tools() {
         let img = program(false, |a, _ro, _rt| a.ret());
         let path = std::env::temp_dir().join(format!("pelago-objdump-{}", std::process::id()));
@@ -495,6 +511,7 @@ fn slots_read_as_zero_unless_overwritten() {
         let opts = gen::Options {
             leak_check: false,
             target: super::Os::Linux,
+            symbols: false,
         };
         let image = gen::compile(&m, "main", &opts).unwrap();
         let r = super::exec::run_image(super::Os::Linux, &image).unwrap();
@@ -632,7 +649,7 @@ mod a64_run {
         a.ldp_post(FP, LR, SP, 16);
         a.ret();
         match os() {
-            Os::Linux => elf::write_a64(&a, &ro, &data, 0, &[]).unwrap(),
+            Os::Linux => elf::write_a64(&a, &ro, &data, 0, Some(&[])).unwrap(),
             Os::Windows => pe::write_a64(&a, &ro, &data, 0).unwrap(),
             Os::MacOs => macho::write_a64(&a, &ro, &data, 0).unwrap(),
         }
