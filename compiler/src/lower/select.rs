@@ -1,7 +1,8 @@
 //! `select { case v = rx.recv() { ... } case tx.send(x) { ... } default { ... } }`.
 //!
 //! Tasks here run one after another, so `select` looks at its arms in order and takes the first that is
-//! ready: a `recv` whose channel has a value (or has no senders left), or any `send`. When none is
+//! ready: a `recv` whose channel has a value (or has no senders left), or a `send` whose channel has room
+//! (or has no receiver, so the send reports `closed`). When none is
 //! ready it takes `default`; with no `default` it lets one waiting task run and looks again; when no task
 //! is left it takes the `timeout` arm, or stops (a deadlock).
 
@@ -9,7 +10,7 @@ use super::*;
 
 enum ArmKind<'a> {
     Recv(&'a Expr),
-    Send,
+    Send(&'a Expr),
     Timeout,
     Default,
 }
@@ -25,7 +26,7 @@ impl<'a> Lowerer<'a> {
         match &callee.kind {
             ExprKind::Field { base, name, .. } => match self.src_text(name.span) {
                 "recv" | "tryRecv" | "try_recv" => Some(ArmKind::Recv(base)),
-                "send" => Some(ArmKind::Send),
+                "send" => Some(ArmKind::Send(base)),
                 _ => None,
             },
             ExprKind::Name(id) if self.src_text(id.span) == "timeout" => Some(ArmKind::Timeout),
@@ -50,19 +51,17 @@ impl<'a> Lowerer<'a> {
             match kind {
                 ArmKind::Default => default_arm = Some(arm),
                 ArmKind::Timeout => timeout_arm = Some(arm),
-                ArmKind::Send => {
-                    let go = self.new_block(&[]);
-                    self.jump(go, vec![]);
-                    ready_arms.push((arm, go));
-                    // Nothing after a send arm can be reached.
-                    break;
-                }
-                ArmKind::Recv(base) => {
+                ArmKind::Recv(base) | ArmKind::Send(base) => {
                     let Some((p, _)) = self.scrutinee(base) else {
                         return Res::Never;
                     };
                     let ch = self.load_at(p, 0, IrTy::Ptr);
-                    let Some(ready) = self.call_core("rt_chan_ready", vec![ch]) else {
+                    let check = if matches!(kind, ArmKind::Send(_)) {
+                        "rt_chan_room"
+                    } else {
+                        "rt_chan_ready"
+                    };
+                    let Some(ready) = self.call_core(check, vec![ch]) else {
                         return Res::Never;
                     };
                     let go = self.new_block(&[]);
