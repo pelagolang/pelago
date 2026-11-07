@@ -52,6 +52,23 @@ fn widen(n: i64, t: IrTy, signed: bool) -> i64 {
 }
 
 /// The integer or boolean constants of a function, by value.
+/// The values made by `x & c` with a constant `c >= 0`, with `c`: such a value cannot exceed `c`, so a shift by it
+/// needs no test against the width when `c` is below the width.
+fn and_masks(f: &Func, imms: &[Option<i64>]) -> Vec<Option<i64>> {
+    let mut out = vec![None; f.values.len()];
+    for b in &f.blocks {
+        for &i in &b.insts {
+            if let (Op::Bin(BinOp::And, x, y), Some(r)) = (&f.insts[i].op, f.insts[i].result) {
+                let c = imms[y.0 as usize]
+                    .or(imms[x.0 as usize])
+                    .filter(|c| *c >= 0);
+                out[r.0 as usize] = c;
+            }
+        }
+    }
+    out
+}
+
 fn const_values(f: &Func) -> Vec<Option<i64>> {
     let mut out = vec![None; f.values.len()];
     for b in &f.blocks {
@@ -98,6 +115,8 @@ struct Sel<'m> {
     f: &'m Func,
     mf: MFunc,
     imms: Vec<Option<i64>>,
+    /// For a value made by `x & c` with a constant `c >= 0`: `c` (the value is at most that).
+    and_max: Vec<Option<i64>>,
     uses: Vec<u32>,
     folds: Vec<Fold>,
     vreg: Vec<Option<Reg>>,
@@ -150,6 +169,7 @@ pub fn select(f: &Func) -> Option<MFunc> {
     let fills = crate::ir::opt::fill_loops(f, FILL_BYTES);
     let filled = crate::ir::opt::filled_slots(f);
     let imms = const_values(f);
+    let and_max = and_masks(f, &imms);
     let uses = f.use_counts();
     let fl = folds(f, &uses, &imms);
     let mut s = Sel {
@@ -159,6 +179,7 @@ pub fn select(f: &Func) -> Option<MFunc> {
             ..MFunc::default()
         },
         imms,
+        and_max,
         uses,
         folds: fl,
         vreg: vec![None; f.values.len()],
@@ -1494,6 +1515,8 @@ impl<'m> Sel<'m> {
                     self.emit(MInst::copy(d, Operand::use_(ra)));
                     let s = self.src(b);
                     self.emit(MInst::copy(Reg::Phys(RCX), s));
+                    // A count made by `& c` with `c` below the width cannot reach it: no test (width 0).
+                    let checked = !self.and_max[b.0 as usize].is_some_and(|c| c < w as i64);
                     let k = match o {
                         BinOp::Shl => 0,
                         BinOp::Shr => 2,
@@ -1505,7 +1528,7 @@ impl<'m> Sel<'m> {
                             Operand::use_def(d),
                             Operand::use_(Reg::Phys(RCX)),
                             Operand::Imm(k),
-                            Operand::Imm(w as i64),
+                            Operand::Imm(if checked { w as i64 } else { 0 }),
                         ],
                     ));
                 }
