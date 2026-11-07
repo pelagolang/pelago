@@ -122,6 +122,8 @@ Each stage is its own PR on its own branch and names the one row it moves; no fu
 
 **H6 waits (2026-11-07).** The allocator in Pelago needs two things that do not exist yet: system-call intrinsics (`os_reserve`, `os_commit`, `os_release`) and the machine-level IR (W4), so that the Pelago version compiles to code as small and fast as the assembly. The W4 thread is running (M0 to M6a merged, the M4 flip pending). H6 is picked up once M4 lands; the owner can overrule this.
 
+**Plan for the rows still behind C (2026-11-07, owner rule: a drop that is still slower gets a plan).** `bintrees` (0.058 s after H1, still about 2x behind the best C row) and `strsplit` (0.037 s, still behind) are the allocator rows left. Next steps, in order of expected gain: (a) inline the allocation fast path (class from a constant size, free-list pop or bump) at each `Alloc` site, which the machine-level IR (W4 M4, M7) makes possible; (b) narrow links (node 64 B to 24 B or less), which halves the memory traffic that dominates `bintrees`; (c) a size-bounded stack buffer for run-time-sized text temporaries (the `strsplit` case that H3 cannot reach), when the length is provably small; (d) free-list batching: `drop` of a whole tree pushes the blocks as one list instead of one at a time. Each needs a measured before and after from the harness; none is started.
+
 H1 and H2 are independent of the arena and narrow-links work. Narrow links (PR #139) shrink the data the allocator hands out
 (`bintrees` nodes about 3x) and compose with H1: smaller blocks, no header. The arena thread's AR5 (lazy `str.chars()`) is untouched.
 
