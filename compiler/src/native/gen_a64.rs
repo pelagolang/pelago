@@ -657,6 +657,14 @@ impl<'m> Gen<'m> {
     fn function(&mut self, fi: usize, f: &Func) -> Result<(), String> {
         if self.regalloc && super::gen::mir_mode() {
             if let Some(mut mf) = super::a64_select::select(f) {
+                mf.cold_syms = (0..self.m.funcs.len() as u32)
+                    .filter(|i| {
+                        self.m.funcs[*i as usize]
+                            .name
+                            .ends_with(crate::ir::opt::COLD_SUFFIX)
+                    })
+                    .map(|i| super::a64_mir::SYM_FUNC + i)
+                    .collect();
                 let target = super::a64_mir::A64::new();
                 if cfg!(debug_assertions) {
                     super::mir::verify(&mf, &target)?;
