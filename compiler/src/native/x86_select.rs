@@ -1603,6 +1603,26 @@ impl<'m> Sel<'m> {
 
     fn select(&mut self, c: Value, a: Value, b: Value, r: Value) {
         let d = self.reg_of(r);
+        // `if c { 1 } else { 0 }` (and the opposite) is the flag itself: a `set`, with no constants.
+        if let Some((o, x, y)) = self.deferred.get(&c).copied() {
+            let (ka, kb) = (self.imms[a.0 as usize], self.imms[b.0 as usize]);
+            if matches!((ka, kb), (Some(1), Some(0)) | (Some(0), Some(1))) {
+                let Cond::Cmp(cc, rx, ry) = self.cmp_cond(o, x, y) else {
+                    unreachable!()
+                };
+                let cc = if ka == Some(1) { cc } else { cc.invert() };
+                self.emit(MInst::new(
+                    op::CMPSET,
+                    vec![
+                        Operand::def(d),
+                        Operand::Imm(cc_num(cc)),
+                        Operand::use_(rx),
+                        ry,
+                    ],
+                ));
+                return;
+            }
+        }
         // The result starts as the false operand and takes the true one when the condition holds.
         let sb = self.src(b);
         let ra = self.vr(a);

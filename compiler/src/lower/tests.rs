@@ -2293,6 +2293,19 @@ fn a_load_joins_an_earlier_load_only_when_no_store_or_call_lies_between() {
 }
 
 #[test]
+fn an_element_written_one_pass_and_read_the_next_is_carried_in_a_register() {
+    // `cur[j + 1] = best` and `cur[j]` on the next pass: the read is the carried value. The loop runs
+    // zero, one and many times, and the first read (before the loop) is whatever the list held.
+    let src = "fn run(n: int) -> int { var cur: [int] = []\n var prev: [int] = []\n for j in 0..8 { prev.push!(j * 3 % 5)\n cur.push!(j * 7 % 4) }\n for j in 0..n { var best = prev[j] + 1\n if cur[j] + 1 < best { best = cur[j] + 1 }\n cur[j + 1] = best }\n var t = 0\n for j in 0..8 { t = t * 3 + cur[j] }\n t }\nfn main() { print(run(0), run(1), run(2), run(7)) }";
+    agree(src);
+}
+
+#[test]
+fn a_comparison_turned_into_one_or_zero_matches_the_interpreter() {
+    agree("fn f(a: int, b: int) -> int { var t = 0\n if a != b { t += 1 }\n t += if a < b { 1 } else { 0 }\n t += if a >= b { 0 } else { 1 }\n t }\nfn main() { print(f(1, 2), f(2, 1), f(3, 3), f(-5, 4), f(9223372036854775807, -1)) }");
+}
+
+#[test]
 fn a_range_test_becomes_one_unsigned_compare() {
     let src = "fn digit(c: int) -> bool { c >= 48 && c <= 57 }\nfn main() { var n = 0\n for i in -5..120 { if digit(i) { n += 1 } }\n print(n) }";
     let l = lowered(src);

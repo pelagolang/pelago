@@ -204,7 +204,7 @@ fn get_name(v: Value, rep: &HashMap<Value, Value>, name: &[u64]) -> u64 {
 }
 
 /// May the instruction change memory (or hand control to code that may)?
-fn writes_memory(op: &Op) -> bool {
+pub(super) fn writes_memory(op: &Op) -> bool {
     matches!(
         op,
         Op::Store(..)

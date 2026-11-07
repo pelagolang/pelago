@@ -15,6 +15,7 @@
 
 mod bce;
 mod cache;
+mod carry;
 mod cfg;
 mod constdata;
 mod cse;
@@ -189,6 +190,7 @@ fn rounds(f: &mut Func, divs: bool) {
             changed |= step(f, "thread", thread::run);
             changed |= step(f, "ifconv", ifconv::run);
             changed |= step(f, "rangecheck", rangecheck::run);
+            changed |= step(f, "carry", carry::run);
         }
         changed |= step(f, "simplify", cfg::run);
         changed |= step(f, "dce", dce::run);
