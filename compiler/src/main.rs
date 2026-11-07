@@ -401,7 +401,12 @@ fn ir_or_run(
     if failed {
         std::process::exit(1);
     }
-    let lowered = pelago::lower::lower(&program, &resolved, &typed);
+    let lowered = pelago::lower::lower_with(
+        &program,
+        &resolved,
+        &typed,
+        flags.contains(&"--heap=pelago"),
+    );
     timer.lap("lower to IR");
     for d in &lowered.diagnostics {
         let module = program.module(d.module);
@@ -426,11 +431,18 @@ fn ir_or_run(
     } else {
         flags.contains(&"--opt")
     };
+    let language_heap = flags.contains(&"--heap=pelago");
+    if language_heap && !optimise {
+        pelago::ir::opt::expand_heap(&mut module);
+    }
     if optimise {
         if timer.on {
             pelago::ir::opt::time_passes();
         }
         pelago::ir::opt::optimize(&mut module, pelago::ir::opt::Options::default());
+        if language_heap {
+            pelago::ir::opt::expand_heap(&mut module);
+        }
         // `@inline_always` and `@leaf` are promises checked on the optimised code.
         for (fi, f) in module.funcs.iter().enumerate() {
             let mut report = |at: Option<(u32, Span)>, what: &str| {
