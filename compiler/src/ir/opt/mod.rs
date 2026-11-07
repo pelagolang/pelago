@@ -38,6 +38,7 @@ mod peel;
 mod promote;
 mod ranges;
 mod sccp;
+mod scratch;
 mod split;
 mod stats;
 mod tailrec;
@@ -160,6 +161,7 @@ fn rounds(f: &mut Func, divs: bool) {
         let mut changed = false;
         changed |= step(f, "simplify", cfg::run);
         changed |= step(f, "dce", dce::run);
+        changed |= step(f, "scratch", scratch::run);
         changed |= step(f, "promote", promote::run);
         changed |= step(f, "split", split::run);
         changed |= step(f, "sccp", sccp::run);
