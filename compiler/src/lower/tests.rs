@@ -1618,6 +1618,19 @@ fn native_agrees_on_sqrt_and_rounding() {
     );
 }
 
+/// Narrowing an `int` wraps or checks, the same in the interpreter and natively.
+#[test]
+fn native_agrees_on_int_narrowing() {
+    agree(
+        "fn main() {
+            const n = 300
+            print(n.wrapToByte() to int, (0 - 1).wrapToByte() to int, n.wrapToInt8() to int, (0 - 129).wrapToInt8() to int)
+            print(n.wrapToInt16() to int, (70000).wrapToUint16() to int, (5000000000).wrapToInt32() to int, (5000000000).wrapToUint32() to int)
+            print(n.toByteChecked(), (255).toByteChecked(), (0 - 1).toInt8Checked(), (127).toInt8Checked())
+        }",
+    );
+}
+
 /// A zero float constant that a hoisted instruction reads stays where the loop can see it.
 #[test]
 fn licm_keeps_a_zero_constant_a_hoisted_op_reads() {

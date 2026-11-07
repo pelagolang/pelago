@@ -64,6 +64,7 @@ A serious, self-hosting systems language:
 | Functions | `fn` (chosen because `fnc` splits into two tokens in most tokenizers) | decided |
 | Variables | `var` (changeable) and `const` (truly immutable) | decided |
 | Types | Lowercase names; sized ints `int8` to `int64`, `uint8` to `uint64` | decided |
+| Narrowing | `to` only when nothing is lost; narrowing an `int` is `n.wrapToByte()` (wraps) or `n.toByteChecked()` (`option`), likewise `Int8`, `Int16`, `Uint16`, `Int32`, `Uint32`; `docs/design/basics.md` section 6 | decided |
 | Naming | The compiler accepts any identifier style; the standard library and formatter pick one | decided |
 | Comments | `/// line`, `///* block *///` (nests); documentation `//~ line`, `//~* block *~//`; `//` and `/* */` are errors with a hint (`docs/design/comments.md`) | decided |
 | Brand | Monoline capital P + dot + wave mark; lowercase `pelago` in Comfortaa Bold, text in Outfit; teal `#0E7C86`, lagoon `#5FD0C8`, deep sea `#0B2239`; assets in `assets/brand/` (`docs/design/brand.md`) | decided |

@@ -35,6 +35,60 @@ impl range<int> {
 }
 
 impl int {
+    //~ The low bits of `self` as a `uint8`: the rest is cut off, so a value out of range wraps.
+    fn wrapToByte(self) -> uint8 = rt_wrap<uint8>(self)
+
+    //~ `self` as a `uint8`, or `none` when it does not fit (0 to 255).
+    fn toByteChecked(self) -> uint8? {
+        if self < 0 || self > 255 { return none }
+        return rt_wrap<uint8>(self)
+    }
+
+    //~ The low bits of `self` as a `int8`: the rest is cut off, so a value out of range wraps.
+    fn wrapToInt8(self) -> int8 = rt_wrap<int8>(self)
+
+    //~ `self` as a `int8`, or `none` when it does not fit (-128 to 127).
+    fn toInt8Checked(self) -> int8? {
+        if self < -128 || self > 127 { return none }
+        return rt_wrap<int8>(self)
+    }
+
+    //~ The low bits of `self` as a `int16`: the rest is cut off, so a value out of range wraps.
+    fn wrapToInt16(self) -> int16 = rt_wrap<int16>(self)
+
+    //~ `self` as a `int16`, or `none` when it does not fit (-32768 to 32767).
+    fn toInt16Checked(self) -> int16? {
+        if self < -32768 || self > 32767 { return none }
+        return rt_wrap<int16>(self)
+    }
+
+    //~ The low bits of `self` as a `uint16`: the rest is cut off, so a value out of range wraps.
+    fn wrapToUint16(self) -> uint16 = rt_wrap<uint16>(self)
+
+    //~ `self` as a `uint16`, or `none` when it does not fit (0 to 65535).
+    fn toUint16Checked(self) -> uint16? {
+        if self < 0 || self > 65535 { return none }
+        return rt_wrap<uint16>(self)
+    }
+
+    //~ The low bits of `self` as a `int32`: the rest is cut off, so a value out of range wraps.
+    fn wrapToInt32(self) -> int32 = rt_wrap<int32>(self)
+
+    //~ `self` as a `int32`, or `none` when it does not fit (-2147483648 to 2147483647).
+    fn toInt32Checked(self) -> int32? {
+        if self < -2147483648 || self > 2147483647 { return none }
+        return rt_wrap<int32>(self)
+    }
+
+    //~ The low bits of `self` as a `uint32`: the rest is cut off, so a value out of range wraps.
+    fn wrapToUint32(self) -> uint32 = rt_wrap<uint32>(self)
+
+    //~ `self` as a `uint32`, or `none` when it does not fit (0 to 4294967295).
+    fn toUint32Checked(self) -> uint32? {
+        if self < 0 || self > 4294967295 { return none }
+        return rt_wrap<uint32>(self)
+    }
+
     fn abs(self) -> int = self < 0 ? 0 - self : self
     fn min(self, other: int) -> int = self < other ? self : other
     fn max(self, other: int) -> int = self > other ? self : other
