@@ -1,6 +1,6 @@
 # Roadmap
 
-Name: **Pelago**, file extension `.pel`, one tool called `pelago` (see [NAMES.md](NAMES.md) for how the name was chosen).
+Name: **Pelago**, file extension `.pel`, one tool called `pelago`.
 
 ## Vision
 
@@ -108,7 +108,7 @@ No compiler code yet. Everything here is cheap to change.
 - [ ] **Paper test.** Sketch the compiler's own core data (tokens, syntax tree, symbol table, type checker state) under value semantics. If something does not fit, revisit the safety model before writing any compiler code
 - [ ] **Token benchmark.** Run the samples and equivalent Rust and TS programs through real tokenizers. Record the numbers
 - [ ] **First target CPU** for the backend (x86-64 is the usual start) and first OS / object format (ELF on Linux)
-- [ ] Pick the final name, then rename the repo
+- [x] Name: **Pelago**, final (owner, 2026-11-07)
 - [x] Choose a license: `MIT OR Apache-2.0` (owner, 2026-10-20); files `LICENSE-MIT` and `LICENSE-APACHE` in every Pelago repository
 
 **Milestone:** the samples read well, the paper test passes, and the grammar fits on a couple of pages.

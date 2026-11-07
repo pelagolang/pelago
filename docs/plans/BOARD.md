@@ -45,8 +45,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 | [A-03](cards/A-03-temporaries-ledger.md) | The ledger for owning scalar temporaries (objects, boxes); IR22. Memory temporaries already ended with their statement; removing the flags is A-04's job | `lower/func.rs`, IR22 |
 | [A-08](cards/A-08-checker-closures.md) | `inout n ~> ...` closure parameters; `scope` handle is the library type `scope_handle`; tasks finish at scope end; a detached task now runs | `core.pel`, `values/mod.rs` |
 | [A-02](cards/A-02-box.md) | `box<T>`: `box(v)`, `get`, `set!`, `take!!`, auto-deref, infinite-size check, heap environments for stored closures | `docs/design/types.md` 6a, IR21 |
-| [B-01](cards/B-01-name.md) | Name chosen: **Pelago** | `NAMES.md` |
-| B-02 | Extension chosen: **`.pel`** | `NAMES.md` |
+| B-01 | Name and extension settled: **Pelago**, `.pel` | final |
 | B-04 | Rename done: crate, binary, library, examples, docs | this commit |
 | [D-01](cards/D-01-lowering.md) | Lowering of the whole checked language to IR, interpreter, `pelago run`, leak checks | `compiler/src/lower/`, `docs/design/ir.md` IR9 to IR20 |
 | D-02 | Checker stages 1 to 6, value semantics, exhaustiveness | `docs/design/checker.md` |

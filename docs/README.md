@@ -10,6 +10,6 @@
 | [`brand/`](brand/README.md) | Identity record and the design-process boards. | Touching logos, icons or the website look. |
 | [`NEXT.md`](NEXT.md) | Where we stopped; the retro of each cycle goes at its top. | Starting a cycle. |
 
-Top level: `README.md` (overview), `ROADMAP.md` (vision, decisions table, phases), `NAMES.md` (name record), `CLAUDE.md` (guide for AI sessions).
+Top level: `README.md` (overview), `ROADMAP.md` (vision, decisions table, phases), `CLAUDE.md` (guide for AI sessions).
 
 Rule: a new document goes in the folder whose "Read when" matches; a decision goes in the design doc and in the `ROADMAP.md` decisions table.

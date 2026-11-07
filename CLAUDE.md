@@ -46,7 +46,7 @@ CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pus
 - `editors/`: the TextMate grammar (generated, with a test that keeps it in step with `keyword.rs`) (the VS Code extension lives in `pelagolang/vscode-pelago`).
 - `docs/plans/`: the task board (Kanban) and one plan card per piece of work; start at `docs/plans/README.md`.
 - `docs/process/`: how we work (two-week cycles, card cap, benchmark rules). `docs/perf/`: speed plans and benchmark findings. `docs/brand/`: identity record. Index: `docs/README.md`.
-- `ROADMAP.md`: the decisions table and the phases. `NAMES.md`: name brainstorm.
+- `ROADMAP.md`: the decisions table and the phases.
 
 ## Keeping things in step
 
@@ -85,7 +85,7 @@ inheritance written `:`; one `switch` for pattern matching; `~>` closures; `#nam
   questions. Record the answers in the docs.
 - The owner wants a language with its own voice, not a copy of another one, but also familiarity where it
   helps. Be honest about costs, push back with reasons once, then follow the decision.
-- The name Pelago is settled (see `NAMES.md`). For any new name (a package, a tool, a release), search the web for clashes before proposing.
+- The name Pelago is settled. For any new name (a package, a tool, a release), search the web for clashes before proposing.
 - Keep chat answers short and well organised; the owner reads the docs for detail.
 - The owner is budget-conscious. Do not start large work (for example the parser) unless asked.
 
