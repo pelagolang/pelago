@@ -1,6 +1,7 @@
 ///* After kostya/benchmarks base64 (MIT, Copyright (c) 2014 Konstantin Makarchev): encode and decode a 128 KiB block into newly allocated buffers, with '=' padding. *///
 fn encode(src: [uint8], table: [uint8]) -> [uint8] {
     var out: [uint8] = []
+    out.reserve!((src.len() + 2) / 3 * 4)
     const full = src.len() - src.len() % 3
     var i = 0
     while i < full {
@@ -32,6 +33,7 @@ fn decode(src: [uint8], rev: [uint8]) -> [uint8] {
     var size = src.len()
     while size > 0 && (src[size - 1] == 61 || src[size - 1] == 10 || src[size - 1] == 13) { size -= 1 }
     var out: [uint8] = []
+    out.reserve!(size / 4 * 3 + 3)
     var i = 0
     while i + 4 <= size {
         const v = ((rev[src[i] to int] to int) << 18) | ((rev[src[i + 1] to int] to int) << 12) | ((rev[src[i + 2] to int] to int) << 6) | (rev[src[i + 3] to int] to int)
