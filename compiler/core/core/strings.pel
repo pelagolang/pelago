@@ -24,6 +24,23 @@ pub fn rt_char_at(p: ptr, i: int, n: int) -> int {
     (c << 3) | width
 }
 
+//~ Where the piece of `n` bytes at `p` that starts at `pos` ends: at the next `sep` (`sn` bytes at `sp`), or at `n`.
+//~ An empty separator never matches. `for w of s.split(sep)` calls it in place, so the loop builds no list.
+pub fn rt_split_end(p: ptr, n: int, sp: ptr, sn: int, pos: int) -> int {
+    if sn == 0 { return n }
+    var i = pos
+    while i + sn <= n {
+        if rt_bytes_eq(rt_offset(p, i), sp, sn) { return i }
+        i += 1
+    }
+    n
+}
+
+//~ Where the search for the next piece starts once the piece ended at `end`: after the separator, or `n + 1` for "no more".
+pub fn rt_split_after(end: int, n: int, sn: int) -> int {
+    if end < n { end + sn } else { n + 1 }
+}
+
 impl str {
     fn len(self) -> int = rt_hdr_len(rt_addr_of(self))
     fn isEmpty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
@@ -68,24 +85,14 @@ impl str {
         var out: [str] = []
         const n = self.len()
         const sn = separator.len()
-        if sn == 0 {
-            out.push!(self)
-            return rt_cast<list<str>, iter<str>>(sink out)
-        }
         const p = rt_hdr_data(rt_addr_of(self))
         const sp = rt_hdr_data(rt_addr_of(separator))
-        var start = 0
-        var i = 0
-        while i + sn <= n {
-            if rt_bytes_eq(rt_offset(p, i), sp, sn) {
-                out.push!(self[start..i])
-                i += sn
-                start = i
-            } else {
-                i += 1
-            }
+        var pos = 0
+        while pos <= n {
+            const end = rt_split_end(p, n, sp, sn, pos)
+            out.push!(self[pos..end])
+            pos = rt_split_after(end, n, sn)
         }
-        out.push!(self[start..n])
         rt_cast<list<str>, iter<str>>(sink out)
     }
 
