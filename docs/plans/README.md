@@ -15,7 +15,7 @@ why, design, steps, tests, and how we know it is done. The board only lists card
 | **Inbox** | An idea or a note. Not designed yet. | The owner or an LLM, when it is written up as a plan. |
 | **Needs decision** | The plan exists but one or more numbered questions wait for the owner. Nothing may be built yet. | The owner answers; record the answers in the card **and** in the matching design doc and `ROADMAP.md`. |
 | **Ready** | Fully specified and unblocked. Anyone may start it. Ordered top to bottom: **take the first one**. | Whoever starts it. |
-| **Doing** | Someone is working on it now. **At most one card at a time per track** (the WIP limit), so work finishes before more starts. | The worker, when the "Done means" checklist in the card is true. |
+| **Doing** | Someone is working on it now. **At most three cards on the whole board** (the WIP limit, see `docs/process/workflow.md`), so work finishes before more starts. | The worker, when the "Done means" checklist in the card is true. |
 | **Review** | Built and green (fmt, clippy, tests). Waiting for the owner to look. | The owner. |
 | **Done** | Finished and accepted. Kept as a record; the card says what was built and where. | nobody |
 | **Shelf** | Deliberately parked. Every shelved card says *why* and *what event should bring it back* (the "revisit when" line). | The owner, or whoever sees the revisit trigger happen. |

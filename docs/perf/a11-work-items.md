@@ -1,6 +1,6 @@
 # A-11 work items (for parallel work)
 
-Status after PRs #7 to #12 and the register allocator (W3) (card [A-11](cards/A-11-native-speed.md) has the longer story). Each item below can be a thread of its own: it says what to do, which files it touches, what it needs first, and which other items it will collide with in git. Branch names follow `claude/<type>/<name>`.
+Status after PRs #7 to #12 and the register allocator (W3) (card [A-11](../plans/cards/A-11-native-speed.md) has the longer story). Each item below can be a thread of its own: it says what to do, which files it touches, what it needs first, and which other items it will collide with in git. Branch names follow `claude/<type>/<name>`.
 
 ## Where we are
 

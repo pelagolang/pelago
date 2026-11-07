@@ -2,14 +2,14 @@
 
 Last updated when every card on the first list was finished (A-01 to A-08 and B-03). What is left is on the shelf: it waits for the backend or for a measured need.
 
-**Order of work.** The next real step is the machine-code backend: card [A-09](cards/A-09-native-backend.md) is under way (owner's answers recorded in the card): x86-64 machine code for Linux and Windows. Done: N1 to N5 and the Windows target; the leftovers (buffered print, float semantics, stack guard) are item W8 in [a11-work-items.md](a11-work-items.md). The editor work (S-05, S-06) is built and in Review.
+**Order of work.** The next real step is the machine-code backend: card [A-09](cards/A-09-native-backend.md) is under way (owner's answers recorded in the card): x86-64 machine code for Linux and Windows. Done: N1 to N5 and the Windows target; the leftovers (buffered print, float semantics, stack guard) are item W8 in [a11-work-items.md](../perf/a11-work-items.md). The editor work (S-05, S-06) is built and in Review.
 
 ## Track A: compiler
 
 | Column | Card | Title | Size |
 |---|---|---|---|
 | Doing | [A-10](cards/A-10-aarch64.md) | AArch64 (64-bit ARM) backend: R1 (encoder) and R2 (Linux ELF, runtime, generator, tests under qemu and on ARM CI) built; R3 (registers) built; Windows on ARM and macOS built | L |
-| Doing | [A-11](cards/A-11-native-speed.md) | Native speed: S1 to S3 first rounds done (collatz 0.30 s to 0.09 s, C -O2 0.07 s); open work split in [a11-work-items.md](a11-work-items.md) | XL |
+| Doing | [A-11](cards/A-11-native-speed.md) | Native speed: S1 to S3 first rounds done (collatz 0.30 s to 0.09 s, C -O2 0.07 s); open work split in [a11-work-items.md](../perf/a11-work-items.md) | XL |
 | Doing | [A-12](cards/A-12-concurrency.md) | Concurrency built out: stackful tasks, scheduler, blocking channels, `select`, locks, coroutines, atomics, workers (plan in `docs/design/concurrency-runtime.md`) | XL |
 | Doing | [A-13](cards/A-13-arena.md) | Bump arenas: `arena`, checked `aref<T>` handles, reset in one store (plan in `docs/design/arena.md`) | M |
 | Doing | [A-14](cards/A-14-pool-and-links.md) | Pools and narrow links: `pool<T, W>`, `link<T, W>` (1, 2 or 4 byte indexes; plan in `docs/design/narrow-links.md`) | L |

@@ -1,5 +1,7 @@
 # Where we stopped, and what comes next
 
+> Cycle rhythm and rules: [docs/process/workflow.md](process/workflow.md). The retro of each two-week cycle (ten lines: shipped, broke, next) is added at the top of this file. The sections below are older and are refreshed at the first retro; the live work list is `docs/plans/BOARD.md`.
+
 ## Done
 
 - Design drafts in `docs/design/`: `modules`, `checker`, `basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `memory`, `ir`, `lexer`, `parser`, `samples`.
@@ -18,7 +20,7 @@
 
 ## The task board
 
-Work is tracked as cards in `docs/plans/` (read `README.md` there, then `BOARD.md`). Cards A-01 to A-08 and B-03 are done (box, the ledger, the optimiser, meta, soa, async at stage 0, the highlighter). The machine-code backend (card A-09) runs: stages N1 to N5 and the Windows target are done (`pelago build`). Card A-11 (native speed) is under way: division by any constant (high multiply), range-proven overflow checks and a leaner generator brought collatz from 0.30 s to 0.09 s (C `-O2` 0.07 s). **Next:** the work items in `docs/plans/a11-work-items.md` (induction-variable ranges, real linear-scan allocation, memory operations, benches, the A-09 leftovers), written to be split across parallel threads. Then the shelf (S-01 maps, S-02 threads, S-04 async suspension). Parked on purpose: the Tree-sitter grammar and Zed extension (S-05) and the language server (S-06); the two empty repositories exist under `pelagolang`.
+Work is tracked as cards in `docs/plans/` (read `README.md` there, then `BOARD.md`). Cards A-01 to A-08 and B-03 are done (box, the ledger, the optimiser, meta, soa, async at stage 0, the highlighter). The machine-code backend (card A-09) runs: stages N1 to N5 and the Windows target are done (`pelago build`). Card A-11 (native speed) is under way: division by any constant (high multiply), range-proven overflow checks and a leaner generator brought collatz from 0.30 s to 0.09 s (C `-O2` 0.07 s). **Next:** the work items in `docs/perf/a11-work-items.md` (induction-variable ranges, real linear-scan allocation, memory operations, benches, the A-09 leftovers), written to be split across parallel threads. Then the shelf (S-01 maps, S-02 threads, S-04 async suspension). Parked on purpose: the Tree-sitter grammar and Zed extension (S-05) and the language server (S-06); the two empty repositories exist under `pelagolang`.
 
 ## Open questions for the owner
 

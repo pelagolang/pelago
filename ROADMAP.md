@@ -67,7 +67,7 @@ A serious, self-hosting systems language:
 | Narrowing | `to` only when nothing is lost; narrowing an `int` is `n.wrapToByte()` (wraps) or `n.toByteChecked()` (`option`), likewise `Int8`, `Int16`, `Uint16`, `Int32`, `Uint32`; `docs/design/basics.md` section 6 | decided |
 | Naming | The compiler accepts any identifier style; the standard library and formatter pick one | decided |
 | Comments | `/// line`, `///* block *///` (nests); documentation `//~ line`, `//~* block *~//`; `//` and `/* */` are errors with a hint (`docs/design/comments.md`) | decided |
-| Brand | Monoline capital P + dot + wave mark; lowercase `pelago` in Comfortaa Bold, text in Outfit; teal `#0E7C86`, lagoon `#5FD0C8`, deep sea `#0B2239`; assets in `assets/brand/` (`docs/design/brand.md`) | decided |
+| Brand | Monoline capital P + dot + wave mark; lowercase `pelago` in Comfortaa Bold, text in Outfit; teal `#0E7C86`, lagoon `#5FD0C8`, deep sea `#0B2239`; assets in `assets/brand/` (`docs/brand/README.md`) | decided |
 | `int` | Always exactly 64 bits; sized types for dense data | decided |
 | Fused multiply-add | Never automatic: `a.fma(b, c)` (one rounding) is an explicit `float` method; `a * b + c` always rounds twice, so results match everywhere. x86 needs FMA3 (Haswell or newer); AArch64 has `fmadd` | decided (Dennis, 2026-10-21) |
 | Conversions | Written `x to float`, allowed only when nothing can be lost; lossy ones get a different spelling | decided in principle |

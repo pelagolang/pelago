@@ -1,6 +1,6 @@
 # Brand design process
 
-The boards we looked at, in order, while designing the Pelago identity. They record what was tried, what was chosen and what was rejected, so nobody repeats a rejected direction. The result is in [`../brand.md`](../brand.md) and `assets/brand/`.
+The boards we looked at, in order, while designing the Pelago identity. They record what was tried, what was chosen and what was rejected, so nobody repeats a rejected direction. The result is in [`../brand.md`](../README.md) and `assets/brand/`.
 
 ## Round 1: the mark
 
