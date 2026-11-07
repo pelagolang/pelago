@@ -64,8 +64,10 @@ pub fn heap_block_size(k: int) -> int {
 
 fn heap_base() -> int = rt_load_int(rt_data_word(0))
 
+//~ Out of memory: stops the program. A store through the null address does it on every target without calling anything that
+//~ could allocate (a message comes with the OS layer on every target).
 fn heap_stop() {
-    rt_os_exit(1)
+    rt_store_int(rt_null(), 1)
 }
 
 //~ Reserves the region on first use, halving the request until the system agrees.
