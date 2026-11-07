@@ -1,0 +1,13 @@
+/// Finished tasks hand their stacks to the next spawn; many in a row, and several alive at once, still work.
+fn main() {
+    var total = 0
+    for i of 0..2000 {
+        const t = spawn(() ~> i * 2)
+        total += t.join!!()
+    }
+    print(total)
+    const a = spawn(() ~> 1)
+    const b = spawn(() ~> 2)
+    const c = spawn(() ~> 3)
+    print(a.join!!() + b.join!!() + c.join!!())
+}

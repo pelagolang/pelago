@@ -39,6 +39,26 @@ pub var rt_zombie: int = 0
 
 const RT_TASK_STACK = 262144
 
+//~ Stacks of finished tasks, kept for the next `spawn` (no mapping, no unmapping). At most `RT_STACK_POOL` of them.
+pub var rt_stack_pool: [int] = []
+const RT_STACK_POOL = 16
+
+fn rt_stack_take() -> ptr {
+    const n = rt_stack_pool.len()
+    if n == 0 { return rt_alloc(RT_TASK_STACK) }
+    const p = rt_stack_pool[n - 1]
+    rt_stack_pool.pop!()
+    rt_cast<int, ptr>(p)
+}
+
+fn rt_stack_give(p: ptr) {
+    if rt_stack_pool.len() < RT_STACK_POOL {
+        rt_stack_pool.push!(rt_addr_int(p))
+    } else {
+        rt_free(p)
+    }
+}
+
 fn rt_main_init() {
     if rt_tasks.len() == 0 {
         const s = rt_alloc(72)
@@ -52,7 +72,7 @@ fn rt_reap() {
     if rt_zombie != 0 {
         const z = rt_cast<int, ptr>(rt_zombie)
         rt_zombie = 0
-        rt_free(rt_load_ptr(rt_offset(z, 24)))
+        rt_stack_give(rt_load_ptr(rt_offset(z, 24)))
         rt_store_ptr(rt_offset(z, 24), rt_null())
         if rt_load_int(rt_offset(z, 16)) == 1 {
             rt_free(z)
@@ -130,6 +150,10 @@ pub fn rt_run_pending() {
     }
     if rt_tasks.len() == 1 {
         rt_free(rt_cast<int, ptr>(rt_tasks[0]))
+        while rt_stack_pool.len() > 0 {
+            rt_free(rt_stack_take())
+        }
+        rt_stack_pool = []
         rt_tasks = []
         rt_cur = 0
     }
@@ -177,7 +201,7 @@ pub fn spawn<T>(sink f: once fn() -> T) -> task<T> {
     rt_main_init()
     rt_idle = 0
     const s = rt_alloc(64 + rt_size_of<T>())
-    const stack = rt_alloc(RT_TASK_STACK)
+    const stack = rt_stack_take()
     rt_store_ptr(rt_offset(s, 24), stack)
     const runner = [sink f, sink s] () ~> rt_task_body<T>(s, sink f)
     rt_write<once fn()>(rt_offset(s, 32), sink runner)

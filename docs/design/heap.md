@@ -114,6 +114,8 @@ Each stage is its own PR on its own branch and names the one row it moves; no fu
 
 **H2 so far.** Measuring `hello` showed that its executable carried the whole allocator only because `print` of text built a temporary `string`. `print` of text values now writes each value directly, so a program that only prints text has no allocator: `hello` is 2592 bytes (4192 with the allocator, 3808 before H1; tcc about 3 KB). The rest of H2 (a bump-only allocator when nothing is freed) has no program to apply to yet, since a program that allocates also frees, so it waits.
 
+**H5 so far.** Per-worker heaps wait for several workers (C6); the scheduler has one worker today, so nothing can race and there is nothing to test. The task stack part is done: a finished task's 256 KiB stack goes to a pool of up to 16 (`tasks.pel`, `rt_stack_give`) and the next `spawn` takes it back, and the pool is freed when the last task ends. Before, every spawn mapped a stack and every finish unmapped it; 20000 sequential spawn and join now make 5 `mmap` calls in all (one run, not the harness).
+
 H1 and H2 are independent of the arena and narrow-links work. Narrow links (PR #139) shrink the data the allocator hands out
 (`bintrees` nodes about 3x) and compose with H1: smaller blocks, no header. The arena thread's AR5 (lazy `str.chars()`) is untouched.
 
