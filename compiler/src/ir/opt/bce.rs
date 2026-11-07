@@ -1163,7 +1163,12 @@ fn apply(f: &mut Func, lp: &Loop, plan: Plan) {
         wrap.extend(p.plain.iter().copied());
         for &(blk, ok_then) in &p.sites {
             if let Some(Term::Branch(_, t, e)) = f.blocks[blk.0 as usize].term.clone() {
-                f.blocks[blk.0 as usize].term = Some(Term::Jump(if ok_then { t } else { e }));
+                let (go, grows) = if ok_then { (t, e) } else { (e, t) };
+                f.blocks[blk.0 as usize].term = Some(Term::Jump(go));
+                // The block that grew the list can no longer run; it must not read what the loop makes.
+                let dead = &mut f.blocks[grows.block.0 as usize];
+                dead.insts.clear();
+                dead.term = Some(Term::Unreachable);
             }
         }
     }
@@ -1384,6 +1389,10 @@ fn apply(f: &mut Func, lp: &Loop, plan: Plan) {
                 t.map_values(|v| *map.get(&v).unwrap_or(&v));
             }
         }
+    }
+    // The blocks that grew the list are unreachable now.
+    if plan.push.is_some() {
+        f.compact();
     }
     let _ = i;
 }
