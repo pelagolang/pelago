@@ -1,7 +1,10 @@
-//~ The always-available library. Names declared `pub` here are in scope in every module.
-//~
-//~ Functions declared `ext` have no body here: the backend provides them. The signatures are what
-//~ the checker needs.
+/// The index of the always-available library, like a `mod.rs`: the interfaces every other module builds on,
+/// and the front file of the modules in `core/` (`core.rt`, `core.lists`, `core.text`, `core.maps`,
+/// `core.strings`, `core.iters`, `core.results`, `core.numbers`, `core.tasks`, `core.boxes`,
+/// `core.columns`, `core.objects`). Names declared `pub` here or in any of them are in scope in every module.
+///
+/// Functions declared `ext` have no body here: the backend provides them. The signatures are what
+/// the checker needs. The library's tests are programs in `tests/`, each with its expected output.
 
 //~ Anything that can be printed and put into a `#( )` string.
 pub interface show {

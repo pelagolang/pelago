@@ -1,0 +1,4 @@
+/// An index past the end stops the program.
+fn main() {
+    print("ab".byteAt(2))
+}

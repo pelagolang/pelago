@@ -1,0 +1,114 @@
+/// Pools and narrow links (docs/design/narrow-links.md).
+
+//~ A value in a `pool`, named by its slot number stored in a `W` (`uint8`, `uint16` or `uint32`). The all-ones
+//~ number means no slot. It is plain data: copying it copies the number, dropping it does nothing.
+pub struct link<T, W> {
+    slot: W
+}
+
+//~ A growable block of equal slots. `add!` fills one (at most `2^W - 1` of them), `remove!` frees it for the next `add!`,
+//~ and the whole pool goes in one free. Values must not need dropping (numbers, `bool`, `char`, structs and enums of those, `link`s).
+pub struct pool<T, W> {
+    base: ptr
+    bounce: ptr
+    stride: int
+    count: int
+    cap: int
+    free: int
+
+    init() {
+        self.base = rt_null()
+        self.bounce = rt_alloc(8)
+        self.stride = ((rt_size_of<T>() + 7) / 8) * 8
+        if self.stride < 8 { self.stride = 8 }
+        self.count = 0
+        self.cap = 0
+        self.free = -1
+    }
+
+    deinit {
+        if self.cap > 0 { rt_free(self.base) }
+        rt_free(self.bounce)
+    }
+}
+
+impl<T, W> pool<T, W> {
+    //~ The most slots this pool can name: one number of `W` is kept for no slot.
+    fn limit(self) -> int = (1 << (8 * rt_size_of<W>())) - 1
+
+    fn toLink(self, n: int) -> link<T, W> {
+        rt_write<int>(self.bounce, n)
+        link<T, W> { slot: rt_read<W>(self.bounce) }
+    }
+
+    fn slotOf(self, l: link<T, W>) -> int {
+        rt_write<int>(self.bounce, 0)
+        rt_write<W>(self.bounce, l.slot)
+        rt_read<int>(self.bounce)
+    }
+
+    //~ The link that names no slot.
+    fn noLink(self) -> link<T, W> = self.toLink(-1)
+
+    //~ Whether `l` names no slot.
+    fn isNone(self, l: link<T, W>) -> bool = self.slotOf(l) == self.limit()
+
+    //~ Puts `value` in a free slot and gives its link; stops when the pool is full.
+    fn add(inout self, sink value: T) -> link<T, W> {
+        if rt_needs_drop<T>() { panic("a pool holds only types without drop glue") }
+        var n = self.free
+        if n >= 0 {
+            self.free = rt_read<int>(rt_offset(self.base, n * self.stride))
+        } else {
+            n = self.count
+            if n >= self.limit() { panic("pool full") }
+            if (n + 1) * self.stride > self.cap { self.grow!((n + 1) * self.stride) }
+            self.count = n + 1
+        }
+        rt_write<T>(rt_offset(self.base, n * self.stride), sink value)
+        self.toLink(n)
+    }
+
+    //~ Makes room for `needed` bytes.
+    fn grow(inout self, needed: int) {
+        var ncap = self.cap * 2
+        if ncap < 4096 { ncap = 4096 }
+        if ncap < needed { ncap = needed }
+        if self.cap > 0 {
+            self.base = rt_realloc(self.base, ncap)
+        } else {
+            self.base = rt_alloc(ncap)
+        }
+        self.cap = ncap
+    }
+
+    fn offsetOf(self, l: link<T, W>) -> int {
+        const n = self.slotOf(l)
+        if n >= self.count { panic("used a link that names no slot") }
+        n * self.stride
+    }
+
+    //~ The value `l` names (a plain value, so this is a bit-for-bit copy).
+    fn get(self, l: link<T, W>) -> T = rt_clone<T>(rt_offset(self.base, self.offsetOf(l)))
+
+    //~ Overwrites the value `l` names.
+    fn set(inout self, l: link<T, W>, sink value: T) {
+        rt_write<T>(rt_offset(self.base, self.offsetOf(l)), sink value)
+    }
+
+    //~ Frees the slot `l` names for the next `add!`; `l` must not be used again.
+    fn remove(inout self, l: link<T, W>) {
+        const n = self.slotOf(l)
+        rt_write<int>(rt_offset(self.base, self.offsetOf(l)), self.free)
+        self.free = n
+    }
+
+    //~ Frees every slot at once; every link made so far is stale.
+    fn clear(inout self) {
+        self.count = 0
+        self.free = -1
+    }
+
+    //~ Slots handed out so far, free ones included.
+    fn len(self) -> int = self.count
+}

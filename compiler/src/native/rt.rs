@@ -8,8 +8,9 @@
 //!
 //! | offset | what |
 //! |---|---|
-//! | 0 to 95 | heads of the twelve free lists (block sizes 32 B to 64 KiB) |
-//! | 96, 104 | next free byte and end of the current chunk |
+//! | 0, 8, 16 | Linux: the base and size of the allocator's region (0 until the first allocation) and its next unused span (`docs/design/heap.md`) |
+//! | 0 to 95 | Windows: heads of the twelve free lists (block sizes 32 B to 64 KiB) |
+//! | 96, 104 | Windows: next free byte and end of the current chunk |
 //! | 112 | live blocks (for the leak check) |
 //! | 120 | the one freed large block kept for reuse (0 when none) |
 //! | 128 | the output buffer ([`PRINT_BUF`] bytes, mapped at start; 0 when the mapping failed) |
@@ -83,6 +84,198 @@ const LARGE_CLASS: i32 = 255;
 /// Windows: a large block of at least this many bytes reserves eight times its size up front and
 /// commits pages as it grows, so `rt_realloc` extends it in place (there is no `mremap`).
 const RESERVE_MIN: i32 = 1 << 20;
+
+/// Linux: the largest payload served from the region; bigger blocks get their own mapping.
+pub(super) const REGION_MAX: i32 = 8192;
+/// Linux: the region is asked for this many bytes of address space (nothing is resident until used)
+/// and the request is halved until the system agrees, down to `REGION_MIN`.
+pub(super) const REGION_BYTES: i64 = 1 << 36;
+pub(super) const REGION_MIN: i32 = 1 << 24;
+/// Linux: the region starts with the class table (`CLASSES` entries of 32 bytes: free list, bump
+/// pointer, bump limit, block size) and then the span table at this offset (one byte per 64 KiB span).
+pub(super) const SPAN_TABLE: i32 = 2048;
+
+/// Emits the Linux small-block allocator for `rt_alloc` (payload size in `rdi`, `rbx` and `r12` saved
+/// by the caller): classes 16 to 256 bytes in steps of 16, then four per doubling up to
+/// [`REGION_MAX`]; blocks come from 64 KiB spans bump-carved out of one reserved region, with no header.
+/// A reused block is cleared; a carved one is zero already. Ends with `ret`; larger sizes jump to `large`.
+fn emit_region_alloc(a: &mut Asm, large: Label, oom: Label) {
+    let (big, classed, have_region, retry, bump, zero, done, refill) = (
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+    );
+    let (grow, grown, small_bs, have_bs, reginit, try_map, mapped) = (
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+    );
+    a.alu_ri(Alu::Cmp, RDI, REGION_MAX, 8);
+    a.jcc(Cc::A, large);
+    a.alu_ri(Alu::Cmp, RDI, 256, 8);
+    a.jcc(Cc::A, big);
+    // Up to 256 bytes: class (n + 15) / 16 - 1, at least 0.
+    a.lea(RAX, mem(RDI, 15));
+    a.shift_imm(Shift::Shr, RAX, 4, 8);
+    a.mov_ri(RCX, 1);
+    a.alu_rr(Alu::Cmp, RAX, RCX, 8);
+    a.cmov(Cc::B, RAX, RCX, 8);
+    a.lea(R12, mem(RAX, -1));
+    a.jmp(classed);
+    // Above: with m = n - 1 and e = the position of its top bit, class 4 * e - 16 + the next two bits.
+    a.bind(big);
+    a.lea(RDX, mem(RDI, -1));
+    a.mov_ri(RCX, 8);
+    a.mov_ri(RAX, 512);
+    a.bind(grow);
+    a.alu_rr(Alu::Cmp, RDX, RAX, 8);
+    a.jcc(Cc::B, grown);
+    a.alu_ri(Alu::Add, RCX, 1, 8);
+    a.alu_rr(Alu::Add, RAX, RAX, 8);
+    a.jmp(grow);
+    a.bind(grown);
+    a.mov_rr(R12, RCX, 8);
+    a.shift_imm(Shift::Shl, R12, 2, 8);
+    a.alu_ri(Alu::Sub, R12, 16, 8);
+    a.alu_ri(Alu::Sub, RCX, 2, 8);
+    a.shift_cl(Shift::Shr, RDX, 8);
+    a.alu_ri(Alu::And, RDX, 3, 8);
+    a.alu_rr(Alu::Add, R12, RDX, 8);
+
+    a.bind(classed);
+    state(a, R10, 0);
+    a.load(R9, mem(R10, 0), 8); // the region's base, 0 before the first allocation
+    a.test_rr(R9, R9, 8);
+    a.jcc(Cc::Ne, have_region);
+    a.call(reginit);
+    a.mov_rr(R9, RAX, 8);
+    a.bind(have_region);
+    a.mov_rr(RSI, R12, 8);
+    a.shift_imm(Shift::Shl, RSI, 5, 8);
+    a.alu_rr(Alu::Add, RSI, R9, 8); // this class's entry
+    a.bind(retry);
+    a.load(RDX, mem(RSI, 0), 8);
+    a.test_rr(RDX, RDX, 8);
+    a.jcc(Cc::E, bump);
+    // Reuse: unlink, then clear the whole block.
+    a.load(RCX, mem(RDX, 0), 8);
+    a.store(mem(RSI, 0), RCX, 8);
+    a.load(RCX, mem(RSI, 24), 8);
+    a.mov_rr(RAX, RDX, 8);
+    a.bind(zero);
+    a.store_imm(mem(RDX, 0), 0, 8);
+    a.store_imm(mem(RDX, 8), 0, 8);
+    a.alu_ri(Alu::Add, RDX, 16, 8);
+    a.alu_ri(Alu::Sub, RCX, 16, 8);
+    a.jcc(Cc::Ne, zero);
+    a.jmp(done);
+    // Fresh: carve from the current span (zero already); a class that has no span yet has block size 0.
+    a.bind(bump);
+    a.load(RAX, mem(RSI, 8), 8);
+    a.load(RCX, mem(RSI, 24), 8);
+    a.test_rr(RCX, RCX, 8);
+    a.jcc(Cc::E, refill);
+    a.lea(RDX, mem_idx(RAX, RCX, 1, 0));
+    a.alu_rm(Alu::Cmp, RDX, mem(RSI, 16), 8);
+    a.jcc(Cc::A, refill);
+    a.store(mem(RSI, 8), RDX, 8);
+    a.bind(done);
+    state(a, RSI, 112);
+    a.alu_mi(Alu::Add, mem(RSI, 0), 1, 8);
+    a.pop(R12);
+    a.pop(RBX);
+    a.ret();
+
+    // Take the next 64 KiB span for this class: block size 16 * (k + 1) below class 16, else
+    // (5 + (k & 3)) << (6 + ((k - 16) >> 2)).
+    a.bind(refill);
+    a.alu_ri(Alu::Cmp, R12, 16, 8);
+    a.jcc(Cc::B, small_bs);
+    a.lea(RDX, mem(R12, -16));
+    a.mov_rr(RAX, RDX, 8);
+    a.alu_ri(Alu::And, RAX, 3, 8);
+    a.alu_ri(Alu::Add, RAX, 5, 8);
+    a.shift_imm(Shift::Shr, RDX, 2, 8);
+    a.alu_ri(Alu::Add, RDX, 6, 8);
+    a.mov_rr(RCX, RDX, 8);
+    a.shift_cl(Shift::Shl, RAX, 8);
+    a.mov_rr(RCX, RAX, 8);
+    a.jmp(have_bs);
+    a.bind(small_bs);
+    a.lea(RCX, mem(R12, 1));
+    a.shift_imm(Shift::Shl, RCX, 4, 8);
+    a.bind(have_bs);
+    a.store(mem(RSI, 24), RCX, 8);
+    state(a, R10, 0);
+    a.load(RAX, mem(R10, 16), 8); // the next unused span
+    a.load(R8, mem(R10, 8), 8);
+    a.alu_rr(Alu::Add, R8, R9, 8); // end of the region
+    a.lea(RDX, mem(RAX, 65536));
+    a.alu_rr(Alu::Cmp, RDX, R8, 8);
+    a.jcc(Cc::A, oom);
+    a.store(mem(R10, 16), RDX, 8);
+    a.mov_rr(R8, RAX, 8);
+    a.alu_rr(Alu::Sub, R8, R9, 8);
+    a.shift_imm(Shift::Shr, R8, 16, 8);
+    a.alu_rr(Alu::Add, R8, R9, 8);
+    a.store(mem(R8, SPAN_TABLE), R12, 1); // the span's class
+    a.mov_rr(R10, RAX, 8);
+    a.mov_ri(RAX, 65536);
+    a.alu_rr(Alu::Xor, RDX, RDX, 4);
+    a.div(RCX, 8);
+    a.imul_rr(RAX, RCX, 8);
+    a.alu_rr(Alu::Add, RAX, R10, 8);
+    a.store(mem(RSI, 16), RAX, 8);
+    a.store(mem(RSI, 8), R10, 8);
+    a.jmp(retry);
+
+    // First allocation: reserve the region (halving the request until the system agrees), tell the
+    // kernel not to back it with huge pages (a first touch would then cost 2 MiB), and set the state.
+    a.bind(reginit);
+    a.mov_ri(RSI, REGION_BYTES);
+    a.bind(try_map);
+    a.mov_ri(RAX, 9);
+    a.alu_rr(Alu::Xor, RDI, RDI, 4);
+    a.mov_ri(RDX, 3);
+    a.mov_ri(R10, 0x4022); // private, anonymous, no reservation
+    a.mov_ri(R8, -1);
+    a.alu_rr(Alu::Xor, R9, R9, 4);
+    a.syscall();
+    a.alu_ri(Alu::Cmp, RAX, -4095, 8);
+    a.jcc(Cc::B, mapped);
+    a.shift_imm(Shift::Shr, RSI, 1, 8);
+    a.alu_ri(Alu::Cmp, RSI, REGION_MIN, 8);
+    a.jcc(Cc::Ae, try_map);
+    a.jmp(oom);
+    a.bind(mapped);
+    a.push(RAX);
+    a.push(RSI);
+    a.mov_rr(RDI, RAX, 8);
+    a.mov_ri(RDX, 15); // MADV_NOHUGEPAGE
+    a.mov_ri(RAX, 28);
+    a.syscall();
+    a.pop(RSI);
+    a.pop(RAX);
+    state(a, R9, 0);
+    a.store(mem(R9, 0), RAX, 8);
+    a.store(mem(R9, 8), RSI, 8);
+    a.mov_rr(RDX, RSI, 8);
+    a.shift_imm(Shift::Shr, RDX, 16, 8);
+    a.alu_ri(Alu::Add, RDX, SPAN_TABLE + 65535, 8);
+    a.alu_ri(Alu::And, RDX, -65536, 8);
+    a.alu_rr(Alu::Add, RDX, RAX, 8);
+    a.store(mem(R9, 16), RDX, 8); // the first span follows the tables
+    a.ret();
+}
 
 /// The entry points of the runtime.
 pub struct Runtime {
@@ -666,60 +859,65 @@ pub fn emit_for(
             a.new_label(),
             a.new_label(),
         );
-        a.alu_ri(Alu::Cmp, RBX, SMALL_MAX, 8);
-        a.jcc(Cc::A, large);
-        a.alu_rr(Alu::Xor, R12, R12, 4); // class
-        a.mov_ri(RAX, 32); // block size of that class
-        a.bind(size_loop);
-        a.alu_rr(Alu::Cmp, RAX, RBX, 8);
-        a.jcc(Cc::Ae, have);
-        a.alu_rr(Alu::Add, RAX, RAX, 8);
-        a.alu_ri(Alu::Add, R12, 1, 8);
-        a.jmp(size_loop);
-        a.bind(have);
-        state(a, RSI, 0);
-        a.mov_rr(RCX, R12, 8);
-        a.shift_imm(Shift::Shl, RCX, 3, 8);
-        a.alu_rr(Alu::Add, RSI, RCX, 8);
-        a.load(RDX, mem(RSI, 0), 8); // head of this class's free list
-        a.test_rr(RDX, RDX, 8);
-        a.jcc(Cc::E, fresh);
-        // Reuse: unlink, then clear the payload.
-        a.load(RCX, mem(RDX, 16), 8);
-        a.store(mem(RSI, 0), RCX, 8);
-        a.lea(RDI, mem(RDX, 16));
-        a.lea(RCX, mem(RAX, -16));
-        a.mov_rr(RBX, RDX, 8);
-        a.alu_rr(Alu::Xor, RAX, RAX, 4);
-        a.rep_stosb();
-        a.mov_rr(RDX, RBX, 8);
-        a.jmp(out);
-        // Fresh: carve from the current chunk (already zero), asking for a new chunk when it is used up.
-        a.bind(fresh);
-        state(a, RSI, 96);
-        a.bind(retry);
-        a.load(RDX, mem(RSI, 0), 8);
-        a.mov_rr(RCX, RDX, 8);
-        a.alu_rr(Alu::Add, RCX, RAX, 8);
-        a.alu_rm(Alu::Cmp, RCX, mem(RSI, 8), 8);
-        a.jcc(Cc::Be, carve);
-        a.push(RAX);
-        a.push(RSI);
-        emit_mmap(a, CHUNK, win);
-        a.mov_rr(RDX, RAX, 8);
-        a.pop(RSI);
-        a.pop(RAX);
-        map_failed(a, RDX, oom, win);
-        a.store(mem(RSI, 0), RDX, 8);
-        a.lea(RCX, mem(RDX, 0));
-        a.mov_ri(RDI, CHUNK);
-        a.alu_rr(Alu::Add, RCX, RDI, 8);
-        a.store(mem(RSI, 8), RCX, 8);
-        a.jmp(retry);
-        a.bind(carve);
-        a.store(mem(RSI, 0), RCX, 8);
-        a.store(mem(RDX, 0), R12, 8); // header: the class
-        a.jmp(out);
+        if !win {
+            emit_region_alloc(a, large, oom);
+        }
+        if win {
+            a.alu_ri(Alu::Cmp, RBX, SMALL_MAX, 8);
+            a.jcc(Cc::A, large);
+            a.alu_rr(Alu::Xor, R12, R12, 4); // class
+            a.mov_ri(RAX, 32); // block size of that class
+            a.bind(size_loop);
+            a.alu_rr(Alu::Cmp, RAX, RBX, 8);
+            a.jcc(Cc::Ae, have);
+            a.alu_rr(Alu::Add, RAX, RAX, 8);
+            a.alu_ri(Alu::Add, R12, 1, 8);
+            a.jmp(size_loop);
+            a.bind(have);
+            state(a, RSI, 0);
+            a.mov_rr(RCX, R12, 8);
+            a.shift_imm(Shift::Shl, RCX, 3, 8);
+            a.alu_rr(Alu::Add, RSI, RCX, 8);
+            a.load(RDX, mem(RSI, 0), 8); // head of this class's free list
+            a.test_rr(RDX, RDX, 8);
+            a.jcc(Cc::E, fresh);
+            // Reuse: unlink, then clear the payload.
+            a.load(RCX, mem(RDX, 16), 8);
+            a.store(mem(RSI, 0), RCX, 8);
+            a.lea(RDI, mem(RDX, 16));
+            a.lea(RCX, mem(RAX, -16));
+            a.mov_rr(RBX, RDX, 8);
+            a.alu_rr(Alu::Xor, RAX, RAX, 4);
+            a.rep_stosb();
+            a.mov_rr(RDX, RBX, 8);
+            a.jmp(out);
+            // Fresh: carve from the current chunk (already zero), asking for a new chunk when it is used up.
+            a.bind(fresh);
+            state(a, RSI, 96);
+            a.bind(retry);
+            a.load(RDX, mem(RSI, 0), 8);
+            a.mov_rr(RCX, RDX, 8);
+            a.alu_rr(Alu::Add, RCX, RAX, 8);
+            a.alu_rm(Alu::Cmp, RCX, mem(RSI, 8), 8);
+            a.jcc(Cc::Be, carve);
+            a.push(RAX);
+            a.push(RSI);
+            emit_mmap(a, CHUNK, win);
+            a.mov_rr(RDX, RAX, 8);
+            a.pop(RSI);
+            a.pop(RAX);
+            map_failed(a, RDX, oom, win);
+            a.store(mem(RSI, 0), RDX, 8);
+            a.lea(RCX, mem(RDX, 0));
+            a.mov_ri(RDI, CHUNK);
+            a.alu_rr(Alu::Add, RCX, RDI, 8);
+            a.store(mem(RSI, 8), RCX, 8);
+            a.jmp(retry);
+            a.bind(carve);
+            a.store(mem(RSI, 0), RCX, 8);
+            a.store(mem(RDX, 0), R12, 8); // header: the class
+            a.jmp(out);
+        }
         // Large: its own mapping, rounded to whole pages; the header keeps the length.
         a.bind(large);
         a.lea(RSI, mem(RBX, 4095));
@@ -847,21 +1045,46 @@ pub fn emit_for(
         let (fdone, flarge) = (a.new_label(), a.new_label());
         a.test_rr(RDI, RDI, 8);
         a.jcc(Cc::E, fdone);
-        a.lea(RDX, mem(RDI, -16));
-        a.load(RAX, mem(RDX, 0), 8);
         if win {
+            a.lea(RDX, mem(RDI, -16));
+            a.load(RAX, mem(RDX, 0), 8);
             a.extend_rr(RAX, RAX, 1, false, false); // the class byte
+            state(a, RSI, 112);
+            a.alu_mi(Alu::Sub, mem(RSI, 0), 1, 8);
+            a.alu_ri(Alu::Cmp, RAX, LARGE_CLASS, 8);
+            a.jcc(Cc::E, flarge);
+            a.shift_imm(Shift::Shl, RAX, 3, 8);
+            state(a, RSI, 0);
+            a.alu_rr(Alu::Add, RSI, RAX, 8);
+            a.load(RCX, mem(RSI, 0), 8);
+            a.store(mem(RDX, 16), RCX, 8);
+            a.store(mem(RSI, 0), RDX, 8);
+        } else {
+            // A block inside the region: its span's class says which free list takes it back.
+            let outside = a.new_label();
+            state(a, RSI, 0);
+            a.load(RDX, mem(RSI, 0), 8);
+            a.mov_rr(RAX, RDI, 8);
+            a.alu_rr(Alu::Sub, RAX, RDX, 8);
+            a.alu_rm(Alu::Cmp, RAX, mem(RSI, 8), 8);
+            a.jcc(Cc::Ae, outside);
+            a.shift_imm(Shift::Shr, RAX, 16, 8);
+            a.alu_rr(Alu::Add, RAX, RDX, 8);
+            a.load_ext(RAX, mem(RAX, SPAN_TABLE), 1, false, true);
+            a.shift_imm(Shift::Shl, RAX, 5, 8);
+            a.alu_rr(Alu::Add, RAX, RDX, 8);
+            a.load(RCX, mem(RAX, 0), 8);
+            a.store(mem(RDI, 0), RCX, 8);
+            a.store(mem(RAX, 0), RDI, 8);
+            state(a, RSI, 112);
+            a.alu_mi(Alu::Sub, mem(RSI, 0), 1, 8);
+            a.ret();
+            a.bind(outside);
+            a.lea(RDX, mem(RDI, -16));
+            state(a, RSI, 112);
+            a.alu_mi(Alu::Sub, mem(RSI, 0), 1, 8);
+            a.jmp(flarge);
         }
-        state(a, RSI, 112);
-        a.alu_mi(Alu::Sub, mem(RSI, 0), 1, 8);
-        a.alu_ri(Alu::Cmp, RAX, LARGE_CLASS, 8);
-        a.jcc(Cc::E, flarge);
-        a.shift_imm(Shift::Shl, RAX, 3, 8);
-        state(a, RSI, 0);
-        a.alu_rr(Alu::Add, RSI, RAX, 8);
-        a.load(RCX, mem(RSI, 0), 8);
-        a.store(mem(RDX, 16), RCX, 8);
-        a.store(mem(RSI, 0), RDX, 8);
         a.bind(fdone);
         a.ret();
         a.bind(flarge);
@@ -903,13 +1126,22 @@ pub fn emit_for(
         a.mov_rr(R12, RSI, 8);
         a.test_rr(RBX, RBX, 8);
         a.jcc(Cc::E, generic);
-        a.lea(RDX, mem(RBX, -16));
-        a.load(RAX, mem(RDX, 0), 8);
         if win {
+            a.lea(RDX, mem(RBX, -16));
+            a.load(RAX, mem(RDX, 0), 8);
             a.extend_rr(RAX, RAX, 1, false, false);
+            a.alu_ri(Alu::Cmp, RAX, LARGE_CLASS, 8);
+            a.jcc(Cc::Ne, generic);
+        } else {
+            // A block inside the region is moved by the generic path.
+            state(a, RSI, 0);
+            a.load(RAX, mem(RSI, 0), 8);
+            a.mov_rr(RCX, RBX, 8);
+            a.alu_rr(Alu::Sub, RCX, RAX, 8);
+            a.alu_rm(Alu::Cmp, RCX, mem(RSI, 8), 8);
+            a.jcc(Cc::B, generic);
+            a.lea(RDX, mem(RBX, -16));
         }
-        a.alu_ri(Alu::Cmp, RAX, LARGE_CLASS, 8);
-        a.jcc(Cc::Ne, generic);
         if win {
             // Grow in place inside the reservation: commit the new pages, which arrive zeroed.
             a.lea(RCX, mem(R12, 16 + 4095));
@@ -964,22 +1196,42 @@ pub fn emit_for(
         a.test_rr(RBX, RBX, 8);
         a.jcc(Cc::E, rfree);
         // Bytes the old block can give: the rest of its class, or its mapping.
-        a.load(RAX, mem(RBX, -16), 8);
         if win {
+            a.load(RAX, mem(RBX, -16), 8);
             a.extend_rr(RAX, RAX, 1, false, false);
+            let (rclass, rcopy) = (a.new_label(), a.new_label());
+            a.alu_ri(Alu::Cmp, RAX, LARGE_CLASS, 8);
+            a.jcc(Cc::Ne, rclass);
+            a.load(RCX, mem(RBX, -8), 8);
+            a.jmp(rcopy);
+            a.bind(rclass);
+            a.mov_rr(RCX, RAX, 8);
+            a.mov_ri(RAX, 32);
+            a.shift_cl(Shift::Shl, RAX, 8);
+            a.mov_rr(RCX, RAX, 8);
+            a.bind(rcopy);
+            a.alu_ri(Alu::Sub, RCX, 16, 8);
+        } else {
+            // What the old block holds: its class's block size, or its mapping less the header.
+            let (rlarge, rcap) = (a.new_label(), a.new_label());
+            state(a, RSI, 0);
+            a.load(RAX, mem(RSI, 0), 8);
+            a.mov_rr(RCX, RBX, 8);
+            a.alu_rr(Alu::Sub, RCX, RAX, 8);
+            a.alu_rm(Alu::Cmp, RCX, mem(RSI, 8), 8);
+            a.jcc(Cc::Ae, rlarge);
+            a.shift_imm(Shift::Shr, RCX, 16, 8);
+            a.alu_rr(Alu::Add, RCX, RAX, 8);
+            a.load_ext(RCX, mem(RCX, SPAN_TABLE), 1, false, true);
+            a.shift_imm(Shift::Shl, RCX, 5, 8);
+            a.alu_rr(Alu::Add, RCX, RAX, 8);
+            a.load(RCX, mem(RCX, 24), 8);
+            a.jmp(rcap);
+            a.bind(rlarge);
+            a.load(RCX, mem(RBX, -8), 8);
+            a.alu_ri(Alu::Sub, RCX, 16, 8);
+            a.bind(rcap);
         }
-        let (rclass, rcopy) = (a.new_label(), a.new_label());
-        a.alu_ri(Alu::Cmp, RAX, LARGE_CLASS, 8);
-        a.jcc(Cc::Ne, rclass);
-        a.load(RCX, mem(RBX, -8), 8);
-        a.jmp(rcopy);
-        a.bind(rclass);
-        a.mov_rr(RCX, RAX, 8);
-        a.mov_ri(RAX, 32);
-        a.shift_cl(Shift::Shl, RAX, 8);
-        a.mov_rr(RCX, RAX, 8);
-        a.bind(rcopy);
-        a.alu_ri(Alu::Sub, RCX, 16, 8);
         a.alu_rr(Alu::Cmp, RCX, R12, 8);
         let keep = a.new_label();
         a.jcc(Cc::Be, keep);

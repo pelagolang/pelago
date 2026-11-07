@@ -458,6 +458,19 @@ fn printing_one_integer_needs_no_heap() {
 }
 
 #[test]
+fn printing_only_text_needs_no_heap() {
+    let src = "fn main() {\n print(\"Hello, World!\")\n const s = \"two\"\n print(s, \"words\", \"\")\n print()\n}\n";
+    assert_eq!(output_of(src), "Hello, World!\ntwo words \n\n");
+    for src in ["fn main() { print(\"Hello, World!\") }", src] {
+        let mut m = lowered(src).module;
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        crate::ir::opt::prune(&mut m, &["main"]);
+        let u = crate::native::Uses::of(&m);
+        assert!(u.print && !u.alloc && !u.realloc, "{u:?}");
+    }
+}
+
+#[test]
 fn interpolation_and_joining() {
     assert_eq!(
         output_of("fn main() { const name = \"Ann\"\n print(\"hi #name, #(1 + 2)!\") }"),
@@ -555,19 +568,6 @@ fn copy_and_in() {
     assert_eq!(output_of(src), "[\"x\", \"y\"] [\"x\", \"y\", \"z\"]\n");
     let src = "fn main() { print(3 in 1..5, 5 in 1..5, 5 in 1..=5, 2 in [1, 2, 3], \"ell\" in \"hello\", 9 in [1, 2]) }";
     assert_eq!(output_of(src), "true false true true true false\n");
-}
-
-#[test]
-fn float_to_int_and_bytes() {
-    let src = "fn main() { print(3.7.truncInt(), (-3.7).truncInt(), 3.2.ceilInt(), (-3.2).floorInt(), 2.5.roundInt(), (-2.5).roundInt())\n const s = \"h\u{e9}y\"\n print(s.bytes().toList(), s.byteAt(1), s.bytes().toList().toText()) }";
-    assert_eq!(
-        output_of(src),
-        "3 -3 4 -4 3 -3\n[104, 195, 169, 121] 195 h\u{e9}y\n"
-    );
-    let o = run_main("fn main() { print((0.0 / 0.0).truncInt()) }");
-    assert_eq!(o.result, Err("panic".to_string()));
-    let o = run_main("fn main() { print(\"ab\".byteAt(2)) }");
-    assert_eq!(o.result, Err("panic".to_string()));
 }
 
 #[test]
@@ -1301,7 +1301,7 @@ fn meta_runs_that_cannot_finish_are_errors() {
             .any(|(m, w)| !w && m.contains("(in inner <- outer)")),
         "{d:?}"
     );
-    let d = lowered_diags("meta fn fail() -> int { meta_error(\"nope\") }\nfn main() { const c = meta fail()\n print(c) }\n");
+    let d = lowered_diags("meta fn fail() -> int { metaError(\"nope\") }\nfn main() { const c = meta fail()\n print(c) }\n");
     assert!(d.iter().any(|(m, w)| !w && m.contains("nope")), "{d:?}");
     let d = lowered_diags(
         "meta fn f() -> int = a + 1\nconst a: int = meta f()\nfn main() { print(a) }\n",
@@ -1324,7 +1324,7 @@ fn meta_values_that_hold_closures_are_errors() {
 
 #[test]
 fn meta_note_is_a_compile_time_message() {
-    let d = lowered_diags("meta fn f() -> int { meta_note(\"building\")\n 4 }\nfn main() { const c = meta f()\n print(c) }\n");
+    let d = lowered_diags("meta fn f() -> int { metaNote(\"building\")\n 4 }\nfn main() { const c = meta f()\n print(c) }\n");
     assert!(
         d.iter().any(|(m, w)| *w && m.contains("meta: building")),
         "{d:?}"
@@ -1335,7 +1335,7 @@ fn meta_note_is_a_compile_time_message() {
 
 #[test]
 fn async_functions_and_await() {
-    let src = "async fn double(x: int) -> int { x * 2 }\nasync fn greet(name: string) -> string { \"hello #name\" }\nasync fn say(s: string) { print(s) }\nasync fn both() -> int {\n const a = double(4)\n const b = double(5)\n await say(\"working\")\n await a + await b }\nstruct counter { n: int\n async fn bump(inout self) -> int { self.n += 1\n self.n } }\nasync fn boxed(v: int) -> box<int> { box(v) }\nfn main() { print(block_on(both()))\n print(block_on(greet(\"pelago\")))\n var c = counter { n: 0 }\n print(block_on(c.bump!()), block_on(c.bump!()))\n const b = block_on(boxed(7))\n print(b.get()) }\n";
+    let src = "async fn double(x: int) -> int { x * 2 }\nasync fn greet(name: string) -> string { \"hello #name\" }\nasync fn say(s: string) { print(s) }\nasync fn both() -> int {\n const a = double(4)\n const b = double(5)\n await say(\"working\")\n await a + await b }\nstruct counter { n: int\n async fn bump(inout self) -> int { self.n += 1\n self.n } }\nasync fn boxed(v: int) -> box<int> { box(v) }\nfn main() { print(blockOn(both()))\n print(blockOn(greet(\"pelago\")))\n var c = counter { n: 0 }\n print(blockOn(c.bump!()), blockOn(c.bump!()))\n const b = blockOn(boxed(7))\n print(b.get()) }\n";
     assert_eq!(output_of(src), "working\n18\nhello pelago\n1 2\n7\n");
 }
 
@@ -1363,11 +1363,11 @@ async fn total(sink rx: receiver<int>) -> int {
     t
 }
 fn main() {
-    print(block_on(safe_div(1, 0)).isErr(), block_on(run()))
+    print(blockOn(safe_div(1, 0)).isErr(), blockOn(run()))
     const (tx, rx) = chan<int>()
     tx.send(1)
     tx.send(2)
-    print(block_on(total(sink rx)))
+    print(blockOn(total(sink rx)))
 }
 "#;
     assert_eq!(output_of(src), "true ok(5)\n3\n");
@@ -2671,6 +2671,32 @@ fn big_blocks_grow_and_are_reused() {
     );
 }
 
+/// Counters bumped on one side of an `if` (a `select` or a join block of the optimiser) are bounded
+/// by the trip count too; a bump that can pass the maximum still stops the program.
+#[test]
+fn counters_behind_an_if_keep_their_traps() {
+    agree(
+        "fn main() {
+            var ok = 0
+            var bad = 0
+            var t = 0
+            for i in 0..5000 {
+                if i % 3 == 0 { bad += 1 } else { ok += 1; t += i & 255 }
+            }
+            print(ok, bad, t)
+        }",
+    );
+    agree(
+        "fn main() {
+            var t = 9223372036854775000
+            for i in 0..5000 {
+                if i % 3 == 0 { t += 1 }
+            }
+            print(t)
+        }",
+    );
+}
+
 /// A loop limit that is not a constant but has a known range bounds the trip count too; a limit
 /// that can be huge still traps.
 #[test]
@@ -2790,6 +2816,39 @@ fn sorting_integers_past_the_insertion_sort_limit() {
         output_of(src),
         "true true -9223372036854775807 9223372036854775807\n"
     );
+}
+
+/// The library's own tests: every `name.pel` in a `tests/` directory next to the library sources is a
+/// program with its expected output in `name.out`. A file `name.stops` says the program must stop.
+#[test]
+fn library_test_suites() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut ran = 0;
+    for lib in ["core", "std"] {
+        let dir = root.join(lib).join("tests");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut files: Vec<_> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "pel"))
+            .collect();
+        files.sort();
+        for f in files {
+            let src = std::fs::read_to_string(&f).unwrap();
+            let expected = std::fs::read_to_string(f.with_extension("out"))
+                .unwrap_or_else(|_| panic!("{} has no .out file", f.display()));
+            if f.with_extension("stops").exists() {
+                let o = run_main(&src);
+                assert_eq!(o.result, Err("panic".to_string()), "{}", f.display());
+                assert_eq!(o.output, expected, "{}", f.display());
+            } else {
+                assert_eq!(output_of(&src), expected, "{}", f.display());
+            }
+            ran += 1;
+        }
+    }
+    assert!(ran > 0);
 }
 
 /// Index tests settled by a guard in front of the loop: what the program prints and where it stops
@@ -2934,4 +2993,53 @@ fn arena_stale_handle_and_drop_glue_stop() {
     let o = run_main(glue);
     assert!(o.result.is_err());
     assert!(o.output.contains("without drop glue"), "{}", o.output);
+}
+
+#[test]
+fn for_over_chars_decodes_in_place() {
+    let src = "fn main() {\n var n = 0\n var last = 'a'\n for c of \"aé€😀z\".chars() { n += 1\n last = c\n if c == 'é' { continue }\n print(c) }\n print(n, last)\n const s = \"hi\".chars().toList()\n print(s.len())\n var t = \"abc\"\n for c of t.chars() { if c == 'b' { break }\n print(c) } }\n";
+    assert_eq!(output_of(src), "a\n€\n😀\nz\n5 z\n2\na\n");
+}
+
+#[test]
+fn for_over_chars_native_agrees() {
+    agree("fn main() {\n var n = 0\n for c of \"aé€😀z\".chars() { n += 1\n if c == 'é' { continue }\n print(c) }\n print(n) }\n");
+}
+
+// ---- Pools and narrow links --------------------------------------------------------------------
+
+#[test]
+fn pool_tree_of_nodes_with_two_byte_links() {
+    let src = "struct node { l: link<node, uint16>, r: link<node, uint16>, key: int32 }\nfn make(inout p: pool<node, uint16>, d: int32) -> link<node, uint16> {\n if d == 0 { return p.add!(node { l: p.noLink(), r: p.noLink(), key: 1 }) }\n const l = make(inout p, d - 1)\n const r = make(inout p, d - 1)\n p.add!(node { l: l, r: r, key: d }) }\nfn count(p: pool<node, uint16>, t: link<node, uint16>) -> int {\n if p.isNone(t) { return 0 }\n const n = p.get(t)\n 1 + count(p, n.l) + count(p, n.r) }\nfn main() {\n var p: pool<node, uint16> = pool()\n const t = make(inout p, 10)\n print(count(p, t), p.len())\n p.remove!(t)\n const u = p.add!(node { l: p.noLink(), r: p.noLink(), key: 5 })\n print(p.get(u).key, p.len())\n p.clear!()\n print(p.len()) }\n";
+    assert_eq!(output_of(src), "2047 2047\n5 2047\n0\n");
+}
+
+#[test]
+fn pool_native_agrees() {
+    let src = "struct node { l: link<node, uint16>, r: link<node, uint16>, key: int32 }\nfn make(inout p: pool<node, uint16>, d: int32) -> link<node, uint16> {\n if d == 0 { return p.add!(node { l: p.noLink(), r: p.noLink(), key: 1 }) }\n const l = make(inout p, d - 1)\n const r = make(inout p, d - 1)\n p.add!(node { l: l, r: r, key: d }) }\nfn count(p: pool<node, uint16>, t: link<node, uint16>) -> int {\n if p.isNone(t) { return 0 }\n const n = p.get(t)\n 1 + count(p, n.l) + count(p, n.r) }\nfn main() {\n var p: pool<node, uint16> = pool()\n const t = make(inout p, 10)\n print(count(p, t), p.len())\n p.remove!(t)\n const u = p.add!(node { l: p.noLink(), r: p.noLink(), key: 5 })\n print(p.get(u).key, p.len())\n p.clear!()\n print(p.len()) }\n";
+    agree(src);
+}
+
+#[test]
+fn pool_links_are_narrow_and_a_full_pool_stops() {
+    let size = "struct n { a: link<n, uint16>, b: link<n, uint16>, k: int32 }\nfn main() {\n print(rt_size_of<n>()) }\n";
+    assert_eq!(output_of(size), "8\n");
+    let full = "fn main() {\n var p: pool<int, uint8> = pool()\n for i in 0..300 { p.add!(i) } }\n";
+    let o = run_main(full);
+    assert!(o.result.is_err());
+    assert!(o.output.contains("pool full"), "{}", o.output);
+    let none = "fn main() {\n var p: pool<int, uint8> = pool()\n print(p.get(p.noLink())) }\n";
+    let o = run_main(none);
+    assert!(o.result.is_err());
+    assert!(o.output.contains("names no slot"), "{}", o.output);
+}
+
+#[test]
+fn std_is_added_only_when_imported() {
+    let mut program = Program::with_core();
+    program.add_package("app", &[("main", "fn main() { print(1) }")]);
+    assert!(program.find_package("std").is_none());
+    let mut program = Program::with_core();
+    program.add_package("app", &[("main", "import std.big\nfn main() { print(1) }")]);
+    assert!(program.find_package("std").is_some());
 }

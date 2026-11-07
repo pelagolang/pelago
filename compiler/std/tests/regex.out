@@ -1,0 +1,50 @@
+true 2 1-4 4-7 x<abc><abc>x
+true 2 1-4 6-8 c<aaa>b <aa>
+true 4 0-0 1-3 3-3 4-4 <>b<aa><>c<>
+true 3 0-1 1-2 2-3 <a><a><a>
+true 3 0-5 6-8 9-13 <aabbb> <ab> <abbb>
+true 2 0-4 5-8 <abac> <bbc> c
+true 2 0-6 7-9 <ababab> <ab>
+true 2 0-3 4-7 <abc>d<abc>
+true 1 3-7 abc<dxyz>abc
+true 2 1-3 4-7 a<12>b<345>
+true 2 0-2 3-10 <hi> <there_1> !
+true 2 1-3 4-5 a<  >b<	>c
+true 1 2-4 12<ab>34
+true 2 1-3 4-5 a<, >b<.>
+true 1 0-1 <a>a
+a
+true 1 3-4 aa
+<a>
+true 1 0-0 <>
+true 2 0-3 11-14 <cat> concat <cat>.
+true 1 1-3 c<at> at
+true 2 0-2 2-4 <aa><aa>a
+true 2 2-4 5-9 a <aa> <aaaa>
+true 3 0-2 2-4 4-5 <aa><aa><a>
+true 2 0-2 2-4 <aa><aa>a
+true 3 0-3 4-5 6-8 <xxy> <y> <xy>
+true 2 0-2 3-4 <ab> <a>
+true 2 0-5 6-12 <color> <colour>
+true 1 0-11 <me@site.com> you@x.org
+true 2 0-3 8-11 <abc> a
+c <a-c>
+true 2 0-8 9-17 <bob@home> <sue@work>
+true 2 0-4 5-9 <tHaN> <tHat> tHab
+true 2 1-9 10-18 x<agggtaaa> <tttaccct>
+true 2 0-8 9-17 <cgggtaaa> <tttaccca>
+true 2 0-3 4-6 <abc> <ac>
+true 2 1-2 3-4 a<.>b<.>c
+true 1 1-4 a<.-.>b
+true 1 1-2 a<\>b
+true 3 0-1 1-2 2-3 <a><b><c>d
+true 1 0-4 <aaab>
+true 2 0-2 2-2 <aa><>
+false 0  aaa
+true 1 1-2 a<b>
+false false false false false false
+5 13 some("bob@home") some("bob") some("home") none none
+3 2 b.a $ | d.c $ |
+ok(0)
+false true
+ok(0)

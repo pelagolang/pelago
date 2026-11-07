@@ -22,7 +22,8 @@ use super::a64::*;
 use super::elf::Blob;
 use super::rt::{
     IMP_ADD_VEH, IMP_EXIT_PROCESS, IMP_GET_CONSOLE_MODE, IMP_GET_STD_HANDLE, IMP_VIRTUAL_ALLOC,
-    IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT, IMP_WRITE_FILE,
+    IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT, IMP_WRITE_FILE, REGION_BYTES, REGION_MAX, REGION_MIN,
+    SPAN_TABLE,
 };
 use super::{Os, Uses};
 
@@ -214,6 +215,177 @@ fn leave(a: &mut Asm) {
     a.ldp(X19, X20, SP, 16);
     a.ldp(X21, X22, SP, 32);
     a.ldp_post(FP, LR, SP, 48);
+}
+
+/// The Linux small-block allocator for `rt_alloc` (payload size in `x0`, `x19` = size + 16, `x19` to
+/// `x22` saved by the caller), the same design as the x86-64 one in `rt.rs`: 16-byte classes up to 256
+/// bytes, then four per doubling up to `REGION_MAX`, 64 KiB spans carved from one reserved region, no
+/// header. Class entries (free list, bump pointer, bump limit, block size) sit at the start of the
+/// region; the span table follows at `SPAN_TABLE`. Ends with the epilogue and `ret`; larger sizes jump to
+/// `large`. `x20` the class, `x21` its entry, `x22` the block, `x9` the region base.
+fn emit_region_alloc(a: &mut Asm, large: Label, oom: Label) {
+    let (big, grow, grown, classed, have_region, retry, bump, zero, done, refill) = (
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+    );
+    let (small_bs, have_bs, reginit, try_map, shrink, mapped) = (
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+    );
+    a.mov_ri(X9, REGION_MAX as i64);
+    a.cmp_rr(X0, X9);
+    a.b_cond(Cond::Hi, large);
+    a.cmp_ri(X0, 256);
+    a.b_cond(Cond::Hi, big);
+    // Up to 256 bytes: class (n + 15) / 16 - 1, at least 0.
+    a.add_ri(X10, X0, 15);
+    a.lsr_ri(X10, X10, 4);
+    a.mov_ri(X11, 1);
+    a.cmp_rr(X10, X11);
+    a.csel(X10, X11, X10, Cond::Lo);
+    a.sub_ri(X20, X10, 1);
+    a.b(classed);
+    // Above: with m = n - 1 and e = the position of its top bit, class 4 * e - 16 + the next two bits.
+    a.bind(big);
+    a.sub_ri(X10, X0, 1);
+    a.mov_ri(X11, 8);
+    a.mov_ri(X12, 512);
+    a.bind(grow);
+    a.cmp_rr(X10, X12);
+    a.b_cond(Cond::Lo, grown);
+    a.add_ri(X11, X11, 1);
+    a.add_rr(X12, X12, X12);
+    a.b(grow);
+    a.bind(grown);
+    a.sub_ri(X13, X11, 2);
+    a.lsrv(X10, X10, X13);
+    a.and_ri(X10, X10, 3);
+    a.lsl_ri(X20, X11, 2);
+    a.sub_ri(X20, X20, 16);
+    a.add_rr(X20, X20, X10);
+
+    a.bind(classed);
+    state(a, X10, 0);
+    a.ldr(X9, X10, 0, 8); // the region's base, 0 before the first allocation
+    a.cbnz(X9, have_region);
+    a.bl(reginit);
+    a.mov_rr(X9, X0);
+    a.bind(have_region);
+    a.lsl_ri(X21, X20, 5);
+    a.add_rr(X21, X21, X9); // this class's entry
+    a.bind(retry);
+    a.ldr(X11, X21, 0, 8);
+    a.cbz(X11, bump);
+    // Reuse: unlink, then clear the whole block.
+    a.ldr(X12, X11, 0, 8);
+    a.str(X12, X21, 0, 8);
+    a.ldr(X13, X21, 24, 8);
+    a.mov_rr(X22, X11);
+    a.add_rr(X14, X11, X13);
+    a.mov_rr(X15, X11);
+    a.bind(zero);
+    a.stp(XZR, XZR, X15, 0);
+    a.add_ri(X15, X15, 16);
+    a.cmp_rr(X15, X14);
+    a.b_cond(Cond::Lo, zero);
+    a.b(done);
+    // Fresh: carve from the current span (zero already); a class that has no span yet has block size 0.
+    a.bind(bump);
+    a.ldr(X22, X21, 8, 8);
+    a.ldr(X13, X21, 24, 8);
+    a.cbz(X13, refill);
+    a.add_rr(X14, X22, X13);
+    a.ldr(X15, X21, 16, 8);
+    a.cmp_rr(X14, X15);
+    a.b_cond(Cond::Hi, refill);
+    a.str(X14, X21, 8, 8);
+    a.bind(done);
+    a.mov_rr(X0, X22);
+    state(a, X10, 112);
+    a.ldr(X11, X10, 0, 8);
+    a.add_ri(X11, X11, 1);
+    a.str(X11, X10, 0, 8);
+    leave(a);
+    a.ret();
+
+    // Take the next 64 KiB span for this class: block size 16 * (k + 1) below class 16, else
+    // (5 + (k & 3)) << (6 + ((k - 16) >> 2)). `x9` stays the region base.
+    a.bind(refill);
+    a.cmp_ri(X20, 16);
+    a.b_cond(Cond::Lo, small_bs);
+    a.sub_ri(X10, X20, 16);
+    a.and_ri(X11, X10, 3);
+    a.add_ri(X11, X11, 5);
+    a.lsr_ri(X10, X10, 2);
+    a.add_ri(X10, X10, 6);
+    a.lslv(X13, X11, X10);
+    a.b(have_bs);
+    a.bind(small_bs);
+    a.add_ri(X13, X20, 1);
+    a.lsl_ri(X13, X13, 4);
+    a.bind(have_bs);
+    a.str(X13, X21, 24, 8);
+    state(a, X10, 0);
+    a.ldr(X11, X10, 16, 8); // the next unused span
+    a.ldr(X12, X10, 8, 8);
+    a.add_rr(X12, X12, X9); // end of the region
+    a.mov_ri(X15, 65536);
+    a.add_rr(X14, X11, X15);
+    a.cmp_rr(X14, X12);
+    a.b_cond(Cond::Hi, oom);
+    a.str(X14, X10, 16, 8);
+    a.sub_rr(X12, X11, X9);
+    a.lsr_ri(X12, X12, 16);
+    a.add_rr(X12, X12, X9);
+    a.str(X20, X12, SPAN_TABLE, 1); // the span's class
+    a.mov_rr(X22, X11);
+    a.udiv(X14, X15, X13);
+    a.mul(X14, X14, X13);
+    a.add_rr(X14, X14, X22);
+    a.str(X14, X21, 16, 8);
+    a.str(X22, X21, 8, 8);
+    a.b(retry);
+
+    // First allocation: reserve the region (halving the request until the system agrees), tell the
+    // kernel not to back it with huge pages, and set the state. Returns the base in `x0`.
+    a.bind(reginit);
+    a.mov_ri(X1, REGION_BYTES);
+    a.bind(try_map);
+    map_x1(a, Os::Linux, 0x4022);
+    failed(a, Os::Linux, X0, shrink);
+    a.b(mapped);
+    a.bind(shrink);
+    a.lsr_ri(X1, X1, 1);
+    a.mov_ri(X15, REGION_MIN as i64);
+    a.cmp_rr(X1, X15);
+    a.b_cond(Cond::Hs, try_map);
+    a.b(oom);
+    a.bind(mapped);
+    a.mov_rr(X6, X0);
+    a.mov_ri(X2, 15); // MADV_NOHUGEPAGE
+    sys(a, Os::Linux, Sys::Madvise);
+    state(a, X10, 0);
+    a.str(X6, X10, 0, 8);
+    a.str(X1, X10, 8, 8);
+    a.lsr_ri(X11, X1, 16);
+    a.add_imm(X11, X11, (SPAN_TABLE + 65535) as i64);
+    a.and_ri(X11, X11, !65535u64);
+    a.add_rr(X11, X11, X6);
+    a.str(X11, X10, 16, 8); // the first span follows the tables
+    a.mov_rr(X0, X6);
+    a.ret();
 }
 
 /// Emits `_start` (at offset 0 of the code) and the routines. `main` is called with no arguments;
@@ -796,51 +968,55 @@ pub fn emit_for(
             a.new_label(),
             a.new_label(),
         );
-        a.mov_ri(X9, SMALL_MAX);
-        a.cmp_rr(X19, X9);
-        a.b_cond(Cond::Hi, large);
-        a.mov_ri(X20, 0);
-        a.mov_ri(X21, 32);
-        a.bind(size_loop);
-        a.cmp_rr(X21, X19);
-        a.b_cond(Cond::Hs, have);
-        a.add_rr(X21, X21, X21);
-        a.add_ri(X20, X20, 1);
-        a.b(size_loop);
-        a.bind(have);
-        state(a, X10, 0);
-        a.add_rr_sh(X10, X10, X20, Shift::Lsl, 3);
-        a.ldr(X11, X10, 0, 8); // head of this class's free list
-        a.cbz(X11, fresh);
-        // Reuse: unlink, then clear the payload.
-        a.ldr(X12, X11, 16, 8);
-        a.str(X12, X10, 0, 8);
-        a.mov_rr(X22, X11);
-        a.add_ri(X13, X11, 16);
-        a.add_rr(X14, X11, X21);
-        zero_range(a, X13, X14);
-        a.b(out);
-        // Fresh: carve from the current chunk (already zero), asking for a new chunk when it is used up.
-        a.bind(fresh);
-        a.bind(retry);
-        state(a, X10, 96);
-        a.ldr(X22, X10, 0, 8);
-        a.add_rr(X12, X22, X21);
-        a.ldr(X13, X10, 8, 8);
-        a.cmp_rr(X12, X13);
-        a.b_cond(Cond::Ls, carve);
-        mmap(a, os, CHUNK, 0x22);
-        failed(a, os, X0, oom);
-        state(a, X10, 96);
-        a.str(X0, X10, 0, 8);
-        a.mov_ri(X9, CHUNK);
-        a.add_rr(X9, X0, X9);
-        a.str(X9, X10, 8, 8);
-        a.b(retry);
-        a.bind(carve);
-        a.str(X12, X10, 0, 8);
-        a.str(X20, X22, 0, 8); // header: the class
-        a.b(out);
+        if os == Os::Linux {
+            emit_region_alloc(a, large, oom);
+        } else {
+            a.mov_ri(X9, SMALL_MAX);
+            a.cmp_rr(X19, X9);
+            a.b_cond(Cond::Hi, large);
+            a.mov_ri(X20, 0);
+            a.mov_ri(X21, 32);
+            a.bind(size_loop);
+            a.cmp_rr(X21, X19);
+            a.b_cond(Cond::Hs, have);
+            a.add_rr(X21, X21, X21);
+            a.add_ri(X20, X20, 1);
+            a.b(size_loop);
+            a.bind(have);
+            state(a, X10, 0);
+            a.add_rr_sh(X10, X10, X20, Shift::Lsl, 3);
+            a.ldr(X11, X10, 0, 8); // head of this class's free list
+            a.cbz(X11, fresh);
+            // Reuse: unlink, then clear the payload.
+            a.ldr(X12, X11, 16, 8);
+            a.str(X12, X10, 0, 8);
+            a.mov_rr(X22, X11);
+            a.add_ri(X13, X11, 16);
+            a.add_rr(X14, X11, X21);
+            zero_range(a, X13, X14);
+            a.b(out);
+            // Fresh: carve from the current chunk (already zero), asking for a new chunk when it is used up.
+            a.bind(fresh);
+            a.bind(retry);
+            state(a, X10, 96);
+            a.ldr(X22, X10, 0, 8);
+            a.add_rr(X12, X22, X21);
+            a.ldr(X13, X10, 8, 8);
+            a.cmp_rr(X12, X13);
+            a.b_cond(Cond::Ls, carve);
+            mmap(a, os, CHUNK, 0x22);
+            failed(a, os, X0, oom);
+            state(a, X10, 96);
+            a.str(X0, X10, 0, 8);
+            a.mov_ri(X9, CHUNK);
+            a.add_rr(X9, X0, X9);
+            a.str(X9, X10, 8, 8);
+            a.b(retry);
+            a.bind(carve);
+            a.str(X12, X10, 0, 8);
+            a.str(X20, X22, 0, 8); // header: the class
+            a.b(out);
+        }
         // Large: its own mapping, rounded to whole pages; the header keeps the length.
         a.bind(large);
         a.add_ri(X21, X19, 4095);
@@ -971,19 +1147,50 @@ pub fn emit_for(
         {
             let (fdone, flarge, unmap) = (a.new_label(), a.new_label(), a.new_label());
             a.cbz(X0, fdone);
-            a.sub_ri(X10, X0, 16);
-            a.ldr(X11, X10, 0, 8);
-            state(a, X12, 112);
-            a.ldr(X13, X12, 0, 8);
-            a.sub_ri(X13, X13, 1);
-            a.str(X13, X12, 0, 8);
-            a.cmp_ri(X11, LARGE_CLASS as u32);
-            a.b_cond(Cond::Eq, flarge);
-            state(a, X12, 0);
-            a.add_rr_sh(X12, X12, X11, Shift::Lsl, 3);
-            a.ldr(X13, X12, 0, 8);
-            a.str(X13, X10, 16, 8);
-            a.str(X10, X12, 0, 8);
+            if os == Os::Linux {
+                // A block inside the region: its span's class says which free list takes it back.
+                let outside = a.new_label();
+                state(a, X12, 0);
+                a.ldr(X13, X12, 0, 8);
+                a.sub_rr(X14, X0, X13);
+                a.ldr(X15, X12, 8, 8);
+                a.cmp_rr(X14, X15);
+                a.b_cond(Cond::Hs, outside);
+                a.lsr_ri(X14, X14, 16);
+                a.add_rr(X14, X14, X13);
+                a.ldr(X14, X14, SPAN_TABLE, 1);
+                a.lsl_ri(X14, X14, 5);
+                a.add_rr(X14, X14, X13);
+                a.ldr(X15, X14, 0, 8);
+                a.str(X15, X0, 0, 8);
+                a.str(X0, X14, 0, 8);
+                state(a, X12, 112);
+                a.ldr(X13, X12, 0, 8);
+                a.sub_ri(X13, X13, 1);
+                a.str(X13, X12, 0, 8);
+                a.ret();
+                a.bind(outside);
+                a.sub_ri(X10, X0, 16);
+                state(a, X12, 112);
+                a.ldr(X13, X12, 0, 8);
+                a.sub_ri(X13, X13, 1);
+                a.str(X13, X12, 0, 8);
+                a.b(flarge);
+            } else {
+                a.sub_ri(X10, X0, 16);
+                a.ldr(X11, X10, 0, 8);
+                state(a, X12, 112);
+                a.ldr(X13, X12, 0, 8);
+                a.sub_ri(X13, X13, 1);
+                a.str(X13, X12, 0, 8);
+                a.cmp_ri(X11, LARGE_CLASS as u32);
+                a.b_cond(Cond::Eq, flarge);
+                state(a, X12, 0);
+                a.add_rr_sh(X12, X12, X11, Shift::Lsl, 3);
+                a.ldr(X13, X12, 0, 8);
+                a.str(X13, X10, 16, 8);
+                a.str(X10, X12, 0, 8);
+            }
             a.bind(fdone);
             a.ret();
             // Keep one large block for the next large allocation; unmap when the slot is taken.
@@ -1036,9 +1243,19 @@ pub fn emit_for(
             a.mov_rr(X20, X1);
             a.cbz(X19, generic);
             a.sub_ri(X10, X19, 16);
-            a.ldr(X11, X10, 0, 8);
-            a.cmp_ri(X11, LARGE_CLASS as u32);
-            a.b_cond(Cond::Ne, generic);
+            if os == Os::Linux {
+                // A block inside the region is moved by the generic path.
+                state(a, X12, 0);
+                a.ldr(X13, X12, 0, 8);
+                a.sub_rr(X14, X19, X13);
+                a.ldr(X15, X12, 8, 8);
+                a.cmp_rr(X14, X15);
+                a.b_cond(Cond::Lo, generic);
+            } else {
+                a.ldr(X11, X10, 0, 8);
+                a.cmp_ri(X11, LARGE_CLASS as u32);
+                a.b_cond(Cond::Ne, generic);
+            }
             if rsv {
                 // Growth inside the reservation: the pages are already there (macOS) or are committed now
                 // (Windows), and the new tail is still zero. Shrinking and outgrowing the reservation copy.
@@ -1093,19 +1310,40 @@ pub fn emit_for(
             a.mov_rr(X21, X0);
             a.cbz(X19, rskip);
             // Bytes the old block can give: the rest of its class, or its mapping.
-            a.ldr(X11, X19, -16, 8);
-            a.cmp_ri(X11, LARGE_CLASS as u32);
-            a.b_cond(Cond::Ne, rclass);
-            a.ldr(X12, X19, -8, 8);
-            if rsv {
-                a.and_ri(X12, X12, !4095);
+            if os == Os::Linux {
+                // What the old block holds: its class's block size, or its mapping less the header.
+                state(a, X10, 0);
+                a.ldr(X13, X10, 0, 8);
+                a.sub_rr(X14, X19, X13);
+                a.ldr(X15, X10, 8, 8);
+                a.cmp_rr(X14, X15);
+                a.b_cond(Cond::Hs, rclass);
+                a.lsr_ri(X14, X14, 16);
+                a.add_rr(X14, X14, X13);
+                a.ldr(X14, X14, SPAN_TABLE, 1);
+                a.lsl_ri(X14, X14, 5);
+                a.add_rr(X14, X14, X13);
+                a.ldr(X12, X14, 24, 8);
+                a.b(rcopy);
+                a.bind(rclass);
+                a.ldr(X12, X19, -8, 8);
+                a.sub_ri(X12, X12, 16);
+                a.bind(rcopy);
+            } else {
+                a.ldr(X11, X19, -16, 8);
+                a.cmp_ri(X11, LARGE_CLASS as u32);
+                a.b_cond(Cond::Ne, rclass);
+                a.ldr(X12, X19, -8, 8);
+                if rsv {
+                    a.and_ri(X12, X12, !4095);
+                }
+                a.b(rcopy);
+                a.bind(rclass);
+                a.mov_ri(X12, 32);
+                a.lslv(X12, X12, X11);
+                a.bind(rcopy);
+                a.sub_ri(X12, X12, 16);
             }
-            a.b(rcopy);
-            a.bind(rclass);
-            a.mov_ri(X12, 32);
-            a.lslv(X12, X12, X11);
-            a.bind(rcopy);
-            a.sub_ri(X12, X12, 16);
             a.cmp_rr(X12, X20);
             a.csel(X2, X12, X20, Cond::Ls);
             a.mov_rr(X0, X21);

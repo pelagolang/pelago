@@ -108,6 +108,12 @@ Each stage is its own PR on its own branch and names the one row it moves; no fu
 | H5 | Per-worker sub-ranges and the task stack pool (concurrency C1, C6) | concurrency rows, none today |
 | H6 | The allocator written in Pelago, inlined by the optimiser | all alloc-heavy rows, one source for both targets |
 
+**Status.** H1 is written for x86-64 Linux (`native/rt.rs`, `emit_region_alloc`); Windows and macOS keep the old allocator for now; Linux AArch64 has a port of the same code in `rt_a64.rs` (checked by the ARM CI job only; no emulator in the sandbox). It reserves the region with `MAP_NORESERVE` and no commit step (Linux faults pages in on first touch), keeps blocks up to 8 KiB in spans, and leaves bigger blocks on their own mappings. One run of the medium programs on a dev machine (not the harness): `bintrees` 0.081 s -> 0.058 s and peak memory 8.2 MiB -> 4.1 MiB; `strsplit` 0.059 s -> 0.037 s and peak memory 6.8 MiB -> 6.7 MiB (an earlier single run read 8.2 MiB; three repeats gave 6.7, 8.2, 6.7, so the first reading was run-to-run noise); `hello` memory unchanged at 524 KiB; the executable grows by about 380 bytes when it allocates (H2 removes that for programs that do not).
+
+**Decision (2026-11-06).** The owner chose the hybrid of section 4 (question 1). Questions 2 to 5 stand as the recommendations written there until answered.
+
+**H2 so far.** Measuring `hello` showed that its executable carried the whole allocator only because `print` of text built a temporary `string`. `print` of text values now writes each value directly, so a program that only prints text has no allocator: `hello` is 2592 bytes (4192 with the allocator, 3808 before H1; tcc about 3 KB). The rest of H2 (a bump-only allocator when nothing is freed) has no program to apply to yet, since a program that allocates also frees, so it waits.
+
 H1 and H2 are independent of the arena and narrow-links work. Narrow links (PR #139) shrink the data the allocator hands out
 (`bintrees` nodes about 3x) and compose with H1: smaller blocks, no header. The arena thread's AR5 (lazy `str.chars()`) is untouched.
 

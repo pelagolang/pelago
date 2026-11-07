@@ -5,28 +5,38 @@
 //! and a front file `geometry.pel` next to the directory `geometry/` is the parent of what is
 //! inside it. A parent without a front file is an empty module made up for the occasion.
 
-use crate::ast::File;
+use crate::ast::{File, ItemKind, StmtKind};
 use crate::parser::{parse_and_check_with, ParseOptions};
 use crate::span::Span;
 use std::collections::HashMap;
 use std::path::Path;
 
-/// The modules of the `core` package: `(module name, source)`. The files live in `compiler/core/`.
+/// The modules of the `core` package: `(module path, source)`. `core.pel` is the front file (the index) of
+/// the modules in `compiler/core/core/`, which are its children (`core.lists`, ...).
 pub const CORE_MODULES: &[(&str, &str)] = &[
     ("core", include_str!("../core/core.pel")),
-    ("rt", include_str!("../core/rt.pel")),
-    ("lists", include_str!("../core/lists.pel")),
-    ("text", include_str!("../core/text.pel")),
-    ("maps", include_str!("../core/maps.pel")),
-    ("strings", include_str!("../core/strings.pel")),
-    ("iters", include_str!("../core/iters.pel")),
-    ("results", include_str!("../core/results.pel")),
-    ("numbers", include_str!("../core/numbers.pel")),
-    ("tasks", include_str!("../core/tasks.pel")),
-    ("boxes", include_str!("../core/boxes.pel")),
-    ("arena", include_str!("../core/arena.pel")),
-    ("columns", include_str!("../core/columns.pel")),
-    ("objects", include_str!("../core/objects.pel")),
+    ("core.rt", include_str!("../core/core/rt.pel")),
+    ("core.lists", include_str!("../core/core/lists.pel")),
+    ("core.text", include_str!("../core/core/text.pel")),
+    ("core.maps", include_str!("../core/core/maps.pel")),
+    ("core.strings", include_str!("../core/core/strings.pel")),
+    ("core.iters", include_str!("../core/core/iters.pel")),
+    ("core.results", include_str!("../core/core/results.pel")),
+    ("core.numbers", include_str!("../core/core/numbers.pel")),
+    ("core.tasks", include_str!("../core/core/tasks.pel")),
+    ("core.boxes", include_str!("../core/core/boxes.pel")),
+    ("core.arena", include_str!("../core/core/arena.pel")),
+    ("core.pool", include_str!("../core/core/pool.pel")),
+    ("core.columns", include_str!("../core/core/columns.pel")),
+    ("core.objects", include_str!("../core/core/objects.pel")),
+];
+
+/// The modules of the `std` package: `(module name, source)`. The files live in `compiler/std/`.
+/// Unlike `core`, the package is added only when a program imports `std.<module>`.
+pub const STD_MODULES: &[(&str, &str)] = &[
+    ("big", include_str!("../std/big.pel")),
+    ("json", include_str!("../std/json.pel")),
+    ("regex", include_str!("../std/regex.pel")),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -127,7 +137,31 @@ impl Program {
         for (path, src) in &ordered {
             self.ensure_module(pid, path, Some(src), &mut by_path);
         }
+        if name != "std" && self.find_package("std").is_none() && self.imports_std(pid) {
+            self.add_package("std", STD_MODULES);
+        }
         pid
+    }
+
+    /// Whether a top-level import of the package starts at `std`.
+    fn imports_std(&self, pid: PackageId) -> bool {
+        self.modules
+            .iter()
+            .filter(|m| m.package == pid)
+            .flat_map(|m| m.file.stmts.iter().map(move |s| (m, s)))
+            .any(|(m, s)| match &s.kind {
+                StmtKind::Item(item) => match &item.kind {
+                    ItemKind::Import(i) => {
+                        i.levels == 0
+                            && i.path
+                                .segments
+                                .first()
+                                .is_some_and(|seg| seg.text(&m.src) == "std")
+                    }
+                    _ => false,
+                },
+                _ => false,
+            })
     }
 
     fn ensure_module(
