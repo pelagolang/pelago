@@ -816,7 +816,6 @@ fn push_plan(x: &Facts, dom: &Dom, counter: &Counter) -> Option<Push> {
                 | Op::Realloc(..)
                 | Op::Free(_)
                 | Op::Print(..)
-                | Op::Os(..)
                 | Op::CtxInit(..)
                 | Op::CtxSwitch(..) => return None,
                 Op::Store(a, v) => stores.push((*a, f.ty(*v))),
