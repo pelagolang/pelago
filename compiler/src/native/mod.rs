@@ -82,6 +82,19 @@ pub struct Uses {
     pub os: bool,
 }
 
+/// What a program that talks to its process (arguments, descriptors, exit) cannot yet be built for.
+pub const PROCESS_REFUSED: &str =
+    "the operating system layer (args, stdin, stderr, exit) is built for x86-64 Linux only so far";
+
+/// Whether the module uses `OsKind::Write`, `Read`, `Exit` or `Argv`.
+pub fn uses_process(m: &crate::ir::Module) -> bool {
+    use crate::ir::Op;
+    m.funcs
+        .iter()
+        .flat_map(|f| &f.insts)
+        .any(|i| matches!(&i.op, Op::Os(k, ..) if k.is_process()))
+}
+
 impl Uses {
     /// Every routine: what the hand-written test programs may call.
     pub const ALL: Uses = Uses {

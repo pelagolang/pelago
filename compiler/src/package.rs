@@ -35,6 +35,8 @@ pub const CORE_MODULES: &[(&str, &str)] = &[
 /// Unlike `core`, the package is added only when a program imports `std.<module>`.
 pub const STD_MODULES: &[(&str, &str)] = &[
     ("big", include_str!("../std/big.pel")),
+    ("io", include_str!("../std/io.pel")),
+    ("os", include_str!("../std/os.pel")),
     ("json", include_str!("../std/json.pel")),
     ("regex", include_str!("../std/regex.pel")),
 ];
