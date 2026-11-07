@@ -3361,3 +3361,10 @@ fn split_finds_separators_of_every_length() {
     assert_eq!(output_of(src), "3\nx\ny-z\n-w\nabcabc\n\nab\na\n\n3\n");
     agree(src);
 }
+
+#[test]
+fn a_range_of_two_literal_compares_is_one_test() {
+    let src = "fn in_high(b: uint8) -> bool { b >= 200 && b <= 255 }\nfn main() {\n var n = 0\n for c of \"aZz_09 é\".chars() { if c >= 'a' && c <= 'z' { n += 1 }\n if c >= '0' && c <= '9' { n += 10 }\n if c >= 'é' && c <= 'é' { n += 100 } }\n print(n)\n var hits = 0\n for i in -8..8 { if i >= -5 && i <= 2 { hits += 1 }\n if i >= 3 && i <= 3 { hits += 100 }\n if i >= 5 && i <= 1 { hits += 1000 } }\n print(hits)\n print(in_high(199), in_high(200), in_high(255), in_high(0)) }\n";
+    assert_eq!(output_of(src), "122\n108\nfalse true true false\n");
+    agree(src);
+}
