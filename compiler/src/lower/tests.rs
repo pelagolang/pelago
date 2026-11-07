@@ -3058,6 +3058,17 @@ fn std_is_added_only_when_imported() {
 }
 
 #[test]
+fn for_over_split_and_bytes_in_place() {
+    let src = "fn main() {\n var n = 0\n for w of \"a,bb,,c,\".split(\",\") { n += 1\n print(w.len()) }\n print(n)\n for w of \"abc\".split(\"\") { print(w) }\n for w of \"\".split(\"-\") { print(w.len()) }\n for w of \"x--y\".split(\"--\") { if w == \"x\" { continue }\n print(w) }\n var t = \"one two three\"\n for w of t.split(\" \") { if w == \"two\" { break }\n print(w) }\n var sum = 0\n for b of \"AbC\".bytes() { sum += b to int }\n print(sum)\n const l = \"p q\".split(\" \").toList()\n print(l.len()) }\n";
+    assert_eq!(output_of(src), "1\n2\n0\n1\n0\n5\nabc\n0\ny\none\n230\n2\n");
+}
+
+#[test]
+fn for_over_split_native_agrees() {
+    agree("fn main() {\n for w of \"a,bb,,c,\".split(\",\") { print(w.len()) }\n for b of \"hé\".bytes() { print(b to int) } }\n");
+}
+
+#[test]
 fn a_pool_with_a_bad_width_stops() {
     for w in ["int", "uint64", "float", "bool"] {
         let src = format!("fn main() {{\n var p: pool<int, {w}> = pool()\n print(p.len()) }}\n");

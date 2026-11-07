@@ -927,8 +927,8 @@ impl<'a> Lowerer<'a> {
         keys_only: bool,
     ) -> Res {
         if let ([p], false) = (pats, keys_only) {
-            if let Some(base) = self.chars_base(iter) {
-                return self.for_chars(label, p, base, iter.span, body);
+            if let Some(src) = self.fused_source(iter) {
+                return self.for_fused(label, p, src, iter.span, body);
             }
         }
         let Some(it) = self.ty_of(iter) else {
@@ -1098,9 +1098,20 @@ impl<'a> Lowerer<'a> {
     }
 }
 
+/// A producer a `for` loop pulls from in place, without building a list (docs/design/iter.md).
+#[derive(Clone, Copy)]
+pub(crate) enum Fused<'a> {
+    /// `s.chars()`
+    Chars(&'a Expr),
+    /// `s.bytes()`
+    Bytes(&'a Expr),
+    /// `s.split(sep)`
+    Split(&'a Expr, &'a Expr),
+}
+
 impl<'a> Lowerer<'a> {
-    /// `s.chars()` on a `str` or `string`: the text `s`.
-    fn chars_base(&mut self, e: &'a Expr) -> Option<&'a Expr> {
+    /// `s.chars()`, `s.bytes()` or `s.split(sep)` on a `str` or `string`.
+    fn fused_source(&mut self, e: &'a Expr) -> Option<Fused<'a>> {
         let ExprKind::Call { callee, args, .. } = &e.kind else {
             return None;
         };
@@ -1112,34 +1123,72 @@ impl<'a> Lowerer<'a> {
         else {
             return None;
         };
-        if !args.is_empty() || self.src_text(name.span) != "chars" {
+        let bt = self.ty_of(base)?;
+        if !matches!(self.kind(bt), TyKind::Str | TyKind::String) {
             return None;
         }
-        let bt = self.ty_of(base)?;
-        matches!(self.kind(bt), TyKind::Str | TyKind::String).then_some(&**base)
+        let plain = args
+            .iter()
+            .all(|a| a.mode.is_none() && a.label.is_none() && !a.spread);
+        match (self.src_text(name.span), args.len()) {
+            ("chars", 0) => Some(Fused::Chars(base)),
+            ("bytes", 0) => Some(Fused::Bytes(base)),
+            ("split", 1) if plain => {
+                let st = self.ty_of(&args[0].value)?;
+                matches!(self.kind(st), TyKind::Str | TyKind::String)
+                    .then_some(Fused::Split(base, &args[0].value))
+            }
+            _ => None,
+        }
     }
 
-    /// `for c of s.chars() { body }`: decodes one character per turn from the text itself, so no list is built.
-    /// The library function `rt_char_at` gives the code point and the width; the width is kept in a slot for the step.
-    fn for_chars(
+    /// `for x of <source> { body }`: one element per turn, taken from the text itself, so no list is built.
+    /// `chars` keeps the width of the character in a slot for the step; `split` keeps the next search position.
+    fn for_fused(
         &mut self,
         label: Option<String>,
         pat: &'a Pattern,
-        base: &'a Expr,
+        src: Fused<'a>,
         span: Span,
         body: &mut LoopBody<'a, '_>,
     ) -> Res {
+        let (base, sep) = match src {
+            Fused::Chars(b) | Fused::Bytes(b) => (b, None),
+            Fused::Split(b, s) => (b, Some(s)),
+        };
         self.push_scope();
         let Res::Val(h) = self.expr(base) else {
             self.f.scopes.pop();
             return Res::Never;
         };
+        let sh = match sep {
+            Some(s) => {
+                let Res::Val(sh) = self.expr(s) else {
+                    self.f.scopes.pop();
+                    return Res::Never;
+                };
+                Some(sh)
+            }
+            None => None,
+        };
         let len = self.load_at(h, 8, IrTy::I64);
         let data = self.load_at(h, 0, IrTy::Ptr);
         let int = self.types.int;
-        let char_ty = self.types.char_;
-        let wslot = self.slot_for(int);
-        let cslot = self.slot_for(char_ty);
+        let (elem_ty, one_more) = match src {
+            Fused::Chars(_) => (self.types.char_, false),
+            Fused::Bytes(_) => (self.types.mk(TyKind::Int(crate::types::IntKind::U8)), false),
+            Fused::Split(..) => (self.types.str_, true),
+        };
+        let nslot = self.slot_for(int);
+        let eslot = self.slot_for(elem_ty);
+        // `split` runs while the position is at most the length (the position after the last piece is length + 1).
+        let limit = if one_more {
+            let one = self.i64c(1);
+            self.emit(Op::Bin(BinOp::Add, len, one), Some(IrTy::I64), span)
+                .unwrap_or(len)
+        } else {
+            len
+        };
         let head = self.new_block(&[IrTy::I64]);
         let body_b = self.new_block(&[]);
         let step = self.new_block(&[]);
@@ -1148,34 +1197,77 @@ impl<'a> Lowerer<'a> {
         self.jump(head, vec![zero]);
         self.start(head);
         let i = self.f.func.block_params(head)[0];
-        if let Some(c) = self.emit(Op::Cmp(CmpOp::Lt, i, len), Some(IrTy::Bool), span) {
+        if let Some(c) = self.emit(Op::Cmp(CmpOp::Lt, i, limit), Some(IrTy::Bool), span) {
             self.branch(c, body_b, exit);
         }
         self.start(body_b);
-        let Some(r) = self.call_core("rt_char_at", vec![data, i, len]) else {
-            self.f.scopes.pop();
-            return Res::Never;
-        };
-        let three = self.i64c(3);
-        let seven = self.i64c(7);
-        let code = self
-            .emit(Op::Bin(BinOp::Shr, r, three), Some(IrTy::I64), span)
-            .unwrap_or(r);
-        let width = self
-            .emit(Op::Bin(BinOp::And, r, seven), Some(IrTy::I64), span)
-            .unwrap_or(r);
-        self.store_scalar_ty(wslot, width);
-        let ch = self
-            .emit(
-                Op::Cast(CastKind::Trunc, code, IrTy::Int(32)),
-                Some(IrTy::Int(32)),
-                span,
-            )
-            .unwrap_or(code);
-        self.store_scalar_ty(cslot, ch);
+        match src {
+            Fused::Chars(_) => {
+                let Some(r) = self.call_core("rt_char_at", vec![data, i, len]) else {
+                    self.f.scopes.pop();
+                    return Res::Never;
+                };
+                let three = self.i64c(3);
+                let seven = self.i64c(7);
+                let code = self
+                    .emit(Op::Bin(BinOp::Shr, r, three), Some(IrTy::I64), span)
+                    .unwrap_or(r);
+                let width = self
+                    .emit(Op::Bin(BinOp::And, r, seven), Some(IrTy::I64), span)
+                    .unwrap_or(r);
+                let next = self
+                    .emit(Op::Bin(BinOp::Add, i, width), Some(IrTy::I64), span)
+                    .unwrap_or(i);
+                self.store_scalar_ty(nslot, next);
+                let ch = self
+                    .emit(
+                        Op::Cast(CastKind::Trunc, code, IrTy::Int(32)),
+                        Some(IrTy::Int(32)),
+                        span,
+                    )
+                    .unwrap_or(code);
+                self.store_scalar_ty(eslot, ch);
+            }
+            Fused::Bytes(_) => {
+                let p = self
+                    .emit(Op::PtrAdd(data, i), Some(IrTy::Ptr), span)
+                    .unwrap_or(data);
+                let b = self.emit(Op::Load(IrTy::Int(8), p), Some(IrTy::Int(8)), span);
+                if let Some(b) = b {
+                    self.store_scalar_ty(eslot, b);
+                }
+                let one = self.i64c(1);
+                let next = self
+                    .emit(Op::Bin(BinOp::Add, i, one), Some(IrTy::I64), span)
+                    .unwrap_or(i);
+                self.store_scalar_ty(nslot, next);
+            }
+            Fused::Split(..) => {
+                let sh = sh.unwrap_or(h);
+                let sn = self.load_at(sh, 8, IrTy::I64);
+                let sp = self.load_at(sh, 0, IrTy::Ptr);
+                let Some(end) = self.call_core("rt_split_end", vec![data, len, sp, sn, i]) else {
+                    self.f.scopes.pop();
+                    return Res::Never;
+                };
+                let Some(next) = self.call_core("rt_split_after", vec![end, len, sn]) else {
+                    self.f.scopes.pop();
+                    return Res::Never;
+                };
+                self.store_scalar_ty(nslot, next);
+                let piece = self
+                    .emit(Op::PtrAdd(data, i), Some(IrTy::Ptr), span)
+                    .unwrap_or(data);
+                let plen = self
+                    .emit(Op::Bin(BinOp::Sub, end, i), Some(IrTy::I64), span)
+                    .unwrap_or(end);
+                self.store_at(eslot, 0, piece);
+                self.store_at(eslot, 8, plen);
+            }
+        }
         let bind_fail = self.stop_block("pattern did not match");
         let depth = self.f.scopes.len();
-        if !self.pat_test(pat, cslot, char_ty, bind_fail) {
+        if !self.pat_test(pat, eslot, elem_ty, bind_fail) {
             return Res::Never;
         }
         self.f.loops.push(LoopCtx {
@@ -1193,10 +1285,8 @@ impl<'a> Lowerer<'a> {
         }
         self.f.loops.pop();
         self.start(step);
-        let w = self.load_at(wslot, 0, IrTy::I64);
-        if let Some(next) = self.emit(Op::Bin(BinOp::Add, i, w), Some(IrTy::I64), span) {
-            self.jump(head, vec![next]);
-        }
+        let next = self.load_at(nslot, 0, IrTy::I64);
+        self.jump(head, vec![next]);
         self.start(exit);
         self.pop_scope();
         Res::Unit
