@@ -101,6 +101,15 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
     g.rt = Some(rt);
     g.place_data();
     g.stop_stubs();
+    // Callees are selected and allocated first, so that a call can be told what its callee writes;
+    // the code is laid out in the order of the module.
+    let mut sets: Vec<Option<super::mir::RegSet>> = vec![None; m.funcs.len()];
+    let mut mfuncs: Vec<Option<super::mir::MFunc>> = (0..m.funcs.len()).map(|_| None).collect();
+    for i in super::clobber::order(m) {
+        let (mf, w) = g.prepare(&m.funcs[i], &sets)?;
+        sets[i] = Some(w);
+        mfuncs[i] = Some(mf);
+    }
     let mut syms = Vec::new();
     for (i, f) in m.funcs.iter().enumerate() {
         // A function starts 16 bytes before a cache line: where the hot code of a function falls
@@ -110,7 +119,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         g.a.align(64, 63);
         g.a.nops(48);
         let start = g.a.here();
-        g.function(i, f)?;
+        g.function(i, mfuncs[i].take().expect("every function is prepared"));
         syms.push(Symbol {
             name: f.name.clone(),
             offset: start as u64,
@@ -201,7 +210,12 @@ impl<'m> Gen<'m> {
             .collect()
     }
 
-    fn function(&mut self, fi: usize, f: &Func) -> Result<(), String> {
+    /// Selects and allocates `f`; also gives the registers a call of it destroys.
+    fn prepare(
+        &mut self,
+        f: &Func,
+        sets: &[Option<super::mir::RegSet>],
+    ) -> Result<(super::mir::MFunc, super::mir::RegSet), String> {
         let Some(mut mf) = super::x86_select::select(f) else {
             return Err(format!(
                 "`{}` uses a value the x86-64 selector does not handle",
@@ -210,6 +224,13 @@ impl<'m> Gen<'m> {
         };
         mf.cold_syms = self.cold_syms(super::x86_mir::SYM_FUNC);
         let target = super::x86_mir::X86::new();
+        super::clobber::narrow_calls(
+            &mut mf,
+            &target,
+            super::x86_mir::op::CALL,
+            super::x86_mir::SYM_FUNC,
+            sets,
+        );
         if cfg!(debug_assertions) {
             super::mir::verify(&mf, &target)?;
         }
@@ -221,6 +242,13 @@ impl<'m> Gen<'m> {
         if dump {
             eprintln!("after allocation:\n{}", mf.print(&target));
         }
+        // The probe of a big frame writes `r10` and `r11` without saying so.
+        let hidden = super::mir::RegSet::of(&[super::x86_mir::R10, super::x86_mir::R11]);
+        let w = super::clobber::written(&mf, &target, hidden);
+        Ok((mf, w))
+    }
+
+    fn function(&mut self, fi: usize, mf: super::mir::MFunc) {
         let label = self.funcs[fi];
         let mut env = super::x86_emit::Env {
             a: &mut self.a,
@@ -236,6 +264,5 @@ impl<'m> Gen<'m> {
             rt: self.rt.as_ref().expect("the runtime is emitted first"),
         };
         super::x86_emit::emit(&mut env, &mf, label);
-        Ok(())
     }
 }

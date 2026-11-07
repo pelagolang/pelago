@@ -67,7 +67,7 @@ Adapters inside a fused loop: `map(f)` evaluates `f(x)` into the loop variable's
 |---|---|---|
 | IT1 | `for c of s.chars()` fused (done, PR 163) | interpreter, optimiser, native |
 | IT2 | `split` and `bytes` sources in `for` | same three, plus `break`, empty separator, empty text, leak check |
-| IT3 | `map` / `filter` on a fused source in `for`, with the ordering rule above | order test with a side-effecting closure; `break` stops the source |
+| IT3 | `map` / `filter` in `for` over any iterator source (done), with the ordering rule above | order test with a side-effecting closure; `break` stops the source |
 | IT4 | Fused consumers: `sum`, `count`, `each`, `toList` over a chain | same as IT3 |
 | IT5 | Real lazy value for generators (`yield`), only when generators are designed | later |
 

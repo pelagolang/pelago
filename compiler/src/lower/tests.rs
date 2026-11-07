@@ -3285,6 +3285,16 @@ fn pool_slots_are_as_small_as_the_value_and_reuse_freed_ones() {
 }
 
 #[test]
+fn for_over_map_and_filter_runs_element_by_element() {
+    let src = "fn main() {\n    var calls = 0\n    const k = 10\n    for x of [1, 2, 3, 4, 5, 6].iter().map(n ~> n * k).filter(n ~> n % 20 == 0) {\n        calls += 1\n        print(x)\n    }\n    print(calls)\n    for x of [1, 2, 3, 4].iter().map(n ~> { print(\"m\", n)\n        n + 1 }) {\n        print(\"body\", x)\n        if x == 3 { break }\n    }\n    for c of \"a1b2\".chars().filter(c ~> c >= '0' && c <= '9').map(c ~> c to int - 48) { print(c) }\n    for w of \"x yy z\".split(\" \").map(w ~> w.len()) { print(w) }\n    for x of [1, 2].iter().filter(n ~> n > 5) { print(x) }\n    print(\"done\")\n}\n";
+    assert_eq!(
+        output_of(src),
+        "20\n40\n60\n3\nm 1\nbody 2\nm 2\nbody 3\n1\n2\n1\n2\n1\ndone\n"
+    );
+    agree(src);
+}
+
+#[test]
 fn push_str_of_an_interpolated_literal_writes_in_place() {
     let src = "fn main() {\n var t = \"[\"\n for i in 0..3 { t.pushStr!(\"#(i):#(i * 2) \") }\n const w = \"é\"\n t.pushStr!(\"#(w)#('x')#(true)#(1.5)]\")\n t.pushStr!(\"plain\")\n print(t)\n print(t.len()) }\n";
     assert_eq!(output_of(src), "[0:0 1:2 2:4 éxtrue1.5]plain\n29\n");

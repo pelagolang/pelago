@@ -124,6 +124,29 @@ impl<'a> Lowerer<'a> {
             | "rt_os_read"
             | "rt_os_exit"
             | "rt_os_argv" => self.intr_os(&name, args, sp),
+            "rt_data_word" => {
+                // The address of the k-th word of the block the compiler keeps for the library's own
+                // state; `k` is a literal, so a bad one is a compile error, not a stop.
+                let k = args.first().and_then(|a| match a.value.kind {
+                    ExprKind::Int => crate::typecheck::literal_value(self.src_text(a.value.span)),
+                    _ => None,
+                });
+                let Some(k) =
+                    k.filter(|k| (0..crate::ir::DATA_WORDS as i128).contains(&(*k as i128)))
+                else {
+                    return self.unsupported(
+                        sp,
+                        "`rt_data_word` needs a number literal below 64 (`DATA_WORDS`)",
+                    );
+                };
+                let d = self.module.word_block();
+                let base = self.emit(Op::DataAddr(d), Some(IrTy::Ptr), sp);
+                let off = self.i64c(k as i64 * 8);
+                let Some(base) = base else {
+                    return Res::Never;
+                };
+                self.wrap(Op::PtrAdd(base, off), ptr, sp)
+            }
             "rt_int_addr" => {
                 let Some(n) = self.arg_scalar(args, 0) else {
                     return Res::Never;

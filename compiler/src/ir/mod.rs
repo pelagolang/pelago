@@ -515,7 +515,12 @@ pub struct Module {
     pub funcs: Vec<Func>,
     /// Static data, such as string literals.
     pub data: Vec<Vec<u8>>,
+    /// The number of the zeroed data block that holds the words of `rt_data_word`, once a function asks.
+    pub words: Option<u32>,
 }
+
+/// The words `rt_data_word` can name: the library keeps its own state there (the heap's chunk lists).
+pub const DATA_WORDS: usize = 64;
 
 impl Module {
     /// Adds static data and gives its number (equal data is shared).
@@ -525,6 +530,16 @@ impl Module {
         }
         self.data.push(bytes.to_vec());
         self.data.len() as u32 - 1
+    }
+
+    /// The block of writable words (made on first use).
+    pub fn word_block(&mut self) -> u32 {
+        if let Some(i) = self.words {
+            return i;
+        }
+        let i = self.add_zeroed_data(DATA_WORDS * 8);
+        self.words = Some(i);
+        i
     }
 
     /// Adds `size` bytes of zeroed static data of its own (for variables that live for the whole program).

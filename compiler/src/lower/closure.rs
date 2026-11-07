@@ -549,11 +549,26 @@ impl<'a> Lowerer<'a> {
         let Some(ft) = self.ty_of(callee) else {
             return self.unsupported(e.span, "calling a value of unknown type");
         };
-        let Some(sig) = self.fn_value_sig(ft) else {
+        if self.fn_value_sig(ft).is_none() {
             return self.unsupported(e.span, "calling something that is not a function");
-        };
+        }
         let Res::Val(fv) = self.expr(callee) else {
             return Res::Never;
+        };
+        self.call_fn_at(e.span, ft, fv, srcs, dst)
+    }
+
+    /// Calls the function value stored at `fv` (type `ft`) with the pieces already matched to its parameters.
+    pub(crate) fn call_fn_at(
+        &mut self,
+        span: Span,
+        ft: Ty,
+        fv: Value,
+        srcs: Vec<ArgSource<'a>>,
+        dst: Option<Value>,
+    ) -> Res {
+        let Some(sig) = self.fn_value_sig(ft) else {
+            return self.unsupported(span, "calling something that is not a function");
         };
         let code = self.load_at(fv, 0, IrTy::Ptr);
         let env = self.load_at(fv, 8, IrTy::Ptr);
@@ -569,10 +584,10 @@ impl<'a> Lowerer<'a> {
         }
         ir_args.push(env);
         if srcs.len() != sig.params.len() {
-            return self.unsupported(e.span, "a call with a different number of arguments");
+            return self.unsupported(span, "a call with a different number of arguments");
         }
         for ((pass, ty, mode), src) in sig.params.iter().zip(srcs) {
-            let v = self.lower_arg(*pass, *ty, *mode, src, e.span);
+            let v = self.lower_arg(*pass, *ty, *mode, src, span);
             match (pass, v) {
                 (Pass::Skip, _) => {}
                 (_, Some(v)) => ir_args.push(v),
@@ -584,11 +599,7 @@ impl<'a> Lowerer<'a> {
             RetPass::Val(t) => (t, Some(t)),
             _ => (IrTy::Void, None),
         };
-        let result = self.emit(
-            Op::CallPtr(param_tys, ret_ir, code, ir_args),
-            res_ty,
-            e.span,
-        );
+        let result = self.emit(Op::CallPtr(param_tys, ret_ir, code, ir_args), res_ty, span);
         if matches!(self.kind(sig.ret), TyKind::Never) {
             self.terminate(Term::Unreachable);
             return Res::Never;

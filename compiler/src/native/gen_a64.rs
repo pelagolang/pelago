@@ -39,11 +39,20 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         let at = g.data.add(d, 16);
         g.data_off.push(at);
     }
+    // Callees are selected and allocated first, so that a call can be told what its callee writes;
+    // the code is laid out in the order of the module.
+    let mut sets: Vec<Option<super::mir::RegSet>> = vec![None; m.funcs.len()];
+    let mut mfuncs: Vec<Option<super::mir::MFunc>> = (0..m.funcs.len()).map(|_| None).collect();
+    for i in super::clobber::order(m) {
+        let (mf, w) = g.prepare(&m.funcs[i], &sets)?;
+        sets[i] = Some(w);
+        mfuncs[i] = Some(mf);
+    }
     let mut syms = Vec::new();
     for (i, f) in m.funcs.iter().enumerate() {
         g.a.align(16);
         let start = g.a.here();
-        g.function(i, f)?;
+        g.function(i, mfuncs[i].take().expect("every function is prepared"));
         syms.push(Symbol {
             name: f.name.clone(),
             offset: start as u64,
@@ -112,7 +121,12 @@ impl<'m> Gen<'m> {
         }
     }
 
-    fn function(&mut self, fi: usize, f: &Func) -> Result<(), String> {
+    /// Selects and allocates `f`; also gives the registers a call of it destroys.
+    fn prepare(
+        &mut self,
+        f: &Func,
+        sets: &[Option<super::mir::RegSet>],
+    ) -> Result<(super::mir::MFunc, super::mir::RegSet), String> {
         let Some(mut mf) = super::a64_select::select(f) else {
             return Err(format!(
                 "`{}` uses a value the AArch64 selector does not handle",
@@ -128,6 +142,13 @@ impl<'m> Gen<'m> {
             .map(|i| super::a64_mir::SYM_FUNC + i)
             .collect();
         let target = super::a64_mir::A64::new();
+        super::clobber::narrow_calls(
+            &mut mf,
+            &target,
+            super::a64_mir::op::CALL,
+            super::a64_mir::SYM_FUNC,
+            sets,
+        );
         if cfg!(debug_assertions) {
             super::mir::verify(&mf, &target)?;
         }
@@ -139,6 +160,12 @@ impl<'m> Gen<'m> {
         if dump {
             eprintln!("after allocation:\n{}", mf.print(&target));
         }
+        // The probe of a big frame writes `x16` and `x17`, which are never allocated.
+        let w = super::clobber::written(&mf, &target, super::mir::RegSet::default());
+        Ok((mf, w))
+    }
+
+    fn function(&mut self, fi: usize, mf: super::mir::MFunc) {
         let label = self.funcs[fi];
         let stops = [
             self.a.new_label(),
@@ -155,6 +182,5 @@ impl<'m> Gen<'m> {
             rt: self.rt.as_ref().expect("the runtime is emitted first"),
         };
         super::a64_emit::emit(&mut env, &mf, label);
-        Ok(())
     }
 }
