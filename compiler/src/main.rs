@@ -2,7 +2,7 @@
 
 use pelago::keyword::{Keyword, Strength};
 use pelago::lexer::tokenize;
-use pelago::span::LineIndex;
+use pelago::span::{LineIndex, Span};
 use pelago::token::{Punct, TokenKind};
 
 /// The compiler runs on a thread with a big stack: the parser and the checker recurse, and the
@@ -64,6 +64,15 @@ fn real_main() {
         },
         Some(cmd @ ("ir" | "run" | "build")) => {
             let mut rest: Vec<String> = args.collect();
+            // What follows `--` belongs to the program that `run` starts.
+            let prog_args: Vec<String> = match rest.iter().position(|a| a == "--") {
+                Some(i) => {
+                    let after = rest.split_off(i + 1);
+                    rest.pop();
+                    after
+                }
+                None => Vec::new(),
+            };
             // `-o <file>` names the output of `build`.
             let mut out_name: Option<String> = None;
             if let Some(i) = rest.iter().position(|a| a == "-o") {
@@ -78,7 +87,7 @@ fn real_main() {
                 .map(|a| a.as_str())
                 .collect();
             match rest.iter().find(|a| !a.starts_with("--")) {
-                Some(path) => ir_or_run(path, cmd, &flags, out_name),
+                Some(path) => ir_or_run(path, cmd, &flags, out_name, prog_args),
                 None => {
                     eprintln!("usage: pelago {cmd} [--opt|--no-opt] [--stats] [--timings] <file or directory>");
                     eprintln!("       pelago run [--no-opt] <path>    build natively and run (the default where supported)");
@@ -349,7 +358,13 @@ fn check_path(path: &str) {
 }
 
 /// Checks the program, lowers it to the IR, verifies it and prints it.
-fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
+fn ir_or_run(
+    path: &str,
+    cmd: &str,
+    flags: &[&str],
+    out_name: Option<String>,
+    prog_args: Vec<String>,
+) {
     let run = cmd == "run";
     let build = cmd == "build";
     // `run` is native where the backend can run the result here; `--interp` (and `--stats`, whose
@@ -416,6 +431,33 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
             pelago::ir::opt::time_passes();
         }
         pelago::ir::opt::optimize(&mut module, pelago::ir::opt::Options::default());
+        // `@inline_always` and `@leaf` are promises checked on the optimised code.
+        for (fi, f) in module.funcs.iter().enumerate() {
+            let mut report = |at: Option<(u32, Span)>, what: &str| {
+                let Some((file, span)) = at else {
+                    return;
+                };
+                let module = program.module(pelago::package::ModuleId(file));
+                let index = LineIndex::new(&module.src);
+                let (line, col) = index.line_col(&module.src, span.start);
+                eprintln!("{}:{line}:{col}: error: `{}` {what}", module.path, f.name);
+                failed = true;
+            };
+            if f.inline_always.is_some() {
+                let called = module.funcs.iter().enumerate().any(|(gi, g)| {
+                    gi != fi && pelago::ir::opt::calls(g, pelago::ir::FuncId(fi as u32))
+                });
+                if called || pelago::ir::opt::calls(f, pelago::ir::FuncId(fi as u32)) {
+                    report(
+                        f.inline_always,
+                        "is `@inline_always` but a call to it is left (it is recursive)",
+                    );
+                }
+            }
+            if f.leaf.is_some() && !pelago::ir::opt::is_leaf(f) {
+                report(f.leaf, "is `@leaf` but makes a call or keeps a stack slot");
+            }
+        }
         pelago::ir::opt::prune(&mut module, &["main"]);
         // `@checkfree` is judged on the optimised code.
         for f in &module.funcs {
@@ -453,7 +495,9 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
         if failed {
             std::process::exit(1);
         }
-        native_build(&module, path, build, flags, out_name, &mut timer);
+        native_build(
+            &module, path, build, flags, out_name, &mut timer, &prog_args,
+        );
         timer.report();
         return;
     }
@@ -461,8 +505,27 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
         if failed {
             std::process::exit(1);
         }
-        let out = pelago::ir::run_full(&module, "main", &[]);
+        let reads = module
+            .funcs
+            .iter()
+            .flat_map(|f| &f.insts)
+            .any(|i| matches!(&i.op, pelago::ir::Op::Os(pelago::ir::OsKind::Read, ..)));
+        let env = pelago::ir::OsEnv {
+            argv: std::iter::once(path.to_string())
+                .chain(prog_args.iter().cloned())
+                .collect(),
+            env: std::env::vars().map(|(k, v)| format!("{k}={v}")).collect(),
+            stdin: if reads {
+                let mut buf = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut buf);
+                buf
+            } else {
+                Vec::new()
+            },
+        };
+        let out = pelago::ir::run_os(&module, "main", &[], env);
         print!("{}", out.output);
+        eprint!("{}", out.err);
         if flags.contains(&"--stats") {
             eprintln!("steps: {}", out.steps);
         }
@@ -472,6 +535,9 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
         }
         if out.leaked > 0 {
             eprintln!("leaked {} allocation(s)", out.leaked);
+        }
+        if out.status != 0 {
+            std::process::exit(out.status);
         }
         return;
     }
@@ -489,6 +555,7 @@ fn native_build(
     flags: &[&str],
     out_name: Option<String>,
     timer: &mut PhaseTimer,
+    prog_args: &[String],
 ) {
     let os = match flags.iter().find_map(|f| f.strip_prefix("--target=")) {
         Some("windows") => pelago::native::Os::Windows,
@@ -536,7 +603,13 @@ fn native_build(
     // On Linux `run` loads the image into this process (no file, no child); if that is not possible
     // (address taken, mapping refused) the temporary-file path below runs it.
     #[cfg(target_os = "linux")]
-    if !build && out_name.is_none() && !flags.contains(&"--spawn") {
+    // A program that uses the operating system layer wants the kernel's start block (arguments, standard
+    // input), so it runs as a process of its own.
+    if !build
+        && out_name.is_none()
+        && !flags.contains(&"--spawn")
+        && !pelago::native::uses_process(module)
+    {
         // `run` only returns on failure; report the phases first, the program ends the process.
         timer.report();
         let Err(e) = pelago::native::load::run(&image);
@@ -581,7 +654,7 @@ fn native_build(
         println!("wrote {} ({} bytes)", target.display(), image.len());
         return;
     }
-    let status = std::process::Command::new(&target).status();
+    let status = std::process::Command::new(&target).args(prog_args).status();
     let _ = std::fs::remove_file(&target);
     match status {
         Ok(s) => std::process::exit(s.code().unwrap_or(1)),

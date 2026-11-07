@@ -800,6 +800,30 @@ fn program_select_send_waits_for_room_in_a_bounded_channel() {
 }
 
 #[test]
+fn program_coroutine_next_and_iter() {
+    let src = "fn main() {\n const g = coroutine<int>(co ~> { for i of 0..3 { co.emit(i * 10) } })\n print(g.next())\n print(g.next())\n const h = coroutine<string>(co ~> { co.emit(\"a\")\n co.emit(\"b\") })\n for s of h.iter() { print(s) }\n print(g.next(), g.next())\n}\n";
+    assert_eq!(output_of(src), "some(0)\nsome(10)\na\nb\nsome(20) none\n");
+}
+
+#[test]
+fn program_coroutine_dropped_before_it_starts_or_while_suspended() {
+    let src = "fn main() {\n const never = coroutine<int>(co ~> { co.emit(1) })\n const g = coroutine<string>(co ~> { var n = 0\n while !co.cancelled() { co.emit(\"x#n\")\n  n += 1 }\n print(\"stopped\") })\n print(g.next())\n print(g.next())\n}\n";
+    assert_eq!(output_of(src), "some(\"x0\")\nsome(\"x1\")\nstopped\n");
+}
+
+#[test]
+fn program_coroutines_nest_and_run_inside_tasks() {
+    let src = "fn main() {\n const t = spawn(() ~> { const g = coroutine<int>(co ~> { const inner = coroutine<int>(c2 ~> { c2.emit(1)\n  c2.emit(2) })\n  while true {\n   const v = inner.next()\n   switch v {\n    case some(x): co.emit(x + 100)\n    case none: return\n   }\n  } })\n var t = 0\n for x of g.iter() { t += x }\n t })\n print(t.join!!())\n}\n";
+    assert_eq!(output_of(src), "203\n");
+}
+
+#[test]
+fn program_task_cancel_is_cooperative() {
+    let src = "fn main() {\n const t = spawn(() ~> { var n = 0\n while !cancelled() { n += 1\n  yield_now() }\n n > 0 })\n yield_now()\n t.cancel()\n print(t.join!!(), cancelled())\n}\n";
+    assert_eq!(output_of(src), "true false\n");
+}
+
+#[test]
 fn program_sp2() {
     let src = "fn main() { const (tx, rx) = chan<int>()\n const p = spawn([sink tx] ~> { for i of 0..3 { tx.send(i * 10) } })\n for v of rx.iter() { print(v) }\n p.join!!() }\n";
     assert_eq!(output_of(src), "0\n10\n20\n");
@@ -2919,6 +2943,43 @@ fn guarded_loops_stop_where_the_checked_loop_did() {
     );
 }
 
+/// A test that repeats with the counter (`i % 3`, `i & 1`) stays a branch: the processor predicts it, and
+/// a `select` would put the counters it updates onto the dependency chain. A test on a value computed
+/// otherwise (the parity of a collatz step) still becomes a `select`.
+#[test]
+fn periodic_tests_stay_branches_and_data_tests_become_selects() {
+    let selects = |src: &str| {
+        let l = lowered(src);
+        let mut m = l.module.clone();
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        let f = m.funcs.iter().find(|f| f.name == "main").unwrap();
+        crate::ir::print_func(f, None).matches("select").count()
+    };
+    let periodic = "fn main() {
+            var a = 0
+            var b = 0
+            var t = 0
+            for i in 0..100000 {
+                if i & 1 == 1 { a += 1 } else { b += 1; t += i & 255 }
+            }
+            print(a, b, t)
+        }";
+    assert_eq!(selects(periodic), 0);
+    agree(periodic);
+    let data = "fn main() {
+            var n = 27
+            var steps = 0
+            for i in 0..100000 {
+                if n & 1 == 1 { n = n * 3 + 1 } else { n = n >> 1 }
+                if n == 1 { n = 27 + i % 50 }
+                steps += 1
+            }
+            print(n, steps)
+        }";
+    assert!(selects(data) > 0);
+    agree(data);
+}
+
 /// A loop that pushes to one list is grown once in front of the loop and runs without capacity tests;
 /// the results, the stops and their order are those of the interpreter, whatever the list held before.
 #[test]
@@ -3231,4 +3292,45 @@ fn for_over_map_and_filter_runs_element_by_element() {
         "20\n40\n60\n3\nm 1\nbody 2\nm 2\nbody 3\n1\n2\n1\n2\n1\ndone\n"
     );
     agree(src);
+}
+
+#[test]
+fn push_str_of_an_interpolated_literal_writes_in_place() {
+    let src = "fn main() {\n var t = \"[\"\n for i in 0..3 { t.pushStr!(\"#(i):#(i * 2) \") }\n const w = \"é\"\n t.pushStr!(\"#(w)#('x')#(true)#(1.5)]\")\n t.pushStr!(\"plain\")\n print(t)\n print(t.len()) }\n";
+    assert_eq!(output_of(src), "[0:0 1:2 2:4 éxtrue1.5]plain\n29\n");
+    agree(src);
+}
+
+#[test]
+fn inline_always_copies_a_big_function_and_leaf_is_checked() {
+    let src = "@inline_always
+        fn big(x: int) -> int {
+            var s = x
+            for i in 0..40 { s = s + i * x % 7 + (s ^ i) % 5 }
+            return s
+        }
+        @leaf
+        fn two(x: int) -> int { return x * 2 }
+        fn rec(n: int) -> int {
+            if n < 2 { return n }
+            return rec(n - 1) + rec(n - 2)
+        }
+        @leaf
+        fn bad(n: int) -> int { return rec(n) }
+        fn main() { print(big(3) + two(4) + bad(5)) }";
+    agree(src);
+    let mut m = lowered(src).module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let find = |n: &str| m.funcs.iter().position(|f| f.name == n);
+    // Every call to the big function is gone, though it is far over the size limit.
+    let big = crate::ir::FuncId(find("big").map_or(u32::MAX, |i| i as u32));
+    assert!(m.funcs.iter().all(|f| !crate::ir::opt::calls(f, big)));
+    // `two` keeps its promise, `bad` calls a recursive function and does not.
+    assert!(m
+        .funcs
+        .iter()
+        .find(|f| f.name == "two")
+        .is_none_or(crate::ir::opt::is_leaf));
+    let bad = m.funcs.iter().find(|f| f.name == "bad").unwrap();
+    assert!(bad.leaf.is_some() && !crate::ir::opt::is_leaf(bad));
 }

@@ -125,12 +125,51 @@ impl<'a> Lowerer<'a> {
         mark: CallMark,
         dst: Option<Value>,
     ) -> Res {
+        if let Some(res) = self.push_interpolated(base, name, args) {
+            return res;
+        }
         let Some((target, map)) = self.call_target(e.span) else {
             // A field that holds a function: `self.callback(x)`.
             let _ = name;
             return self.unsupported(e.span, "calling a field that holds a function");
         };
         self.emit_call(e, target, map, Some(base), args, mark, dst)
+    }
+
+    /// `text.pushStr!("a#(x)b")` on a `string` variable: the pieces are appended straight to the variable's
+    /// buffer, so no temporary string is built, copied and freed. `None` for anything else.
+    fn push_interpolated(&mut self, base: &'a Expr, name: &Ident, args: &'a [Arg]) -> Option<Res> {
+        let [a] = args else {
+            return None;
+        };
+        let ExprKind::Str(parts) = &a.value.kind else {
+            return None;
+        };
+        if self.src_text(name.span) != "pushStr"
+            || !matches!(base.kind, ExprKind::Name(_))
+            || !parts.iter().any(|p| matches!(p, StrPart::Interp(_)))
+        {
+            return None;
+        }
+        let bt = self.ty_of(base)?;
+        if !matches!(self.kind(bt), TyKind::String) {
+            return None;
+        }
+        let out = self.place(base)?;
+        for p in parts {
+            match p {
+                StrPart::Text(sp) => {
+                    let bytes = self.unescape(self.src_text(*sp));
+                    self.push_static(out, &bytes);
+                }
+                StrPart::Interp(x) => {
+                    if !self.show_expr(x, out) {
+                        return Some(Res::Never);
+                    }
+                }
+            }
+        }
+        Some(Res::Unit)
     }
 
     /// `.circle(2.0)`: the case comes from the type the context expects.

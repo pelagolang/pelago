@@ -69,7 +69,7 @@ impl<'a> Lowerer<'a> {
     // ---- Text ----------------------------------------------------------------------------------------------------------
 
     /// The bytes of a string literal part, with escapes resolved.
-    fn unescape(&self, text: &str) -> Vec<u8> {
+    pub(crate) fn unescape(&self, text: &str) -> Vec<u8> {
         let mut out = Vec::new();
         let mut cs = text.chars().peekable();
         while let Some(c) = cs.next() {
@@ -1214,6 +1214,46 @@ impl<'a> Lowerer<'a> {
         self.start(body_b);
         match src {
             Fused::Chars(_) => {
+                // ASCII is the common case: one load, one compare, no decoding. Anything else calls `rt_char_at`.
+                let p = self
+                    .emit(Op::PtrAdd(data, i), Some(IrTy::Ptr), span)
+                    .unwrap_or(data);
+                let Some(b) = self.emit(Op::Load(IrTy::Int(8), p), Some(IrTy::Int(8)), span) else {
+                    self.f.scopes.pop();
+                    return Res::Never;
+                };
+                let b64 = self
+                    .emit(
+                        Op::Cast(CastKind::ZExt, b, IrTy::I64),
+                        Some(IrTy::I64),
+                        span,
+                    )
+                    .unwrap_or(b);
+                let limit128 = self.i64c(128);
+                let ascii_b = self.new_block(&[]);
+                let wide_b = self.new_block(&[]);
+                let join_b = self.new_block(&[]);
+                if let Some(c) =
+                    self.emit(Op::Cmp(CmpOp::Lt, b64, limit128), Some(IrTy::Bool), span)
+                {
+                    self.branch(c, ascii_b, wide_b);
+                }
+                self.start(ascii_b);
+                let one = self.i64c(1);
+                let next = self
+                    .emit(Op::Bin(BinOp::Add, i, one), Some(IrTy::I64), span)
+                    .unwrap_or(i);
+                self.store_scalar_ty(nslot, next);
+                let ch = self
+                    .emit(
+                        Op::Cast(CastKind::Trunc, b64, IrTy::Int(32)),
+                        Some(IrTy::Int(32)),
+                        span,
+                    )
+                    .unwrap_or(b64);
+                self.store_scalar_ty(eslot, ch);
+                self.jump(join_b, vec![]);
+                self.start(wide_b);
                 let Some(r) = self.call_core("rt_char_at", vec![data, i, len]) else {
                     self.f.scopes.pop();
                     return Res::Never;
@@ -1238,6 +1278,8 @@ impl<'a> Lowerer<'a> {
                     )
                     .unwrap_or(code);
                 self.store_scalar_ty(eslot, ch);
+                self.jump(join_b, vec![]);
+                self.start(join_b);
             }
             Fused::Bytes(_) => {
                 let p = self

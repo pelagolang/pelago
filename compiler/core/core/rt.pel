@@ -48,6 +48,14 @@ pub ext fn rt_store_char(p: ptr, v: char)
 pub ext fn rt_load_bool(p: ptr) -> bool
 pub ext fn rt_store_bool(p: ptr, v: bool)
 pub ext fn rt_print(p: ptr, n: int)
+//~ The operating system layer (docs/design/runtime.md). `rt_os_write` flushes standard output first and
+//~ writes once: it gives the count written or a negative error number; `rt_os_read` gives the count read,
+//~ 0 at the end, or a negative error number. `rt_os_argv` is the start-up block: the count, that many
+//~ pointers to zero-terminated texts, a zero, then the environment the same way.
+pub ext fn rt_os_write(fd: int, p: ptr, n: int) -> int
+pub ext fn rt_os_read(fd: int, p: ptr, n: int) -> int
+pub ext fn rt_os_exit(code: int)
+pub ext fn rt_os_argv() -> int
 pub ext fn rt_to_byte(n: int) -> uint8
 pub ext fn rt_wrap<T>(n: int) -> T
 pub ext fn rt_to_int(x: float) -> int
@@ -86,3 +94,25 @@ pub ext fn rt_call_void2(f: ptr, a: ptr, b: ptr)
 pub ext fn rt_call_bool2(f: ptr, a: ptr, b: ptr) -> bool
 pub ext fn rt_call_int2(f: ptr, a: ptr, b: ptr) -> int
 pub ext fn rt_call_int1(f: ptr, a: ptr) -> int
+
+//~ Writes the program's arguments as a `[string]` header (pointer, length, capacity) at `dst`. The texts stay
+//~ in the start-up block (capacity 0: borrowed); only the array of headers is allocated, and its owner frees it.
+pub fn rt_args_into(dst: ptr) {
+    const blk = rt_int_addr(rt_os_argv())
+    const n = rt_load_int(blk)
+    const buf = rt_alloc(n * 24)
+    var i = 0
+    while i < n {
+        const s = rt_load_ptr(rt_offset(blk, 8 + 8 * i))
+        var len = 0
+        while rt_load_byte(rt_offset(s, len)) != 0 { len += 1 }
+        const h = rt_offset(buf, i * 24)
+        rt_store_ptr(h, s)
+        rt_store_int(rt_offset(h, 8), len)
+        rt_store_int(rt_offset(h, 16), 0)
+        i += 1
+    }
+    rt_store_ptr(dst, buf)
+    rt_store_int(rt_offset(dst, 8), n)
+    rt_store_int(rt_offset(dst, 16), n)
+}

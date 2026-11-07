@@ -52,6 +52,7 @@ mod vectorise;
 pub use bce::kept_checks;
 pub use fill::{fill_loops, filled_slots, FillLoop};
 pub use fx::{HashMap as FxHashMap, HashSet as FxHashSet};
+pub use inline::{calls, is_leaf};
 pub use inline::{drop_idle_task_drain, prune};
 pub use stats::{stats_of, Stats};
 

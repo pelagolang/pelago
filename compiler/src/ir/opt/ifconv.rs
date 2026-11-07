@@ -101,7 +101,7 @@ fn try_block(f: &mut Func, h: usize, preds: &[usize]) -> bool {
     let Some(Term::Branch(c, t, e)) = f.blocks[h].term.clone() else {
         return false;
     };
-    if t.block == e.block {
+    if t.block == e.block || periodic(f, c) {
         return false;
     }
     let (st, se) = (side(f, &t, h, preds), side(f, &e, h, preds));
@@ -211,4 +211,56 @@ fn try_block(f: &mut Func, h: usize, preds: &[usize]) -> bool {
     }
     f.blocks[h].term = Some(Term::Jump(Target { block: join, args }));
     true
+}
+
+/// A test the processor predicts without fail: a small remainder or mask of a counter, compared with a
+/// constant (`i % 3 == 0`, `i & 1 == 1`). It repeats every few passes, so a branch costs nothing,
+/// while a `select` would put the values it picks onto the loop's dependency chain. A counter is a
+/// block parameter that one of its edges sends back plus a constant; `n & 1` of a value that is
+/// computed otherwise (`collatz`) is not periodic.
+fn periodic(f: &Func, c: Value) -> bool {
+    let defs = f.defs();
+    let op_of = |v: Value| defs[v.0 as usize].map(|i| &f.insts[i].op);
+    let konst = |v: Value| match op_of(v) {
+        Some(Op::Const(IrTy::Int(_), Const::Int(k))) => Some(*k),
+        _ => None,
+    };
+    let Some(&Op::Cmp(_, a, b)) = op_of(c) else {
+        return false;
+    };
+    let (m, k) = match (konst(a), konst(b)) {
+        (None, Some(_)) => (a, b),
+        (Some(_), None) => (b, a),
+        _ => return false,
+    };
+    let _ = k;
+    let x = match op_of(m) {
+        Some(Op::Bin(BinOp::And, p, q)) => match (konst(*p), konst(*q)) {
+            (None, Some(mask)) if (0..=63).contains(&mask) => *p,
+            (Some(mask), None) if (0..=63).contains(&mask) => *q,
+            _ => return false,
+        },
+        Some(Op::Bin(BinOp::Rem | BinOp::URem, x, k)) => match konst(*k) {
+            Some(d) if (2..=64).contains(&d) => *x,
+            _ => return false,
+        },
+        _ => return false,
+    };
+    // `x` must be a counter: a block parameter, some edge into its block sending `x + constant`.
+    let Some(bi) = f.blocks.iter().position(|b| b.params.contains(&x)) else {
+        return false;
+    };
+    let ix = f.blocks[bi].params.iter().position(|p| *p == x).unwrap();
+    f.blocks.iter().any(|b| {
+        let targets: Vec<&Target> = match &b.term {
+            Some(Term::Jump(t)) => vec![t],
+            Some(Term::Branch(_, t, e)) => vec![t, e],
+            _ => Vec::new(),
+        };
+        targets.iter().any(|t| {
+            t.block.0 as usize == bi
+                && matches!(op_of(t.args[ix]), Some(Op::Bin(BinOp::Add, a, k)) | Some(Op::Checked(BinOp::Add, true, a, k))
+                    if *a == x && konst(*k).is_some_and(|k| (1..=1024).contains(&k)))
+        })
+    })
 }
