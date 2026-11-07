@@ -9,11 +9,11 @@ Chosen on 2026-10 by the owner. Greek *pelagos*, "the open sea", the root of *ar
 - Pronunciation used in docs: peh-LAY-go.
 - Why: free on crates.io, npm and PyPI, short to type, no programming-language clash found, and the meaning fits a
   language built from many small packages. Runner-up: Thalassa (three registry names taken, longer).
-- Research and the head-to-head: `docs/plans/cards/B-01-name.md`. Everything below is the history of the search.
+- Closed: the owner confirmed on 2026-11-07 that the name is Pelago and nothing else; there is no further naming round. Research and the head-to-head: `docs/plans/cards/B-01-name.md`. Everything below is the history of the search.
 
 # Name brainstorm (history)
 
-The repo is called `lang` until we choose. Good language names are usually
+(History: the repository was called `lang` until the name was chosen; it is `pelagolang/pelago` now.) Good language names are usually
 **short (3–6 letters), easy to say, easy to search, and free as a file extension
 and package name**. Before committing to one, check: GitHub, crates.io / npm /
 PyPI, the domain, and that the file extension isn't already taken.

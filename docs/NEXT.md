@@ -24,5 +24,5 @@ Work is tracked as cards in `docs/plans/` (read `README.md` there, then `BOARD.m
 
 ## Open questions for the owner
 
-- The final **name** (see `NAMES.md`, round 6). `pelago` stays as the crate name until then.
-- Whether to ship a **single tool** named after the language, with the compiler inside it.
+
+None right now. (The name is settled: Pelago, see `NAMES.md`; the tool is the one `pelago` binary.)
