@@ -45,6 +45,7 @@ CI (`.github/workflows/ci.yml`) runs the first three. Keep them green before pus
 - `docs/design/`: design drafts (`basics`, `keywords`, `functions`, `types`, `switch`, `collections`, `errors`, `concurrency`, `list-patterns`, `lexer`, `parser`, `modules`, `checker`, `ir`, `memory`, `samples`).
 - `editors/`: the TextMate grammar (generated, with a test that keeps it in step with `keyword.rs`) (the VS Code extension lives in `pelagolang/vscode-pelago`).
 - `docs/plans/`: the task board (Kanban) and one plan card per piece of work; start at `docs/plans/README.md`.
+- `docs/process/`: how we work (two-week cycles, card cap, benchmark rules). `docs/perf/`: speed plans and benchmark findings. `docs/brand/`: identity record. Index: `docs/README.md`.
 - `ROADMAP.md`: the decisions table and the phases. `NAMES.md`: name brainstorm.
 
 ## Keeping things in step
@@ -91,6 +92,5 @@ inheritance written `:`; one `switch` for pattern matching; `~>` closures; `#nam
 ## Git
 
 - Commit subjects and PR titles use Conventional Commits: `type(scope): summary` with `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `chore`, `ci`, `build`; `!` or a `BREAKING CHANGE:` footer for breaking changes. See `docs/contributing/commits.md`; CI lints it.
-- Develop on `claude/programming-language-design-psjufd`. PR #1 is merged into `main`; later work needs a new
-  pull request, and only when the owner asks for one.
+- Branches are `<author>/<type>/<short-name>` (for example `claude/docs/dev-workflow`). Open a pull request with the repo template when the owner asks for one.
 - The owner switches GitHub's default branch (Settings, General, Default branch); the tools here cannot.

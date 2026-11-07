@@ -115,7 +115,7 @@ python3 bench/harness/run.py                       # needs python 3.11+, gcc and
 python3 bench/harness/run.py --runs 7 --size small,medium,large collatz sieve
 ```
 
-A snapshot (best of 5, one container, native `--opt`): geometric mean 1.04x of C `-O2` and 1.09x of Rust, at or below C `-O2` on 8 of 16 programs (the five newest, covering sorting, strings, `switch`, structs in lists and `result` paths, are the weakest). Numbers move with every performance PR; the work plan is [docs/plans/a11-work-items.md](docs/plans/a11-work-items.md), and the backend is described in [docs/design/backend.md](docs/design/backend.md). CI also runs the suite on Windows.
+A snapshot (best of 5, one container, native `--opt`): geometric mean 1.04x of C `-O2` and 1.09x of Rust, at or below C `-O2` on 8 of 16 programs (the five newest, covering sorting, strings, `switch`, structs in lists and `result` paths, are the weakest). Numbers move with every performance PR; the work plan is [docs/perf/a11-work-items.md](docs/perf/a11-work-items.md), and the backend is described in [docs/design/backend.md](docs/design/backend.md). CI also runs the suite on Windows.
 
 ## Repository layout
 

@@ -69,4 +69,4 @@ The simple generator is about 700 lines of templates. Two ways to support a seco
 
 **Update 2026-10-21:** W4 (machine-level IR) has started; plan in `docs/design/mir.md`. Step M5 moves the AArch64 backend onto the shared allocator and selector and removes `gen_a64.rs` and `regs_a64.rs`.
 
-**Update 2026-11-07:** the MIR is the only AArch64 generator (#185, #187) and shares the allocator changes of #204 (loop splitting; RBP is x86 only). The `arm` and `windows-arm` CI jobs run the native programs. Open: loop heads are not aligned on AArch64, `madd`/`msub` are defined but not selected, and the benchmark plan in `docs/plans/w4-benchmark-gap-plan.md` has not been measured on ARM.
+**Update 2026-11-07:** the MIR is the only AArch64 generator (#185, #187) and shares the allocator changes of #204 (loop splitting; RBP is x86 only). The `arm` and `windows-arm` CI jobs run the native programs. Open: loop heads are not aligned on AArch64, `madd`/`msub` are defined but not selected, and the benchmark plan in `docs/perf/w4-benchmark-gap-plan.md` has not been measured on ARM.

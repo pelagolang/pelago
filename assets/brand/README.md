@@ -1,6 +1,6 @@
 # Pelago brand assets
 
-The logo, icons, file icons and social images for Pelago. Design record and rules: [`docs/design/brand.md`](../../docs/design/brand.md).
+The logo, icons, file icons and social images for Pelago. Design record and rules: [`docs/brand/README.md`](../../docs/brand/README.md).
 
 `build/build.py` generates every file below, so the assets can be rebuilt after a change. The SVG files are the source; the PNG, ICO and ICNS files are exports of them. The wordmark in every logo SVG is outlined to paths, so no font is needed to display them.
 
