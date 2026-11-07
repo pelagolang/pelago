@@ -18,7 +18,7 @@ jobs:
             flags: --arch=aarch64
             cc: gcc
           - name: macos-arm
-            os: macos-14
+            os: macos-latest
             flags: --arch=aarch64 --target=macos
             cc: clang
           - name: windows-arm
