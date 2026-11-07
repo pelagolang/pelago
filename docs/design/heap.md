@@ -116,6 +116,8 @@ Each stage is its own PR on its own branch and names the one row it moves; no fu
 
 **H5 so far.** Per-worker heaps wait for several workers (C6); the scheduler has one worker today, so nothing can race and there is nothing to test. The task stack part is done: a finished task's 256 KiB stack goes to a pool of up to 16 (`tasks.pel`, `rt_stack_give`) and the next `spawn` takes it back, and the pool is freed when the last task ends. Before, every spawn mapped a stack and every finish unmapped it; 20000 sequential spawn and join now make 5 `mmap` calls in all (one run, not the harness).
 
+**H6 waits (2026-11-07).** The allocator in Pelago needs two things that do not exist yet: system-call intrinsics (`os_reserve`, `os_commit`, `os_release`) and the machine-level IR (W4), so that the Pelago version compiles to code as small and fast as the assembly. The W4 thread is running (M0 to M6a merged, the M4 flip pending). H6 is picked up once M4 lands; the owner can overrule this.
+
 H1 and H2 are independent of the arena and narrow-links work. Narrow links (PR #139) shrink the data the allocator hands out
 (`bintrees` nodes about 3x) and compose with H1: smaller blocks, no header. The arena thread's AR5 (lazy `str.chars()`) is untouched.
 
