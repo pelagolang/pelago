@@ -114,6 +114,10 @@ pub mod op {
     pub const RT_PRINT: i64 = 3;
     pub const RT_CTX_INIT: i64 = 4;
     pub const RT_CTX_SWITCH: i64 = 5;
+    pub const RT_OS_WRITE: i64 = 6;
+    pub const RT_OS_READ: i64 = 7;
+    pub const RT_OS_EXIT: i64 = 8;
+    pub const RT_OS_ARGV: i64 = 9;
     /// Epilogue and `ret`; `[rax Use]` when a value is returned.
     pub const RET: u16 = B + 31;
     /// Stop the program with the message number `Imm`: `[Imm n]`.

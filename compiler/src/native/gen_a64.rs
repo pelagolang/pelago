@@ -35,8 +35,14 @@ const NONE: i32 = i32::MIN;
 /// Constant sizes up to this many bytes are copied by plain moves.
 const SMALL_COPY: i64 = 64;
 
+const OS_REFUSED: &str =
+    "the operating system layer (args, stdin, stderr, exit) is built for x86-64 Linux only so far";
+
 /// Compiles the module to an AArch64 Linux executable whose entry runs the function named `entry`.
 pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, String> {
+    if super::Uses::of(m).os {
+        return Err(OS_REFUSED.to_string());
+    }
     let main_fn = m
         .funcs
         .iter()
@@ -1213,6 +1219,7 @@ impl<'m> Gen<'m> {
                 self.a.lea_label(X9, l);
                 self.st(res.unwrap(), X9);
             }
+            Op::Os(..) => return Err(OS_REFUSED.to_string()),
             Op::Print(p, n) => {
                 self.ld(X0, *p);
                 self.ld(X1, *n);

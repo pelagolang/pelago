@@ -19,7 +19,9 @@ use super::regs::{folds, fused_cmp, small_copy, Base, Fold};
 use super::x86_mir::{self as x, call_clobbers, cc_num, op, Cc, INT_ARGS, SYM_FUNC};
 use super::x86_mir::{RAX, RCX, RDX, RSI};
 use crate::ir::Target as JumpTarget;
-use crate::ir::{BinOp, CastKind, CmpOp, Const, FUn, Func, IrTy, Op, Term, Test, VBin, VUn, Value};
+use crate::ir::{
+    BinOp, CastKind, CmpOp, Const, FUn, Func, IrTy, Op, OsOp, Term, Test, VBin, VUn, Value,
+};
 use std::collections::HashMap;
 
 fn bits(t: IrTy) -> u32 {
@@ -1034,6 +1036,26 @@ impl<'m> Sel<'m> {
             Op::Print(p, n) => {
                 let (a, b) = (self.src(*p), self.src(*n));
                 self.runtime(op::RT_PRINT, vec![(RSI, a), (RDX, b)], None);
+            }
+            Op::Os(o, args) => {
+                let s: Vec<Operand> = args.iter().map(|a| self.src(*a)).collect();
+                match o {
+                    OsOp::Write | OsOp::Read => {
+                        let which = if *o == OsOp::Write {
+                            op::RT_OS_WRITE
+                        } else {
+                            op::RT_OS_READ
+                        };
+                        let a = vec![
+                            (x::RDI, s[0].clone()),
+                            (RSI, s[1].clone()),
+                            (RDX, s[2].clone()),
+                        ];
+                        self.runtime(which, a, res);
+                    }
+                    OsOp::Exit => self.runtime(op::RT_OS_EXIT, vec![(x::RDI, s[0].clone())], None),
+                    OsOp::Argv => self.runtime(op::RT_OS_ARGV, vec![], res),
+                }
             }
             Op::Fma(a, b, c) => {
                 let d = self.reg_of(res.unwrap());

@@ -78,6 +78,8 @@ pub struct Uses {
     pub fmod: bool,
     /// Context switching (`CtxInit`, `CtxSwitch`).
     pub ctx: bool,
+    /// The operating system layer (`Op::Os`): the start-up block is saved and the routines are emitted.
+    pub os: bool,
 }
 
 impl Uses {
@@ -91,6 +93,7 @@ impl Uses {
         memcpy: true,
         fmod: true,
         ctx: true,
+        os: true,
     };
 
     /// The routines the module's instructions can call (a little too many is fine, too few is not).
@@ -106,6 +109,7 @@ impl Uses {
                     Op::Realloc(..) => u.realloc = true,
                     Op::MemCopy(..) => u.memcpy = true,
                     Op::CtxInit(..) | Op::CtxSwitch(..) => u.ctx = true,
+                    Op::Os(..) => u.os = true,
                     Op::Bin(BinOp::Rem, a, _) if f.ty(*a).is_float() => u.fmod = true,
                     _ => {}
                 }

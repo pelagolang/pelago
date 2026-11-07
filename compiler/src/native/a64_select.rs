@@ -679,6 +679,7 @@ impl<'m> Sel<'m> {
         }
         match &inst.op {
             Op::Const(..) => {}
+            Op::Os(..) => unreachable!("refused before code generation"),
             Op::Bin(o, a, b) => self.bin(*o, *a, *b, res.unwrap()),
             Op::Checked(o, signed, a, b) => {
                 self.checked(*o, *signed, *a, *b, res.unwrap(), Vec::new())

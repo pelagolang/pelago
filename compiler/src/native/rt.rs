@@ -302,6 +302,14 @@ pub struct Runtime {
     /// `rt_ctx_switch(save = rdi, to = rsi)`: saves the callee-saved registers on this stack, stores the
     /// stack pointer at `save`, and continues the context `to`.
     pub ctx_switch: Label,
+    /// `os_write(fd = rdi, ptr = rsi, len = rdx) -> rax`: flushes standard output, then one `write`; the count
+    /// written (maybe less than `len`) or a negative error number. Linux only.
+    pub os_write: Label,
+    /// `os_read(fd = rdi, ptr = rsi, len = rdx) -> rax`: one `read`; 0 at the end of the input. Linux only.
+    pub os_read: Label,
+    /// `os_argv() -> rax`: the address the process started with on its stack: argument count, the
+    /// argument pointers, a zero, the environment pointers, a zero. Linux only.
+    pub os_argv: Label,
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -350,6 +358,9 @@ pub fn emit_for(
         write_u64: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
+        os_write: a.new_label(),
+        os_read: a.new_label(),
+        os_argv: a.new_label(),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -369,6 +380,11 @@ pub fn emit_for(
     };
 
     // ---- _start ------------------------------------------------------------------------------------
+    if uses.os && !win {
+        // The kernel's start block: argument count, arguments, environment (offset 168 of the state).
+        state(a, RCX, 168);
+        a.store(mem(RCX, 0), RSP, 8);
+    }
     a.alu_rr(Alu::Xor, RBP, RBP, 4);
     // A big stack of our own, taken lazily, so deep recursion works like it does in the
     // interpreter; if the mapping fails, the stack the system gave us stays.
@@ -1002,6 +1018,39 @@ pub fn emit_for(
         a.alu_mi(Alu::Add, mem(RSI, 0), 1, 8);
         a.pop(R12);
         a.pop(RBX);
+        a.ret();
+    }
+
+    if uses.os && !win {
+        // ---- os_write, os_read, os_argv ----------------------------------------------------------------
+        a.bind(rt.os_write);
+        if uses.print {
+            a.push(RDI);
+            a.push(RSI);
+            a.push(RDX);
+            a.call(flush);
+            a.pop(RDX);
+            a.pop(RSI);
+            a.pop(RDI);
+        }
+        let retry = a.new_label();
+        a.bind(retry);
+        a.mov_ri(RAX, 1);
+        a.syscall();
+        a.alu_ri(Alu::Cmp, RAX, -4, 8); // interrupted: try again
+        a.jcc(Cc::E, retry);
+        a.ret();
+        a.bind(rt.os_read);
+        let retry = a.new_label();
+        a.bind(retry);
+        a.mov_ri(RAX, 0);
+        a.syscall();
+        a.alu_ri(Alu::Cmp, RAX, -4, 8);
+        a.jcc(Cc::E, retry);
+        a.ret();
+        a.bind(rt.os_argv);
+        state(a, RAX, 168);
+        a.load(RAX, mem(RAX, 0), 8);
         a.ret();
     }
 

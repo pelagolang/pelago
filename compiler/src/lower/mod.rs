@@ -36,8 +36,8 @@ mod ty;
 
 use crate::ast::*;
 use crate::ir::{
-    BinOp, BlockId, CastKind, CmpOp, Const, FUn, Func, FuncId, IrTy, Module, Op, Target, Term,
-    Value,
+    BinOp, BlockId, CastKind, CmpOp, Const, FUn, Func, FuncId, IrTy, Module, Op, OsOp, Target,
+    Term, Value,
 };
 use crate::package::{Diagnostic, ModuleId, Program};
 use crate::resolve::{DefId, DefKind, Resolved};
@@ -222,9 +222,50 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         lw.request_fn(d, &HashMap::new());
     }
     lw.run_jobs();
+    lw.add_entry();
     Lowered {
         module: lw.module,
         diagnostics: lw.diags,
+    }
+}
+
+impl Lowerer<'_> {
+    /// `fn main(args: [string])` takes the argument list; the process starts `main` with nothing. So the
+    /// function gets another name and a new `main` builds the list from the start-up block
+    /// (`core`'s `rt_args_into`), calls it and frees the list's buffer (the texts are borrowed).
+    fn add_entry(&mut self) {
+        let Some(idx) = self
+            .module
+            .funcs
+            .iter()
+            .position(|f| f.name == "main" && f.params == [IrTy::Ptr] && f.ret == IrTy::Void)
+        else {
+            return;
+        };
+        self.module.funcs[idx].name = "main$args".to_string();
+        let user = FuncId(idx as u32);
+        let void = self.types.void;
+        let mut state = FnState::empty(void);
+        state.func = Func::new("main", &[], IrTy::Void);
+        state.cur = Some(state.func.entry());
+        self.f = state;
+        let sp = Span::new(0, 0);
+        let slot = self.emit(Op::Slot(24, 8), Some(IrTy::Ptr), sp);
+        let Some(slot) = slot else { return };
+        self.call_core("rt_args_into", vec![slot]);
+        self.emit(Op::Call(user, vec![slot]), None, sp);
+        if let Some(buf) = self.emit(Op::Load(IrTy::Ptr, slot), Some(IrTy::Ptr), sp) {
+            self.emit(Op::Free(buf), None, sp);
+        }
+        self.terminate(Term::Return(None));
+        let st = std::mem::replace(&mut self.f, FnState::empty(void));
+        if st.fail.is_none() {
+            let mut func = st.func;
+            func.compact();
+            self.module.add(func);
+        }
+        // `rt_args_into` was asked for just now.
+        self.run_jobs();
     }
 }
 
@@ -694,7 +735,7 @@ impl<'a> Lowerer<'a> {
         if !in_core
             && decl.kind == FnKind::Fn
             && info.self_ty.is_none()
-            && decl.params.is_empty()
+            && decl.params.len() <= 1
             && self.src_text(decl.name.span) == "main"
         {
             if let Some(s) = self.f.scopes.last_mut() {

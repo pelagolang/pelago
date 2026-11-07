@@ -295,6 +295,7 @@ fn analyse(f: &Func, dom: &Dom, lp: &Loop) -> Option<Plan> {
                 | Op::MemCopy(..)
                 | Op::Alloc(_)
                 | Op::Realloc(..)
+                | Op::Os(..)
                 | Op::Free(_) => calls = true,
                 Op::Store(a, v) => match facts.address(counter.i, *a, 0) {
                     Some((base, c, d)) if c >= 0 && stores.len() < MAX_STORES => {

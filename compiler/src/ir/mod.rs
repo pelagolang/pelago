@@ -15,7 +15,7 @@ mod tests;
 mod verify;
 
 pub(crate) use interp::fold;
-pub use interp::{run, run_capture, run_full, Capture, Outcome, Val};
+pub use interp::{run, run_capture, run_full, run_os, Capture, OsEnv, Outcome, Val};
 pub use print::{print_func, print_module};
 pub use verify::{verify_func, verify_module};
 
@@ -370,6 +370,38 @@ pub enum Op {
     /// Saves the running context's handle at the address in the first value and continues the context
     /// whose handle is the second. Comes back when something switches to the saved handle.
     CtxSwitch(Value, Value),
+    /// A call into the operating system layer (`docs/design/runtime.md`); the operands depend on the
+    /// operation, see [`OsOp`].
+    Os(OsOp, Vec<Value>),
+}
+
+/// What the operating system layer gives the program. The interpreter has its own stand-in for each, so
+/// that a program behaves the same in both engines.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OsOp {
+    /// `(fd: i64, p: ptr, n: i64) -> i64`: writes the bytes at once (nothing waits in a buffer). What was
+    /// written to standard output with `Print` is flushed first, so the order is the program's. Gives the
+    /// count written, or a negative error number.
+    Write,
+    /// `(fd: i64, p: ptr, n: i64) -> i64`: reads up to `n` bytes; 0 is the end of the input; negative is
+    /// an error number.
+    Read,
+    /// `(status: i64)`: flushes the output and ends the process. Never returns.
+    Exit,
+    /// `() -> ptr`: the start-up block: the argument count (8 bytes), then that many pointers to
+    /// zero-terminated texts, then a zero, then the environment the same way.
+    Argv,
+}
+
+impl OsOp {
+    pub fn name(self) -> &'static str {
+        match self {
+            OsOp::Write => "os_write",
+            OsOp::Read => "os_read",
+            OsOp::Exit => "os_exit",
+            OsOp::Argv => "os_argv",
+        }
+    }
 }
 
 #[derive(Clone, PartialEq, Debug)]

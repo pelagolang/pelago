@@ -291,7 +291,7 @@ impl Op {
                 f(*b);
                 f(*c);
             }
-            Op::Call(_, args) => args.iter().for_each(|v| f(*v)),
+            Op::Call(_, args) | Op::Os(_, args) => args.iter().for_each(|v| f(*v)),
             Op::CallPtr(_, _, p, args) => {
                 f(*p);
                 args.iter().for_each(|v| f(*v));
@@ -339,7 +339,7 @@ impl Op {
                 *b = f(*b);
                 *c = f(*c);
             }
-            Op::Call(_, args) => args.iter_mut().for_each(|v| *v = f(*v)),
+            Op::Call(_, args) | Op::Os(_, args) => args.iter_mut().for_each(|v| *v = f(*v)),
             Op::CallPtr(_, _, p, args) => {
                 *p = f(*p);
                 args.iter_mut().for_each(|v| *v = f(*v));

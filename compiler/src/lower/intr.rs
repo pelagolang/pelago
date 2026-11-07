@@ -208,6 +208,29 @@ impl<'a> Lowerer<'a> {
                 self.emit(Op::Store(p, v), None, sp);
                 Res::Unit
             }
+            "rt_os_write" | "rt_os_read" => {
+                let (Some(fd), Some(p), Some(n)) = (
+                    self.arg_scalar(args, 0),
+                    self.arg_scalar(args, 1),
+                    self.arg_scalar(args, 2),
+                ) else {
+                    return Res::Never;
+                };
+                let o = if name == "rt_os_write" {
+                    OsOp::Write
+                } else {
+                    OsOp::Read
+                };
+                self.wrap(Op::Os(o, vec![fd, p, n]), IrTy::I64, sp)
+            }
+            "rt_os_exit" => {
+                let Some(code) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
+                self.emit(Op::Os(OsOp::Exit, vec![code]), None, sp);
+                Res::Unit
+            }
+            "rt_os_argv" => self.wrap(Op::Os(OsOp::Argv, Vec::new()), ptr, sp),
             "rt_print" => {
                 let (Some(p), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {

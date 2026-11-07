@@ -607,6 +607,10 @@ impl Em<'_, '_> {
                     op::RT_REALLOC => rt.realloc,
                     op::RT_CTX_INIT => rt.ctx_init,
                     op::RT_CTX_SWITCH => rt.ctx_switch,
+                    op::RT_OS_WRITE => rt.os_write,
+                    op::RT_OS_READ => rt.os_read,
+                    op::RT_OS_EXIT => rt.exit,
+                    op::RT_OS_ARGV => rt.os_argv,
                     _ => rt.print,
                 };
                 self.env.a.call(l);

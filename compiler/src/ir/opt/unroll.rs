@@ -180,6 +180,7 @@ fn unroll(f: &mut Func, h: BlockId, b: BlockId) -> bool {
                 | Op::CallPtr(..)
                 | Op::Alloc(_)
                 | Op::Realloc(..)
+                | Op::Os(..)
                 | Op::Free(_)
                 | Op::CtxInit(..)
                 | Op::CtxSwitch(..)

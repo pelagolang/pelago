@@ -68,6 +68,7 @@ pub fn is_call_like(op: &Op, consts: &[Option<i64>]) -> bool {
                 | Op::CtxInit(..)
                 | Op::CtxSwitch(..)
                 | Op::Print(..)
+                | Op::Os(..)
         ),
     }
 }
@@ -324,7 +325,7 @@ pub(super) fn inst_uses(op: &Op, out: &mut Vec<Value>) {
             out.extend([*a, *b]);
         }
         Op::Select(a, b, c) | Op::Fma(a, b, c) | Op::MemCopy(a, b, c) => out.extend([*a, *b, *c]),
-        Op::Call(_, args) => out.extend(args.iter().copied()),
+        Op::Call(_, args) | Op::Os(_, args) => out.extend(args.iter().copied()),
         Op::CallPtr(_, _, p, args) => {
             out.push(*p);
             out.extend(args.iter().copied());

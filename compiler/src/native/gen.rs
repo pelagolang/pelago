@@ -15,7 +15,7 @@ use super::{pe, Os};
 use crate::ir::{
     BinOp, CastKind, CmpOp, Const, Func, FuncId, Inst, IrTy, Module, Op, Target, Term, Value,
 };
-use crate::ir::{FUn, Test, VBin, VUn};
+use crate::ir::{FUn, OsOp, Test, VBin, VUn};
 use std::collections::{HashMap, HashSet};
 
 const INT_REGS: [Reg; 6] = [RDI, RSI, RDX, RCX, R8, R9];
@@ -121,6 +121,9 @@ enum Where {
 
 /// Compiles the module to an executable whose entry runs the function named `entry`.
 pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, String> {
+    if super::Uses::of(m).os && opts.target != Os::Linux {
+        return Err("the operating system layer (args, stdin, stderr, exit) is built for x86-64 Linux only so far".to_string());
+    }
     let main_fn = m
         .funcs
         .iter()
@@ -764,6 +767,7 @@ impl<'m> Gen<'m> {
                     | Op::CtxInit(..)
                     | Op::CtxSwitch(..)
                     | Op::Print(..)
+                    | Op::Os(..)
             )
         });
         self.frameless = self.regalloc
@@ -1397,6 +1401,26 @@ impl<'m> Gen<'m> {
                 self.moves(&[(Where::Reg(RSI), wp), (Where::Reg(RDX), wn)]);
                 let w = self.rt().print;
                 self.a.call(w);
+            }
+            Op::Os(o, args) => {
+                let w: Vec<Where> = args.iter().map(|v| self.loc[v.0 as usize]).collect();
+                let regs = [RDI, RSI, RDX];
+                let moves: Vec<(Where, Where)> = w
+                    .iter()
+                    .zip(regs)
+                    .map(|(src, r)| (Where::Reg(r), *src))
+                    .collect();
+                self.moves(&moves);
+                let l = match o {
+                    OsOp::Write => self.rt().os_write,
+                    OsOp::Read => self.rt().os_read,
+                    OsOp::Exit => self.rt().exit,
+                    OsOp::Argv => self.rt().os_argv,
+                };
+                self.a.call(l);
+                if let Some(r) = res {
+                    self.st(r, RAX);
+                }
             }
             Op::VUn(o, a) => {
                 let r = res.unwrap();
