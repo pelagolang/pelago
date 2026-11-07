@@ -130,3 +130,22 @@ fn standard_input_and_standard_error() {
         assert_eq!(code, 0, "{flags:?}");
     }
 }
+
+/// The heap written in the language (`--heap=pelago`) gives the same output as the built-in one, natively, with
+/// the optimiser off, and in the interpreter.
+#[test]
+fn the_language_heap_agrees_with_the_built_in_one() {
+    let src = "fn main() {\n    var xs: [int] = []\n    for i of 0..5000 { xs.push!(i * 3) }\n    var t = 0\n    for x of xs { t += x }\n    var s = \"a\"\n    for i of 0..300 { s.pushStr!(\"bc\") }\n    print(t, s.len())\n}\n";
+    let (want, _, code) = run(&[], src);
+    assert_eq!(code, 0);
+    assert_eq!(want.trim_end(), "37492500 601");
+    for flags in [
+        &["--heap=pelago"][..],
+        &["--heap=pelago", "--no-opt"],
+        &["--heap=pelago", "--interp"],
+    ] {
+        let (out, err, code) = run(flags, src);
+        assert_eq!(out, want, "{flags:?} {err}");
+        assert_eq!(code, 0, "{flags:?}");
+    }
+}

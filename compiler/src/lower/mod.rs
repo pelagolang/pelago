@@ -171,6 +171,17 @@ pub(crate) struct Lowerer<'a> {
 }
 
 pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
+    lower_with(program, res, typed, false)
+}
+
+/// Like `lower`; with `language_heap` the library's `heap_alloc`, `heap_free` and `heap_realloc` are lowered too, for
+/// `opt::expand_heap` to call (docs/design/heap.md, stage H6).
+pub fn lower_with(
+    program: &Program,
+    res: &Resolved,
+    typed: &Typed,
+    language_heap: bool,
+) -> Lowered {
     let types = typed.types.clone();
     let void = types.void;
     let mut lw = Lowerer {
@@ -225,6 +236,14 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         lw.request_fn(d, &HashMap::new());
     }
     lw.run_jobs();
+    if language_heap {
+        for name in crate::ir::opt::HEAP_FNS {
+            if let Some(def) = lw.core_fn(name) {
+                lw.request_fn(def, &HashMap::new());
+            }
+        }
+        lw.run_jobs();
+    }
     lw.add_entry();
     Lowered {
         module: lw.module,
