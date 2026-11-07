@@ -822,6 +822,10 @@ impl<'a> Lowerer<'a> {
                     } else {
                         None
                     };
+                    // A `let` value in memory is not written while the call runs.
+                    if !matches!(mode, Some(Mode::Inout | Mode::Sink)) {
+                        self.f.func.let_ptrs.push(p);
+                    }
                     self.f.locals.insert(def, Local::Slot { ptr: p, ty, flag });
                 }
             }

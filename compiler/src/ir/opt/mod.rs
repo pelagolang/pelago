@@ -25,6 +25,7 @@ mod divconst;
 mod dom;
 mod fill;
 mod fneg;
+pub mod frozen;
 pub(crate) mod fx;
 mod heapcalls;
 mod ifconv;
@@ -89,6 +90,9 @@ fn optimize_passes(m: &mut Module, opts: Options) {
     // Divisions by constants become multiplications only after inlining: a callee's `n / 10` may
     // turn out to have a dividend known to be non-negative, which makes a cheaper sequence.
     let inlining = opts.level >= 2;
+    for f in &mut m.funcs {
+        frozen::mark(f);
+    }
     for i in 0..m.funcs.len() {
         passes(&mut m.funcs[i], !inlining);
     }
@@ -131,6 +135,8 @@ fn optimize_passes(m: &mut Module, opts: Options) {
                 changed |= inline::recursive_once(&mut m.funcs[i], me);
             }
             if changed {
+                // A tail call turned into a loop passes new arguments each time round: the marks are about one call.
+                m.funcs[i].frozen.clear();
                 optimize_func(&mut m.funcs[i]);
             }
         }
