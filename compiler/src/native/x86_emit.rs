@@ -670,6 +670,10 @@ impl Em<'_, '_> {
                 let m = self.mem(&ops[0]);
                 self.env.a.movups_store(m, xr(phys(&ops[1])));
             }
+            op::FBITS => {
+                let (d, sx) = (gpr(phys(&ops[0])), xr(phys(&ops[1])));
+                self.env.a.movq_from_xmm(d, sx, imm(&ops[2]) == 1);
+            }
             op::FCONST => {
                 let d = xr(phys(&ops[0]));
                 match imm(&ops[1]) {

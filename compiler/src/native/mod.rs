@@ -130,7 +130,6 @@ pub mod mir;
 pub mod pe;
 pub mod ralloc;
 pub mod regs;
-pub mod regs_a64;
 pub mod rt;
 pub mod rt_a64;
 pub mod x86;

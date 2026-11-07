@@ -181,7 +181,9 @@ pub mod op {
     pub const REP_STOS: u16 = B + 61;
     /// `d = sqrt / floor / ceil of s`: `[d Def, s Use, Imm kind (0, 1, 2), Imm double]`.
     pub const FUN: u16 = B + 62;
-    pub const COUNT: u16 = B + 63;
+    /// The raw bits of a float in an integer register: `[d Def, s Use, Imm double]`.
+    pub const FBITS: u16 = B + 63;
+    pub const COUNT: u16 = B + 64;
 }
 
 /// Symbols: the shared stop routines, then the functions of the module.
@@ -311,7 +313,7 @@ impl Target for X86 {
     }
 
     fn op_name(&self, o: u16) -> &'static str {
-        const NAMES: [&str; 62] = [
+        const NAMES: [&str; 64] = [
             "add",
             "sub",
             "and",
@@ -374,6 +376,8 @@ impl Target for X86 {
             "vbuild",
             "valu",
             "rep_stos",
+            "fun",
+            "fbits",
         ];
         NAMES
             .get(o.wrapping_sub(op::ADD) as usize)

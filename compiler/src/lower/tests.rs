@@ -358,15 +358,9 @@ fn output_of(src: &str) -> String {
     o.output
 }
 
-/// The native configurations every program runs in: without registers, with all of them, and with
-/// only the first one, two or four of each kind.
-const REG_SETS: [(bool, usize); 5] = [
-    (false, usize::MAX),
-    (true, usize::MAX),
-    (true, 1),
-    (true, 2),
-    (true, 4),
-];
+/// The native configurations every program runs in: with all the registers, and with only the first
+/// one, two or four of each kind.
+const REG_SETS: [usize; 4] = [usize::MAX, 1, 2, 4];
 
 /// The third column of the differential test: the native build prints the same, leaks nothing and
 /// exits with status 0. It runs on Linux x86-64 for Linux, and for Windows through Wine (or directly
@@ -377,32 +371,23 @@ fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
         if !exec::can_run(os) || (os == Os::Windows && what != "plain") {
             continue;
         }
-        // The frame-only generator and the one with registers must both be right, also with few
-        // registers (every spill and split path).
-        // The machine-IR path (work item W4) runs beside the old generator on every configuration
-        // that has registers, on Linux.
-        for (mir, (regalloc, limit)) in REG_SETS.iter().flat_map(|&c| [(false, c), (true, c)]) {
-            if os == Os::Windows && (mir || !regalloc || limit != usize::MAX) {
+        // Also with few registers (every spill and split path).
+        for limit in REG_SETS {
+            if os == Os::Windows && limit != usize::MAX {
                 continue;
             }
-            if mir && !regalloc {
-                continue;
-            }
-            gen::MIR.with(|m| m.set(Some(mir)));
             gen::REG_LIMIT.with(|l| l.set(limit));
             let opts = gen::Options {
                 leak_check: true,
                 target: os,
-                regalloc,
             };
             let image = match gen::compile(m, "main", &opts) {
                 Ok(i) => i,
                 Err(e) => panic!("the native build ({what}, {os:?}) failed: {e}\n{src}"),
             };
             gen::REG_LIMIT.with(|l| l.set(usize::MAX));
-            gen::MIR.with(|m| m.set(None));
             let r = exec::run_image(os, &image).unwrap();
-            let how = format!("{what}, {os:?}, mir {mir}, regalloc {regalloc}, {limit} registers");
+            let how = format!("{what}, {os:?}, {limit} registers");
             assert_eq!(r.out, want, "native output ({how}) differs in {src}");
             assert_eq!(
                 (r.err.as_str(), r.code),
@@ -1524,23 +1509,21 @@ fn agree(src: &str) {
         m
     };
     let mut sets = vec![
-        ("plain", Os::Linux, &l.module, false, usize::MAX),
-        ("plain", Os::Linux, &l.module, true, usize::MAX),
-        ("optimised", Os::Linux, &optimised, true, usize::MAX),
-        ("plain", Os::Windows, &l.module, true, usize::MAX),
+        ("plain", Os::Linux, &l.module, usize::MAX),
+        ("optimised", Os::Linux, &optimised, usize::MAX),
+        ("plain", Os::Windows, &l.module, usize::MAX),
     ];
     for limit in [1, 2, 4] {
-        sets.push(("plain", Os::Linux, &l.module, true, limit));
-        sets.push(("optimised", Os::Linux, &optimised, true, limit));
+        sets.push(("plain", Os::Linux, &l.module, limit));
+        sets.push(("optimised", Os::Linux, &optimised, limit));
     }
-    for (what, os, m, regalloc, limit) in sets {
+    for (what, os, m, limit) in sets {
         if !exec::can_run(os) {
             continue;
         }
         let opts = gen::Options {
             leak_check: false,
             target: os,
-            regalloc,
         };
         gen::REG_LIMIT.with(|l| l.set(limit));
         let image = gen::compile(m, "main", &opts).unwrap();
@@ -2482,7 +2465,6 @@ fn native_runaway_recursion_stops_cleanly() {
             let opts = gen::Options {
                 leak_check: false,
                 target: os,
-                regalloc: true,
             };
             let image = gen::compile(&l.module, "main", &opts).unwrap();
             let r = exec::run_image(os, &image).unwrap();
