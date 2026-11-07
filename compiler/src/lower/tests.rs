@@ -3066,3 +3066,11 @@ fn a_pool_with_a_bad_width_stops() {
         assert!(o.output.contains("width must be"), "{w}: {}", o.output);
     }
 }
+
+#[test]
+fn pool_slots_are_as_small_as_the_value_and_reuse_freed_ones() {
+    let src = "struct small { a: uint8, b: uint16 }\nfn main() {\n    var p: pool<small, uint8> = pool()\n    const x = p.add!(small { a: 1, b: 300 })\n    const y = p.add!(small { a: 2, b: 400 })\n    const z = p.add!(small { a: 3, b: 500 })\n    p.remove!(y)\n    p.remove!(x)\n    const u = p.add!(small { a: 9, b: 900 })\n    const v = p.add!(small { a: 8, b: 800 })\n    print(p.get(u).a, p.get(u).b, p.get(v).a, p.get(v).b, p.get(z).b, p.len(), p.slotBytes())\n}\n";
+    // The slot is the 4 bytes of the struct (a `uint8` and a `uint16` with alignment), not rounded up to 8.
+    assert_eq!(output_of(src), "9 900 8 800 500 3 4\n");
+    agree(src);
+}
