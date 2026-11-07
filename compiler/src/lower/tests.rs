@@ -2406,8 +2406,9 @@ fn lists_are_summed_and_mapped_in_vectors_with_the_same_results_and_stops() {
                 fast.result.map(|v| v.as_i64()),
                 "go({n}, {base})"
             );
-            // A stop leaves what it holds, in both.
-            assert_eq!(plain.leaked, fast.leaked, "go({n}, {base}) leaked");
+            // A stop leaves what it holds, in both. The bytes may differ: the optimised loop makes
+            // room for all its pushes at once, and the capacity of a list is not observable.
+            assert_eq!(plain.leaked > 0, fast.leaked > 0, "go({n}, {base}) leaked");
         }
     }
     agree(src);
@@ -2932,6 +2933,153 @@ fn guarded_loops_stop_where_the_checked_loop_did() {
             var s = 0
             for i in 0..30 { a.push!(i); s += a[i] }
             print(s)
+        }",
+    );
+}
+
+/// A loop that pushes to one list is grown once in front of the loop and runs without capacity tests;
+/// the results, the stops and their order are those of the interpreter, whatever the list held before.
+#[test]
+fn push_loops_agree_with_the_interpreter_and_keep_their_stops() {
+    // Four pushes a pass, a step of three, a masked table index: the shape of base64.
+    let enc = "fn enc(src: [uint8], table: [uint8], pre: int) -> [uint8] {
+            var out: [uint8] = []
+            for k in 0..pre { out.push!(7) }
+            if pre == 2 { out.reserve!(src.len() + 40) }
+            var i = 0
+            const full = src.len() - src.len() % 3
+            while i < full {
+                const v = ((src[i] to int) << 16) | ((src[i + 1] to int) << 8) | (src[i + 2] to int)
+                out.push!(table[(v >> 18) & 63])
+                out.push!(table[(v >> 12) & 63])
+                out.push!(table[(v >> 6) & 63])
+                out.push!(table[v & 63])
+                i += 3
+            }
+            return out
+        }
+        fn main() {
+            var table: [uint8] = []
+            for i in 0..64 { table.push!((65 + i).wrapToByte()) }
+            for n in 0..40 {
+                var src: [uint8] = []
+                for i in 0..n * 3 + n % 3 { src.push!((i * 7 + n).wrapToByte()) }
+                for pre in 0..4 {
+                    const e = enc(src, table, pre)
+                    var s = 0
+                    for j in 0..e.len() { s += (e[j] to int) * (j % 7 + 1) }
+                    print(n, pre, e.len(), s)
+                }
+            }
+        }";
+    agree(enc);
+    // The fast copy of that loop has no index test left: `@checkfree` accepts it.
+    let marked = enc.replacen("fn enc(", "@checkfree\n        fn enc(", 1);
+    let l = lowered(&marked);
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let f = m.funcs.iter().find(|f| f.name == "enc").unwrap();
+    assert!(f.checkfree.is_some());
+    assert_eq!(crate::ir::opt::kept_checks(f), 0);
+    // Reads of a byte a pass later in the source, and a loop test of the form `i + 4 <= n`.
+    agree(
+        "fn dec(src: [uint8], rev: [uint8]) -> [uint8] {
+            var out: [uint8] = []
+            var i = 0
+            while i + 4 <= src.len() {
+                const v = ((rev[src[i] to int] to int) << 18) | ((rev[src[i + 1] to int] to int) << 12) | ((rev[src[i + 2] to int] to int) << 6) | (rev[src[i + 3] to int] to int)
+                out.push!(((v >> 16) & 255).wrapToByte())
+                out.push!(((v >> 8) & 255).wrapToByte())
+                out.push!((v & 255).wrapToByte())
+                i += 4
+            }
+            return out
+        }
+        fn main() {
+            var rev: [uint8] = []
+            for i in 0..256 { rev.push!((i * 5).wrapToByte()) }
+            for n in 0..30 {
+                var src: [uint8] = []
+                for i in 0..n * 2 + 1 { src.push!((i * 11 + n).wrapToByte()) }
+                const d = dec(src, rev)
+                var s = 0
+                for j in 0..d.len() { s += (d[j] to int) * (j % 5 + 1) }
+                print(n, d.len(), s)
+            }
+        }",
+    );
+    // A source too short for the last passes: the stop comes at the same pass, after the same output.
+    agree(
+        "fn two(src: [uint8], n: int) -> [uint8] {
+            var out: [uint8] = []
+            var i = 0
+            while i < n { out.push!(src[i]); out.push!(src[i + 1]); i += 2 }
+            return out
+        }
+        fn main() {
+            var src: [uint8] = []
+            for i in 0..10 { src.push!(i.wrapToByte()) }
+            print(two(src, 8).len())
+            print(two(src, 12).len())
+        }",
+    );
+    // A table shorter than the mask allows: the checked copy stops on the first index past its end.
+    agree(
+        "fn pick(src: [uint8], table: [uint8]) -> [uint8] {
+            var out: [uint8] = []
+            for i in 0..src.len() { out.push!(table[(src[i] to int) & 15]) }
+            return out
+        }
+        fn main() {
+            var src: [uint8] = []
+            for i in 0..40 { src.push!((i * 3).wrapToByte()) }
+            var t: [uint8] = []
+            for i in 0..16 { t.push!(i.wrapToByte()) }
+            print(pick(src, t).len())
+            t.pop!()
+            print(pick(src, t).len())
+        }",
+    );
+    // A sum next to the pushes that passes the maximum: it still stops.
+    agree(
+        "fn main() {
+            var out: [int] = []
+            var t = 9223372036854775000
+            var i = 0
+            while i < 40 { out.push!(i); out.push!(t); t += 100; i += 2 }
+            print(out.len(), t)
+        }",
+    );
+    // Eight-byte elements, a loop that reads what it pushed, two lists, a conditional push.
+    agree(
+        "fn main() {
+            for n in 0..20 {
+                var a: [int] = [n]
+                for i in 0..n { a.push!(i); a.push!(i * 2) }
+                var b: [int] = []
+                for i in 0..a.len() { b.push!(a[i] + i); a.push!(b[i]) }
+                var c: [int] = []
+                var d: [int] = []
+                for i in 0..n { c.push!(i); d.push!(i + 1); c.push!(d[i]) }
+                var e: [int] = []
+                for i in 0..n * 3 { if i % 3 == 0 { e.push!(i) } else { e.push!(i + 1); e.push!(i + 2) } }
+                var s = 0
+                for i in 0..a.len() { s += a[i] }
+                for i in 0..b.len() { s += b[i] * 3 }
+                for i in 0..c.len() { s += c[i] * 5 }
+                for i in 0..e.len() { s += e[i] * 7 }
+                print(n, a.len(), b.len(), c.len(), e.len(), s)
+            }
+        }",
+    );
+    // The loop reads and pushes the same list.
+    agree(
+        "fn main() {
+            var a: [uint8] = [1, 2, 3]
+            for i in 0..100 { a.push!(a[i % 3]); a.push!(a[i]) }
+            var s = 0
+            for i in 0..a.len() { s += (a[i] to int) * (i % 11 + 1) }
+            print(a.len(), s)
         }",
     );
 }

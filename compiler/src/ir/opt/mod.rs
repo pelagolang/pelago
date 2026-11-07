@@ -76,6 +76,12 @@ pub fn optimize(m: &mut Module, opts: Options) {
         return;
     }
     drop_idle_task_drain(m);
+    bce::set_grow(Some(m));
+    optimize_passes(m, opts);
+    bce::set_grow(None);
+}
+
+fn optimize_passes(m: &mut Module, opts: Options) {
     // Divisions by constants become multiplications only after inlining: a callee's `n / 10` may
     // turn out to have a dividend known to be non-negative, which makes a cheaper sequence.
     let inlining = opts.level >= 2;
