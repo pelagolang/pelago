@@ -126,10 +126,6 @@ fn supported(f: &Func) -> bool {
     if vec(f.ret) || f.block_params(f.entry()).iter().any(|p| vec(f.ty(*p))) {
         return false;
     }
-    let fills = crate::ir::opt::fill_loops(f, FILL_BYTES);
-    if fills.iter().any(|l| class_of(f.ty(l.value)) != Class::Int) {
-        return false;
-    }
     f.blocks
         .iter()
         .flat_map(|b| &b.insts)
@@ -1167,7 +1163,19 @@ impl<'m> Sel<'m> {
         let m = self.mem_of(base);
         let a = self.new_vreg();
         self.emit(MInst::new(op::LEA, vec![Operand::def(a), m]));
-        let v = self.src(value);
+        let v = if class_of(self.f.ty(value)) == Class::Float {
+            // The bits of the float go to `rax` for the string store.
+            let s = self.vr(value);
+            let t = self.new_vreg();
+            let dbl = i64::from(self.f.ty(value) == IrTy::F64);
+            self.emit(MInst::new(
+                op::FBITS,
+                vec![Operand::def(t), Operand::use_(s), Operand::Imm(dbl)],
+            ));
+            Operand::use_(t)
+        } else {
+            self.src(value)
+        };
         let regs = [x::RDI, RAX, RCX].map(Reg::Phys);
         self.copies(vec![
             (regs[0], Operand::use_(a)),

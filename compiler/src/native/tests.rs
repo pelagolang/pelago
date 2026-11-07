@@ -491,19 +491,14 @@ fn slots_read_as_zero_unless_overwritten() {
     main.terminate(b, Term::Return(None));
     m.add(main);
     // part() = 1 + 2 = 3 (the middle words are zero); full() = 1 + 2 + 3 + 4 = 10, as the digit '0' + 10 = ':'.
-    for regalloc in [false, true] {
+    {
         let opts = gen::Options {
             leak_check: false,
             target: super::Os::Linux,
-            regalloc,
         };
         let image = gen::compile(&m, "main", &opts).unwrap();
         let r = super::exec::run_image(super::Os::Linux, &image).unwrap();
-        assert_eq!(
-            (r.out.as_str(), r.err.as_str(), r.code),
-            ("3:", "", 0),
-            "regalloc {regalloc}"
-        );
+        assert_eq!((r.out.as_str(), r.err.as_str(), r.code), ("3:", "", 0));
     }
     if let Some(r) = super::exec::build_and_run_a64(&m, false) {
         assert_eq!(

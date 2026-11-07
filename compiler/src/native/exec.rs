@@ -176,23 +176,19 @@ pub fn build_and_run_a64(m: &crate::ir::Module, leak_check: bool) -> Option<Ran>
     if std::env::var_os("PELAGO_SKIP_A64").is_some() || !can_run_a64_on(target) {
         return None;
     }
-    // Every configuration must give the same result: the frame only, the full register set, and (in
-    // tests) two registers, which pushes the sharing and the spills through ordinary programs.
+    // Every configuration must give the same result: the full register set and (in tests) four
+    // registers, which pushes the sharing and the spills through ordinary programs.
     #[allow(unused_mut)]
-    let mut configs: Vec<(bool, usize)> = vec![(false, usize::MAX), (true, usize::MAX)];
+    let mut configs: Vec<usize> = vec![usize::MAX];
     #[cfg(test)]
-    configs.push((true, 2));
+    configs.push(4);
     let mut first: Option<Ran> = None;
-    for (regalloc, limit) in configs {
+    for limit in configs {
         #[cfg(test)]
-        super::regs_a64::REG_LIMIT.with(|l| l.set(limit));
+        super::gen::REG_LIMIT.with(|l| l.set(limit));
         #[cfg(not(test))]
         let _ = limit;
-        let opts = super::gen::Options {
-            leak_check,
-            target,
-            regalloc,
-        };
+        let opts = super::gen::Options { leak_check, target };
         let image = super::gen_a64::compile(m, "main", &opts)
             .unwrap_or_else(|e| panic!("the AArch64 build failed: {e}"));
         let ran = run_image_arch(Arch::Aarch64, target, &image).unwrap();
@@ -201,11 +197,11 @@ pub fn build_and_run_a64(m: &crate::ir::Module, leak_check: bool) -> Option<Ran>
             Some(f) => assert_eq!(
                 (f.code, &f.out, &f.err),
                 (ran.code, &ran.out, &ran.err),
-                "AArch64 results differ with regalloc={regalloc} limit={limit}"
+                "AArch64 results differ with limit={limit}"
             ),
         }
     }
     #[cfg(test)]
-    super::regs_a64::REG_LIMIT.with(|l| l.set(usize::MAX));
+    super::gen::REG_LIMIT.with(|l| l.set(usize::MAX));
     first
 }

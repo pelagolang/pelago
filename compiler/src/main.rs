@@ -520,7 +520,6 @@ fn native_build(
     let opts = pelago::native::gen::Options {
         leak_check: flags.contains(&"--leak-check"),
         target: os,
-        regalloc: !flags.contains(&"--no-regalloc"),
     };
     let compile = match arch {
         pelago::native::Arch::X86_64 => pelago::native::gen::compile,
