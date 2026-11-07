@@ -809,6 +809,12 @@ fn program_barrier_releases_all_together() {
 }
 
 #[test]
+fn program_select_send_waits_for_room_in_a_bounded_channel() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>(1)\n tx.send(1)\n scope s {\n  s.spawn([sink rx] () ~> { yield_now()\n   print(rx.recv() ?? 0)\n   print(rx.recv() ?? 0) })\n  select {\n   case tx.send(2) { print(\"sent\") }\n  }\n }\n}\n";
+    assert_eq!(output_of(src), "1\nsent\n2\n");
+}
+
+#[test]
 fn program_sp2() {
     let src = "fn main() { const (tx, rx) = chan<int>()\n const p = spawn([sink tx] ~> { for i of 0..3 { tx.send(i * 10) } })\n for v of rx.iter() { print(v) }\n p.join!!() }\n";
     assert_eq!(output_of(src), "0\n10\n20\n");
