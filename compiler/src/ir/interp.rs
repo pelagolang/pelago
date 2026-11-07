@@ -67,8 +67,10 @@ fn bits_of(t: IrTy) -> u32 {
 const FUNC_BASE: usize = 1 << 40;
 const STACK_SIZE: usize = 8 << 20;
 /// Deep chains (a list of ten thousand boxes) recurse once per node; the host thread that runs the
-/// machine gets a big stack for it.
-const HOST_STACK: usize = 1 << 30;
+/// machine gets a big stack for it. An interpreted call costs about 10 KiB of host stack in a debug build
+/// (more on Windows ARM), and a program may recurse 100 000 deep, so 1 GiB left no margin; the
+/// stack is reserved address space and only the part that is used is committed.
+const HOST_STACK: usize = 2 << 30;
 const MAX_DEPTH: u32 = 200_000;
 /// A context started by `CtxInit` runs on a host thread of its own; it gets a smaller host stack and call depth.
 const CTX_HOST_STACK: usize = 64 << 20;
