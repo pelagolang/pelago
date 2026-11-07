@@ -22,7 +22,7 @@ The interpreter (`ir/interp.rs`) is the specification. Every row is a test (card
 |---|---|---|
 | `Div`, `Rem`, `UDiv`, `URem` by zero | stop `division by zero` | compare the divisor with 0 and branch to the stop block (the CPU would raise `SIGFPE`) |
 | signed `MIN / -1` and `MIN % -1` | wraps: `MIN` and `0` | compare with -1 and branch around `idiv` (the CPU traps) |
-| `Shl`, `Shr`, `UShr` by the type's width or more | stop `shifted by the width or more` | compare the count and branch (x86 masks it silently) |
+| `Shl`, `Shr`, `UShr` by the type's width or more | stop `shifted by the width or more` | compare the count and branch (x86 masks it silently); no test when the count is `x & c` with `c` below the width |
 | `Checked` add, sub, mul | stop on overflow | `add`/`sub`/`imul` then `jo` (signed) or `jc` (unsigned) to the stop block |
 | plain `Add`, `Sub`, `Mul` | wrap around at the type's width | the bare instruction at the right operand size |
 | `Cmp` on floats with NaN | like Rust: `==` false, `!=` true, ordered comparisons false | `ucomisd` flags with the parity flag checked |

@@ -581,9 +581,11 @@ impl Em<'_, '_> {
             op::SHIFT_CL => {
                 let d = gpr(phys(&ops[0]));
                 let w = imm(&ops[3]) as i32;
-                self.env.a.alu_ri(Alu::Cmp, x86::RCX, w, 8);
-                let l = self.env.stops[SYM_SHIFT as usize];
-                self.env.a.jcc(Cc::Ae, l);
+                if w != 0 {
+                    self.env.a.alu_ri(Alu::Cmp, x86::RCX, w, 8);
+                    let l = self.env.stops[SYM_SHIFT as usize];
+                    self.env.a.jcc(Cc::Ae, l);
+                }
                 let sh = match imm(&ops[2]) {
                     0 => Shift::Shl,
                     1 => Shift::Shr,

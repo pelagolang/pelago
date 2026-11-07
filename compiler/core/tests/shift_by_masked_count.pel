@@ -1,0 +1,7 @@
+/// A shift by `x & 63` can never reach the width, so the code makes no test; a count that is not masked still stops.
+fn main() {
+    var x = 70
+    print(1 << (x & 63), 4096 >> (x & 3), -64 >> (x & 7))
+    x = 5
+    print(3 << (x & 63))
+}
