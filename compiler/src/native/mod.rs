@@ -114,7 +114,14 @@ impl Uses {
         use crate::ir::{BinOp, Op};
         let mut u = Uses::default();
         for f in &m.funcs {
-            for i in &f.insts {
+            // Only the instructions a block still holds: the optimiser leaves the ones it removed in
+            // `insts`, and counting them linked a `free` routine into a program that never frees.
+            for i in f
+                .blocks
+                .iter()
+                .flat_map(|b| b.insts.iter())
+                .map(|&n| &f.insts[n])
+            {
                 match &i.op {
                     Op::Print(..) => u.print = true,
                     Op::Alloc(_) => u.alloc = true,

@@ -100,7 +100,6 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
     );
     g.rt = Some(rt);
     let bss = g.place_data(opts.target == Os::Linux);
-    g.stop_stubs();
     // Callees are selected and allocated first, so that a call can be told what its callee writes;
     // the code is laid out in the order of the module.
     let mut sets: Vec<Option<super::mir::RegSet>> = vec![None; m.funcs.len()];
@@ -126,6 +125,8 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
             size: (g.a.here() - start) as u64,
         });
     }
+    // After the functions, so only the stubs that a check jumps to are emitted.
+    g.stop_stubs();
     match opts.target {
         Os::Linux => elf::write(&g.a, &g.ro, &g.data, bss, &syms),
         Os::Windows => pe::write(&g.a, &g.ro, &g.data, 0),
@@ -181,13 +182,16 @@ impl<'m> Gen<'m> {
 
     /// The shared exits for the checks that stop the program.
     fn stop_stubs(&mut self) {
-        // Jumped over by the start code: they are only reached by `jcc`.
+        // Only reached by `jcc`; a stub that no check names is left out, with its message.
         for (label, msg) in [
             (self.stop_div0, "division by zero"),
             (self.stop_shift, "shifted by the width or more"),
             (self.stop_overflow, "arithmetic overflow"),
             (self.stop_unreachable, "reached unreachable code"),
         ] {
+            if !self.a.is_referenced(label) {
+                continue;
+            }
             let off = self.ro.add(msg.as_bytes(), 1);
             self.a.bind(label);
             self.a.lea_sect(RDI, Sect::Rodata, off);

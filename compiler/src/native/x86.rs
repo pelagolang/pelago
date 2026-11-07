@@ -229,6 +229,13 @@ impl Asm {
         self.last_bound = self.code.len();
     }
 
+    /// Whether any jump, call or address so far names the label.
+    pub fn is_referenced(&self, l: Label) -> bool {
+        self.fixups
+            .iter()
+            .any(|f| matches!(f.kind, FixKind::Label(x) if x == l))
+    }
+
     pub fn label_offset(&self, l: Label) -> Option<usize> {
         self.labels[l.0 as usize]
     }

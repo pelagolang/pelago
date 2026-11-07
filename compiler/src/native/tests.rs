@@ -1094,3 +1094,21 @@ fn a64_fmod_is_exact() {
         );
     }
 }
+
+/// An instruction the optimiser removed stays in `Func::insts` but is in no block: it must not pull a
+/// runtime routine into the program.
+#[test]
+fn removed_instructions_do_not_count_as_uses() {
+    use super::Uses;
+    use crate::ir::*;
+    let mut m = Module::default();
+    let mut main = Func::new("main", &[], IrTy::Void);
+    let b = main.entry();
+    let s = main.emit(b, Op::Slot(8, 8), Some(IrTy::Ptr)).unwrap();
+    main.emit(b, Op::Free(s), None);
+    main.terminate(b, Term::Return(None));
+    m.add(main);
+    assert!(Uses::of(&m).free);
+    m.funcs[0].blocks[0].insts.pop();
+    assert!(!Uses::of(&m).free);
+}
