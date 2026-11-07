@@ -318,6 +318,83 @@ impl FUn {
     }
 }
 
+/// The operating system memory calls (`docs/design/os-memory.md`). Each takes up to three `i64` or `ptr`
+/// operands and gives an `i64`: an address or `0` for success, a negative error otherwise
+/// (`OS_NOMEM`, `OS_BAD`, `OS_FAIL`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OsKind {
+    /// `(size)`: address-space only, no access (`mmap` `PROT_NONE`, `VirtualAlloc` `MEM_RESERVE`).
+    Reserve,
+    /// `(address, size)`: make a reserved range readable and writable.
+    Commit,
+    /// `(address, size)`: give the range back.
+    Release,
+    /// `(address, old size, new size)`: move or grow a block, the first bytes kept; gives the new address.
+    Remap,
+    /// `(address, size)`: ask the system not to use huge pages here (a hint; a no-op where there is none).
+    AdviseNoHuge,
+    /// `(fd, address, count)`: write to a file descriptor (standard output is flushed first); the count
+    /// written or a negative error number.
+    Write,
+    /// `(fd, address, count)`: read from a file descriptor; the count read, 0 at the end, or a negative error.
+    Read,
+    /// `(status)`: end the program at once.
+    Exit,
+    /// `()`: the address of the start-up block (argument count, argument pointers, 0, environment pointers, 0).
+    Argv,
+}
+
+impl OsKind {
+    pub const ALL: [OsKind; 9] = [
+        OsKind::Reserve,
+        OsKind::Commit,
+        OsKind::Release,
+        OsKind::Remap,
+        OsKind::AdviseNoHuge,
+        OsKind::Write,
+        OsKind::Read,
+        OsKind::Exit,
+        OsKind::Argv,
+    ];
+
+    /// Whether the call reaches the process (arguments, descriptors, exit) rather than memory.
+    pub fn is_process(self) -> bool {
+        matches!(
+            self,
+            OsKind::Write | OsKind::Read | OsKind::Exit | OsKind::Argv
+        )
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            OsKind::Reserve => "os_reserve",
+            OsKind::Commit => "os_commit",
+            OsKind::Release => "os_release",
+            OsKind::Remap => "os_remap",
+            OsKind::AdviseNoHuge => "os_advise_nohuge",
+            OsKind::Write => "os_write",
+            OsKind::Read => "os_read",
+            OsKind::Exit => "os_exit",
+            OsKind::Argv => "os_argv",
+        }
+    }
+
+    /// How many operands the call reads (the others are not looked at).
+    pub fn arity(self) -> usize {
+        match self {
+            OsKind::Argv => 0,
+            OsKind::Reserve | OsKind::Exit => 1,
+            OsKind::Commit | OsKind::Release | OsKind::AdviseNoHuge => 2,
+            OsKind::Remap | OsKind::Write | OsKind::Read => 3,
+        }
+    }
+}
+
+/// The error values of an `OsKind` call.
+pub const OS_NOMEM: i64 = -1;
+pub const OS_BAD: i64 = -2;
+pub const OS_FAIL: i64 = -3;
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Op {
     Const(IrTy, Const),
@@ -370,38 +447,8 @@ pub enum Op {
     /// Saves the running context's handle at the address in the first value and continues the context
     /// whose handle is the second. Comes back when something switches to the saved handle.
     CtxSwitch(Value, Value),
-    /// A call into the operating system layer (`docs/design/runtime.md`); the operands depend on the
-    /// operation, see [`OsOp`].
-    Os(OsOp, Vec<Value>),
-}
-
-/// What the operating system layer gives the program. The interpreter has its own stand-in for each, so
-/// that a program behaves the same in both engines.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum OsOp {
-    /// `(fd: i64, p: ptr, n: i64) -> i64`: writes the bytes at once (nothing waits in a buffer). What was
-    /// written to standard output with `Print` is flushed first, so the order is the program's. Gives the
-    /// count written, or a negative error number.
-    Write,
-    /// `(fd: i64, p: ptr, n: i64) -> i64`: reads up to `n` bytes; 0 is the end of the input; negative is
-    /// an error number.
-    Read,
-    /// `(status: i64)`: flushes the output and ends the process. Never returns.
-    Exit,
-    /// `() -> ptr`: the start-up block: the argument count (8 bytes), then that many pointers to
-    /// zero-terminated texts, then a zero, then the environment the same way.
-    Argv,
-}
-
-impl OsOp {
-    pub fn name(self) -> &'static str {
-        match self {
-            OsOp::Write => "os_write",
-            OsOp::Read => "os_read",
-            OsOp::Exit => "os_exit",
-            OsOp::Argv => "os_argv",
-        }
-    }
+    /// An operating system memory call (see `OsKind`); the operands past its arity repeat the first.
+    Os(OsKind, Value, Value, Value),
 }
 
 #[derive(Clone, PartialEq, Debug)]

@@ -20,7 +20,7 @@ use super::x86_mir::{self as x, call_clobbers, cc_num, op, Cc, INT_ARGS, SYM_FUN
 use super::x86_mir::{RAX, RCX, RDX, RSI};
 use crate::ir::Target as JumpTarget;
 use crate::ir::{
-    BinOp, CastKind, CmpOp, Const, FUn, Func, IrTy, Op, OsOp, Term, Test, VBin, VUn, Value,
+    BinOp, CastKind, CmpOp, Const, FUn, Func, IrTy, Op, OsKind, Term, Test, VBin, VUn, Value,
 };
 use std::collections::HashMap;
 
@@ -126,10 +126,6 @@ fn class_of(t: IrTy) -> Class {
 fn supported(f: &Func) -> bool {
     let vec = |t: IrTy| t == IrTy::V2I64;
     if vec(f.ret) || f.block_params(f.entry()).iter().any(|p| vec(f.ty(*p))) {
-        return false;
-    }
-    let fills = crate::ir::opt::fill_loops(f, FILL_BYTES);
-    if fills.iter().any(|l| class_of(f.ty(l.value)) != Class::Int) {
         return false;
     }
     f.blocks
@@ -1033,29 +1029,16 @@ impl<'m> Sel<'m> {
                 let (a, b) = (self.src(*p), self.src(*n));
                 self.runtime(op::RT_REALLOC, vec![(x::RDI, a), (RSI, b)], res);
             }
+            Op::Os(k, a, b, c) => {
+                let ops = [self.src(*a), self.src(*b), self.src(*c)];
+                let regs = [x::RDI, RSI, RDX];
+                let args = (0..k.arity()).map(|i| (regs[i], ops[i].clone())).collect();
+                let which = op::RT_OS + OsKind::ALL.iter().position(|x| x == k).unwrap() as i64;
+                self.runtime(which, args, res);
+            }
             Op::Print(p, n) => {
                 let (a, b) = (self.src(*p), self.src(*n));
                 self.runtime(op::RT_PRINT, vec![(RSI, a), (RDX, b)], None);
-            }
-            Op::Os(o, args) => {
-                let s: Vec<Operand> = args.iter().map(|a| self.src(*a)).collect();
-                match o {
-                    OsOp::Write | OsOp::Read => {
-                        let which = if *o == OsOp::Write {
-                            op::RT_OS_WRITE
-                        } else {
-                            op::RT_OS_READ
-                        };
-                        let a = vec![
-                            (x::RDI, s[0].clone()),
-                            (RSI, s[1].clone()),
-                            (RDX, s[2].clone()),
-                        ];
-                        self.runtime(which, a, res);
-                    }
-                    OsOp::Exit => self.runtime(op::RT_OS_EXIT, vec![(x::RDI, s[0].clone())], None),
-                    OsOp::Argv => self.runtime(op::RT_OS_ARGV, vec![], res),
-                }
             }
             Op::Fma(a, b, c) => {
                 let d = self.reg_of(res.unwrap());
@@ -1189,7 +1172,19 @@ impl<'m> Sel<'m> {
         let m = self.mem_of(base);
         let a = self.new_vreg();
         self.emit(MInst::new(op::LEA, vec![Operand::def(a), m]));
-        let v = self.src(value);
+        let v = if class_of(self.f.ty(value)) == Class::Float {
+            // The bits of the float go to `rax` for the string store.
+            let s = self.vr(value);
+            let t = self.new_vreg();
+            let dbl = i64::from(self.f.ty(value) == IrTy::F64);
+            self.emit(MInst::new(
+                op::FBITS,
+                vec![Operand::def(t), Operand::use_(s), Operand::Imm(dbl)],
+            ));
+            Operand::use_(t)
+        } else {
+            self.src(value)
+        };
         let regs = [x::RDI, RAX, RCX].map(Reg::Phys);
         self.copies(vec![
             (regs[0], Operand::use_(a)),
@@ -1533,10 +1528,12 @@ impl<'m> Sel<'m> {
         let d = self.reg_of(r);
         if w == 64 && (matches!(o, BinOp::Add | BinOp::Sub) || (o == BinOp::Mul && signed)) {
             let (mut a, mut b) = (a, b);
+            // A constant goes to the right (`imul d, s, k`, `add d, k`); otherwise the operand that
+            // dies here is the one the result starts as.
             if o != BinOp::Sub
                 && self.imms[b.0 as usize].is_none()
-                && self.uses[b.0 as usize] == 1
-                && self.uses[a.0 as usize] != 1
+                && (self.imms[a.0 as usize].is_some()
+                    || (self.uses[b.0 as usize] == 1 && self.uses[a.0 as usize] != 1))
             {
                 std::mem::swap(&mut a, &mut b);
             }

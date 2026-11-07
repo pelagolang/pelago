@@ -18,6 +18,7 @@
 //! | 144 | the base (lowest address) of our own stack, 0 if the system stack is used |
 //! | 152 | Windows: the lowest committed address of our stack (it grows downwards on demand) |
 //! | 160 | scratch for `VirtualProtect` (Windows) |
+//! | 168 | Linux: the kernel's start block (the stack pointer at `_start`: argument count, arguments, environment) |
 
 use super::elf::Blob;
 use super::x86::*;
@@ -302,14 +303,9 @@ pub struct Runtime {
     /// `rt_ctx_switch(save = rdi, to = rsi)`: saves the callee-saved registers on this stack, stores the
     /// stack pointer at `save`, and continues the context `to`.
     pub ctx_switch: Label,
-    /// `os_write(fd = rdi, ptr = rsi, len = rdx) -> rax`: flushes standard output, then one `write`; the count
-    /// written (maybe less than `len`) or a negative error number. Linux only.
-    pub os_write: Label,
-    /// `os_read(fd = rdi, ptr = rsi, len = rdx) -> rax`: one `read`; 0 at the end of the input. Linux only.
-    pub os_read: Label,
-    /// `os_argv() -> rax`: the address the process started with on its stack: argument count, the
-    /// argument pointers, a zero, the environment pointers, a zero. Linux only.
-    pub os_argv: Label,
+    /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
+    /// arguments in `rdi`, `rsi`, `rdx`, the result in `rax` (an address or 0, or a negative error).
+    pub os: [Label; 9],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -358,9 +354,7 @@ pub fn emit_for(
         write_u64: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os_write: a.new_label(),
-        os_read: a.new_label(),
-        os_argv: a.new_label(),
+        os: [(); 9].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -1021,37 +1015,8 @@ pub fn emit_for(
         a.ret();
     }
 
-    if uses.os && !win {
-        // ---- os_write, os_read, os_argv ----------------------------------------------------------------
-        a.bind(rt.os_write);
-        if uses.print {
-            a.push(RDI);
-            a.push(RSI);
-            a.push(RDX);
-            a.call(flush);
-            a.pop(RDX);
-            a.pop(RSI);
-            a.pop(RDI);
-        }
-        let retry = a.new_label();
-        a.bind(retry);
-        a.mov_ri(RAX, 1);
-        a.syscall();
-        a.alu_ri(Alu::Cmp, RAX, -4, 8); // interrupted: try again
-        a.jcc(Cc::E, retry);
-        a.ret();
-        a.bind(rt.os_read);
-        let retry = a.new_label();
-        a.bind(retry);
-        a.mov_ri(RAX, 0);
-        a.syscall();
-        a.alu_ri(Alu::Cmp, RAX, -4, 8);
-        a.jcc(Cc::E, retry);
-        a.ret();
-        a.bind(rt.os_argv);
-        state(a, RAX, 168);
-        a.load(RAX, mem(RAX, 0), 8);
-        a.ret();
+    if uses.os {
+        emit_os(a, &rt, win, flush, uses.print);
     }
 
     if uses.ctx {
@@ -1358,4 +1323,213 @@ fn map_failed(a: &mut Asm, r: Reg, oom: Label, win: bool) {
         a.alu_ri(Alu::Cmp, r, -4095, 8);
         a.jcc(Cc::Ae, oom);
     }
+}
+
+/// The OS memory calls (docs/design/os-memory.md), in a function of their own: `emit_for` is already a huge
+/// frame in debug builds.
+#[inline(never)]
+fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool) {
+    // ---- the OS memory calls (docs/design/os-memory.md) ----------------------------------------------
+    // Sizes and addresses must be whole pages (else -2). A system error becomes -1 (no memory), -2
+    // (invalid argument) or -3. Callers treat every register but the callee-saved ones as lost.
+    let (bad, nomem, other) = (a.new_label(), a.new_label(), a.new_label());
+    // The shared exits: `bad` returns -2, `os_error` maps the negative errno in `rax` (Linux) and
+    // `other` returns -3.
+    let os_error = a.new_label();
+    let page_size = |a: &mut Asm, r: Reg, bad: Label| {
+        // A size: positive and a multiple of 4096.
+        a.alu_ri(Alu::Cmp, r, 0, 8);
+        a.jcc(Cc::Le, bad);
+        a.mov_rr(RAX, r, 8);
+        a.alu_ri(Alu::And, RAX, 4095, 8);
+        a.jcc(Cc::Ne, bad);
+    };
+    let page_aligned = |a: &mut Asm, r: Reg, bad: Label| {
+        a.mov_rr(RAX, r, 8);
+        a.alu_ri(Alu::And, RAX, 4095, 8);
+        a.jcc(Cc::Ne, bad);
+    };
+    // reserve(size)
+    a.bind(rt.os[0]);
+    page_size(a, RDI, bad);
+    if win {
+        a.mov_rr(RDX, RDI, 8);
+        a.alu_rr(Alu::Xor, RCX, RCX, 4);
+        a.mov_ri(R8, 0x2000); // reserve
+        a.mov_ri(R9, 1); // no access
+        win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::E, nomem);
+        a.ret();
+    } else {
+        a.mov_rr(RSI, RDI, 8);
+        a.mov_ri(RAX, 9);
+        a.alu_rr(Alu::Xor, RDI, RDI, 4);
+        a.alu_rr(Alu::Xor, RDX, RDX, 4); // PROT_NONE
+        a.mov_ri(R10, 0x4022); // private, anonymous, no reserve
+        a.mov_ri(R8, -1);
+        a.alu_rr(Alu::Xor, R9, R9, 4);
+        a.syscall();
+        a.jmp(os_error);
+    }
+    // commit(addr, size)
+    a.bind(rt.os[1]);
+    page_aligned(a, RDI, bad);
+    page_size(a, RSI, bad);
+    if win {
+        a.mov_rr(RCX, RDI, 8);
+        a.mov_rr(RDX, RSI, 8);
+        a.mov_ri(R8, 0x1000); // commit
+        a.mov_ri(R9, 4); // read and write
+        win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::E, other);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.ret();
+    } else {
+        a.mov_ri(RDX, 3);
+        a.mov_ri(RAX, 10);
+        a.syscall();
+        a.jmp(os_error);
+    }
+    // release(addr, size)
+    a.bind(rt.os[2]);
+    page_aligned(a, RDI, bad);
+    page_size(a, RSI, bad);
+    if win {
+        a.mov_rr(RCX, RDI, 8);
+        a.alu_rr(Alu::Xor, RDX, RDX, 4);
+        a.mov_ri(R8, 0x8000); // release
+        win_call(a, IMP_VIRTUAL_FREE, |_| {});
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::E, other);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.ret();
+    } else {
+        a.mov_ri(RAX, 11);
+        a.syscall();
+        a.jmp(os_error);
+    }
+    // remap(addr, old, new)
+    a.bind(rt.os[3]);
+    page_aligned(a, RDI, bad);
+    page_size(a, RSI, bad);
+    page_size(a, RDX, bad);
+    if win {
+        // No kernel remap: a new block, the smaller size copied, the old one released.
+        a.push(RBX);
+        a.push(R12);
+        a.push(R13);
+        a.mov_rr(RBX, RDI, 8);
+        a.mov_rr(R12, RSI, 8);
+        a.mov_rr(R13, RDX, 8);
+        a.alu_rr(Alu::Xor, RCX, RCX, 4);
+        a.mov_rr(RDX, R13, 8);
+        a.mov_ri(R8, 0x3000); // commit and reserve
+        a.mov_ri(R9, 4);
+        win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+        let fail = a.new_label();
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::E, fail);
+        a.mov_rr(RDI, RAX, 8);
+        a.mov_rr(RSI, RBX, 8);
+        a.mov_rr(RCX, R12, 8);
+        a.alu_rr(Alu::Cmp, RCX, R13, 8);
+        let keep = a.new_label();
+        a.jcc(Cc::Be, keep);
+        a.mov_rr(RCX, R13, 8);
+        a.bind(keep);
+        a.mov_rr(R12, RAX, 8); // the new block
+        a.rep_movsb();
+        a.mov_rr(RCX, RBX, 8);
+        a.alu_rr(Alu::Xor, RDX, RDX, 4);
+        a.mov_ri(R8, 0x8000);
+        win_call(a, IMP_VIRTUAL_FREE, |_| {});
+        a.mov_rr(RAX, R12, 8);
+        let done = a.new_label();
+        a.jmp(done);
+        a.bind(fail);
+        a.mov_ri(RAX, -1);
+        a.bind(done);
+        a.pop(R13);
+        a.pop(R12);
+        a.pop(RBX);
+        a.ret();
+    } else {
+        a.mov_ri(R10, 1); // may move
+        a.mov_ri(RAX, 25);
+        a.syscall();
+        a.jmp(os_error);
+    }
+    // advise_nohuge(addr, size)
+    a.bind(rt.os[4]);
+    page_aligned(a, RDI, bad);
+    page_size(a, RSI, bad);
+    if win {
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.ret();
+    } else {
+        a.mov_ri(RDX, 15); // MADV_NOHUGEPAGE
+        a.mov_ri(RAX, 28);
+        a.syscall();
+        a.jmp(os_error);
+    }
+    // The exits.
+    a.bind(bad);
+    a.mov_ri(RAX, -2);
+    a.ret();
+    a.bind(nomem);
+    a.mov_ri(RAX, -1);
+    a.ret();
+    a.bind(other);
+    a.mov_ri(RAX, -3);
+    a.ret();
+    // ---- the process calls (Linux only): write(fd, ptr, len), read(fd, ptr, len), exit(status), argv() ----
+    if !win {
+        // write: standard output is flushed first, so output keeps its order; one `write`, retried when
+        // interrupted. The result is the count or a negative errno.
+        a.bind(rt.os[5]);
+        if print {
+            a.push(RDI);
+            a.push(RSI);
+            a.push(RDX);
+            a.call(flush);
+            a.pop(RDX);
+            a.pop(RSI);
+            a.pop(RDI);
+        }
+        let retry = a.new_label();
+        a.bind(retry);
+        a.mov_ri(RAX, 1);
+        a.syscall();
+        a.alu_ri(Alu::Cmp, RAX, -4, 8);
+        a.jcc(Cc::E, retry);
+        a.ret();
+        a.bind(rt.os[6]);
+        let retry = a.new_label();
+        a.bind(retry);
+        a.mov_ri(RAX, 0);
+        a.syscall();
+        a.alu_ri(Alu::Cmp, RAX, -4, 8);
+        a.jcc(Cc::E, retry);
+        a.ret();
+        a.bind(rt.os[7]);
+        a.jmp(rt.exit);
+        a.bind(rt.os[8]);
+        state(a, RAX, 168);
+        a.load(RAX, mem(RAX, 0), 8);
+        a.ret();
+    }
+    a.bind(os_error);
+    // Linux: `rax` is the result, or -errno in the last 4095 values.
+    let ok = a.new_label();
+    a.alu_ri(Alu::Cmp, RAX, -4095, 8);
+    a.jcc(Cc::B, ok);
+    a.alu_ri(Alu::Cmp, RAX, -12, 8);
+    a.jcc(Cc::E, nomem);
+    a.alu_ri(Alu::Cmp, RAX, -22, 8);
+    a.jcc(Cc::E, bad);
+    a.jmp(other);
+    a.bind(ok);
+    a.ret();
 }

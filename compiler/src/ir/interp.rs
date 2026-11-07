@@ -67,10 +67,8 @@ fn bits_of(t: IrTy) -> u32 {
 const FUNC_BASE: usize = 1 << 40;
 const STACK_SIZE: usize = 8 << 20;
 /// Deep chains (a list of ten thousand boxes) recurse once per node; the host thread that runs the
-/// machine gets a big stack for it. An interpreted call costs about 10 KiB of host stack in a debug build
-/// (more on Windows ARM), and a program may recurse 100 000 deep, so 1 GiB left no margin; the
-/// stack is reserved address space and only the part that is used is committed.
-const HOST_STACK: usize = 2 << 30;
+/// machine gets a big stack for it.
+const HOST_STACK: usize = if cfg!(windows) { 3 << 29 } else { 1 << 30 };
 const MAX_DEPTH: u32 = 200_000;
 /// A context started by `CtxInit` runs on a host thread of its own; it gets a smaller host stack and call depth.
 const CTX_HOST_STACK: usize = 64 << 20;
@@ -650,6 +648,75 @@ impl Machine<'_> {
         addr
     }
 
+    /// The OS memory calls on the interpreter's heap: a reservation is a zeroed block, a commit and an
+    /// advice change nothing, a remap is a reallocation. The error values are those of the compiled code.
+    #[inline(never)]
+    fn os_op(&mut self, vals: &[Val], k: OsKind, v: [&Value; 3]) -> Result<Val, String> {
+        let g = |x: &Value| vals[x.0 as usize];
+        Ok(Val::int(self.os_call(k, g(v[0]), g(v[1]), g(v[2]))?))
+    }
+
+    #[inline(never)]
+    fn os_call(&mut self, k: OsKind, a: Val, b: Val, c: Val) -> Result<i64, String> {
+        const PAGE: i64 = 4096;
+        let (a, b, c) = (
+            a.signed(64) as i64,
+            b.signed(64) as i64,
+            c.signed(64) as i64,
+        );
+        let sized = |n: i64| n > 0 && n % PAGE == 0;
+        let known = |s: &Self, p: i64| matches!(s.heap.get(&(p as usize)), Some((_, true)));
+        Ok(match k {
+            OsKind::Write | OsKind::Read | OsKind::Exit | OsKind::Argv => {
+                return self.os_layer(k, a, b, c)
+            }
+            OsKind::Reserve => {
+                if !sized(a) {
+                    OS_BAD
+                } else if a > (1 << 32) {
+                    OS_NOMEM
+                } else {
+                    // A reservation starts on a page.
+                    while !(self.mem.len() + 16).is_multiple_of(PAGE as usize) {
+                        self.mem.push(0);
+                    }
+                    self.alloc(a as usize) as i64
+                }
+            }
+            OsKind::Commit | OsKind::AdviseNoHuge => {
+                if !sized(b) || a % PAGE != 0 || !known(self, a) {
+                    OS_BAD
+                } else {
+                    0
+                }
+            }
+            OsKind::Release => {
+                if !sized(b) || !known(self, a) {
+                    OS_BAD
+                } else {
+                    self.free(Val::Ptr(a as usize))?;
+                    0
+                }
+            }
+            OsKind::Remap => {
+                if !sized(b) || !sized(c) || !known(self, a) {
+                    OS_BAD
+                } else if c > (1 << 32) {
+                    OS_NOMEM
+                } else {
+                    while !(self.mem.len() + 16).is_multiple_of(PAGE as usize) {
+                        self.mem.push(0);
+                    }
+                    let new = self.alloc(c as usize);
+                    let keep = b.min(c) as usize;
+                    self.mem.copy_within(a as usize..a as usize + keep, new);
+                    self.free(Val::Ptr(a as usize))?;
+                    new as i64
+                }
+            }
+        })
+    }
+
     fn free(&mut self, p: Val) -> Result<(), String> {
         let Val::Ptr(addr) = p else {
             return Err("freed a value that is not an address".to_string());
@@ -671,41 +738,28 @@ impl Machine<'_> {
         }
     }
 
-    /// Not inlined into `exec`: its frame is on the stack of every interpreted call, and the stack depth is
-    /// what a deeply recursive program runs out of first.
+    /// The interpreter's stand-in for the operating system layer (`OsKind::Write` and the others that talk to
+    /// the process rather than to memory). Kept out of `exec`: its frame is on the stack of every interpreted
+    /// call, and the stack depth is what a deeply recursive program runs out of first.
     #[inline(never)]
-    fn os_exec(&mut self, vals: &[Val], o: OsOp, args: &[Value]) -> Result<Val, String> {
-        let a: Vec<Val> = args.iter().map(|v| vals[v.0 as usize]).collect();
-        self.os_call(o, &a)
-    }
-
-    /// The interpreter's stand-in for the operating system layer (`OsOp`).
-    #[inline(never)]
-    fn os_call(&mut self, o: OsOp, a: &[Val]) -> Result<Val, String> {
-        let to_addr = |v: &Val| match v {
-            Val::Ptr(p) => Ok(*p),
-            Val::Int(p) => Ok(*p as usize),
-            _ => Err("expected an address".to_string()),
-        };
-        Ok(match o {
-            OsOp::Write => {
-                let fd = a[0].signed(64);
-                let (p, n) = (to_addr(&a[1])?, a[2].signed(64).max(0) as usize);
+    fn os_layer(&mut self, k: OsKind, a: i64, b: i64, c: i64) -> Result<i64, String> {
+        Ok(match k {
+            OsKind::Write => {
+                let (p, n) = (b as usize, c.max(0) as usize);
                 self.check(p, n)?;
                 let bytes = self.mem[p..p + n].to_vec();
-                match fd {
+                match a {
                     1 => self.out.extend_from_slice(&bytes),
                     2 => self.os.err.extend_from_slice(&bytes),
-                    _ => return Ok(Val::Int(mask((-9i128) as u128, 64))),
+                    _ => return Ok(-9),
                 }
-                Val::Int(n as u128)
+                n as i64
             }
-            OsOp::Read => {
-                let fd = a[0].signed(64);
-                let (p, n) = (to_addr(&a[1])?, a[2].signed(64).max(0) as usize);
+            OsKind::Read => {
+                let (p, n) = (b as usize, c.max(0) as usize);
                 self.check(p, n)?;
-                if fd != 0 {
-                    return Ok(Val::Int(mask((-9i128) as u128, 64)));
+                if a != 0 {
+                    return Ok(-9);
                 }
                 let left = self.os.stdin.len() - self.os.stdin_pos;
                 let k = left.min(n);
@@ -713,13 +767,13 @@ impl Machine<'_> {
                 let chunk = self.os.stdin[from..from + k].to_vec();
                 self.mem[p..p + k].copy_from_slice(&chunk);
                 self.os.stdin_pos += k;
-                Val::Int(k as u128)
+                k as i64
             }
-            OsOp::Exit => {
-                self.os.exit = Some(a[0].signed(64) as i32);
+            OsKind::Exit => {
+                self.os.exit = Some(a as i32);
                 return Err(EXIT.to_string());
             }
-            OsOp::Argv => {
+            OsKind::Argv => {
                 if self.os.block == 0 {
                     let (argv, env) = (self.os.argv.clone(), self.os.env.clone());
                     let words = 1 + argv.len() + 1 + env.len() + 1;
@@ -740,8 +794,9 @@ impl Machine<'_> {
                     }
                     self.os.block = base;
                 }
-                Val::Ptr(self.os.block)
+                self.os.block as i64
             }
+            _ => unreachable!("a memory call"),
         })
     }
 
@@ -918,6 +973,7 @@ impl Machine<'_> {
                 addr(&get(code))?,
                 get(env),
             )?,
+            Op::Os(k, a, b, c) => self.os_op(vals, *k, [a, b, c])?,
             Op::CtxSwitch(save, to) => {
                 self.ctx_switch(addr(&get(save))?, addr(&get(to))?)?;
                 Val::Unit
@@ -953,7 +1009,6 @@ impl Machine<'_> {
                 self.write(a, t, get(x))?;
                 Val::Unit
             }
-            Op::Os(o, args) => self.os_exec(vals, *o, args)?,
             Op::Print(p, n) => {
                 let (a, n) = (addr(&get(p))?, get(n).signed(64) as usize);
                 self.check(a, n)?;

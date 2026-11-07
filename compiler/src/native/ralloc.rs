@@ -202,6 +202,72 @@ struct Analysis {
     copies: Vec<(u64, u32, u32)>,
 }
 
+/// How many loops each block is in. A loop is the natural loop of a back edge (an edge to a block still
+/// on the depth-first path), not a stretch of the layout: an out-of-line block that jumps back into the
+/// middle of a loop (the slow path of a push) is no loop.
+fn loop_depths(f: &MFunc) -> Vec<u32> {
+    let nb = f.blocks.len();
+    let succ: Vec<Vec<usize>> = (0..nb).map(|b| successors(f, b)).collect();
+    let mut pred: Vec<Vec<usize>> = vec![Vec::new(); nb];
+    for (b, ss) in succ.iter().enumerate() {
+        for &s in ss {
+            pred[s].push(b);
+        }
+    }
+    // Back edges by an iterative depth-first search from the entry.
+    let mut state = vec![0u8; nb]; // 0 new, 1 on the path, 2 done
+    let mut back: Vec<(usize, usize)> = Vec::new();
+    let mut stack: Vec<(usize, usize)> = vec![(0, 0)];
+    state[0] = 1;
+    while let Some(&mut (b, ref mut k)) = stack.last_mut() {
+        if *k < succ[b].len() {
+            let s = succ[b][*k];
+            *k += 1;
+            match state[s] {
+                0 => {
+                    state[s] = 1;
+                    stack.push((s, 0));
+                }
+                1 => back.push((b, s)),
+                _ => {}
+            }
+        } else {
+            state[b] = 2;
+            stack.pop();
+        }
+    }
+    // The body of each header: the blocks that reach a tail of one of its back edges without passing it.
+    let mut depth = vec![0u32; nb];
+    let mut headers: Vec<usize> = back.iter().map(|e| e.1).collect();
+    headers.sort_unstable();
+    headers.dedup();
+    for h in headers {
+        let mut inside = vec![false; nb];
+        inside[h] = true;
+        let mut work: Vec<usize> = Vec::new();
+        for &(t, _) in back.iter().filter(|e| e.1 == h) {
+            if !inside[t] {
+                inside[t] = true;
+                work.push(t);
+            }
+        }
+        while let Some(b) = work.pop() {
+            for &p in &pred[b] {
+                if !inside[p] {
+                    inside[p] = true;
+                    work.push(p);
+                }
+            }
+        }
+        for (b, d) in depth.iter_mut().enumerate() {
+            if inside[b] {
+                *d += 1;
+            }
+        }
+    }
+    depth
+}
+
 fn analyse(f: &MFunc, nphys: usize) -> Analysis {
     let nv = f.vclass.len();
     let nb = f.blocks.len();
@@ -214,16 +280,7 @@ fn analyse(f: &MFunc, nphys: usize) -> Analysis {
         at += 2 * b.insts.len() as u32;
         end[bi] = at;
     }
-    let mut depth = vec![0u32; nb];
-    for bi in 0..nb {
-        for s in successors(f, bi) {
-            if s <= bi {
-                for d in &mut depth[s..=bi] {
-                    *d += 1;
-                }
-            }
-        }
-    }
+    let depth = loop_depths(f);
     let block_weight = |bi: usize| 10u64.pow(depth[bi].min(6));
 
     // Ranges (built from the last block to the first), weights, calls and copies.
@@ -277,14 +334,38 @@ fn analyse(f: &MFunc, nphys: usize) -> Analysis {
                 live_phys[first_inst[bi] + k].insert(PReg(id as u8));
             }
             let (mut defs, mut uses) = (Vec::new(), Vec::new());
+            let mut dying: Vec<Reg> = Vec::new();
+            let mut results: Vec<Reg> = Vec::new();
             visit_regs(inst, |r, a| {
                 let id = reg_id(r, nphys);
                 match a {
-                    Acc::Use => uses.push(id),
-                    Acc::Def => defs.push((id, p + 1)),
+                    Acc::Use => {
+                        uses.push(id);
+                        if !now.contains(id) {
+                            dying.push(r);
+                        }
+                    }
+                    Acc::Def => {
+                        defs.push((id, p + 1));
+                        results.push(r);
+                    }
                     Acc::EarlyDef => defs.push((id, p)),
                 }
             });
+            // A result takes the register of an operand that dies here when it can: the operation then
+            // works in place and no move is needed before or after it.
+            if inst.op != COPY && inst.op != PARCOPY {
+                for d in &results {
+                    for u in &dying {
+                        if let Reg::Virt(v) = d {
+                            hints[*v as usize].push((*u, w));
+                        }
+                        if let Reg::Virt(v) = u {
+                            hints[*v as usize].push((*d, w));
+                        }
+                    }
+                }
+            }
             for (id, pos) in defs {
                 set_from(&mut ranges[id], pos);
                 now.remove(id);
@@ -302,9 +383,11 @@ fn analyse(f: &MFunc, nphys: usize) -> Analysis {
                 }
             }
             if inst.flags.has(IFlags::CALL) {
+                let cold =
+                    matches!(inst.ops.first(), Some(Operand::Sym(n)) if f.cold_syms.contains(n));
                 calls.push(Call {
                     pos: p,
-                    weight: w,
+                    weight: if cold { 1 } else { w },
                     clobbers: inst.clobbers,
                     inst: first_inst[bi] + k,
                 });
@@ -541,8 +624,7 @@ pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
     let mut used_callee = RegSet::default();
     let mut order: Vec<usize> = (0..nv).filter(|v| !ranges[nphys + v].is_empty()).collect();
     // Densest first: a short value that is used often beats a long one used as often, because the
-    // long one blocks a register for longer. (A plain weight starved the temporaries of loops whose
-    // invariants took every register.)
+    // long one blocks a register for longer.
     let len = |v: usize| -> u64 {
         ranges[nphys + v]
             .iter()
@@ -550,7 +632,12 @@ pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
             .sum::<u64>()
             .max(1)
     };
-    order.sort_by_key(|v| (std::cmp::Reverse(weight[*v] * 4096 / len(*v)), *v));
+    // The length counts with a root: a plain division starved the long invariants of an inner loop
+    // (kostya_matmul, levenshtein), a plain weight starved the loop's temporaries.
+    order.sort_by_key(|v| {
+        let key = (weight[*v] as f64 * 4096.0 / (len(*v) as f64).powf(0.25)) as u64;
+        (std::cmp::Reverse(key), *v)
+    });
     let mut splits: Vec<(u32, PReg, Vec<usize>)> = Vec::new();
     for v in order {
         let c = f.vclass[v];

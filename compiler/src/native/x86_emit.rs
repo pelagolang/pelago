@@ -607,10 +607,7 @@ impl Em<'_, '_> {
                     op::RT_REALLOC => rt.realloc,
                     op::RT_CTX_INIT => rt.ctx_init,
                     op::RT_CTX_SWITCH => rt.ctx_switch,
-                    op::RT_OS_WRITE => rt.os_write,
-                    op::RT_OS_READ => rt.os_read,
-                    op::RT_OS_EXIT => rt.exit,
-                    op::RT_OS_ARGV => rt.os_argv,
+                    k if (op::RT_OS..op::RT_OS + 9).contains(&k) => rt.os[(k - op::RT_OS) as usize],
                     _ => rt.print,
                 };
                 self.env.a.call(l);
@@ -673,6 +670,10 @@ impl Em<'_, '_> {
             op::VSTORE => {
                 let m = self.mem(&ops[0]);
                 self.env.a.movups_store(m, xr(phys(&ops[1])));
+            }
+            op::FBITS => {
+                let (d, sx) = (gpr(phys(&ops[0])), xr(phys(&ops[1])));
+                self.env.a.movq_from_xmm(d, sx, imm(&ops[2]) == 1);
             }
             op::FCONST => {
                 let d = xr(phys(&ops[0]));

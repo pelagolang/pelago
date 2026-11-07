@@ -38,6 +38,7 @@ mod peel;
 mod promote;
 mod ranges;
 mod sccp;
+mod scratch;
 mod split;
 mod stats;
 mod tailrec;
@@ -75,6 +76,12 @@ pub fn optimize(m: &mut Module, opts: Options) {
         return;
     }
     drop_idle_task_drain(m);
+    bce::set_grow(Some(m));
+    optimize_passes(m, opts);
+    bce::set_grow(None);
+}
+
+fn optimize_passes(m: &mut Module, opts: Options) {
     // Divisions by constants become multiplications only after inlining: a callee's `n / 10` may
     // turn out to have a dividend known to be non-negative, which makes a cheaper sequence.
     let inlining = opts.level >= 2;
@@ -160,6 +167,7 @@ fn rounds(f: &mut Func, divs: bool) {
         let mut changed = false;
         changed |= step(f, "simplify", cfg::run);
         changed |= step(f, "dce", dce::run);
+        changed |= step(f, "scratch", scratch::run);
         changed |= step(f, "promote", promote::run);
         changed |= step(f, "split", split::run);
         changed |= step(f, "sccp", sccp::run);
@@ -273,6 +281,10 @@ impl Op {
                 f(*c);
                 f(*d);
             }
+            Op::Os(k, a, b, c) => {
+                let all = [*a, *b, *c];
+                all[..k.arity()].iter().for_each(|v| f(*v));
+            }
             Op::Neg(a)
             | Op::FUn(_, a)
             | Op::Not(a)
@@ -291,7 +303,7 @@ impl Op {
                 f(*b);
                 f(*c);
             }
-            Op::Call(_, args) | Op::Os(_, args) => args.iter().for_each(|v| f(*v)),
+            Op::Call(_, args) => args.iter().for_each(|v| f(*v)),
             Op::CallPtr(_, _, p, args) => {
                 f(*p);
                 args.iter().for_each(|v| f(*v));
@@ -321,6 +333,11 @@ impl Op {
                 *c = f(*c);
                 *d = f(*d);
             }
+            Op::Os(_, a, b, c) => {
+                *a = f(*a);
+                *b = f(*b);
+                *c = f(*c);
+            }
             Op::Neg(a)
             | Op::FUn(_, a)
             | Op::Not(a)
@@ -339,7 +356,7 @@ impl Op {
                 *b = f(*b);
                 *c = f(*c);
             }
-            Op::Call(_, args) | Op::Os(_, args) => args.iter_mut().for_each(|v| *v = f(*v)),
+            Op::Call(_, args) => args.iter_mut().for_each(|v| *v = f(*v)),
             Op::CallPtr(_, _, p, args) => {
                 *p = f(*p);
                 args.iter_mut().for_each(|v| *v = f(*v));

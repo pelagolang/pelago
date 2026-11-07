@@ -695,13 +695,7 @@ fn vectors_agree_with_integers_natively() {
     use crate::native::{exec, gen, Os};
     let m = vector_loop();
     // All the registers, none and few: every memory home, split and cycle path.
-    for (regalloc, limit) in [
-        (false, usize::MAX),
-        (true, usize::MAX),
-        (true, 1),
-        (true, 2),
-        (true, 4),
-    ] {
+    for limit in [usize::MAX, 1, 2, 4] {
         if !exec::can_run(Os::Linux) {
             break;
         }
@@ -709,16 +703,15 @@ fn vectors_agree_with_integers_natively() {
         let opts = gen::Options {
             leak_check: true,
             target: Os::Linux,
-            regalloc,
         };
         let image = gen::compile(&m, "main", &opts);
         gen::REG_LIMIT.with(|l| l.set(usize::MAX));
         let image = match image {
             Ok(i) => i,
-            Err(e) => panic!("the native build ({regalloc}, {limit}) failed: {e}"),
+            Err(e) => panic!("the native build ({limit}) failed: {e}"),
         };
         let r = exec::run_image(Os::Linux, &image).unwrap();
-        assert_eq!((r.err.as_str(), r.code), ("", 0), "({regalloc}, {limit})");
+        assert_eq!((r.err.as_str(), r.code), ("", 0), "({limit})");
     }
     if let Some(r) = exec::build_and_run_a64(&m, true) {
         assert_eq!((r.err.as_str(), r.code), ("", 0), "AArch64");

@@ -78,8 +78,21 @@ pub struct Uses {
     pub fmod: bool,
     /// Context switching (`CtxInit`, `CtxSwitch`).
     pub ctx: bool,
-    /// The operating system layer (`Op::Os`): the start-up block is saved and the routines are emitted.
+    /// The OS memory calls (`Op::Os`).
     pub os: bool,
+}
+
+/// What a program that talks to its process (arguments, descriptors, exit) cannot yet be built for.
+pub const PROCESS_REFUSED: &str =
+    "the operating system layer (args, stdin, stderr, exit) is built for x86-64 Linux only so far";
+
+/// Whether the module uses `OsKind::Write`, `Read`, `Exit` or `Argv`.
+pub fn uses_process(m: &crate::ir::Module) -> bool {
+    use crate::ir::Op;
+    m.funcs
+        .iter()
+        .flat_map(|f| &f.insts)
+        .any(|i| matches!(&i.op, Op::Os(k, ..) if k.is_process()))
 }
 
 impl Uses {
@@ -134,7 +147,6 @@ pub mod mir;
 pub mod pe;
 pub mod ralloc;
 pub mod regs;
-pub mod regs_a64;
 pub mod rt;
 pub mod rt_a64;
 pub mod x86;

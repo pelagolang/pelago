@@ -114,10 +114,8 @@ pub mod op {
     pub const RT_PRINT: i64 = 3;
     pub const RT_CTX_INIT: i64 = 4;
     pub const RT_CTX_SWITCH: i64 = 5;
-    pub const RT_OS_WRITE: i64 = 6;
-    pub const RT_OS_READ: i64 = 7;
-    pub const RT_OS_EXIT: i64 = 8;
-    pub const RT_OS_ARGV: i64 = 9;
+    /// The OS memory calls: `RT_OS + OsKind as i64`.
+    pub const RT_OS: i64 = 16;
     /// Epilogue and `ret`; `[rax Use]` when a value is returned.
     pub const RET: u16 = B + 31;
     /// Stop the program with the message number `Imm`: `[Imm n]`.
@@ -185,7 +183,9 @@ pub mod op {
     pub const REP_STOS: u16 = B + 61;
     /// `d = sqrt / floor / ceil of s`: `[d Def, s Use, Imm kind (0, 1, 2), Imm double]`.
     pub const FUN: u16 = B + 62;
-    pub const COUNT: u16 = B + 63;
+    /// The raw bits of a float in an integer register: `[d Def, s Use, Imm double]`.
+    pub const FBITS: u16 = B + 63;
+    pub const COUNT: u16 = B + 64;
 }
 
 /// Symbols: the shared stop routines, then the functions of the module.
@@ -315,7 +315,7 @@ impl Target for X86 {
     }
 
     fn op_name(&self, o: u16) -> &'static str {
-        const NAMES: [&str; 62] = [
+        const NAMES: [&str; 64] = [
             "add",
             "sub",
             "and",
@@ -378,6 +378,8 @@ impl Target for X86 {
             "vbuild",
             "valu",
             "rep_stos",
+            "fun",
+            "fbits",
         ];
         NAMES
             .get(o.wrapping_sub(op::ADD) as usize)

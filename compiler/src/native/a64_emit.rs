@@ -311,7 +311,7 @@ impl Em<'_, '_> {
                     return;
                 }
                 if is_vec(d) {
-                    self.a().fmov_rr(true, vr(d), vr(*s));
+                    self.a().vmov(vr(d), vr(*s));
                 } else {
                     self.a().mov_rr(gp(d), gp(*s));
                 }
@@ -735,11 +735,20 @@ impl Em<'_, '_> {
                     op::RT_REALLOC => rt.realloc,
                     op::RT_CTX_INIT => rt.ctx_init,
                     op::RT_CTX_SWITCH => rt.ctx_switch,
+                    k if (op::RT_OS..op::RT_OS + 5).contains(&k) => rt.os[(k - op::RT_OS) as usize],
                     op::RT_MEMCPY => rt.memcpy,
-                    op::RT_FMOD => rt.fmod,
+                    op::RT_FMOD | op::RT_FMOD32 => rt.fmod,
                     _ => rt.print,
                 };
+                let narrow = imm(&ops[0]) == op::RT_FMOD32;
+                if narrow {
+                    self.a().fcvt(true, hw::V(0), hw::V(0));
+                    self.a().fcvt(true, hw::V(1), hw::V(1));
+                }
                 self.a().bl(l);
+                if narrow {
+                    self.a().fcvt(false, hw::V(0), hw::V(0));
+                }
             }
             op::RET => self.epilogue(),
             op::STOP => {
@@ -781,6 +790,134 @@ impl Em<'_, '_> {
                 self.cmp(&ops[1], &ops[2]);
                 let l = self.stop_label(&ops[3]);
                 self.ov_branch(Br::Cc(cc_of(imm(&ops[0]))), l, &ops[4..]);
+            }
+            op::FLD => {
+                let d = vr(phys(&ops[0]));
+                let size = match imm(&ops[2]) {
+                    2 => 16,
+                    1 => 8,
+                    _ => 4,
+                };
+                match self.ea(&ops[1], size) {
+                    Ea::Off(b, off) => self.a().ldr_f(d, b, off, size),
+                    Ea::Idx(b, x, scaled) => self.a().ldr_f_idx(d, b, x, size, scaled),
+                }
+            }
+            op::FST => {
+                let s = vr(phys(&ops[1]));
+                let size = match imm(&ops[2]) {
+                    2 => 16,
+                    1 => 8,
+                    _ => 4,
+                };
+                match self.ea(&ops[0], size) {
+                    Ea::Off(b, off) => self.a().str_f(s, b, off, size),
+                    Ea::Idx(b, x, scaled) => self.a().str_f_idx(s, b, x, size, scaled),
+                }
+            }
+            op::FCONST => {
+                let d = vr(phys(&ops[0]));
+                let dbl = imm(&ops[2]) == 1;
+                let a = &mut *self.env.a;
+                match imm(&ops[1]) {
+                    0 => a.fmov_from_gp(dbl, d, hw::XZR),
+                    n => {
+                        a.mov_ri(hw::X17, n);
+                        a.fmov_from_gp(dbl, d, hw::X17);
+                    }
+                }
+            }
+            op::FARITH => {
+                let (d, x, y) = (vr(phys(&ops[0])), vr(phys(&ops[1])), vr(phys(&ops[2])));
+                let dbl = imm(&ops[4]) == 1;
+                let a = &mut *self.env.a;
+                match imm(&ops[3]) {
+                    0 => a.fadd(dbl, d, x, y),
+                    1 => a.fsub(dbl, d, x, y),
+                    2 => a.fmul(dbl, d, x, y),
+                    _ => a.fdiv(dbl, d, x, y),
+                }
+            }
+            op::FNEG => {
+                let (d, s) = (vr(phys(&ops[0])), vr(phys(&ops[1])));
+                self.a().fneg(imm(&ops[2]) == 1, d, s);
+            }
+            op::FCMPSET => {
+                let (x, y) = (vr(phys(&ops[2])), vr(phys(&ops[3])));
+                let d = r(&ops[0]);
+                let a = &mut *self.env.a;
+                a.fcmp(imm(&ops[4]) == 1, x, y);
+                a.cset(d, cc_of(imm(&ops[1])));
+            }
+            op::FCMPJCC => {
+                let (x, y) = (vr(phys(&ops[1])), vr(phys(&ops[2])));
+                let l = self.block_label(&ops[3]);
+                let a = &mut *self.env.a;
+                a.fcmp(imm(&ops[4]) == 1, x, y);
+                a.b_cond(cc_of(imm(&ops[0])), l);
+            }
+            op::ITOF => {
+                let (d, s) = (vr(phys(&ops[0])), r(&ops[1]));
+                self.a().scvtf(imm(&ops[2]) == 1, d, s);
+            }
+            op::FTOI => {
+                // `fcvtzs` saturates and turns NaN into 0, like Rust's `as`; then cut to the width.
+                let (d, s) = (r(&ops[0]), vr(phys(&ops[1])));
+                self.a().fcvtzs(imm(&ops[2]) == 1, d, s);
+                self.mask(d, d, imm(&ops[3]));
+            }
+            op::FRESIZE => {
+                let (d, s) = (vr(phys(&ops[0])), vr(phys(&ops[1])));
+                self.a().fcvt(imm(&ops[2]) == 1, d, s);
+            }
+            op::FUN => {
+                let (d, s, dbl) = (vr(phys(&ops[0])), vr(phys(&ops[1])), imm(&ops[3]) == 1);
+                match imm(&ops[2]) {
+                    0 => self.a().fsqrt(dbl, d, s),
+                    1 => self.a().frintm(dbl, d, s),
+                    _ => self.a().frintp(dbl, d, s),
+                }
+            }
+            op::FFMA => {
+                let d = vr(phys(&ops[0]));
+                let (x, y, z) = (vr(phys(&ops[1])), vr(phys(&ops[2])), vr(phys(&ops[3])));
+                self.a().fmadd(imm(&ops[4]) == 1, d, x, y, z);
+            }
+            op::VSPLAT => {
+                let (d, s) = (vr(phys(&ops[0])), r(&ops[1]));
+                self.a().vdup(d, s);
+            }
+            op::VSHIFT => {
+                let d = vr(phys(&ops[0]));
+                let k = imm(&ops[2]) as u32;
+                if imm(&ops[1]) == 1 {
+                    self.a().vshl(d, d, k);
+                } else {
+                    self.a().vushr(d, d, k);
+                }
+            }
+            op::VREDUCE => {
+                let (d, s) = (r(&ops[0]), vr(phys(&ops[1])));
+                // `addp d31, vS.2d` sums the lanes into a scratch register.
+                self.a().vaddp(hw::V(31), s);
+                self.a().fmov_to_gp(true, d, hw::V(31));
+            }
+            op::VBUILD => {
+                let d = vr(phys(&ops[0]));
+                let (x, y) = (r(&ops[1]), r(&ops[2]));
+                self.a().vins(d, 0, x);
+                self.a().vins(d, 1, y);
+            }
+            op::VALU => {
+                let d = vr(phys(&ops[0]));
+                let (x, y) = (vr(phys(&ops[1])), vr(phys(&ops[2])));
+                match imm(&ops[3]) {
+                    0 => self.a().vadd(d, x, y),
+                    1 => self.a().vsub(d, x, y),
+                    2 => self.a().vand(d, x, y),
+                    3 => self.a().vorr(d, x, y),
+                    _ => self.a().veor(d, x, y),
+                }
             }
             o => panic!("the AArch64 emitter does not know opcode {o}"),
         }

@@ -1,0 +1,10 @@
+fn main() {
+    var xs: [int] = []
+    xs.reserve!(100)
+    print(xs.len())
+    for i in 0..100 { xs.push!(i) }
+    xs.reserve!(0)
+    var s = 0
+    for x in xs { s += x }
+    print(xs.len(), s)
+}

@@ -115,6 +115,21 @@ impl<'a> Lowerer<'a> {
                 self.emit(Op::Free(p), None, sp);
                 Res::Unit
             }
+            "rt_os_reserve"
+            | "rt_os_commit"
+            | "rt_os_release"
+            | "rt_os_remap"
+            | "rt_os_advise_nohuge"
+            | "rt_os_write"
+            | "rt_os_read"
+            | "rt_os_exit"
+            | "rt_os_argv" => self.intr_os(&name, args, sp),
+            "rt_int_addr" => {
+                let Some(n) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
+                self.wrap(Op::Cast(CastKind::IntToPtr, n, ptr), ptr, sp)
+            }
             "rt_ctx_init" => {
                 let (Some(b), Some(n), Some(c), Some(e)) = (
                     self.arg_scalar(args, 0),
@@ -208,29 +223,6 @@ impl<'a> Lowerer<'a> {
                 self.emit(Op::Store(p, v), None, sp);
                 Res::Unit
             }
-            "rt_os_write" | "rt_os_read" => {
-                let (Some(fd), Some(p), Some(n)) = (
-                    self.arg_scalar(args, 0),
-                    self.arg_scalar(args, 1),
-                    self.arg_scalar(args, 2),
-                ) else {
-                    return Res::Never;
-                };
-                let o = if name == "rt_os_write" {
-                    OsOp::Write
-                } else {
-                    OsOp::Read
-                };
-                self.wrap(Op::Os(o, vec![fd, p, n]), IrTy::I64, sp)
-            }
-            "rt_os_exit" => {
-                let Some(code) = self.arg_scalar(args, 0) else {
-                    return Res::Never;
-                };
-                self.emit(Op::Os(OsOp::Exit, vec![code]), None, sp);
-                Res::Unit
-            }
-            "rt_os_argv" => self.wrap(Op::Os(OsOp::Argv, Vec::new()), ptr, sp),
             "rt_print" => {
                 let (Some(p), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {
@@ -244,6 +236,18 @@ impl<'a> Lowerer<'a> {
                     return Res::Never;
                 };
                 self.wrap(Op::Cast(CastKind::Trunc, n, IrTy::Int(8)), IrTy::Int(8), sp)
+            }
+            "rt_wrap" => {
+                let Some(t) = self.intr_type(def, map) else {
+                    return self.unsupported(sp, "`rt_wrap` of an unknown type");
+                };
+                let (Some(n), Some(to)) = (self.arg_scalar(args, 0), self.scalar_of(t)) else {
+                    return Res::Never;
+                };
+                if self.vty(n) == to {
+                    return Res::Val(n);
+                }
+                self.wrap(Op::Cast(CastKind::Trunc, n, to), to, sp)
             }
             "rt_to_char" => {
                 let Some(n) = self.arg_scalar(args, 0) else {
@@ -308,6 +312,20 @@ impl<'a> Lowerer<'a> {
                     return self.unsupported(sp, "`rt_is_int` of an unknown type");
                 };
                 let yes = matches!(self.kind(t), TyKind::Int(crate::types::IntKind::I64));
+                Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
+            }
+            "rt_is_small_uint" => {
+                let Some(t) = self.intr_type(def, map) else {
+                    return self.unsupported(sp, "`rt_is_small_uint` of an unknown type");
+                };
+                let yes = matches!(
+                    self.kind(t),
+                    TyKind::Int(
+                        crate::types::IntKind::U8
+                            | crate::types::IntKind::U16
+                            | crate::types::IntKind::U32
+                    )
+                );
                 Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
             }
             "rt_needs_drop" => {
@@ -604,5 +622,69 @@ impl<'a> Lowerer<'a> {
                 Res::Val(s)
             }
         }
+    }
+}
+
+impl<'a> Lowerer<'a> {
+    /// The OS memory calls (kept out of `intrinsic_call`, whose stack frame is already large in debug builds).
+    #[inline(never)]
+    fn intr_os(&mut self, name: &str, args: &'a [Arg], sp: Span) -> Res {
+        let kind = match name {
+            "rt_os_write" => crate::ir::OsKind::Write,
+            "rt_os_read" => crate::ir::OsKind::Read,
+            "rt_os_exit" => crate::ir::OsKind::Exit,
+            "rt_os_argv" => crate::ir::OsKind::Argv,
+            "rt_os_reserve" => crate::ir::OsKind::Reserve,
+            "rt_os_commit" => crate::ir::OsKind::Commit,
+            "rt_os_release" => crate::ir::OsKind::Release,
+            "rt_os_remap" => crate::ir::OsKind::Remap,
+            _ => crate::ir::OsKind::AdviseNoHuge,
+        };
+        let mut vs = Vec::new();
+        for i in 0..kind.arity() {
+            let Some(v) = self.arg_scalar(args, i) else {
+                return Res::Never;
+            };
+            // An address travels as an `i64`: the first operand of the memory calls, the second of the
+            // descriptor calls.
+            let addr_at = if matches!(kind, crate::ir::OsKind::Write | crate::ir::OsKind::Read) {
+                1
+            } else {
+                0
+            };
+            let v = if i == addr_at
+                && !matches!(kind, crate::ir::OsKind::Reserve | crate::ir::OsKind::Exit)
+            {
+                let Some(n) = self.emit(
+                    Op::Cast(CastKind::PtrToInt, v, IrTy::I64),
+                    Some(IrTy::I64),
+                    sp,
+                ) else {
+                    return Res::Never;
+                };
+                n
+            } else {
+                v
+            };
+            vs.push(v);
+        }
+        if vs.is_empty() {
+            // `os_argv` reads nothing; the operands are placeholders.
+            let Some(z) = self.emit(Op::Const(IrTy::I64, Const::Int(0)), Some(IrTy::I64), sp)
+            else {
+                return Res::Never;
+            };
+            vs.push(z);
+        }
+        let (a, b, c) = (
+            vs[0],
+            *vs.get(1).unwrap_or(&vs[0]),
+            *vs.get(2).unwrap_or(&vs[0]),
+        );
+        if kind == crate::ir::OsKind::Exit {
+            self.emit(Op::Os(kind, a, b, c), Some(IrTy::I64), sp);
+            return Res::Unit;
+        }
+        self.wrap(Op::Os(kind, a, b, c), IrTy::I64, sp)
     }
 }

@@ -227,6 +227,7 @@ fn inputs(op: &Op) -> Vec<Value> {
             vec![*a, *b]
         }
         Op::CtxInit(a, b, c, d) => vec![*a, *b, *c, *d],
+        Op::Os(k, a, b, c) => [*a, *b, *c][..k.arity()].to_vec(),
         Op::Neg(a)
         | Op::FUn(_, a)
         | Op::Not(a)
@@ -237,7 +238,7 @@ fn inputs(op: &Op) -> Vec<Value> {
         | Op::Free(a) => {
             vec![*a]
         }
-        Op::Call(_, args) | Op::Os(_, args) => args.clone(),
+        Op::Call(_, args) => args.clone(),
         Op::CheckedIf(_, _, test, a, b) => {
             let mut v = Vec::new();
             test.for_each_value(|x| v.push(x));
@@ -554,23 +555,20 @@ fn check_inst(f: &Func, m: Option<&Module>, inst: &Inst) -> Vec<String> {
                 e.push("`ctxinit` makes a ptr".to_string());
             }
         }
+        Op::Os(k, a, b, c) => {
+            if [*a, *b, *c][..k.arity()]
+                .iter()
+                .any(|x| t(*x) != Some(IrTy::I64))
+            {
+                e.push(format!("`{}` needs i64 operands", k.name()));
+            }
+            if result_ty != Some(IrTy::I64) {
+                e.push(format!("`{}` makes an i64", k.name()));
+            }
+        }
         Op::CtxSwitch(s, to) => {
             if t(*s) != Some(IrTy::Ptr) || t(*to) != Some(IrTy::Ptr) {
                 e.push("`ctxswitch` needs two ptrs".to_string());
-            }
-        }
-        Op::Os(o, args) => {
-            let (want, ret): (&[IrTy], Option<IrTy>) = match o {
-                OsOp::Write | OsOp::Read => (&[IrTy::I64, IrTy::Ptr, IrTy::I64], Some(IrTy::I64)),
-                OsOp::Exit => (&[IrTy::I64], None),
-                OsOp::Argv => (&[], Some(IrTy::Ptr)),
-            };
-            let got: Vec<Option<IrTy>> = args.iter().map(|a| t(*a)).collect();
-            if got.len() != want.len() || got.iter().zip(want).any(|(g, w)| *g != Some(*w)) {
-                e.push(format!("`{}` has the wrong operands", o.name()));
-            }
-            if result_ty != ret {
-                e.push(format!("`{}` has the wrong result type", o.name()));
             }
         }
     }

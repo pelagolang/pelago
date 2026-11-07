@@ -103,7 +103,7 @@ In dependency order; each can be one PR.
 ## 9. Built so far (Linux x86-64 and the interpreter)
 
 - **IR:** one operation, `Os(op, operands)`, with `os_write(fd, p, n)`, `os_read(fd, p, n)`, `os_exit(code)` and
-  `os_argv()` (`OsOp` in `ir/mod.rs`, verified, printed, never removed or moved by the optimiser).
+  `os_argv()` (`OsKind::Write`, `Read`, `Exit` and `Argv` in `ir/mod.rs`, next to the memory calls of `os-memory.md`, verified, printed, never removed or moved by the optimiser).
 - **Native (x86-64 Linux):** `_start` saves the kernel's start block; `os_write` flushes the print buffer and
   makes one `write`, `os_read` one `read` (both retry on `EINTR`), `os_exit` is `rt_exit`, `os_argv` returns the
   saved block. Both generators (`gen.rs` and the MIR path) emit them. AArch64 and Windows refuse a program that
@@ -135,10 +135,13 @@ In dependency order; each can be one PR.
 - **Open questions of the concurrency thread** (stackful tasks as the model, async on tasks, unwinding of cancelled
   tasks, detached tasks at the end of `main`, the 256 KiB task stack) are in `docs/handoff/concurrency.md` on PR #157.
 
-## Questions for the owner
+## Decisions (owner, 2026-11-07)
 
-- **R1** Is the `core`/`std` split above right (prelude small, OS access in `std`)?
-- **R2** Is "no foreign libraries in version 1" acceptable?
-- **R3** Windows randomness without extra DLLs: allow `advapi32` for `RtlGenRandom`, or read the entropy from the
-  system in another way (only `kernel32` is imported today)?
-- **R4** Source locations in stop messages: yes, and in release builds too?
+- **R1** Yes. `core` stays a small prelude; OS access lives in `std` (`std.io`, `std.fs`, `std.env`, `std.time`,
+  `std.random`, `std.os`). The `std` package now exists on main (`compiler/std/`, #170 to #172); the OS modules join it.
+- **R2** Yes. No foreign-library FFI in version 1. The calling convention stays documented for later.
+- **R3** Yes. Windows randomness may import `RtlGenRandom` from `advapi32`.
+- **R4** Yes. Stop messages carry a source location, in release builds too, encoded compactly (a file id and a line,
+  with the names in a side table that is only read when a stop happens) so the binary stays small.
+
+Work starts with package 2 and 3 of section 8 on Linux x86-64, using the thread-side `os_*` names above.

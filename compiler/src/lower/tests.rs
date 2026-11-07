@@ -358,15 +358,9 @@ fn output_of(src: &str) -> String {
     o.output
 }
 
-/// The native configurations every program runs in: without registers, with all of them, and with
-/// only the first one, two or four of each kind.
-const REG_SETS: [(bool, usize); 5] = [
-    (false, usize::MAX),
-    (true, usize::MAX),
-    (true, 1),
-    (true, 2),
-    (true, 4),
-];
+/// The native configurations every program runs in: with all the registers, and with only the first
+/// one, two or four of each kind.
+const REG_SETS: [usize; 4] = [usize::MAX, 1, 2, 4];
 
 /// The third column of the differential test: the native build prints the same, leaks nothing and
 /// exits with status 0. It runs on Linux x86-64 for Linux, and for Windows through Wine (or directly
@@ -377,32 +371,23 @@ fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
         if !exec::can_run(os) || (os == Os::Windows && what != "plain") {
             continue;
         }
-        // The frame-only generator and the one with registers must both be right, also with few
-        // registers (every spill and split path).
-        // The machine-IR path (work item W4) runs beside the old generator on every configuration
-        // that has registers, on Linux.
-        for (mir, (regalloc, limit)) in REG_SETS.iter().flat_map(|&c| [(false, c), (true, c)]) {
-            if os == Os::Windows && (mir || !regalloc || limit != usize::MAX) {
+        // Also with few registers (every spill and split path).
+        for limit in REG_SETS {
+            if os == Os::Windows && limit != usize::MAX {
                 continue;
             }
-            if mir && !regalloc {
-                continue;
-            }
-            gen::MIR.with(|m| m.set(Some(mir)));
             gen::REG_LIMIT.with(|l| l.set(limit));
             let opts = gen::Options {
                 leak_check: true,
                 target: os,
-                regalloc,
             };
             let image = match gen::compile(m, "main", &opts) {
                 Ok(i) => i,
                 Err(e) => panic!("the native build ({what}, {os:?}) failed: {e}\n{src}"),
             };
             gen::REG_LIMIT.with(|l| l.set(usize::MAX));
-            gen::MIR.with(|m| m.set(None));
             let r = exec::run_image(os, &image).unwrap();
-            let how = format!("{what}, {os:?}, mir {mir}, regalloc {regalloc}, {limit} registers");
+            let how = format!("{what}, {os:?}, {limit} registers");
             assert_eq!(r.out, want, "native output ({how}) differs in {src}");
             assert_eq!(
                 (r.err.as_str(), r.code),
@@ -806,6 +791,12 @@ fn program_barrier_releases_all_together() {
         output_of(src),
         "before 0\nbefore 1\nbefore 2\nafter 2\nafter 0\nafter 1\n"
     );
+}
+
+#[test]
+fn program_select_send_waits_for_room_in_a_bounded_channel() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>(1)\n tx.send(1)\n scope s {\n  s.spawn([sink rx] () ~> { yield_now()\n   print(rx.recv() ?? 0)\n   print(rx.recv() ?? 0) })\n  select {\n   case tx.send(2) { print(\"sent\") }\n  }\n }\n}\n";
+    assert_eq!(output_of(src), "1\nsent\n2\n");
 }
 
 #[test]
@@ -1518,23 +1509,21 @@ fn agree(src: &str) {
         m
     };
     let mut sets = vec![
-        ("plain", Os::Linux, &l.module, false, usize::MAX),
-        ("plain", Os::Linux, &l.module, true, usize::MAX),
-        ("optimised", Os::Linux, &optimised, true, usize::MAX),
-        ("plain", Os::Windows, &l.module, true, usize::MAX),
+        ("plain", Os::Linux, &l.module, usize::MAX),
+        ("optimised", Os::Linux, &optimised, usize::MAX),
+        ("plain", Os::Windows, &l.module, usize::MAX),
     ];
     for limit in [1, 2, 4] {
-        sets.push(("plain", Os::Linux, &l.module, true, limit));
-        sets.push(("optimised", Os::Linux, &optimised, true, limit));
+        sets.push(("plain", Os::Linux, &l.module, limit));
+        sets.push(("optimised", Os::Linux, &optimised, limit));
     }
-    for (what, os, m, regalloc, limit) in sets {
+    for (what, os, m, limit) in sets {
         if !exec::can_run(os) {
             continue;
         }
         let opts = gen::Options {
             leak_check: false,
             target: os,
-            regalloc,
         };
         gen::REG_LIMIT.with(|l| l.set(limit));
         let image = gen::compile(m, "main", &opts).unwrap();
@@ -1608,6 +1597,19 @@ fn native_agrees_on_sqrt_and_rounding() {
                 print(x.round())
                 i += 1
             }
+        }",
+    );
+}
+
+/// Narrowing an `int` wraps or checks, the same in the interpreter and natively.
+#[test]
+fn native_agrees_on_int_narrowing() {
+    agree(
+        "fn main() {
+            const n = 300
+            print(n.wrapToByte() to int, (0 - 1).wrapToByte() to int, n.wrapToInt8() to int, (0 - 129).wrapToInt8() to int)
+            print(n.wrapToInt16() to int, (70000).wrapToUint16() to int, (5000000000).wrapToInt32() to int, (5000000000).wrapToUint32() to int)
+            print(n.toByteChecked(), (255).toByteChecked(), (0 - 1).toInt8Checked(), (127).toInt8Checked())
         }",
     );
 }
@@ -2387,8 +2389,9 @@ fn lists_are_summed_and_mapped_in_vectors_with_the_same_results_and_stops() {
                 fast.result.map(|v| v.as_i64()),
                 "go({n}, {base})"
             );
-            // A stop leaves what it holds, in both.
-            assert_eq!(plain.leaked, fast.leaked, "go({n}, {base}) leaked");
+            // A stop leaves what it holds, in both. The bytes may differ: the optimised loop makes
+            // room for all its pushes at once, and the capacity of a list is not observable.
+            assert_eq!(plain.leaked > 0, fast.leaked > 0, "go({n}, {base}) leaked");
         }
     }
     agree(src);
@@ -2462,7 +2465,6 @@ fn native_runaway_recursion_stops_cleanly() {
             let opts = gen::Options {
                 leak_check: false,
                 target: os,
-                regalloc: true,
             };
             let image = gen::compile(&l.module, "main", &opts).unwrap();
             let r = exec::run_image(os, &image).unwrap();
@@ -2917,6 +2919,153 @@ fn guarded_loops_stop_where_the_checked_loop_did() {
     );
 }
 
+/// A loop that pushes to one list is grown once in front of the loop and runs without capacity tests;
+/// the results, the stops and their order are those of the interpreter, whatever the list held before.
+#[test]
+fn push_loops_agree_with_the_interpreter_and_keep_their_stops() {
+    // Four pushes a pass, a step of three, a masked table index: the shape of base64.
+    let enc = "fn enc(src: [uint8], table: [uint8], pre: int) -> [uint8] {
+            var out: [uint8] = []
+            for k in 0..pre { out.push!(7) }
+            if pre == 2 { out.reserve!(src.len() + 40) }
+            var i = 0
+            const full = src.len() - src.len() % 3
+            while i < full {
+                const v = ((src[i] to int) << 16) | ((src[i + 1] to int) << 8) | (src[i + 2] to int)
+                out.push!(table[(v >> 18) & 63])
+                out.push!(table[(v >> 12) & 63])
+                out.push!(table[(v >> 6) & 63])
+                out.push!(table[v & 63])
+                i += 3
+            }
+            return out
+        }
+        fn main() {
+            var table: [uint8] = []
+            for i in 0..64 { table.push!((65 + i).wrapToByte()) }
+            for n in 0..40 {
+                var src: [uint8] = []
+                for i in 0..n * 3 + n % 3 { src.push!((i * 7 + n).wrapToByte()) }
+                for pre in 0..4 {
+                    const e = enc(src, table, pre)
+                    var s = 0
+                    for j in 0..e.len() { s += (e[j] to int) * (j % 7 + 1) }
+                    print(n, pre, e.len(), s)
+                }
+            }
+        }";
+    agree(enc);
+    // The fast copy of that loop has no index test left: `@checkfree` accepts it.
+    let marked = enc.replacen("fn enc(", "@checkfree\n        fn enc(", 1);
+    let l = lowered(&marked);
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let f = m.funcs.iter().find(|f| f.name == "enc").unwrap();
+    assert!(f.checkfree.is_some());
+    assert_eq!(crate::ir::opt::kept_checks(f), 0);
+    // Reads of a byte a pass later in the source, and a loop test of the form `i + 4 <= n`.
+    agree(
+        "fn dec(src: [uint8], rev: [uint8]) -> [uint8] {
+            var out: [uint8] = []
+            var i = 0
+            while i + 4 <= src.len() {
+                const v = ((rev[src[i] to int] to int) << 18) | ((rev[src[i + 1] to int] to int) << 12) | ((rev[src[i + 2] to int] to int) << 6) | (rev[src[i + 3] to int] to int)
+                out.push!(((v >> 16) & 255).wrapToByte())
+                out.push!(((v >> 8) & 255).wrapToByte())
+                out.push!((v & 255).wrapToByte())
+                i += 4
+            }
+            return out
+        }
+        fn main() {
+            var rev: [uint8] = []
+            for i in 0..256 { rev.push!((i * 5).wrapToByte()) }
+            for n in 0..30 {
+                var src: [uint8] = []
+                for i in 0..n * 2 + 1 { src.push!((i * 11 + n).wrapToByte()) }
+                const d = dec(src, rev)
+                var s = 0
+                for j in 0..d.len() { s += (d[j] to int) * (j % 5 + 1) }
+                print(n, d.len(), s)
+            }
+        }",
+    );
+    // A source too short for the last passes: the stop comes at the same pass, after the same output.
+    agree(
+        "fn two(src: [uint8], n: int) -> [uint8] {
+            var out: [uint8] = []
+            var i = 0
+            while i < n { out.push!(src[i]); out.push!(src[i + 1]); i += 2 }
+            return out
+        }
+        fn main() {
+            var src: [uint8] = []
+            for i in 0..10 { src.push!(i.wrapToByte()) }
+            print(two(src, 8).len())
+            print(two(src, 12).len())
+        }",
+    );
+    // A table shorter than the mask allows: the checked copy stops on the first index past its end.
+    agree(
+        "fn pick(src: [uint8], table: [uint8]) -> [uint8] {
+            var out: [uint8] = []
+            for i in 0..src.len() { out.push!(table[(src[i] to int) & 15]) }
+            return out
+        }
+        fn main() {
+            var src: [uint8] = []
+            for i in 0..40 { src.push!((i * 3).wrapToByte()) }
+            var t: [uint8] = []
+            for i in 0..16 { t.push!(i.wrapToByte()) }
+            print(pick(src, t).len())
+            t.pop!()
+            print(pick(src, t).len())
+        }",
+    );
+    // A sum next to the pushes that passes the maximum: it still stops.
+    agree(
+        "fn main() {
+            var out: [int] = []
+            var t = 9223372036854775000
+            var i = 0
+            while i < 40 { out.push!(i); out.push!(t); t += 100; i += 2 }
+            print(out.len(), t)
+        }",
+    );
+    // Eight-byte elements, a loop that reads what it pushed, two lists, a conditional push.
+    agree(
+        "fn main() {
+            for n in 0..20 {
+                var a: [int] = [n]
+                for i in 0..n { a.push!(i); a.push!(i * 2) }
+                var b: [int] = []
+                for i in 0..a.len() { b.push!(a[i] + i); a.push!(b[i]) }
+                var c: [int] = []
+                var d: [int] = []
+                for i in 0..n { c.push!(i); d.push!(i + 1); c.push!(d[i]) }
+                var e: [int] = []
+                for i in 0..n * 3 { if i % 3 == 0 { e.push!(i) } else { e.push!(i + 1); e.push!(i + 2) } }
+                var s = 0
+                for i in 0..a.len() { s += a[i] }
+                for i in 0..b.len() { s += b[i] * 3 }
+                for i in 0..c.len() { s += c[i] * 5 }
+                for i in 0..e.len() { s += e[i] * 7 }
+                print(n, a.len(), b.len(), c.len(), e.len(), s)
+            }
+        }",
+    );
+    // The loop reads and pushes the same list.
+    agree(
+        "fn main() {
+            var a: [uint8] = [1, 2, 3]
+            for i in 0..100 { a.push!(a[i % 3]); a.push!(a[i]) }
+            var s = 0
+            for i in 0..a.len() { s += (a[i] to int) * (i % 11 + 1) }
+            print(a.len(), s)
+        }",
+    );
+}
+
 /// `@checkfree` is judged on the optimised code: a kernel whose tests all move into guards passes,
 /// one that indexes by an unknown value does not.
 #[test]
@@ -3036,4 +3185,40 @@ fn std_is_added_only_when_imported() {
     let mut program = Program::with_core();
     program.add_package("app", &[("main", "import std.big\nfn main() { print(1) }")]);
     assert!(program.find_package("std").is_some());
+}
+
+#[test]
+fn arena_no_ref_and_cold_grow() {
+    let src = "struct node { l: aref<node>, r: aref<node>, v: int }\nfn main() {\n var a = arena()\n const nothing = a.noRef()\n print(a.isNone(nothing))\n const x = a.new!(node { l: nothing, r: nothing, v: 7 })\n print(a.isNone(x), a.get(x).v, a.isNone(a.get(x).l), a.used())\n for i in 0..1000 { a.new!(node { l: x, r: nothing, v: i }) }\n print(a.get(x).v, a.used()) }\n";
+    assert_eq!(output_of(src), "true\nfalse 7 true 24\n7 24024\n");
+    agree(src);
+}
+
+#[test]
+fn for_over_split_and_bytes_in_place() {
+    let src = "fn main() {\n var n = 0\n for w of \"a,bb,,c,\".split(\",\") { n += 1\n print(w.len()) }\n print(n)\n for w of \"abc\".split(\"\") { print(w) }\n for w of \"\".split(\"-\") { print(w.len()) }\n for w of \"x--y\".split(\"--\") { if w == \"x\" { continue }\n print(w) }\n var t = \"one two three\"\n for w of t.split(\" \") { if w == \"two\" { break }\n print(w) }\n var sum = 0\n for b of \"AbC\".bytes() { sum += b to int }\n print(sum)\n const l = \"p q\".split(\" \").toList()\n print(l.len()) }\n";
+    assert_eq!(output_of(src), "1\n2\n0\n1\n0\n5\nabc\n0\ny\none\n230\n2\n");
+}
+
+#[test]
+fn for_over_split_native_agrees() {
+    agree("fn main() {\n for w of \"a,bb,,c,\".split(\",\") { print(w.len()) }\n for b of \"hé\".bytes() { print(b to int) } }\n");
+}
+
+#[test]
+fn a_pool_with_a_bad_width_stops() {
+    for w in ["int", "uint64", "float", "bool"] {
+        let src = format!("fn main() {{\n var p: pool<int, {w}> = pool()\n print(p.len()) }}\n");
+        let o = run_main(&src);
+        assert!(o.result.is_err(), "{w}");
+        assert!(o.output.contains("width must be"), "{w}: {}", o.output);
+    }
+}
+
+#[test]
+fn pool_slots_are_as_small_as_the_value_and_reuse_freed_ones() {
+    let src = "struct small { a: uint8, b: uint16 }\nfn main() {\n    var p: pool<small, uint8> = pool()\n    const x = p.add!(small { a: 1, b: 300 })\n    const y = p.add!(small { a: 2, b: 400 })\n    const z = p.add!(small { a: 3, b: 500 })\n    p.remove!(y)\n    p.remove!(x)\n    const u = p.add!(small { a: 9, b: 900 })\n    const v = p.add!(small { a: 8, b: 800 })\n    print(p.get(u).a, p.get(u).b, p.get(v).a, p.get(v).b, p.get(z).b, p.len(), p.slotBytes())\n}\n";
+    // The slot is the 4 bytes of the struct (a `uint8` and a `uint16` with alignment), not rounded up to 8.
+    assert_eq!(output_of(src), "9 900 8 800 500 3 4\n");
+    agree(src);
 }

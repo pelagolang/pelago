@@ -46,7 +46,7 @@ A serious, self-hosting systems language:
 | Parser | `docs/design/parser.md` P1 to P10 decided: top-level statements, `loop` values, loop labels (`outer: for ...`, `break outer`), closure return types (`(x: int) -> int ~> ...`), doc comments kept, syntax checks pass | decided |
 | Checker | `docs/design/checker.md`: all five stages built (names, types, interfaces, exhaustiveness, value semantics); TC1 to TC13 decided, VS1 to VS6 chosen (literals, two implicit conversions, no same-scope redeclaration, `fn` types are views, empty literals need context, integer division, equality) | decided |
 | Imports | Imports are bindings: `import std.io`, `import fmt = std.io`, `import { a, b: c, ... } = path`; cycles allowed, top-level only, `pub pkg` middle visibility, orphan rule (`docs/design/modules.md`). A file is a module named after the file; relative paths with leading dots stay | decided |
-| Runtime | No `libc`; a panic stops immediately (no unwinding); the OS-facing runtime (I/O, args, time, `std`) is built in one dedicated period (`docs/design/runtime.md`, draft) | decided |
+| Runtime | No `libc`; a panic stops immediately (no unwinding); the OS-facing runtime (I/O, args, time, `std`) is built in one dedicated period; OS access in `std`, no foreign-library FFI in version 1, `RtlGenRandom` allowed on Windows, stop messages carry a compact source location (`docs/design/runtime.md`) | decided |
 | Config | `pelago.toml` is the general config file for everything language-related; the formatter reads its `[fmt]` section (`indent`, `width`), found by walking up from the file (`docs/plans/cards/S-07-formatter.md`) | decided |
 | Heap | No libc-style heap, no pure bump stacks: one reserved region of address space, 64 KiB spans per size class, no block header, allocator left out of programs that do not need it; arenas and scratch allocation on top (`docs/design/heap.md`, stages H0 to H6; owner chose the hybrid on 2026-11-06) | decided (H1 done on x86-64 Linux) |
 | Arenas | Library `arena` with checked 32+32-bit `aref<T>` handles, plain types only in v1; no hidden region that redirects `box` (`docs/design/arena.md`) | proposed, awaiting owner |
@@ -64,6 +64,7 @@ A serious, self-hosting systems language:
 | Functions | `fn` (chosen because `fnc` splits into two tokens in most tokenizers) | decided |
 | Variables | `var` (changeable) and `const` (truly immutable) | decided |
 | Types | Lowercase names; sized ints `int8` to `int64`, `uint8` to `uint64` | decided |
+| Narrowing | `to` only when nothing is lost; narrowing an `int` is `n.wrapToByte()` (wraps) or `n.toByteChecked()` (`option`), likewise `Int8`, `Int16`, `Uint16`, `Int32`, `Uint32`; `docs/design/basics.md` section 6 | decided |
 | Naming | The compiler accepts any identifier style; the standard library and formatter pick one | decided |
 | Comments | `/// line`, `///* block *///` (nests); documentation `//~ line`, `//~* block *~//`; `//` and `/* */` are errors with a hint (`docs/design/comments.md`) | decided |
 | Brand | Monoline capital P + dot + wave mark; lowercase `pelago` in Comfortaa Bold, text in Outfit; teal `#0E7C86`, lagoon `#5FD0C8`, deep sea `#0B2239`; assets in `assets/brand/` (`docs/design/brand.md`) | decided |

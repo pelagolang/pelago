@@ -482,7 +482,7 @@ fn ir_or_run(
             .funcs
             .iter()
             .flat_map(|f| &f.insts)
-            .any(|i| matches!(&i.op, pelago::ir::Op::Os(pelago::ir::OsOp::Read, _)));
+            .any(|i| matches!(&i.op, pelago::ir::Op::Os(pelago::ir::OsKind::Read, ..)));
         let env = pelago::ir::OsEnv {
             argv: std::iter::once(path.to_string())
                 .chain(prog_args.iter().cloned())
@@ -560,7 +560,6 @@ fn native_build(
     let opts = pelago::native::gen::Options {
         leak_check: flags.contains(&"--leak-check"),
         target: os,
-        regalloc: !flags.contains(&"--no-regalloc"),
     };
     let compile = match arch {
         pelago::native::Arch::X86_64 => pelago::native::gen::compile,
@@ -582,7 +581,7 @@ fn native_build(
     if !build
         && out_name.is_none()
         && !flags.contains(&"--spawn")
-        && !pelago::native::Uses::of(module).os
+        && !pelago::native::uses_process(module)
     {
         // `run` only returns on failure; report the phases first, the program ends the process.
         timer.report();

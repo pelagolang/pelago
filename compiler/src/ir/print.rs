@@ -148,7 +148,11 @@ fn inst_text(f: &Func, i: &Inst, m: Option<&Module>) -> String {
         Op::Realloc(p, n) => format!("realloc {}, {}", v(*p), v(*n)),
         Op::CtxInit(b, n, c, e) => format!("ctxinit {}, {}, {}, {}", v(*b), v(*n), v(*c), v(*e)),
         Op::CtxSwitch(s, t) => format!("ctxswitch {}, {}", v(*s), v(*t)),
-        Op::Os(o, args) => format!("{} {}", o.name(), vs(args)),
+        Op::Os(k, a, b, c) => {
+            let all = [*a, *b, *c];
+            let args: Vec<String> = all[..k.arity()].iter().map(|x| v(*x)).collect();
+            format!("{} {}", k.name(), args.join(", "))
+        }
     };
     let _ = f;
     match i.result {
