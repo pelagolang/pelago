@@ -34,7 +34,7 @@ fn heap_stop() {
     rt_store_int(rt_null(), 1)
 }
 
-//~ Reserves the range on first use: as much as the system grants, halving the lane size until it agrees.
+//~ Reserves the range on first use (no access): as much as the system grants, halving the lane size until it agrees. Lanes are made usable one MiB step at a time as they grow (see `heap_alloc`).
 fn heap_init_slow() {
     var shift = HEAP_SHIFT
     var r = rt_os_reserve(HEAP_LANES << (shift & 63))
@@ -43,7 +43,7 @@ fn heap_init_slow() {
         r = rt_os_reserve(HEAP_LANES << (shift & 63))
     }
     const size = HEAP_LANES << (shift & 63)
-    if r <= 0 || rt_os_commit(rt_int_addr(r), size) != 0 { heap_stop() }
+    if r <= 0 { heap_stop() }
     rt_os_advise_nohuge(rt_int_addr(r), size)
     heap_st(heap_words() +% 480, r)
     heap_st(heap_words() +% 488, shift)
@@ -75,7 +75,11 @@ pub fn heap_alloc(n: int) -> int {
     const used = heap_ld(e +% 8)
     if k >= HEAP_LANES || used +% size > 1 << (shift & 63) { heap_stop() }
     heap_st(e +% 8, used +% size)
-    r +% (k << (shift & 63)) +% used
+    const at = r +% (k << (shift & 63))
+    const lo = (used +% 1048575) & -1048576
+    const hi = (used +% size +% 1048575) & -1048576
+    if hi > lo && rt_os_commit(rt_int_addr(at +% lo), hi -% lo) != 0 { heap_stop() }
+    at +% used
 }
 
 //~ The lane (size class) of the block at `p`.

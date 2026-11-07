@@ -666,6 +666,13 @@ impl Machine<'_> {
         );
         let sized = |n: i64| n > 0 && n % PAGE == 0;
         let known = |s: &Self, p: i64| matches!(s.heap.get(&(p as usize)), Some((_, true)));
+        // A commit or an advice may name any page-aligned range inside a reservation (as `mprotect` does).
+        let inside = |s: &Self, p: i64, n: i64| {
+            s.heap
+                .range(..=p as usize)
+                .next_back()
+                .is_some_and(|(at, (size, live))| *live && p as usize + n as usize <= at + size)
+        };
         Ok(match k {
             OsKind::Write | OsKind::Read | OsKind::Exit | OsKind::Argv => {
                 return self.os_layer(k, a, b, c)
@@ -684,7 +691,7 @@ impl Machine<'_> {
                 }
             }
             OsKind::Commit | OsKind::AdviseNoHuge => {
-                if !sized(b) || a % PAGE != 0 || !known(self, a) {
+                if !sized(b) || a % PAGE != 0 || a <= 0 || !inside(self, a, b) {
                     OS_BAD
                 } else {
                     0
