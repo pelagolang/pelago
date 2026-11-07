@@ -638,6 +638,12 @@ impl<'a> Lowerer<'a> {
                 if attrs.iter().any(|a| a.name.text(src) == "checkfree") {
                     func.checkfree = Some((file.0, decl.name.span));
                 }
+                if attrs.iter().any(|a| a.name.text(src) == "inline_always") {
+                    func.inline_always = Some((file.0, decl.name.span));
+                }
+                if attrs.iter().any(|a| a.name.text(src) == "leaf") {
+                    func.leaf = Some((file.0, decl.name.span));
+                }
                 self.module.funcs[id.0 as usize] = func;
             }
             (_, fail) => {

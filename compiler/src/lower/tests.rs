@@ -3222,3 +3222,37 @@ fn pool_slots_are_as_small_as_the_value_and_reuse_freed_ones() {
     assert_eq!(output_of(src), "9 900 8 800 500 3 4\n");
     agree(src);
 }
+
+#[test]
+fn inline_always_copies_a_big_function_and_leaf_is_checked() {
+    let src = "@inline_always
+        fn big(x: int) -> int {
+            var s = x
+            for i in 0..40 { s = s + i * x % 7 + (s ^ i) % 5 }
+            return s
+        }
+        @leaf
+        fn two(x: int) -> int { return x * 2 }
+        fn rec(n: int) -> int {
+            if n < 2 { return n }
+            return rec(n - 1) + rec(n - 2)
+        }
+        @leaf
+        fn bad(n: int) -> int { return rec(n) }
+        fn main() { print(big(3) + two(4) + bad(5)) }";
+    agree(src);
+    let mut m = lowered(src).module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let find = |n: &str| m.funcs.iter().position(|f| f.name == n);
+    // Every call to the big function is gone, though it is far over the size limit.
+    let big = crate::ir::FuncId(find("big").map_or(u32::MAX, |i| i as u32));
+    assert!(m.funcs.iter().all(|f| !crate::ir::opt::calls(f, big)));
+    // `two` keeps its promise, `bad` calls a recursive function and does not.
+    assert!(m
+        .funcs
+        .iter()
+        .find(|f| f.name == "two")
+        .is_none_or(crate::ir::opt::is_leaf));
+    let bad = m.funcs.iter().find(|f| f.name == "bad").unwrap();
+    assert!(bad.leaf.is_some() && !crate::ir::opt::is_leaf(bad));
+}
