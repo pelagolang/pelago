@@ -123,6 +123,7 @@ pub mod a64;
 pub mod a64_emit;
 pub mod a64_mir;
 pub mod a64_select;
+pub mod clobber;
 pub mod elf;
 pub mod exec;
 pub mod gen;
