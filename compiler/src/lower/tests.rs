@@ -2283,6 +2283,17 @@ fn a_branch_with_plain_sides_becomes_a_select() {
 }
 
 #[test]
+fn a_range_test_becomes_one_unsigned_compare() {
+    let src = "fn digit(c: int) -> bool { c >= 48 && c <= 57 }\nfn main() { var n = 0\n for i in -5..120 { if digit(i) { n += 1 } }\n print(n) }";
+    let l = lowered(src);
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let text = crate::ir::print_func(m.funcs.iter().find(|f| f.name == "digit").unwrap(), None);
+    assert!(!text.contains("select"), "{text}");
+    agree(src);
+}
+
+#[test]
 fn masks_nobody_reads_go_and_counters_that_move_together_become_one() {
     let src = "fn main() { var x = 1\n var y = 2\n var t = 0\n for i in 0..1000 { x += 3\n y += 1\n t += (x * 3 + y) & 1023\n x = x & 65535\n y = y & 65535 }\n print(t) }";
     let l = lowered(src);

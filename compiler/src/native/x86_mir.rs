@@ -19,6 +19,7 @@ pub const RAX: PReg = PReg(0);
 pub const RCX: PReg = PReg(1);
 pub const RDX: PReg = PReg(2);
 pub const RBX: PReg = PReg(3);
+pub const RBP: PReg = PReg(5);
 pub const RSI: PReg = PReg(6);
 pub const RDI: PReg = PReg(7);
 pub const R8: PReg = PReg(8);
@@ -273,7 +274,7 @@ impl X86 {
             regs,
             // Caller-saved first (free when nothing is called while the value lives), then the
             // callee-saved ones.
-            int: vec![R10, R8, R9, RSI, RDI, RBX, R12, R13, R14, R15],
+            int: vec![R10, R8, R9, RSI, RDI, RBX, R12, R13, R14, R15, RBP],
             float: (0..13).map(xmm).collect(),
             int_scratch: vec![RAX, R11, RCX, RDX],
             float_scratch: vec![xmm(15), xmm(14), xmm(13)],

@@ -175,11 +175,9 @@ fn try_block(f: &mut Func, h: usize, preds: &[usize]) -> bool {
         let Some(s) = s else { continue };
         for &i in &s.insts {
             if let Op::Checked(o, signed, a, b) = f.insts[i].op.clone() {
-                // The test stands alone and its result is unused; the value is the plain operation, so
-                // the chain that feeds the select is as short as it can be.
-                let ty = f.ty(a);
-                add(f, Op::CheckedIf(o, signed, test, a, b), ty);
-                f.insts[i].op = Op::Bin(o, a, b);
+                // The value stays the plain operation's: the code generator adds once and tests the
+                // overflow flag where the test holds.
+                f.insts[i].op = Op::CheckedIf(o, signed, test, a, b);
             }
             f.blocks[h].insts.push(i);
         }
