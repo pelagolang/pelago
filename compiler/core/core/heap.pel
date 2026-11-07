@@ -1,0 +1,226 @@
+/// The heap, written in the language (docs/design/heap.md, stage H6).
+///
+/// One reserved region holds every block of 8192 bytes or less, in 64 KiB spans of one size class each, with no header.
+/// A bigger block has a mapping of its own and a 16-byte header with its size. The state lives in static data words:
+/// 0 region start, 1 region size, 2 next unused span, 3 live blocks (for the leak check), 4 how far the region is committed.
+/// Class entries (32 bytes: free list head, bump position, bump limit, block size) sit at the start of the region, the
+/// span table (one byte per span, the class plus one) after them. Fresh span memory is zero; a reused block is zeroed
+/// when it is handed out.
+
+const HEAP_CLASSES: int = 36
+const HEAP_SMALL_MAX: int = 8192
+const HEAP_SPAN: int = 65536
+const HEAP_TABLE: int = 2048
+const HEAP_REGION: int = 68719476736
+const HEAP_REGION_MIN: int = 16777216
+
+pub fn heap_ld(a: int) -> int = rt_load_int(rt_int_addr(a))
+
+pub fn heap_st(a: int, v: int) {
+    rt_store_int(rt_int_addr(a), v)
+}
+
+fn heap_lowbit(m: int) -> int {
+    var e = 0
+    var x = m
+    if x >= 4294967296 {
+        x = x >> 32
+        e += 32
+    }
+    if x >= 65536 {
+        x = x >> 16
+        e += 16
+    }
+    if x >= 256 {
+        x = x >> 8
+        e += 8
+    }
+    if x >= 16 {
+        x = x >> 4
+        e += 4
+    }
+    if x >= 4 {
+        x = x >> 2
+        e += 2
+    }
+    if x >= 2 { e += 1 }
+    e
+}
+
+//~ The size class of a block of `n` bytes (`n` is 1 to 8192).
+pub fn heap_class(n: int) -> int {
+    if n <= 256 { return ((n + 15) >> 4) - 1 }
+    const m = n - 1
+    const e = heap_lowbit(m)
+    4 * e - 16 + ((m >> (e - 2)) & 3)
+}
+
+//~ The block size of class `k`: 16-byte steps up to 256, then four steps per doubling.
+pub fn heap_block_size(k: int) -> int {
+    if k < 16 { return (k + 1) * 16 }
+    const e = (k + 16) >> 2
+    (5 + (k & 3)) << (e - 2)
+}
+
+fn heap_base() -> int = rt_load_int(rt_data_word(0))
+
+fn heap_stop() {
+    rt_os_exit(1)
+}
+
+//~ Reserves the region on first use, halving the request until the system agrees.
+fn heap_init() {
+    var size = HEAP_REGION
+    var at = 0
+    while size >= HEAP_REGION_MIN {
+        const r = rt_os_reserve(size)
+        if r > 0 {
+            at = r
+            break
+        }
+        size = size >> 1
+    }
+    if at == 0 { heap_stop() }
+    rt_os_advise_nohuge(rt_int_addr(at), size)
+    const first = at + HEAP_TABLE + (size >> 16)
+    const start = (first + HEAP_SPAN - 1) / HEAP_SPAN * HEAP_SPAN
+    rt_store_int(rt_data_word(0), at)
+    rt_store_int(rt_data_word(1), size)
+    rt_store_int(rt_data_word(2), start)
+    rt_store_int(rt_data_word(4), at)
+    heap_commit(start + HEAP_SPAN)
+    var k = 0
+    while k < HEAP_CLASSES {
+        heap_st(at + k * 32 + 24, heap_block_size(k))
+        k += 1
+    }
+}
+
+//~ Makes the region usable up to `upto`: doubling steps, so a growing heap makes few calls.
+fn heap_commit(upto: int) {
+    const done = rt_load_int(rt_data_word(4))
+    const at = heap_base()
+    var want = done - at
+    if want < 1048576 { want = 1048576 }
+    while at + want < upto { want = want * 2 }
+    const size = rt_load_int(rt_data_word(1))
+    if want > size { want = size }
+    if rt_os_commit(rt_int_addr(done), at + want - done) != 0 { heap_stop() }
+    rt_store_int(rt_data_word(4), at + want)
+}
+
+//~ Takes a fresh span for class `k`, gives its first block.
+fn heap_refill(k: int, entry: int) -> int {
+    const at = heap_base()
+    const sp = rt_load_int(rt_data_word(2))
+    if sp + HEAP_SPAN > at + rt_load_int(rt_data_word(1)) { heap_stop() }
+    if sp + HEAP_SPAN > rt_load_int(rt_data_word(4)) { heap_commit(sp + HEAP_SPAN) }
+    rt_store_int(rt_data_word(2), sp + HEAP_SPAN)
+    rt_store_byte(rt_int_addr(at + HEAP_TABLE + ((sp - at) >> 16)), (k + 1).wrapToByte())
+    const bs = heap_ld(entry + 24)
+    heap_st(entry + 8, sp + bs)
+    heap_st(entry + 16, sp + HEAP_SPAN / bs * bs)
+    sp
+}
+
+fn heap_large_alloc(n: int) -> int {
+    const bytes = (n + 16 + 4095) / 4096 * 4096
+    const r = rt_os_reserve(bytes)
+    if r <= 0 { heap_stop() }
+    if rt_os_commit(rt_int_addr(r), bytes) != 0 { heap_stop() }
+    heap_st(r, bytes)
+    r + 16
+}
+
+//~ Zeroed memory of `n` bytes, 16-byte aligned; stops when there is none.
+pub fn heap_alloc(n: int) -> int {
+    if rt_load_int(rt_data_word(0)) == 0 { heap_init() }
+    rt_store_int(rt_data_word(3), rt_load_int(rt_data_word(3)) + 1)
+    if n > HEAP_SMALL_MAX { return heap_large_alloc(n) }
+    var size = n
+    if size < 1 { size = 1 }
+    const k = heap_class(size)
+    const entry = heap_base() + k * 32
+    const head = heap_ld(entry)
+    if head != 0 {
+        heap_st(entry, heap_ld(head))
+        const bs = heap_ld(entry + 24)
+        var i = 0
+        while i < bs {
+            heap_st(head + i, 0)
+            i += 8
+        }
+        return head
+    }
+    const bump = heap_ld(entry + 8)
+    const bs = heap_ld(entry + 24)
+    if bump != 0 && bump + bs <= heap_ld(entry + 16) {
+        heap_st(entry + 8, bump + bs)
+        return bump
+    }
+    heap_refill(k, entry)
+}
+
+fn heap_in_region(p: int) -> bool {
+    const at = heap_base()
+    p >= at && p < at + rt_load_int(rt_data_word(1))
+}
+
+//~ The size class of the region block at `p`.
+fn heap_class_of(p: int) -> int {
+    const at = heap_base()
+    (rt_load_byte(rt_int_addr(at + HEAP_TABLE + ((p - at) >> 16))) to int) - 1
+}
+
+//~ Gives a block back (`p` is a block from `heap_alloc` or `0`).
+pub fn heap_free(p: int) {
+    if p == 0 { return }
+    rt_store_int(rt_data_word(3), rt_load_int(rt_data_word(3)) - 1)
+    if heap_in_region(p) {
+        const entry = heap_base() + heap_class_of(p) * 32
+        heap_st(p, heap_ld(entry))
+        heap_st(entry, p)
+    } else {
+        rt_os_release(rt_int_addr(p - 16), heap_ld(p - 16))
+    }
+}
+
+//~ A block of `n` bytes holding the first bytes of `p` (`0` allocates), the rest zero; `p` is dead afterwards.
+pub fn heap_realloc(p: int, n: int) -> int {
+    if p == 0 { return heap_alloc(n) }
+    var have = 0
+    if heap_in_region(p) {
+        have = heap_ld(heap_base() + heap_class_of(p) * 32 + 24)
+        if n <= have { return p }
+    } else {
+        have = heap_ld(p - 16) - 16
+        if n > HEAP_SMALL_MAX {
+            const bytes = (n + 16 + 4095) / 4096 * 4096
+            if bytes == have + 16 { return p }
+            const r = rt_os_remap(rt_int_addr(p - 16), have + 16, bytes)
+            if r <= 0 { heap_stop() }
+            heap_st(r, bytes)
+            return r + 16
+        }
+    }
+    const q = heap_alloc(n)
+    var m = have
+    if n < m { m = n }
+    rt_copy(rt_int_addr(q), rt_int_addr(p), m)
+    heap_free(p)
+    q
+}
+
+//~ The number of blocks handed out and not given back.
+pub fn heap_live() -> int = rt_load_int(rt_data_word(3))
+
+//~ Gives the whole region back and forgets the state (for the end of a program or a test). Blocks in it are dead.
+pub fn heap_trim() {
+    const at = heap_base()
+    if at == 0 { return }
+    rt_os_release(rt_int_addr(at), rt_load_int(rt_data_word(1)))
+    rt_store_int(rt_data_word(0), 0)
+    rt_store_int(rt_data_word(1), 0)
+    rt_store_int(rt_data_word(2), 0)
+    rt_store_int(rt_data_word(4), 0)
+}

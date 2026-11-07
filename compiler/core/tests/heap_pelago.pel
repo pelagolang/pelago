@@ -1,0 +1,38 @@
+/// The allocator written in the language, driven directly: classes, reuse, large blocks, realloc, live count.
+fn main() {
+    print(heap_class(1), heap_class(16), heap_class(17), heap_class(256), heap_class(257), heap_class(8192))
+    print(heap_block_size(0), heap_block_size(15), heap_block_size(16), heap_block_size(17), heap_block_size(35))
+    const a = heap_alloc(24)
+    const b = heap_alloc(24)
+    print(a != b, a % 16, heap_ld(a), heap_ld(a + 16))
+    heap_st(a, 77)
+    heap_free(a)
+    const c = heap_alloc(20)
+    print(c == a, heap_ld(c))
+    print(heap_live())
+    heap_free(b)
+    heap_free(c)
+    print(heap_live())
+    var sum = 0
+    var i = 0
+    while i < 3000 {
+        const p = heap_alloc(100 + i % 200)
+        heap_st(p, i)
+        sum += heap_ld(p)
+        heap_free(p)
+        i += 1
+    }
+    print(sum, heap_live())
+    const big = heap_alloc(100000)
+    heap_st(big + 99992, 5)
+    const big2 = heap_realloc(big, 300000)
+    print(heap_ld(big2 + 99992), heap_ld(big2 + 299992))
+    const small = heap_alloc(40)
+    heap_st(small, 9)
+    const small2 = heap_realloc(small, 5000)
+    print(heap_ld(small2), heap_ld(small2 + 4000))
+    heap_free(big2)
+    heap_free(small2)
+    print(heap_live())
+    heap_trim()
+}
