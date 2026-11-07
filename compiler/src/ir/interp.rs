@@ -669,7 +669,16 @@ impl Machine<'_> {
         }
     }
 
+    /// Not inlined into `exec`: its frame is on the stack of every interpreted call, and the stack depth is
+    /// what a deeply recursive program runs out of first.
+    #[inline(never)]
+    fn os_exec(&mut self, vals: &[Val], o: OsOp, args: &[Value]) -> Result<Val, String> {
+        let a: Vec<Val> = args.iter().map(|v| vals[v.0 as usize]).collect();
+        self.os_call(o, &a)
+    }
+
     /// The interpreter's stand-in for the operating system layer (`OsOp`).
+    #[inline(never)]
     fn os_call(&mut self, o: OsOp, a: &[Val]) -> Result<Val, String> {
         let to_addr = |v: &Val| match v {
             Val::Ptr(p) => Ok(*p),
@@ -942,7 +951,7 @@ impl Machine<'_> {
                 self.write(a, t, get(x))?;
                 Val::Unit
             }
-            Op::Os(o, args) => self.os_call(*o, &args.iter().map(get).collect::<Vec<_>>())?,
+            Op::Os(o, args) => self.os_exec(vals, *o, args)?,
             Op::Print(p, n) => {
                 let (a, n) = (addr(&get(p))?, get(n).signed(64) as usize);
                 self.check(a, n)?;
