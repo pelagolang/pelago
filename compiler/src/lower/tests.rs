@@ -3354,3 +3354,10 @@ fn inline_always_copies_a_big_function_and_leaf_is_checked() {
     let bad = m.funcs.iter().find(|f| f.name == "bad").unwrap();
     assert!(bad.leaf.is_some() && !crate::ir::opt::is_leaf(bad));
 }
+
+#[test]
+fn split_finds_separators_of_every_length() {
+    let src = "fn main() {\n var n = 0\n for w of \"a,b,,c\".split(\",\") { n += w.len() }\n print(n)\n for w of \"x--y-z---w\".split(\"--\") { print(w) }\n for w of \"abcabcabd\".split(\"abd\") { print(w) }\n for w of \"ab\".split(\"abc\") { print(w) }\n for w of \"aab\".split(\"ab\") { print(w) }\n print(\"1 22 333\".split(\" \").toList().len()) }\n";
+    assert_eq!(output_of(src), "3\nx\ny-z\n-w\nabcabc\n\nab\na\n\n3\n");
+    agree(src);
+}

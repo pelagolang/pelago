@@ -28,9 +28,14 @@ pub fn rt_char_at(p: ptr, i: int, n: int) -> int {
 //~ An empty separator never matches. `for w of s.split(sep)` calls it in place, so the loop builds no list.
 pub fn rt_split_end(p: ptr, n: int, sp: ptr, sn: int, pos: int) -> int {
     if sn == 0 { return n }
+    /// One byte is compared per position; the rest of the separator only when that byte matches (for a one-byte separator, never).
+    const first = rt_load_byte(sp)
+    const last = n - sn
     var i = pos
-    while i + sn <= n {
-        if rt_bytes_eq(rt_offset(p, i), sp, sn) { return i }
+    while i <= last {
+        if rt_load_byte(rt_offset(p, i)) == first {
+            if sn == 1 || rt_bytes_eq(rt_offset(p, i + 1), rt_offset(sp, 1), sn - 1) { return i }
+        }
         i += 1
     }
     n
