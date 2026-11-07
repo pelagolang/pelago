@@ -1,6 +1,6 @@
 # OS memory intrinsics (M7)
 
-Status: draft for the owner. Asked for by the heap thread (H6); built on the machine IR (`mir.md`), which is now the default generator.
+Status: part 1 (section 1) built; sections 2 to 4 are next. The four questions at the end were answered by the coordinator on the owner's delegation (2026-11-07): take the recommendations. Drafted for the owner. Asked for by the heap thread (H6); built on the machine IR (`mir.md`), which is now the default generator.
 
 ## What the heap needs
 
@@ -12,6 +12,8 @@ A heap written in Pelago needs four things the compiler does not give it today:
 4. Words of static data it can read and write (the heap's own state).
 
 ## 1. The intrinsics
+
+**Built.** The names are `rt_os_reserve`, `rt_os_commit`, `rt_os_release`, `rt_os_remap`, `rt_os_advise_nohuge` (every compiler intrinsic in `core` starts with `rt_`) plus `rt_int_addr(n) -> ptr` to turn the returned address into a pointer. They take and give `int` (an address is an `i64` in the IR: `Op::Os(kind, a, b, c)`); a `ptr` argument is converted by the lowering. Addresses and sizes must be whole 4096-byte pages, else `-2`. A system error is `-1` (`ENOMEM`), `-2` (`EINVAL`) or `-3`. The `PELAGO_OS_FAIL` test hook was dropped: the error paths are testable with a size of `1 << 62` (`-1`) and with unaligned arguments (`-2`), see `compiler/core/tests/os_memory.pel`. The interpreter implements the calls on its own heap (a reservation is a zeroed, page-aligned block). `Remap` is `mremap` on Linux and reserve, copy, release elsewhere. x86-64 and AArch64 (Linux, Windows, macOS) routines are in `rt.rs` and `rt_a64.rs`; the Windows and macOS ones are tested by CI only.
 
 All take and give `int` (addresses are `ptr` where the library already uses it) and return a negative `int` on failure, never stop the program. Success is a non-negative address or `0`.
 

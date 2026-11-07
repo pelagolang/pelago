@@ -10,6 +10,20 @@ pub ext fn rt_alloc(size: int) -> ptr
 pub ext fn rt_free(p: ptr)
 //~ A block of `size` bytes holding the first bytes of `p` (null allocates), the rest zero; `p` is dead afterwards.
 pub ext fn rt_realloc(p: ptr, size: int) -> ptr
+//~ The operating system's memory, for allocators (`docs/design/os-memory.md`). Each gives an address or `0`, or a negative
+//~ error: -1 out of memory, -2 a bad argument (a size or address that is not a whole number of 4096-byte pages), -3 another failure.
+//~ Address space of `size` bytes with no access.
+pub ext fn rt_os_reserve(size: int) -> int
+//~ Makes a reserved range readable and writable.
+pub ext fn rt_os_commit(p: ptr, size: int) -> int
+//~ Gives a range back.
+pub ext fn rt_os_release(p: ptr, size: int) -> int
+//~ Moves or grows a block from `old` to `new` bytes, keeping the first bytes; gives the new address (the old one is dead).
+pub ext fn rt_os_remap(p: ptr, old: int, new: int) -> int
+//~ Asks the system not to use huge pages for a range (only a hint; does nothing where there are none).
+pub ext fn rt_os_advise_nohuge(p: ptr, size: int) -> int
+//~ The address a number names, for the results of the calls above.
+pub ext fn rt_int_addr(n: int) -> ptr
 //~ A context: a stack at `base` of `size` bytes that starts by calling `code(env)` (a closure's two words), which must never return.
 //~ Nothing runs until something switches to the handle it returns.
 pub ext fn rt_ctx_init(base: ptr, size: int, code: ptr, env: ptr) -> ptr

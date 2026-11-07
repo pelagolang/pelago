@@ -281,6 +281,10 @@ impl Op {
                 f(*c);
                 f(*d);
             }
+            Op::Os(k, a, b, c) => {
+                let all = [*a, *b, *c];
+                all[..k.arity()].iter().for_each(|v| f(*v));
+            }
             Op::Neg(a)
             | Op::FUn(_, a)
             | Op::Not(a)
@@ -328,6 +332,11 @@ impl Op {
                 *b = f(*b);
                 *c = f(*c);
                 *d = f(*d);
+            }
+            Op::Os(_, a, b, c) => {
+                *a = f(*a);
+                *b = f(*b);
+                *c = f(*c);
             }
             Op::Neg(a)
             | Op::FUn(_, a)

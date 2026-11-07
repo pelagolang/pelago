@@ -115,6 +115,51 @@ impl<'a> Lowerer<'a> {
                 self.emit(Op::Free(p), None, sp);
                 Res::Unit
             }
+            "rt_os_reserve"
+            | "rt_os_commit"
+            | "rt_os_release"
+            | "rt_os_remap"
+            | "rt_os_advise_nohuge" => {
+                let kind = match name.as_str() {
+                    "rt_os_reserve" => crate::ir::OsKind::Reserve,
+                    "rt_os_commit" => crate::ir::OsKind::Commit,
+                    "rt_os_release" => crate::ir::OsKind::Release,
+                    "rt_os_remap" => crate::ir::OsKind::Remap,
+                    _ => crate::ir::OsKind::AdviseNoHuge,
+                };
+                let mut vs = Vec::new();
+                for i in 0..kind.arity() {
+                    let Some(v) = self.arg_scalar(args, i) else {
+                        return Res::Never;
+                    };
+                    // An address travels as an `i64`.
+                    let v = if i == 0 && kind != crate::ir::OsKind::Reserve {
+                        let Some(n) = self.emit(
+                            Op::Cast(CastKind::PtrToInt, v, IrTy::I64),
+                            Some(IrTy::I64),
+                            sp,
+                        ) else {
+                            return Res::Never;
+                        };
+                        n
+                    } else {
+                        v
+                    };
+                    vs.push(v);
+                }
+                let (a, b, c) = (
+                    vs[0],
+                    *vs.get(1).unwrap_or(&vs[0]),
+                    *vs.get(2).unwrap_or(&vs[0]),
+                );
+                self.wrap(Op::Os(kind, a, b, c), IrTy::I64, sp)
+            }
+            "rt_int_addr" => {
+                let Some(n) = self.arg_scalar(args, 0) else {
+                    return Res::Never;
+                };
+                self.wrap(Op::Cast(CastKind::IntToPtr, n, ptr), ptr, sp)
+            }
             "rt_ctx_init" => {
                 let (Some(b), Some(n), Some(c), Some(e)) = (
                     self.arg_scalar(args, 0),
