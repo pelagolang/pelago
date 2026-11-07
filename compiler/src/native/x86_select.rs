@@ -19,7 +19,9 @@ use super::regs::{folds, fused_cmp, small_copy, Base, Fold};
 use super::x86_mir::{self as x, call_clobbers, cc_num, op, Cc, INT_ARGS, SYM_FUNC};
 use super::x86_mir::{RAX, RCX, RDX, RSI};
 use crate::ir::Target as JumpTarget;
-use crate::ir::{BinOp, CastKind, CmpOp, Const, FUn, Func, IrTy, Op, Term, Test, VBin, VUn, Value};
+use crate::ir::{
+    BinOp, CastKind, CmpOp, Const, FUn, Func, IrTy, Op, OsKind, Term, Test, VBin, VUn, Value,
+};
 use std::collections::HashMap;
 
 fn bits(t: IrTy) -> u32 {
@@ -1026,6 +1028,13 @@ impl<'m> Sel<'m> {
             Op::Realloc(p, n) => {
                 let (a, b) = (self.src(*p), self.src(*n));
                 self.runtime(op::RT_REALLOC, vec![(x::RDI, a), (RSI, b)], res);
+            }
+            Op::Os(k, a, b, c) => {
+                let ops = [self.src(*a), self.src(*b), self.src(*c)];
+                let regs = [x::RDI, RSI, RDX];
+                let args = (0..k.arity()).map(|i| (regs[i], ops[i].clone())).collect();
+                let which = op::RT_OS + OsKind::ALL.iter().position(|x| x == k).unwrap() as i64;
+                self.runtime(which, args, res);
             }
             Op::Print(p, n) => {
                 let (a, b) = (self.src(*p), self.src(*n));

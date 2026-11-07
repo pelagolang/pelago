@@ -318,6 +318,57 @@ impl FUn {
     }
 }
 
+/// The operating system memory calls (`docs/design/os-memory.md`). Each takes up to three `i64` or `ptr`
+/// operands and gives an `i64`: an address or `0` for success, a negative error otherwise
+/// (`OS_NOMEM`, `OS_BAD`, `OS_FAIL`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OsKind {
+    /// `(size)`: address-space only, no access (`mmap` `PROT_NONE`, `VirtualAlloc` `MEM_RESERVE`).
+    Reserve,
+    /// `(address, size)`: make a reserved range readable and writable.
+    Commit,
+    /// `(address, size)`: give the range back.
+    Release,
+    /// `(address, old size, new size)`: move or grow a block, the first bytes kept; gives the new address.
+    Remap,
+    /// `(address, size)`: ask the system not to use huge pages here (a hint; a no-op where there is none).
+    AdviseNoHuge,
+}
+
+impl OsKind {
+    pub const ALL: [OsKind; 5] = [
+        OsKind::Reserve,
+        OsKind::Commit,
+        OsKind::Release,
+        OsKind::Remap,
+        OsKind::AdviseNoHuge,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            OsKind::Reserve => "os_reserve",
+            OsKind::Commit => "os_commit",
+            OsKind::Release => "os_release",
+            OsKind::Remap => "os_remap",
+            OsKind::AdviseNoHuge => "os_advise_nohuge",
+        }
+    }
+
+    /// How many operands the call reads (the others are not looked at).
+    pub fn arity(self) -> usize {
+        match self {
+            OsKind::Reserve => 1,
+            OsKind::Commit | OsKind::Release | OsKind::AdviseNoHuge => 2,
+            OsKind::Remap => 3,
+        }
+    }
+}
+
+/// The error values of an `OsKind` call.
+pub const OS_NOMEM: i64 = -1;
+pub const OS_BAD: i64 = -2;
+pub const OS_FAIL: i64 = -3;
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Op {
     Const(IrTy, Const),
@@ -370,6 +421,8 @@ pub enum Op {
     /// Saves the running context's handle at the address in the first value and continues the context
     /// whose handle is the second. Comes back when something switches to the saved handle.
     CtxSwitch(Value, Value),
+    /// An operating system memory call (see `OsKind`); the operands past its arity repeat the first.
+    Os(OsKind, Value, Value, Value),
 }
 
 #[derive(Clone, PartialEq, Debug)]

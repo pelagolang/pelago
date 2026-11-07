@@ -114,6 +114,8 @@ pub mod op {
     pub const RT_PRINT: i64 = 3;
     pub const RT_CTX_INIT: i64 = 4;
     pub const RT_CTX_SWITCH: i64 = 5;
+    /// The OS memory calls: `RT_OS + OsKind as i64`.
+    pub const RT_OS: i64 = 16;
     /// Epilogue and `ret`; `[rax Use]` when a value is returned.
     pub const RET: u16 = B + 31;
     /// Stop the program with the message number `Imm`: `[Imm n]`.

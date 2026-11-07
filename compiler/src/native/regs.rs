@@ -243,6 +243,7 @@ pub(super) fn inst_uses(op: &Op, out: &mut Vec<Value>) {
         | Op::CtxSwitch(a, b)
         | Op::Print(a, b) => out.extend([*a, *b]),
         Op::CtxInit(a, b, c, d) => out.extend([*a, *b, *c, *d]),
+        Op::Os(k, a, b, c) => out.extend(&[*a, *b, *c][..k.arity()]),
         Op::CheckedIf(_, _, test, a, b) => {
             test.for_each_value(|v| out.push(v));
             out.extend([*a, *b]);

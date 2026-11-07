@@ -227,6 +227,7 @@ fn inputs(op: &Op) -> Vec<Value> {
             vec![*a, *b]
         }
         Op::CtxInit(a, b, c, d) => vec![*a, *b, *c, *d],
+        Op::Os(k, a, b, c) => [*a, *b, *c][..k.arity()].to_vec(),
         Op::Neg(a)
         | Op::FUn(_, a)
         | Op::Not(a)
@@ -552,6 +553,17 @@ fn check_inst(f: &Func, m: Option<&Module>, inst: &Inst) -> Vec<String> {
             }
             if result_ty != Some(IrTy::Ptr) {
                 e.push("`ctxinit` makes a ptr".to_string());
+            }
+        }
+        Op::Os(k, a, b, c) => {
+            if [*a, *b, *c][..k.arity()]
+                .iter()
+                .any(|x| t(*x) != Some(IrTy::I64))
+            {
+                e.push(format!("`{}` needs i64 operands", k.name()));
+            }
+            if result_ty != Some(IrTy::I64) {
+                e.push(format!("`{}` makes an i64", k.name()));
             }
         }
         Op::CtxSwitch(s, to) => {

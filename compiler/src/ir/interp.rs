@@ -68,7 +68,7 @@ const FUNC_BASE: usize = 1 << 40;
 const STACK_SIZE: usize = 8 << 20;
 /// Deep chains (a list of ten thousand boxes) recurse once per node; the host thread that runs the
 /// machine gets a big stack for it.
-const HOST_STACK: usize = 1 << 30;
+const HOST_STACK: usize = if cfg!(windows) { 3 << 29 } else { 1 << 30 };
 const MAX_DEPTH: u32 = 200_000;
 /// A context started by `CtxInit` runs on a host thread of its own; it gets a smaller host stack and call depth.
 const CTX_HOST_STACK: usize = 64 << 20;
@@ -588,6 +588,72 @@ impl Machine<'_> {
         addr
     }
 
+    /// The OS memory calls on the interpreter's heap: a reservation is a zeroed block, a commit and an
+    /// advice change nothing, a remap is a reallocation. The error values are those of the compiled code.
+    #[inline(never)]
+    fn os_op(&mut self, vals: &[Val], k: OsKind, v: [&Value; 3]) -> Result<Val, String> {
+        let g = |x: &Value| vals[x.0 as usize];
+        Ok(Val::int(self.os_call(k, g(v[0]), g(v[1]), g(v[2]))?))
+    }
+
+    #[inline(never)]
+    fn os_call(&mut self, k: OsKind, a: Val, b: Val, c: Val) -> Result<i64, String> {
+        const PAGE: i64 = 4096;
+        let (a, b, c) = (
+            a.signed(64) as i64,
+            b.signed(64) as i64,
+            c.signed(64) as i64,
+        );
+        let sized = |n: i64| n > 0 && n % PAGE == 0;
+        let known = |s: &Self, p: i64| matches!(s.heap.get(&(p as usize)), Some((_, true)));
+        Ok(match k {
+            OsKind::Reserve => {
+                if !sized(a) {
+                    OS_BAD
+                } else if a > (1 << 32) {
+                    OS_NOMEM
+                } else {
+                    // A reservation starts on a page.
+                    while !(self.mem.len() + 16).is_multiple_of(PAGE as usize) {
+                        self.mem.push(0);
+                    }
+                    self.alloc(a as usize) as i64
+                }
+            }
+            OsKind::Commit | OsKind::AdviseNoHuge => {
+                if !sized(b) || a % PAGE != 0 || !known(self, a) {
+                    OS_BAD
+                } else {
+                    0
+                }
+            }
+            OsKind::Release => {
+                if !sized(b) || !known(self, a) {
+                    OS_BAD
+                } else {
+                    self.free(Val::Ptr(a as usize))?;
+                    0
+                }
+            }
+            OsKind::Remap => {
+                if !sized(b) || !sized(c) || !known(self, a) {
+                    OS_BAD
+                } else if c > (1 << 32) {
+                    OS_NOMEM
+                } else {
+                    while !(self.mem.len() + 16).is_multiple_of(PAGE as usize) {
+                        self.mem.push(0);
+                    }
+                    let new = self.alloc(c as usize);
+                    let keep = b.min(c) as usize;
+                    self.mem.copy_within(a as usize..a as usize + keep, new);
+                    self.free(Val::Ptr(a as usize))?;
+                    new as i64
+                }
+            }
+        })
+    }
+
     fn free(&mut self, p: Val) -> Result<(), String> {
         let Val::Ptr(addr) = p else {
             return Err("freed a value that is not an address".to_string());
@@ -782,6 +848,7 @@ impl Machine<'_> {
                 addr(&get(code))?,
                 get(env),
             )?,
+            Op::Os(k, a, b, c) => self.os_op(vals, *k, [a, b, c])?,
             Op::CtxSwitch(save, to) => {
                 self.ctx_switch(addr(&get(save))?, addr(&get(to))?)?;
                 Val::Unit
