@@ -18,6 +18,7 @@
 //! | 144 | the base (lowest address) of our own stack, 0 if the system stack is used |
 //! | 152 | Windows: the lowest committed address of our stack (it grows downwards on demand) |
 //! | 160 | scratch for `VirtualProtect` (Windows) |
+//! | 168 | Linux: the kernel's start block (the stack pointer at `_start`: argument count, arguments, environment) |
 
 use super::elf::Blob;
 use super::x86::*;
@@ -304,7 +305,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `rdi`, `rsi`, `rdx`, the result in `rax` (an address or 0, or a negative error).
-    pub os: [Label; 5],
+    pub os: [Label; 9],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -353,7 +354,7 @@ pub fn emit_for(
         write_u64: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 5].map(|_| a.new_label()),
+        os: [(); 9].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -373,6 +374,11 @@ pub fn emit_for(
     };
 
     // ---- _start ------------------------------------------------------------------------------------
+    if uses.os && !win {
+        // The kernel's start block: argument count, arguments, environment (offset 168 of the state).
+        state(a, RCX, 168);
+        a.store(mem(RCX, 0), RSP, 8);
+    }
     a.alu_rr(Alu::Xor, RBP, RBP, 4);
     // A big stack of our own, taken lazily, so deep recursion works like it does in the
     // interpreter; if the mapping fails, the stack the system gave us stays.
@@ -1010,7 +1016,7 @@ pub fn emit_for(
     }
 
     if uses.os {
-        emit_os(a, &rt, win);
+        emit_os(a, &rt, win, flush, uses.print);
     }
 
     if uses.ctx {
@@ -1322,7 +1328,7 @@ fn map_failed(a: &mut Asm, r: Reg, oom: Label, win: bool) {
 /// The OS memory calls (docs/design/os-memory.md), in a function of their own: `emit_for` is already a huge
 /// frame in debug builds.
 #[inline(never)]
-fn emit_os(a: &mut Asm, rt: &Runtime, win: bool) {
+fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool) {
     // ---- the OS memory calls (docs/design/os-memory.md) ----------------------------------------------
     // Sizes and addresses must be whole pages (else -2). A system error becomes -1 (no memory), -2
     // (invalid argument) or -3. Callers treat every register but the callee-saved ones as lost.
@@ -1478,6 +1484,42 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool) {
     a.bind(other);
     a.mov_ri(RAX, -3);
     a.ret();
+    // ---- the process calls (Linux only): write(fd, ptr, len), read(fd, ptr, len), exit(status), argv() ----
+    if !win {
+        // write: standard output is flushed first, so output keeps its order; one `write`, retried when
+        // interrupted. The result is the count or a negative errno.
+        a.bind(rt.os[5]);
+        if print {
+            a.push(RDI);
+            a.push(RSI);
+            a.push(RDX);
+            a.call(flush);
+            a.pop(RDX);
+            a.pop(RSI);
+            a.pop(RDI);
+        }
+        let retry = a.new_label();
+        a.bind(retry);
+        a.mov_ri(RAX, 1);
+        a.syscall();
+        a.alu_ri(Alu::Cmp, RAX, -4, 8);
+        a.jcc(Cc::E, retry);
+        a.ret();
+        a.bind(rt.os[6]);
+        let retry = a.new_label();
+        a.bind(retry);
+        a.mov_ri(RAX, 0);
+        a.syscall();
+        a.alu_ri(Alu::Cmp, RAX, -4, 8);
+        a.jcc(Cc::E, retry);
+        a.ret();
+        a.bind(rt.os[7]);
+        a.jmp(rt.exit);
+        a.bind(rt.os[8]);
+        state(a, RAX, 168);
+        a.load(RAX, mem(RAX, 0), 8);
+        a.ret();
+    }
     a.bind(os_error);
     // Linux: `rax` is the result, or -errno in the last 4095 values.
     let ok = a.new_label();

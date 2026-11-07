@@ -77,6 +77,8 @@ const CTX_MAX_DEPTH: u32 = 20_000;
 const CTX_BASE: usize = 1 << 41;
 /// Starts the message of the error that unwinds a context thread after the run has ended.
 const SHUTDOWN: &str = "\0shutdown";
+/// The stop that `os_exit` makes; the status is in `OsState::exit`.
+const EXIT: &str = "\0exit";
 
 /// Contexts (`CtxInit`, `CtxSwitch`) are host threads that pass a baton: exactly one runs at a time, so
 /// the machine is never used by two threads at once and the order is fixed by the program.
@@ -104,6 +106,28 @@ struct CtxInfo {
 /// The machine's address, passed to a context thread. Only the thread holding the baton uses it.
 struct MachinePtr(usize);
 
+/// What the program sees of the operating system: the stand-in for `OsOp`.
+struct OsState {
+    argv: Vec<String>,
+    env: Vec<String>,
+    stdin: Vec<u8>,
+    stdin_pos: usize,
+    /// What was written to file descriptor 2.
+    err: Vec<u8>,
+    exit: Option<i32>,
+    /// The start-up block, made the first time `os_argv` is used.
+    block: usize,
+}
+
+/// The process the interpreter pretends to be in: its arguments (the first is the program's name), its
+/// environment and what standard input holds.
+#[derive(Clone, Default, Debug)]
+pub struct OsEnv {
+    pub argv: Vec<String>,
+    pub env: Vec<String>,
+    pub stdin: Vec<u8>,
+}
+
 struct Machine<'m> {
     m: &'m Module,
     mem: Vec<u8>,
@@ -116,6 +140,7 @@ struct Machine<'m> {
     /// Heap blocks by start address: size and whether still alive.
     heap: BTreeMap<usize, (usize, bool)>,
     out: Vec<u8>,
+    os: OsState,
     steps: u64,
     max_steps: u64,
     depth: u32,
@@ -137,6 +162,10 @@ struct Machine<'m> {
 pub struct Outcome {
     pub result: Result<Val, String>,
     pub output: String,
+    /// What was written to standard error with `os_write`.
+    pub err: String,
+    /// The exit status: 0, or what `os_exit` was given.
+    pub status: i32,
     pub leaked: usize,
     /// Instructions executed: the metric for the optimiser.
     pub steps: u64,
@@ -150,7 +179,12 @@ pub fn run(m: &Module, name: &str, args: &[Val]) -> Result<Val, String> {
 }
 
 pub fn run_full(m: &Module, name: &str, args: &[Val]) -> Outcome {
-    run_inner(m, name, args, DEFAULT_STEPS, None).0
+    run_inner(m, name, args, DEFAULT_STEPS, None, OsEnv::default()).0
+}
+
+/// Like [`run_full`], as a process with the given arguments, environment and standard input.
+pub fn run_os(m: &Module, name: &str, args: &[Val], os: OsEnv) -> Outcome {
+    run_inner(m, name, args, DEFAULT_STEPS, None, os).0
 }
 
 /// A run that also keeps what is left in memory, for compile-time code (`meta`).
@@ -166,7 +200,7 @@ pub struct Capture {
 /// and its address is the only argument (the function writes its result there, as functions
 /// returning memory values do); the block does not count as a leak.
 pub fn run_capture(m: &Module, name: &str, ret_size: Option<usize>, max_steps: u64) -> Capture {
-    let (outcome, image, ret_addr) = run_inner(m, name, &[], max_steps, ret_size);
+    let (outcome, image, ret_addr) = run_inner(m, name, &[], max_steps, ret_size, OsEnv::default());
     Capture {
         outcome,
         image,
@@ -182,12 +216,15 @@ fn run_inner(
     args: &[Val],
     max_steps: u64,
     ret_size: Option<usize>,
+    os: OsEnv,
 ) -> (Outcome, Vec<u8>, usize) {
     let Some(i) = m.funcs.iter().position(|f| f.name == name) else {
         return (
             Outcome {
                 result: Err(format!("no function `{name}`")),
                 output: String::new(),
+                err: String::new(),
+                status: 0,
                 leaked: 0,
                 steps: 0,
                 trace: Vec::new(),
@@ -220,6 +257,15 @@ fn run_inner(
         heap_base,
         heap: BTreeMap::new(),
         out: Vec::new(),
+        os: OsState {
+            argv: os.argv,
+            env: os.env,
+            stdin: os.stdin,
+            stdin_pos: 0,
+            err: Vec::new(),
+            exit: None,
+            block: 0,
+        },
         steps: 0,
         max_steps,
         depth: 0,
@@ -270,14 +316,28 @@ fn run_inner(
             b.1 = false;
         }
     }
-    let leaked = mc
+    let mut result = result;
+    let mut status = 0;
+    if matches!(&result, Err(m) if m == EXIT) {
+        status = mc.os.exit.unwrap_or(0);
+        result = Ok(Val::Unit);
+    }
+    if mc.os.block != 0 {
+        if let Some(b) = mc.heap.get_mut(&mc.os.block) {
+            b.1 = false;
+        }
+    }
+    // `os_exit` ends the process at once: nothing is dropped, so nothing counts as a leak.
+    let leaked: usize = mc
         .heap
         .values()
-        .filter(|(_, live)| *live)
+        .filter(|(_, live)| *live && mc.os.exit.is_none())
         .map(|(s, _)| *s)
         .sum();
     let outcome = Outcome {
         result,
+        status,
+        err: String::from_utf8_lossy(&mc.os.err).into_owned(),
         output: String::from_utf8_lossy(&mc.out).into_owned(),
         leaked,
         steps: mc.steps,
@@ -295,7 +355,7 @@ impl Machine<'_> {
     fn call(&mut self, fi: usize, args: &[Val]) -> Result<Val, String> {
         let r = self.call_inner(fi, args);
         if let Err(msg) = &r {
-            if self.trace.len() < 12 && msg != SHUTDOWN {
+            if self.trace.len() < 12 && msg != SHUTDOWN && msg != EXIT {
                 self.trace.push(self.m.funcs[fi].name.clone());
             }
         }
@@ -607,6 +667,9 @@ impl Machine<'_> {
         let sized = |n: i64| n > 0 && n % PAGE == 0;
         let known = |s: &Self, p: i64| matches!(s.heap.get(&(p as usize)), Some((_, true)));
         Ok(match k {
+            OsKind::Write | OsKind::Read | OsKind::Exit | OsKind::Argv => {
+                return self.os_layer(k, a, b, c)
+            }
             OsKind::Reserve => {
                 if !sized(a) {
                     OS_BAD
@@ -673,6 +736,68 @@ impl Machine<'_> {
             }
             None => Err("freed an address that was not allocated".to_string()),
         }
+    }
+
+    /// The interpreter's stand-in for the operating system layer (`OsKind::Write` and the others that talk to
+    /// the process rather than to memory). Kept out of `exec`: its frame is on the stack of every interpreted
+    /// call, and the stack depth is what a deeply recursive program runs out of first.
+    #[inline(never)]
+    fn os_layer(&mut self, k: OsKind, a: i64, b: i64, c: i64) -> Result<i64, String> {
+        Ok(match k {
+            OsKind::Write => {
+                let (p, n) = (b as usize, c.max(0) as usize);
+                self.check(p, n)?;
+                let bytes = self.mem[p..p + n].to_vec();
+                match a {
+                    1 => self.out.extend_from_slice(&bytes),
+                    2 => self.os.err.extend_from_slice(&bytes),
+                    _ => return Ok(-9),
+                }
+                n as i64
+            }
+            OsKind::Read => {
+                let (p, n) = (b as usize, c.max(0) as usize);
+                self.check(p, n)?;
+                if a != 0 {
+                    return Ok(-9);
+                }
+                let left = self.os.stdin.len() - self.os.stdin_pos;
+                let k = left.min(n);
+                let from = self.os.stdin_pos;
+                let chunk = self.os.stdin[from..from + k].to_vec();
+                self.mem[p..p + k].copy_from_slice(&chunk);
+                self.os.stdin_pos += k;
+                k as i64
+            }
+            OsKind::Exit => {
+                self.os.exit = Some(a as i32);
+                return Err(EXIT.to_string());
+            }
+            OsKind::Argv => {
+                if self.os.block == 0 {
+                    let (argv, env) = (self.os.argv.clone(), self.os.env.clone());
+                    let words = 1 + argv.len() + 1 + env.len() + 1;
+                    let text: usize = argv.iter().chain(&env).map(|s| s.len() + 1).sum();
+                    let base = self.alloc(words * 8 + text);
+                    let mut at = base + words * 8;
+                    let mut put = |m: &mut Self, slot: usize, s: &str| {
+                        m.mem[slot..slot + 8].copy_from_slice(&(at as u64).to_le_bytes());
+                        m.mem[at..at + s.len()].copy_from_slice(s.as_bytes());
+                        at += s.len() + 1;
+                    };
+                    self.mem[base..base + 8].copy_from_slice(&(argv.len() as u64).to_le_bytes());
+                    for (i, s) in argv.iter().enumerate() {
+                        put(self, base + 8 * (1 + i), s);
+                    }
+                    for (i, s) in env.iter().enumerate() {
+                        put(self, base + 8 * (2 + argv.len() + i), s);
+                    }
+                    self.os.block = base;
+                }
+                self.os.block as i64
+            }
+            _ => unreachable!("a memory call"),
+        })
     }
 
     fn exec(&mut self, f: &Func, vals: &[Val], op: &Op) -> Result<Val, String> {

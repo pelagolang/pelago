@@ -1,0 +1,17 @@
+/// The process: how it ends. The arguments arrive as the parameter of `main`:
+///
+/// ```
+/// import std.os
+///
+/// fn main(args: [string]) {
+///     if args.len() < 2 { os.exit(2) }
+///     print(args[1])
+/// }
+/// ```
+
+//~ Ends the program at once with this status: standard output is flushed, `defer` and `deinit` do not run
+//~ (like a panic, but without a message).
+pub fn exit(code: int) -> never {
+    rt_os_exit(code)
+    unreachable()
+}

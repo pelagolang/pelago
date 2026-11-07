@@ -169,6 +169,7 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 - **IR19** `become f(...)` on the function itself with plain number parameters is a jump to the top (no stack growth); any other `become` is a
   call followed by `return`.
 - **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa` and `async` (see the plans in `docs/plans/`).
+- **IR28** The operating system layer shares the one operation `Os(kind, a, b, c)` with the OS memory calls (`OsKind`): `os_write(fd, p, n) -> i64` and `os_read(fd, p, n) -> i64` (one system call each: the count or a negative error number; `os_write` flushes `Print`'s buffer first), `os_exit(code)` (flushes, never returns, nothing is dropped) and `os_argv() -> i64` (the address of the start block: count, argument pointers, zero, environment pointers, zero). Addresses travel as `i64`. Not pure and not moved. The interpreter has a stand-in (`OsEnv`, `Outcome.err`, `Outcome.status`). Native code has it on x86-64 Linux only; other targets refuse the program. Design: `runtime.md`.
 - **IR27** Small closing fixes. `any show` tables for types without a `show` method of their own (numbers, lists, strings...) point their `show`
   slot at the library function `rt_any_show<T>`; this was the real cause of `print(if c { 8 } else { 4 })` failing (the table had no `show`).
   `meta` results can hold `box`, maps and sets (`Cv::Boxed`, `Cv::Entries`; maps and sets are rebuilt with `rt_map_put`/`rt_set_put`).

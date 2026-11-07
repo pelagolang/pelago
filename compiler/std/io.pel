@@ -1,0 +1,81 @@
+/// Standard error and standard input. Standard output is `print`, in the prelude.
+///
+/// ```
+/// import std.io
+///
+/// fn main() {
+///     io.eprintln("warning: no input")
+///     const text = io.readAll()
+///     print(text.len())
+/// }
+/// ```
+///
+/// Reading and `eprint` go through the operating system layer (`docs/design/runtime.md`). Standard output
+/// is flushed first, so the lines of the two streams come out in the order the program wrote them.
+
+fn writeAll(fd: int, text: str) {
+    const h = rt_addr_of(text)
+    var p = rt_load_ptr(h)
+    var n = rt_hdr_len(h)
+    while n > 0 {
+        const k = rt_os_write(fd, p, n)
+        if k <= 0 { return }
+        p = rt_offset(p, k)
+        n -= k
+    }
+}
+
+//~ Writes the text to standard error.
+pub fn eprint(text: str) {
+    writeAll(2, text)
+}
+
+//~ Writes the text and a newline to standard error.
+pub fn eprintln(text: str) {
+    writeAll(2, text)
+    writeAll(2, "\n")
+}
+
+//~ Everything left on standard input, as text.
+pub fn readAll() -> string {
+    var out = ""
+    const buf = rt_alloc(4096)
+    while true {
+        const k = rt_os_read(0, buf, 4096)
+        if k <= 0 { break }
+        var i = 0
+        while i < k {
+            out.pushByte!(rt_load_byte(rt_offset(buf, i)))
+            i += 1
+        }
+    }
+    rt_free(buf)
+    out
+}
+
+//~ The next line of standard input without its line ending, or `none` at the end of the input.
+pub fn readLine() -> string? {
+    var out = ""
+    var got = false
+    const buf = rt_alloc(8)
+    while true {
+        const k = rt_os_read(0, buf, 1)
+        if k <= 0 { break }
+        got = true
+        const b = rt_load_byte(buf)
+        if b == 10 { break }
+        out.pushByte!(b)
+    }
+    rt_free(buf)
+    if !got { return none }
+    if out.len() > 0 && out.byteAt(out.len() - 1) == 13 {
+        var cut = ""
+        var i = 0
+        while i < out.len() - 1 {
+            cut.pushByte!(out.byteAt(i))
+            i += 1
+        }
+        return cut
+    }
+    out
+}
