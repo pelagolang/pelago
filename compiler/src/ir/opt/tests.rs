@@ -2116,3 +2116,44 @@ fn a_signed_comparison_of_small_values_is_decided() {
         .iter()
         .any(|i| matches!(i.op, Op::Const(IrTy::Bool, Const::Bool(true)))));
 }
+
+#[test]
+fn a_local_heap_block_moves_to_the_stack() {
+    let mut f = Func::new("main", &[], IrTy::I64);
+    let e = f.entry();
+    let n = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(24)), Some(IrTy::I64))
+        .unwrap();
+    let p = f.emit(e, Op::Alloc(n), Some(IrTy::Ptr)).unwrap();
+    let c = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(7)), Some(IrTy::I64))
+        .unwrap();
+    let eight = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(8)), Some(IrTy::I64))
+        .unwrap();
+    let q = f.emit(e, Op::PtrAdd(p, eight), Some(IrTy::Ptr)).unwrap();
+    f.emit(e, Op::Store(q, c), None);
+    let x = f.emit(e, Op::Load(IrTy::I64, q), Some(IrTy::I64)).unwrap();
+    f.emit(e, Op::Free(p), None);
+    f.terminate(e, Term::Return(Some(x)));
+    let (o, before, after) = both(&module_of(f));
+    assert_eq!((before, after), (Val::int(7), Val::int(7)));
+    assert_eq!(
+        count(&o.funcs[0], |op| matches!(op, Op::Alloc(_) | Op::Free(_))),
+        0
+    );
+}
+
+#[test]
+fn a_heap_block_that_leaves_the_function_stays_on_the_heap() {
+    let mut f = Func::new("main", &[], IrTy::Ptr);
+    let e = f.entry();
+    let n = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(24)), Some(IrTy::I64))
+        .unwrap();
+    let p = f.emit(e, Op::Alloc(n), Some(IrTy::Ptr)).unwrap();
+    f.terminate(e, Term::Return(Some(p)));
+    let mut o = module_of(f);
+    optimize(&mut o, Options::default());
+    assert_eq!(count(&o.funcs[0], |op| matches!(op, Op::Alloc(_))), 1);
+}
