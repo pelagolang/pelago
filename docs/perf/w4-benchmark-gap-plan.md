@@ -34,7 +34,7 @@ Source of the numbers: `python3 bench/harness/run.py --runs 5 --size medium` on 
 
 ## Back-end work (W4) behind several rows
 
-- **Lexer (now ahead of C and Rust at 0.74x of the best)**: after PR 204, remaining waste is codegen: setcc/movzx chains for letter and digit tests, flags kept as bools. The audit to allow RAX/RCX/RDX/R11 as allocatable is still open; it only matters for rows with more than 11 live values, which is levenshtein's inlined `main`, not the lexer any more.
+- **Lexer (now ahead of C and Rust at 0.74x of the best)**: after PR 204, remaining waste is codegen: setcc/movzx chains for letter and digit tests, flags kept as bools. Allocating RAX/RCX/RDX/R11 is dropped from the plan: it only helps machines with many registers (see the register-poor section below).
 - **base64 (now ahead at 0.88x)**: live-range splitting at the guard landed, the redundant `zext` through `rax` is a one-line peephole to do next.
 - **Write sets**: widening the number of rows that benefit needs an exact write set per runtime routine and a fixed point for recursive functions (see `docs/design/mir.md`, section on write sets). The measurement in PR 199 found only 2 of 40 benchmarks change, so this stays below the rows above.
 
@@ -46,3 +46,62 @@ Source of the numbers: `python3 bench/harness/run.py --runs 5 --size medium` on 
 4. bintrees, lru: region allocation in the result-owning function.
 5. switchwork, interp, bf_bench: switch lowering.
 6. Diagnose nbody, wordfreq, knucleotide, fasta, fannkuch, nqueen.
+
+## Register-poor profile (Dennis, 2026-11-07: as fast as C on chips with few registers)
+
+Gains must not depend on having more registers. `PELAGO_REG_LIMIT=n` keeps `n` registers of each class (integer and float) in the allocator; the table is instruction counts (callgrind, medium size, main at `458ac9f`) at all registers, and the ratio at 8 and at 6. Every output is identical to the full-register build. Geometric mean over 41 programs: 8 registers 1.022, 6 registers 1.061. Instructions only: spills are loads and stores that often cost little in cycles on a big core, so this is an upper bound there and a fair guide for a small in-order chip.
+
+| program | all regs (M) | 8 regs | 6 regs |
+|---|---:|---:|---:|
+| base64 | 798.3 | 1.042 | 1.281 |
+| bintrees | 396.9 | 0.987 | 0.986 |
+| blur | 298.0 | 1.067 | 1.098 |
+| collatz | 647.8 | 1.000 | 1.000 |
+| crc32 | 300.0 | 1.000 | 0.867 |
+| divmod | 375.6 | 1.000 | 1.000 |
+| fannkuch | 293.8 | 0.994 | 1.099 |
+| fasta | 338.2 | 1.150 | 1.177 |
+| fib38 | 1545.6 | 0.999 | 1.100 |
+| floatloop | 360.0 | 1.000 | 0.944 |
+| graph | 50.5 | 0.996 | 1.093 |
+| histogram | 450.0 | 1.000 | 1.000 |
+| interp | 532.9 | 0.989 | 0.923 |
+| knucleotide | 586.0 | 1.024 | 1.048 |
+| kostya_bf_bench | 26722.6 | 0.944 | 0.965 |
+| kostya_bf_mandel | 262600.4 | 0.955 | 1.062 |
+| kostya_json | 234.5 | 1.048 | 1.119 |
+| kostya_matmul | 657.2 | 1.196 | 1.392 |
+| levenshtein | 6672.3 | 1.017 | 1.121 |
+| lexer | 76.4 | 1.047 | 1.144 |
+| list_sum | 52.5 | 1.000 | 1.000 |
+| loop_sum | 2700.0 | 1.000 | 1.000 |
+| loops | 1700.3 | 1.000 | 0.941 |
+| lru | 427.9 | 1.086 | 1.105 |
+| mandelbrot | 195.4 | 1.000 | 0.984 |
+| mapwork | 63.7 | 1.077 | 1.169 |
+| matmul | 323.2 | 1.002 | 1.211 |
+| nbody | 322.6 | 1.036 | 1.120 |
+| nqueen | 1720.3 | 0.905 | 0.953 |
+| primes | 654.5 | 1.063 | 1.087 |
+| resultpath | 270.0 | 1.000 | 1.000 |
+| sieve | 102.7 | 1.000 | 1.000 |
+| sortwork | 318.0 | 1.085 | 1.085 |
+| spectralnorm | 4162.7 | 1.000 | 1.000 |
+| strbuild | 20.0 | 1.200 | 1.300 |
+| strsplit | 201.7 | 0.995 | 1.017 |
+| structlist | 380.3 | 1.000 | 1.000 |
+| structloop | 27.5 | 1.000 | 1.182 |
+| switchwork | 477.4 | 1.000 | 1.000 |
+| tak | 1023.7 | 1.045 | 1.071 |
+| wordfreq | 182.8 | 1.012 | 1.042 |
+
+Reading it: about 15 programs do not move at 6 registers (their loops hold fewer than 6 values); the damage is in kostya_matmul (+39%), strbuild (+30%), base64 (+28%), matmul (+21%), structloop (+18%), fasta (+18%), mapwork (+17%), lexer (+14%). Some programs get faster with fewer registers (crc32 at 6 registers -13%, nqueen at 8 registers -9.5%), so the allocator's choice of what to keep is not optimal at full size either.
+
+Ways to speed up without registers, in the order I am doing them (the first is in PR 214):
+1. Fewer instructions and live values: join repeated loads and address arithmetic (levenshtein's branch-free minimum), fold `index * 8` into every address that uses it instead of keeping the scaled value in a register.
+2. Cheaper checks: a bounds or overflow test whose answer is already known on the path is removed by the optimiser, not by registers (range tests as one unsigned compare, PR 204).
+3. Memory operands: `cmp r, [mem]` and `add r, [mem]` for a value used once, so a spilled operand costs no extra register and no extra instruction. The allocator already folds a use into an operand when the value is spilled; the gap is values kept alive across a loop only to be read once per pass.
+4. Loads that are invariant by language rule: the data pointers and elements of a `let` parameter cannot change during the call (value semantics, no aliasing of a borrowed value), so a loop reads them once or uses them as memory operands; levenshtein still reloads `a.data`, `b.data` and `a[i]` every pass.
+5. Strength reduction: a pointer that steps by 8 instead of `base + i*8` removes the index register in streaming loops (structlist, kostya_matmul, matmul); a counter that is also the address takes one register instead of two.
+6. Less live state by design: rematerialise constants and `slot + k` addresses at the use instead of spilling them, and split ranges only around calls and loops where it pays.
+7. Evaluate every change at 6 and 8 registers next to the full-size numbers; a change that helps only at full size is not accepted.
