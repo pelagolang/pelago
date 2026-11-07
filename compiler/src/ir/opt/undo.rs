@@ -21,7 +21,7 @@ use super::dom::Dom;
 use crate::ir::*;
 
 pub fn run(f: &mut Func) -> bool {
-    let mut changed = false;
+    let mut changed = displacements(f);
     for _ in 0..64 {
         if !once(f) {
             break;
@@ -171,4 +171,56 @@ fn apply(f: &mut Func, r: Value, x: Value, k: i128, uses: Vec<Use>) {
             }
         }
     }
+}
+
+/// `ptradd p, (x + k)` with a constant `k` becomes `ptradd (ptradd p, x), k`: the address of `a[i + 1]`
+/// or of a push at `length + 2` then takes the constant as its displacement, instead of the sum being
+/// made in a register first. Only for a wrapping add: a checked one has to keep its trap.
+fn displacements(f: &mut Func) -> bool {
+    let defs = f.defs();
+    let mut changed = false;
+    for bi in 0..f.blocks.len() {
+        let mut pos = 0;
+        while pos < f.blocks[bi].insts.len() {
+            let ii = f.blocks[bi].insts[pos];
+            pos += 1;
+            let (Op::PtrAdd(p, y), Some(r)) = (f.insts[ii].op.clone(), f.insts[ii].result) else {
+                continue;
+            };
+            let Some(Op::Bin(BinOp::Add, a, b)) = defs[y.0 as usize].map(|i| f.insts[i].op.clone())
+            else {
+                continue;
+            };
+            let konst = |v: Value| match defs[v.0 as usize].map(|i| &f.insts[i].op) {
+                Some(Op::Const(IrTy::Int(64), Const::Int(n))) => Some(*n),
+                _ => None,
+            };
+            let (x, k) = match (konst(a), konst(b)) {
+                (None, Some(_)) => (a, b),
+                (Some(_), None) => (b, a),
+                _ => continue,
+            };
+            if f.ty(y) != IrTy::Int(64) || konst(k).is_some_and(|n| n.abs() >= 1 << 30) {
+                continue;
+            }
+            let t = f.new_value(IrTy::Ptr);
+            let span = f.insts[ii].span;
+            f.insts.push(Inst {
+                result: Some(t),
+                op: Op::PtrAdd(p, x),
+                span,
+            });
+            let ni = f.insts.len() - 1;
+            f.blocks[bi].insts.insert(pos - 1, ni);
+            f.insts[ii].op = Op::PtrAdd(t, k);
+            pos += 1;
+            let _ = r;
+            changed = true;
+        }
+    }
+    // The sums nobody reads any more.
+    if changed {
+        super::dce::run(f);
+    }
+    changed
 }
