@@ -222,6 +222,18 @@ impl<'a> Lowerer<'a> {
                 };
                 self.wrap(Op::Cast(CastKind::Trunc, n, IrTy::Int(8)), IrTy::Int(8), sp)
             }
+            "rt_wrap" => {
+                let Some(t) = self.intr_type(def, map) else {
+                    return self.unsupported(sp, "`rt_wrap` of an unknown type");
+                };
+                let (Some(n), Some(to)) = (self.arg_scalar(args, 0), self.scalar_of(t)) else {
+                    return Res::Never;
+                };
+                if self.vty(n) == to {
+                    return Res::Val(n);
+                }
+                self.wrap(Op::Cast(CastKind::Trunc, n, to), to, sp)
+            }
             "rt_to_char" => {
                 let Some(n) = self.arg_scalar(args, 0) else {
                     return Res::Never;
@@ -285,6 +297,20 @@ impl<'a> Lowerer<'a> {
                     return self.unsupported(sp, "`rt_is_int` of an unknown type");
                 };
                 let yes = matches!(self.kind(t), TyKind::Int(crate::types::IntKind::I64));
+                Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
+            }
+            "rt_is_small_uint" => {
+                let Some(t) = self.intr_type(def, map) else {
+                    return self.unsupported(sp, "`rt_is_small_uint` of an unknown type");
+                };
+                let yes = matches!(
+                    self.kind(t),
+                    TyKind::Int(
+                        crate::types::IntKind::U8
+                            | crate::types::IntKind::U16
+                            | crate::types::IntKind::U32
+                    )
+                );
                 Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
             }
             "rt_needs_drop" => {

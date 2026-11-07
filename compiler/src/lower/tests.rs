@@ -809,6 +809,12 @@ fn program_barrier_releases_all_together() {
 }
 
 #[test]
+fn program_select_send_waits_for_room_in_a_bounded_channel() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>(1)\n tx.send(1)\n scope s {\n  s.spawn([sink rx] () ~> { yield_now()\n   print(rx.recv() ?? 0)\n   print(rx.recv() ?? 0) })\n  select {\n   case tx.send(2) { print(\"sent\") }\n  }\n }\n}\n";
+    assert_eq!(output_of(src), "1\nsent\n2\n");
+}
+
+#[test]
 fn program_sp2() {
     let src = "fn main() { const (tx, rx) = chan<int>()\n const p = spawn([sink tx] ~> { for i of 0..3 { tx.send(i * 10) } })\n for v of rx.iter() { print(v) }\n p.join!!() }\n";
     assert_eq!(output_of(src), "0\n10\n20\n");
@@ -1608,6 +1614,19 @@ fn native_agrees_on_sqrt_and_rounding() {
                 print(x.round())
                 i += 1
             }
+        }",
+    );
+}
+
+/// Narrowing an `int` wraps or checks, the same in the interpreter and natively.
+#[test]
+fn native_agrees_on_int_narrowing() {
+    agree(
+        "fn main() {
+            const n = 300
+            print(n.wrapToByte() to int, (0 - 1).wrapToByte() to int, n.wrapToInt8() to int, (0 - 129).wrapToInt8() to int)
+            print(n.wrapToInt16() to int, (70000).wrapToUint16() to int, (5000000000).wrapToInt32() to int, (5000000000).wrapToUint32() to int)
+            print(n.toByteChecked(), (255).toByteChecked(), (0 - 1).toInt8Checked(), (127).toInt8Checked())
         }",
     );
 }
@@ -3047,4 +3066,14 @@ fn for_over_split_and_bytes_in_place() {
 #[test]
 fn for_over_split_native_agrees() {
     agree("fn main() {\n for w of \"a,bb,,c,\".split(\",\") { print(w.len()) }\n for b of \"hé\".bytes() { print(b to int) } }\n");
+}
+
+#[test]
+fn a_pool_with_a_bad_width_stops() {
+    for w in ["int", "uint64", "float", "bool"] {
+        let src = format!("fn main() {{\n var p: pool<int, {w}> = pool()\n print(p.len()) }}\n");
+        let o = run_main(&src);
+        assert!(o.result.is_err(), "{w}");
+        assert!(o.output.contains("width must be"), "{w}: {}", o.output);
+    }
 }

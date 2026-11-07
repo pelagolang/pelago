@@ -35,6 +35,7 @@ pub ext fn rt_load_bool(p: ptr) -> bool
 pub ext fn rt_store_bool(p: ptr, v: bool)
 pub ext fn rt_print(p: ptr, n: int)
 pub ext fn rt_to_byte(n: int) -> uint8
+pub ext fn rt_wrap<T>(n: int) -> T
 pub ext fn rt_to_int(x: float) -> int
 pub ext fn rt_fma(a: float, b: float, c: float) -> float
 pub ext fn rt_sqrt(a: float) -> float
@@ -45,6 +46,8 @@ pub ext fn rt_show_to<T>(src: ptr, out: ptr)
 pub ext fn rt_show_item_to<T>(src: ptr, out: ptr)
 pub ext fn rt_size_of<T>() -> int
 pub ext fn rt_is_int<T>() -> bool
+//~ Whether `T` is `uint8`, `uint16` or `uint32`.
+pub ext fn rt_is_small_uint<T>() -> bool
 //~ Whether a `T` has drop glue (owns memory or has a `deinit`).
 pub ext fn rt_needs_drop<T>() -> bool
 pub ext fn rt_addr_of<T>(x: T) -> ptr

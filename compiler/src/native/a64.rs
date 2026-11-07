@@ -715,9 +715,22 @@ impl Asm {
         self.idx_op(0, rt, base, index, size, scaled);
     }
 
+    /// `ldr vt, [base, index, lsl #shift]` of a 4- or 8-byte float.
+    pub fn ldr_f_idx(&mut self, vt: V, base: Reg, index: Reg, size: u8, scaled: bool) {
+        self.idx_op(1 | 0x10, Reg(vt.0), base, index, size, scaled);
+    }
+
+    pub fn str_f_idx(&mut self, vt: V, base: Reg, index: Reg, size: u8, scaled: bool) {
+        self.idx_op(0x10, Reg(vt.0), base, index, size, scaled);
+    }
+
+    /// `opc` bit 4 (0x10) selects the vector register file.
     fn idx_op(&mut self, opc: u32, rt: Reg, base: Reg, index: Reg, size: u8, scaled: bool) {
+        let v = if opc & 0x10 != 0 { 0x0400_0000 } else { 0 };
+        let opc = opc & 0xF;
         self.word(
             size.trailing_zeros() << 30
+                | v
                 | 0x3820_6800
                 | opc << 22
                 | (index.0 as u32) << 16

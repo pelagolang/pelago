@@ -92,8 +92,18 @@ const text = whole to string        // "7"
 ```
 
 The compiler only allows `to` when nothing can be lost. Conversions that can
-lose information or fail will need a different, visible spelling. We work that
-out when we reach errors.
+lose information use a visible method on `int` (decided 2026-11-07, on the
+owner's behalf, overrulable):
+
+```
+const n = 300
+n.wrapToByte()        // 44: the low bits, so a value out of range wraps
+n.toByteChecked()     // none: `uint8?`, `none` when it does not fit
+```
+
+The same pair exists for every narrower width: `wrapToInt8`, `wrapToInt16`,
+`wrapToUint16`, `wrapToInt32`, `wrapToUint32` and `toInt8Checked` and so on.
+There is no silent narrowing, and arithmetic overflow still stops the program.
 
 ## 7. Strings with values inside (decided: our own `#` marker)
 
