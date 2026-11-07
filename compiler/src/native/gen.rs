@@ -68,14 +68,14 @@ pub(super) fn reg_limit() -> usize {
 
 thread_local! {
     /// Tests choose the machine IR path (`Some(true)`) or the older generator (`Some(false)`);
-    /// otherwise `PELAGO_MIR=1` turns it on (work item W4, default off until it matches the old path).
+    /// otherwise the machine IR path is used, and `PELAGO_MIR=0` selects the older generator (work item W4, M4).
     pub static MIR: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 pub(super) fn mir_mode() -> bool {
     MIR.with(|m| m.get()).unwrap_or_else(|| {
         static ENV: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *ENV.get_or_init(|| std::env::var("PELAGO_MIR").is_ok_and(|v| v == "1"))
+        *ENV.get_or_init(|| !std::env::var("PELAGO_MIR").is_ok_and(|v| v == "0"))
     })
 }
 
