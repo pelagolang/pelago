@@ -114,6 +114,10 @@ Each stage is its own PR on its own branch and names the one row it moves; no fu
 
 **H2 so far.** Measuring `hello` showed that its executable carried the whole allocator only because `print` of text built a temporary `string`. `print` of text values now writes each value directly, so a program that only prints text has no allocator: `hello` is 2592 bytes (4192 with the allocator, 3808 before H1; tcc about 3 KB). The rest of H2 (a bump-only allocator when nothing is freed) has no program to apply to yet, since a program that allocates also frees, so it waits.
 
+**H3 so far (PR 173).** An optimiser pass (`ir/opt/scratch.rs`) turns a heap block of a constant size up to 128 bytes (512 per function) into a stack slot when its address never leaves the function, and drops its `free`. It changes neither `strsplit` nor `bintrees`: their temporaries have a run-time size (text buffers) or escape (tree nodes). A run-time-sized text temporary needs either a length-bounded stack buffer or an arena, so the expected `strsplit` gain in section 6 stays unproven.
+
+**H4 so far.** The library `arena` already starts with a 4096-byte block, which is a region span block under H1, and grows by `rt_realloc`; past 8 KiB that is a mapping that `mremap` grows without copying. So an arena already lives in the reserved memory for small sizes and never copies for large ones, and the one-store `reset!` and the bump in `new` are unchanged by a reserved range. A reserved 1 GiB range per arena would only remove the occasional `mremap`, and would cost a huge-page touch (large blocks ask for huge pages) for every small arena. No code is written for H4; it needs a measured reason first.
+
 H1 and H2 are independent of the arena and narrow-links work. Narrow links (PR #139) shrink the data the allocator hands out
 (`bintrees` nodes about 3x) and compose with H1: smaller blocks, no header. The arena thread's AR5 (lazy `str.chars()`) is untouched.
 
