@@ -1,6 +1,6 @@
 # OS memory intrinsics (M7)
 
-Status: part 1 (section 1) and part 2 (section 2) built; sections 3 and 4 are next. The four questions at the end were answered by the coordinator on the owner's delegation (2026-11-07): take the recommendations. Drafted for the owner. Asked for by the heap thread (H6); built on the machine IR (`mir.md`), which is now the default generator.
+Status: part 1 (section 1) and part 2 (section 2) built, and the first half of section 3 (per-callee write sets for module functions); the runtime routines' own sets and the data words (section 4) are next. The four questions at the end were answered by the coordinator on the owner's delegation (2026-11-07): take the recommendations. Drafted for the owner. Asked for by the heap thread (H6); built on the machine IR (`mir.md`), which is now the default generator.
 
 ## What the heap needs
 
@@ -35,7 +35,9 @@ How: one new IR op `Os(kind, args)` that the MIR carries as a call to a runtime 
 
 ## 3. Clobber rule
 
-Today a call destroys every caller-saved register. The rule becomes per callee: the MIR keeps a set for each function, computed bottom-up after allocation (the registers the function writes, plus those of its callees; an unknown callee, a call through a pointer or a recursive cycle destroys the whole caller-saved set). A caller then keeps values live across calls in registers the callee does not touch. The runtime routines get fixed documented sets (`rt_alloc`: `rax`, `rcx`, `rdx`, `rsi`, `rdi`, `r8`-`r11` on x86-64 until it is rewritten in Pelago, then whatever the allocator says). This is the part that needs the most care: the set must be known before the caller is allocated, so functions are allocated callee-first (the call graph's order, cycles broken at their entry).
+**Built for module functions** (`native/clobber.rs`, used by `gen.rs` and `gen_a64.rs`). Functions are selected and allocated callee first (postorder of the call graph; a call that closes a cycle is skipped). After a function is allocated, its *write set* is every register an instruction defines or clobbers, minus the callee-saved registers (every function saves and restores those), plus the registers the emitter writes without saying so (`r10`, `r11` for the page probe on x86-64). A direct call in a caller allocated later is narrowed to that set before allocation, so a value that lives across it may stay in any allocatable register outside the set. Calls through pointers, calls that close a cycle and every call of the runtime (`CALLRT`) keep the whole caller-saved set, so a function that prints, allocates or stops has a full set itself. The code is still laid out in module order. Answer 3 of the questions asked to start with `core` and the runtime; the order costs nothing measurable (a postorder walk), so it applies to every function.
+
+**Measured** on the 40 benchmark programs (x86-64): only `levenshtein` (about 9 percent faster, 0.757 s to 0.691 s) and `kostya_json` (no change beyond noise) produce different code. Most hot calls are already inlined, recursive (a cycle), or reach a function that calls the runtime, which has the full set. Two things widen it: exact sets for the runtime routines (`rt_alloc`, `rt_free`, `print`, which today stop every caller from keeping anything), and a set for recursive functions computed to a fixed point instead of the full set.
 
 ## 4. Data words
 
