@@ -27,6 +27,7 @@ pub const CORE_MODULES: &[(&str, &str)] = &[
     ("core.boxes", include_str!("../core/core/boxes.pel")),
     ("core.arena", include_str!("../core/core/arena.pel")),
     ("core.pool", include_str!("../core/core/pool.pel")),
+    ("core.heap", include_str!("../core/core/heap.pel")),
     ("core.columns", include_str!("../core/core/columns.pel")),
     ("core.objects", include_str!("../core/core/objects.pel")),
 ];
