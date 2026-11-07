@@ -90,56 +90,67 @@ pub fn folds(f: &Func, uses: &[u32], consts: &[Option<i64>]) -> Vec<Fold> {
     loop {
         let mut fold = vec![Fold::No; nv];
         let mut changed = false;
-        for b in &f.blocks {
-            for &i in &b.insts {
-                let Some(r) = f.insts[i].result else { continue };
-                let ri = r.0 as usize;
-                match &f.insts[i].op {
-                    Op::Slot(..) => {
-                        fold[ri] = Fold::Addr {
-                            base: Base::Slot(i),
-                            index: None,
-                            disp: 0,
-                        }
-                    }
-                    Op::PtrAdd(a, c) if on[ri] => {
-                        let (base, index, disp) = match fold[a.0 as usize] {
-                            Fold::Addr { base, index, disp } => (base, index, disp),
-                            _ => (Base::Value(*a), None, 0),
-                        };
-                        let made = match (consts[c.0 as usize], fold[c.0 as usize]) {
-                            (Some(k), _) => i32::try_from(disp as i64 + k)
-                                .ok()
-                                .map(|disp| Fold::Addr { base, index, disp }),
-                            (None, Fold::Scaled { idx, scale }) if index.is_none() => {
-                                Some(Fold::Addr {
-                                    base,
-                                    index: Some((idx, scale)),
-                                    disp,
-                                })
-                            }
-                            (None, Fold::No) if index.is_none() && is64(*c) => Some(Fold::Addr {
-                                base,
-                                index: Some((*c, 1)),
-                                disp,
-                            }),
-                            _ => None,
-                        };
-                        match made {
-                            Some(m) => fold[ri] = m,
-                            None => {
-                                on[ri] = false;
-                                changed = true;
+        // The blocks are not in the order of the program (a loop's test sits at its bottom), so a use
+        // can come before its definition: repeat until every chain of addresses has settled.
+        loop {
+            let before = fold.clone();
+            for b in &f.blocks {
+                for &i in &b.insts {
+                    let Some(r) = f.insts[i].result else { continue };
+                    let ri = r.0 as usize;
+                    match &f.insts[i].op {
+                        Op::Slot(..) => {
+                            fold[ri] = Fold::Addr {
+                                base: Base::Slot(i),
+                                index: None,
+                                disp: 0,
                             }
                         }
-                    }
-                    Op::Bin(..) if on[ri] => {
-                        if let Some((idx, scale)) = scaled[ri] {
-                            fold[ri] = Fold::Scaled { idx, scale };
+                        Op::PtrAdd(a, c) if on[ri] => {
+                            let (base, index, disp) = match fold[a.0 as usize] {
+                                Fold::Addr { base, index, disp } => (base, index, disp),
+                                _ => (Base::Value(*a), None, 0),
+                            };
+                            let made = match (consts[c.0 as usize], fold[c.0 as usize]) {
+                                (Some(k), _) => i32::try_from(disp as i64 + k)
+                                    .ok()
+                                    .map(|disp| Fold::Addr { base, index, disp }),
+                                (None, Fold::Scaled { idx, scale }) if index.is_none() => {
+                                    Some(Fold::Addr {
+                                        base,
+                                        index: Some((idx, scale)),
+                                        disp,
+                                    })
+                                }
+                                (None, Fold::No) if index.is_none() && is64(*c) => {
+                                    Some(Fold::Addr {
+                                        base,
+                                        index: Some((*c, 1)),
+                                        disp,
+                                    })
+                                }
+                                _ => None,
+                            };
+                            match made {
+                                Some(m) => fold[ri] = m,
+                                None => {
+                                    fold[ri] = Fold::No;
+                                    on[ri] = false;
+                                    changed = true;
+                                }
+                            }
                         }
+                        Op::Bin(..) if on[ri] => {
+                            if let Some((idx, scale)) = scaled[ri] {
+                                fold[ri] = Fold::Scaled { idx, scale };
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
+            }
+            if fold == before {
+                break;
             }
         }
         // A folded value with a use that needs a register cannot stay folded.

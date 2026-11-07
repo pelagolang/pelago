@@ -38,6 +38,26 @@ fn eval(src: &str, name: &str, args: &[i64]) -> Result<i64, String> {
 }
 
 #[test]
+fn a_folded_address_defined_after_its_use_in_block_order_is_still_folded() {
+    // The fused split loop lays its blocks out with the definition of an address below its uses:
+    // the selector once read the folded address as a value and panicked.
+    agree(
+        "fn sum_words(text: str) -> int ! parse_error {
+            var t = 0
+            for w of text.split(\" \") {
+                if w.isEmpty() { continue }
+                t += w.parseInt()? & 1023
+            }
+            ok(t)
+        }
+        fn main() {
+            print(sum_words(\"1 2 3\").or(0))
+            print(sum_words(\"10  20 x\").or(-1))
+        }",
+    );
+}
+
+#[test]
 fn arithmetic_and_calls() {
     let src = "fn add(a: int, b: int) -> int = a + b\nfn twice(x: int) -> int = add(x, x)\nfn mix(a: int) -> int = (a * 3 - 4) / 2 + a % 5";
     assert_eq!(eval(src, "twice", &[21]), Ok(42));
