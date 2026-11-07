@@ -13,6 +13,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 | Doing | [A-12](cards/A-12-concurrency.md) | Concurrency built out: stackful tasks, scheduler, blocking channels, `select`, locks, coroutines, atomics, workers (plan in `docs/design/concurrency-runtime.md`) | XL |
 | Doing | [A-13](cards/A-13-arena.md) | Bump arenas: `arena`, checked `aref<T>` handles, reset in one store (plan in `docs/design/arena.md`) | M |
 | Doing | [A-14](cards/A-14-pool-and-links.md) | Pools and narrow links: `pool<T, W>`, `link<T, W>` (1, 2 or 4 byte indexes; plan in `docs/design/narrow-links.md`) | L |
+| Doing | [A-15](cards/A-15-iter-fusion.md) | Lazy iterators by fusion in `for` loops (plan in `docs/design/iter.md`) | M |
 | Done | [A-09](cards/A-09-native-backend.md) | Native backend: x86-64 machine code, ELF and PE, straight from the IR (all stages and the leftovers: buffered print, float semantics, stack guard) | XL |
 
 ## Track B: tooling and identity
