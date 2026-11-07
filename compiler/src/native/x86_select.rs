@@ -1511,10 +1511,12 @@ impl<'m> Sel<'m> {
         let d = self.reg_of(r);
         if w == 64 && (matches!(o, BinOp::Add | BinOp::Sub) || (o == BinOp::Mul && signed)) {
             let (mut a, mut b) = (a, b);
+            // A constant goes to the right (`imul d, s, k`, `add d, k`); otherwise the operand that
+            // dies here is the one the result starts as.
             if o != BinOp::Sub
                 && self.imms[b.0 as usize].is_none()
-                && self.uses[b.0 as usize] == 1
-                && self.uses[a.0 as usize] != 1
+                && (self.imms[a.0 as usize].is_some()
+                    || (self.uses[b.0 as usize] == 1 && self.uses[a.0 as usize] != 1))
             {
                 std::mem::swap(&mut a, &mut b);
             }

@@ -708,9 +708,22 @@ impl<'m> Gen<'m> {
 
     // ---- Functions -----------------------------------------------------------------------------------
 
+    /// The `Sym` numbers of the module's rarely called functions (see `MFunc::cold_syms`).
+    pub(super) fn cold_syms(&self, base: u32) -> Vec<u32> {
+        (0..self.m.funcs.len() as u32)
+            .filter(|i| {
+                self.m.funcs[*i as usize]
+                    .name
+                    .ends_with(crate::ir::opt::COLD_SUFFIX)
+            })
+            .map(|i| base + i)
+            .collect()
+    }
+
     fn function(&mut self, fi: usize, f: &Func) -> Result<(), String> {
         if self.regalloc && mir_mode() {
             if let Some(mut mf) = super::x86_select::select(f) {
+                mf.cold_syms = self.cold_syms(super::x86_mir::SYM_FUNC);
                 let target = super::x86_mir::X86::new();
                 if cfg!(debug_assertions) {
                     super::mir::verify(&mf, &target)?;

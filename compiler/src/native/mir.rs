@@ -255,6 +255,9 @@ pub struct MFunc {
     pub used_callee_saved: RegSet,
     /// Texts the code refers to by number (the messages of `stop`).
     pub strings: Vec<String>,
+    /// The `Sym` numbers of functions that are rarely called (a `_slow` path): a call of one weighs
+    /// nothing in the allocator's choices, so values may live across it in caller-saved registers.
+    pub cold_syms: Vec<u32>,
 }
 
 impl MFunc {
