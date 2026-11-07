@@ -7,7 +7,7 @@ use crate::ir::*;
 
 pub fn run(m: &mut Module) -> bool {
     let mut changed = false;
-    let Module { funcs, data } = m;
+    let Module { funcs, data, .. } = m;
     for f in funcs.iter_mut() {
         changed |= copies_to_stores(f, data);
     }

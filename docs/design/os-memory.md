@@ -1,6 +1,6 @@
 # OS memory intrinsics (M7)
 
-Status: part 1 (section 1) and part 2 (section 2) built; sections 3 and 4 are next. The four questions at the end were answered by the coordinator on the owner's delegation (2026-11-07): take the recommendations. Drafted for the owner. Asked for by the heap thread (H6); built on the machine IR (`mir.md`), which is now the default generator.
+Status: part 1 (section 1) and part 2 (section 2) and part 4 (section 4, the intrinsic) built; section 3 is next. The four questions at the end were answered by the coordinator on the owner's delegation (2026-11-07): take the recommendations. Drafted for the owner. Asked for by the heap thread (H6); built on the machine IR (`mir.md`), which is now the default generator.
 
 ## What the heap needs
 
@@ -39,7 +39,7 @@ Today a call destroys every caller-saved register. The rule becomes per callee: 
 
 ## 4. Data words
 
-`DataAddr` already gives the address of static data. What is missing is a writable place: today data lives in the read-only section for strings and tables. The proposal: `static name: int = 0` at module level in `core` only (a language feature the library uses, not users), placed in a read-write data section; `name` reads and `name = v` writes. Alternative without syntax: an intrinsic `rt_data_word(k) -> ptr`, the address of the k-th word of a block the compiler reserves (size set by a constant). The intrinsic is less pretty and needs no parser change.
+**Built (the intrinsic).** `rt_data_word(k) -> ptr` is the address of the k-th 8-byte word of a block of `DATA_WORDS` (64) zeroed words the compiler adds to the module's static data on first use (`Module::word_block`). `k` must be a literal below 64, so a bad one is a compile error, not a run-time stop. All static data already lives in the writable data section (native) and in interpreter memory, so no new section or op was needed: the address is `DataAddr` plus a constant. Test: `compiler/core/tests/data_words.pel`. The `static name: int` form stays for the module work.
 
 ## Questions
 
