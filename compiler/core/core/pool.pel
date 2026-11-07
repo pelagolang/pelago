@@ -17,6 +17,7 @@ pub struct pool<T, W> {
     free: int
 
     init() {
+        if !rt_is_small_uint<W>() { panic("a pool's width must be uint8, uint16 or uint32") }
         self.base = rt_null()
         self.bounce = rt_alloc(8)
         self.stride = ((rt_size_of<T>() + 7) / 8) * 8

@@ -3037,3 +3037,13 @@ fn std_is_added_only_when_imported() {
     program.add_package("app", &[("main", "import std.big\nfn main() { print(1) }")]);
     assert!(program.find_package("std").is_some());
 }
+
+#[test]
+fn a_pool_with_a_bad_width_stops() {
+    for w in ["int", "uint64", "float", "bool"] {
+        let src = format!("fn main() {{\n var p: pool<int, {w}> = pool()\n print(p.len()) }}\n");
+        let o = run_main(&src);
+        assert!(o.result.is_err(), "{w}");
+        assert!(o.output.contains("width must be"), "{w}: {}", o.output);
+    }
+}

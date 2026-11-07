@@ -287,6 +287,20 @@ impl<'a> Lowerer<'a> {
                 let yes = matches!(self.kind(t), TyKind::Int(crate::types::IntKind::I64));
                 Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
             }
+            "rt_is_small_uint" => {
+                let Some(t) = self.intr_type(def, map) else {
+                    return self.unsupported(sp, "`rt_is_small_uint` of an unknown type");
+                };
+                let yes = matches!(
+                    self.kind(t),
+                    TyKind::Int(
+                        crate::types::IntKind::U8
+                            | crate::types::IntKind::U16
+                            | crate::types::IntKind::U32
+                    )
+                );
+                Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
+            }
             "rt_needs_drop" => {
                 let Some(t) = self.intr_type(def, map) else {
                     return self.unsupported(sp, "`rt_needs_drop` of an unknown type");
