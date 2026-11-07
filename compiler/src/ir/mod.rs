@@ -15,7 +15,7 @@ mod tests;
 mod verify;
 
 pub(crate) use interp::fold;
-pub use interp::{run, run_capture, run_full, Capture, Outcome, Val};
+pub use interp::{run, run_capture, run_full, run_os, Capture, OsEnv, Outcome, Val};
 pub use print::{print_func, print_module};
 pub use verify::{verify_func, verify_module};
 
@@ -333,16 +333,37 @@ pub enum OsKind {
     Remap,
     /// `(address, size)`: ask the system not to use huge pages here (a hint; a no-op where there is none).
     AdviseNoHuge,
+    /// `(fd, address, count)`: write to a file descriptor (standard output is flushed first); the count
+    /// written or a negative error number.
+    Write,
+    /// `(fd, address, count)`: read from a file descriptor; the count read, 0 at the end, or a negative error.
+    Read,
+    /// `(status)`: end the program at once.
+    Exit,
+    /// `()`: the address of the start-up block (argument count, argument pointers, 0, environment pointers, 0).
+    Argv,
 }
 
 impl OsKind {
-    pub const ALL: [OsKind; 5] = [
+    pub const ALL: [OsKind; 9] = [
         OsKind::Reserve,
         OsKind::Commit,
         OsKind::Release,
         OsKind::Remap,
         OsKind::AdviseNoHuge,
+        OsKind::Write,
+        OsKind::Read,
+        OsKind::Exit,
+        OsKind::Argv,
     ];
+
+    /// Whether the call reaches the process (arguments, descriptors, exit) rather than memory.
+    pub fn is_process(self) -> bool {
+        matches!(
+            self,
+            OsKind::Write | OsKind::Read | OsKind::Exit | OsKind::Argv
+        )
+    }
 
     pub fn name(self) -> &'static str {
         match self {
@@ -351,15 +372,20 @@ impl OsKind {
             OsKind::Release => "os_release",
             OsKind::Remap => "os_remap",
             OsKind::AdviseNoHuge => "os_advise_nohuge",
+            OsKind::Write => "os_write",
+            OsKind::Read => "os_read",
+            OsKind::Exit => "os_exit",
+            OsKind::Argv => "os_argv",
         }
     }
 
     /// How many operands the call reads (the others are not looked at).
     pub fn arity(self) -> usize {
         match self {
-            OsKind::Reserve => 1,
+            OsKind::Argv => 0,
+            OsKind::Reserve | OsKind::Exit => 1,
             OsKind::Commit | OsKind::Release | OsKind::AdviseNoHuge => 2,
-            OsKind::Remap => 3,
+            OsKind::Remap | OsKind::Write | OsKind::Read => 3,
         }
     }
 }

@@ -119,7 +119,11 @@ impl<'a> Lowerer<'a> {
             | "rt_os_commit"
             | "rt_os_release"
             | "rt_os_remap"
-            | "rt_os_advise_nohuge" => self.intr_os(&name, args, sp),
+            | "rt_os_advise_nohuge"
+            | "rt_os_write"
+            | "rt_os_read"
+            | "rt_os_exit"
+            | "rt_os_argv" => self.intr_os(&name, args, sp),
             "rt_int_addr" => {
                 let Some(n) = self.arg_scalar(args, 0) else {
                     return Res::Never;
@@ -626,6 +630,10 @@ impl<'a> Lowerer<'a> {
     #[inline(never)]
     fn intr_os(&mut self, name: &str, args: &'a [Arg], sp: Span) -> Res {
         let kind = match name {
+            "rt_os_write" => crate::ir::OsKind::Write,
+            "rt_os_read" => crate::ir::OsKind::Read,
+            "rt_os_exit" => crate::ir::OsKind::Exit,
+            "rt_os_argv" => crate::ir::OsKind::Argv,
             "rt_os_reserve" => crate::ir::OsKind::Reserve,
             "rt_os_commit" => crate::ir::OsKind::Commit,
             "rt_os_release" => crate::ir::OsKind::Release,
@@ -637,8 +645,16 @@ impl<'a> Lowerer<'a> {
             let Some(v) = self.arg_scalar(args, i) else {
                 return Res::Never;
             };
-            // An address travels as an `i64`.
-            let v = if i == 0 && kind != crate::ir::OsKind::Reserve {
+            // An address travels as an `i64`: the first operand of the memory calls, the second of the
+            // descriptor calls.
+            let addr_at = if matches!(kind, crate::ir::OsKind::Write | crate::ir::OsKind::Read) {
+                1
+            } else {
+                0
+            };
+            let v = if i == addr_at
+                && !matches!(kind, crate::ir::OsKind::Reserve | crate::ir::OsKind::Exit)
+            {
                 let Some(n) = self.emit(
                     Op::Cast(CastKind::PtrToInt, v, IrTy::I64),
                     Some(IrTy::I64),
@@ -652,11 +668,23 @@ impl<'a> Lowerer<'a> {
             };
             vs.push(v);
         }
+        if vs.is_empty() {
+            // `os_argv` reads nothing; the operands are placeholders.
+            let Some(z) = self.emit(Op::Const(IrTy::I64, Const::Int(0)), Some(IrTy::I64), sp)
+            else {
+                return Res::Never;
+            };
+            vs.push(z);
+        }
         let (a, b, c) = (
             vs[0],
             *vs.get(1).unwrap_or(&vs[0]),
             *vs.get(2).unwrap_or(&vs[0]),
         );
+        if kind == crate::ir::OsKind::Exit {
+            self.emit(Op::Os(kind, a, b, c), Some(IrTy::I64), sp);
+            return Res::Unit;
+        }
         self.wrap(Op::Os(kind, a, b, c), IrTy::I64, sp)
     }
 }
