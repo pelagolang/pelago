@@ -202,10 +202,11 @@ struct Analysis {
     copies: Vec<(u64, u32, u32)>,
 }
 
-/// How many loops each block is in. A loop is the natural loop of a back edge (an edge to a block still
-/// on the depth-first path), not a stretch of the layout: an out-of-line block that jumps back into the
-/// middle of a loop (the slow path of a push) is no loop.
-fn loop_depths(f: &MFunc) -> Vec<u32> {
+/// The natural loops of the function, one per header: the header and, for each block, whether it is in
+/// the loop. A loop is the natural loop of a back edge (an edge to a block still on the depth-first
+/// path), not a stretch of the layout: an out-of-line block that jumps back into the middle of a loop
+/// (the slow path of a push) is no loop.
+fn natural_loops(f: &MFunc) -> Vec<(usize, Vec<bool>)> {
     let nb = f.blocks.len();
     let succ: Vec<Vec<usize>> = (0..nb).map(|b| successors(f, b)).collect();
     let mut pred: Vec<Vec<usize>> = vec![Vec::new(); nb];
@@ -237,10 +238,10 @@ fn loop_depths(f: &MFunc) -> Vec<u32> {
         }
     }
     // The body of each header: the blocks that reach a tail of one of its back edges without passing it.
-    let mut depth = vec![0u32; nb];
     let mut headers: Vec<usize> = back.iter().map(|e| e.1).collect();
     headers.sort_unstable();
     headers.dedup();
+    let mut out = Vec::new();
     for h in headers {
         let mut inside = vec![false; nb];
         inside[h] = true;
@@ -259,6 +260,15 @@ fn loop_depths(f: &MFunc) -> Vec<u32> {
                 }
             }
         }
+        out.push((h, inside));
+    }
+    out
+}
+
+/// How many loops each block is in.
+fn loop_depths(f: &MFunc) -> Vec<u32> {
+    let mut depth = vec![0u32; f.blocks.len()];
+    for (_, inside) in natural_loops(f) {
         for (b, d) in depth.iter_mut().enumerate() {
             if inside[b] {
                 *d += 1;
@@ -266,6 +276,144 @@ fn loop_depths(f: &MFunc) -> Vec<u32> {
         }
     }
     depth
+}
+
+/// Values that live across a loop without being touched in it keep a register all the way round when
+/// the loop has more values than registers, and a value the loop does use ends up in memory for it. So
+/// when a loop has more values of a class than the target has registers for, the values it only passes
+/// through are stored before it (on every edge into the header) and loaded after it (on a new block on
+/// every edge that leaves it where they are still needed): they are dead inside the loop and their
+/// registers are free for the values the loop works on.
+fn split_around_loops(f: &mut MFunc, t: &dyn Target, limit: usize) {
+    let nphys = t.regs().len();
+    let mut loops = natural_loops(f);
+    // The outermost first: a value unused in an outer loop is split there, once.
+    loops.sort_by_key(|(_, inside)| std::cmp::Reverse(inside.iter().filter(|b| **b).count()));
+    let nb_old = f.blocks.len();
+    for (header, inside) in loops {
+        if header == 0 {
+            continue;
+        }
+        let nb = f.blocks.len();
+        let inside_of = |b: usize| b < nb_old && inside[b];
+        // What the loop touches, and what lives across it untouched.
+        let nv = f.vclass.len();
+        let mut touched = vec![false; nv];
+        for b in (0..nb).filter(|b| inside_of(*b)) {
+            for i in &f.blocks[b].insts {
+                visit_regs(i, |r, _| {
+                    if let Reg::Virt(v) = r {
+                        touched[v as usize] = true;
+                    }
+                });
+            }
+        }
+        let live = liveness(f, nphys);
+        let through: Vec<usize> = (0..nv)
+            .filter(|v| !touched[*v] && live.live_in[header].contains(nphys + v))
+            .filter(|v| f.vclass[*v] != Class::Vec)
+            .collect();
+        if through.is_empty() {
+            continue;
+        }
+        let mut split: Vec<usize> = Vec::new();
+        for c in [Class::Int, Class::Float] {
+            let regs = t.allocatable(c).len().min(limit);
+            let busy = (0..nv).filter(|v| f.vclass[*v] == c && touched[*v]).count();
+            let idle: Vec<usize> = through
+                .iter()
+                .copied()
+                .filter(|v| f.vclass[*v] == c)
+                .collect();
+            if busy + idle.len() >= regs && !idle.is_empty() {
+                split.extend(idle);
+            }
+        }
+        if split.is_empty() {
+            continue;
+        }
+        let slots: Vec<(usize, FrameId)> = split
+            .iter()
+            .map(|&v| {
+                let c = f.vclass[v];
+                (v, f.new_frame(c.size(), c.size(), FrameKind::Spill))
+            })
+            .collect();
+        // Stores before the loop: at the end of each block outside it that jumps to or falls into the header.
+        let preds: Vec<usize> = (0..nb)
+            .filter(|b| !inside_of(*b) && successors(f, *b).contains(&header))
+            .collect();
+        for p in preds {
+            let insts = &mut f.blocks[p].insts;
+            let mut at = insts.len();
+            while at > 0 && insts[at - 1].flags.has(IFlags::BRANCH) {
+                at -= 1;
+            }
+            for (k, (v, fr)) in slots.iter().enumerate() {
+                let c = f.vclass[*v];
+                let mut st = t.store(c, *fr, PReg(0));
+                for o in &mut st.ops {
+                    if let Operand::Reg(r, Role::Use) = o {
+                        *r = Reg::Virt(*v as u32);
+                    }
+                }
+                insts.insert(at + k, st);
+            }
+        }
+        // Loads after the loop: a block on each edge that leaves it.
+        let mut made: HashMap<(usize, usize), u32> = HashMap::new();
+        for b in (0..nb).filter(|b| inside_of(*b)) {
+            for s in successors(f, b) {
+                if inside_of(s) || made.contains_key(&(b, s)) {
+                    continue;
+                }
+                let needed: Vec<&(usize, FrameId)> = slots
+                    .iter()
+                    .filter(|(v, _)| live.live_in[s].contains(nphys + v))
+                    .collect();
+                if needed.is_empty() {
+                    continue;
+                }
+                let e = f.new_block();
+                for (v, fr) in needed {
+                    let c = f.vclass[*v];
+                    let mut ld = t.load(c, PReg(0), *fr);
+                    for o in &mut ld.ops {
+                        if let Operand::Reg(r, Role::Def) = o {
+                            *r = Reg::Virt(*v as u32);
+                        }
+                    }
+                    f.push(e, ld);
+                }
+                f.push(e, t.jump(s as u32));
+                made.insert((b, s), e);
+                // Send the edge there: the branches to `s` in `b`, or the fall-through.
+                let blk = &mut f.blocks[b];
+                let mut redirected = false;
+                for i in &mut blk.insts {
+                    if i.flags.has(IFlags::BRANCH) {
+                        for o in &mut i.ops {
+                            if let Operand::Block(x) = o {
+                                if *x as usize == s {
+                                    *x = e;
+                                    redirected = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                let falls = blk
+                    .insts
+                    .last()
+                    .is_none_or(|i| !i.flags.has(IFlags::NOFALL));
+                if falls && b + 1 == s {
+                    blk.insts.push(t.jump(e));
+                    redirected = true;
+                }
+                debug_assert!(redirected, "an edge out of a loop was not redirected");
+            }
+        }
+    }
 }
 
 fn analyse(f: &MFunc, nphys: usize) -> Analysis {
@@ -599,6 +747,7 @@ fn commute(f: &mut MFunc, t: &dyn Target) {
 
 pub fn allocate(f: &mut MFunc, t: &dyn Target, limit: usize) -> Stats {
     commute(f, t);
+    split_around_loops(f, t, limit);
     let nphys = t.regs().len();
     let nv = f.vclass.len();
     let nb = f.blocks.len();
