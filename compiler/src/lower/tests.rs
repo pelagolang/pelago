@@ -3285,6 +3285,13 @@ fn pool_slots_are_as_small_as_the_value_and_reuse_freed_ones() {
 }
 
 #[test]
+fn push_str_of_an_interpolated_literal_writes_in_place() {
+    let src = "fn main() {\n var t = \"[\"\n for i in 0..3 { t.pushStr!(\"#(i):#(i * 2) \") }\n const w = \"é\"\n t.pushStr!(\"#(w)#('x')#(true)#(1.5)]\")\n t.pushStr!(\"plain\")\n print(t)\n print(t.len()) }\n";
+    assert_eq!(output_of(src), "[0:0 1:2 2:4 éxtrue1.5]plain\n29\n");
+    agree(src);
+}
+
+#[test]
 fn inline_always_copies_a_big_function_and_leaf_is_checked() {
     let src = "@inline_always
         fn big(x: int) -> int {
