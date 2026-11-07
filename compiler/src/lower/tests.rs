@@ -2336,6 +2336,31 @@ fn loads_through_a_let_parameter_are_marked_frozen_and_others_are_not() {
 }
 
 #[test]
+fn the_verifier_rejects_a_frozen_mark_that_is_not_a_load() {
+    let l = lowered(
+        "fn pick(a: [int], i: int) -> int { a[i] + a[0] }\nfn main() { print(pick([1, 2], 1)) }",
+    );
+    let mut m = l.module.clone();
+    let id = m.funcs.iter().position(|f| f.name == "pick").unwrap();
+    crate::ir::opt::frozen::mark(&mut m.funcs[id]);
+    assert!(crate::lower::tests::verify_module(&m).is_empty());
+    // A stale number (out of range) and a non-load are both reported.
+    m.funcs[id].frozen.insert(usize::MAX);
+    let nonload = m.funcs[id]
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter().copied())
+        .find(|&i| !matches!(m.funcs[id].insts[i].op, Op::Load(..)))
+        .unwrap();
+    m.funcs[id].frozen.insert(nonload);
+    assert_eq!(crate::lower::tests::verify_module(&m).len(), 2);
+    // The whole pipeline leaves only valid marks.
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    assert!(crate::lower::tests::verify_module(&m).is_empty());
+}
+
+#[test]
 fn a_range_test_becomes_one_unsigned_compare() {
     let src = "fn digit(c: int) -> bool { c >= 48 && c <= 57 }\nfn main() { var n = 0\n for i in -5..120 { if digit(i) { n += 1 } }\n print(n) }";
     let l = lowered(src);

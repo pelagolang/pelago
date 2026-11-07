@@ -4,6 +4,7 @@
 //! - every block has one terminator, and every block can be reached from the entry;
 //! - a value is made once, and every use is of a value made earlier: in the same block above it, or in
 //!   a block that dominates this one;
+//! - every frozen mark names a load that is still in the function;
 //! - operand types fit the operation; jumps hand the right number and types of values to the
 //!   block parameters; calls match the callee's signature; `return` matches the function's type.
 
@@ -65,6 +66,18 @@ fn check(f: &Func, m: Option<&Module>) -> Vec<String> {
     if f.blocks.is_empty() {
         err!("has no blocks".to_string());
         return errs;
+    }
+    // A frozen mark names a load that is still in the function (docs/design/mir.md 8.1).
+    let placed: std::collections::HashSet<usize> = f
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter().copied())
+        .collect();
+    for &i in &f.frozen {
+        match f.insts.get(i) {
+            Some(inst) if matches!(inst.op, Op::Load(..)) && placed.contains(&i) => {}
+            _ => err!(format!("frozen mark {} is not a load in the function", i)),
+        }
     }
     let ptys: Vec<IrTy> = f.blocks[0].params.iter().map(|p| f.ty(*p)).collect();
     if ptys != f.params {
