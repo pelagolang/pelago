@@ -1104,171 +1104,7 @@ pub fn emit_for(
     }
 
     if uses.os {
-        // ---- the OS memory calls (docs/design/os-memory.md) ----------------------------------------------
-        // Sizes and addresses must be whole pages (else -2). A system error becomes -1 (no memory), -2
-        // (invalid argument) or -3. Windows routines keep a frame (the imports lose the link register).
-        let (bad, nomem, other, os_error) =
-            (a.new_label(), a.new_label(), a.new_label(), a.new_label());
-        let mac = os == Os::MacOs;
-        let finish = |a: &mut Asm| {
-            if win {
-                leave(a);
-            }
-            a.ret();
-        };
-        let size_ok = |a: &mut Asm, r: Reg, bad: Label| {
-            a.cmp_ri(r, 0);
-            a.b_cond(Cond::Le, bad);
-            assert!(a.tst_ri(r, 4095));
-            a.b_cond(Cond::Ne, bad);
-        };
-        let aligned = |a: &mut Asm, r: Reg, bad: Label| {
-            assert!(a.tst_ri(r, 4095));
-            a.b_cond(Cond::Ne, bad);
-        };
-        let start = |a: &mut Asm, l: Label| {
-            a.bind(l);
-            if win {
-                enter(a);
-            }
-        };
-        // reserve(size)
-        start(a, rt.os[0]);
-        size_ok(a, X0, bad);
-        if win {
-            a.mov_rr(X1, X0);
-            a.mov_ri(X0, 0);
-            a.mov_ri(X2, 0x2000); // reserve
-            a.mov_ri(X3, 1); // no access
-            win_call(a, IMP_VIRTUAL_ALLOC);
-            a.cbz(X0, nomem);
-            finish(a);
-        } else {
-            a.mov_rr(X1, X0);
-            a.mov_ri(X0, 0);
-            a.mov_ri(X2, 0); // no access
-            a.mov_ri(X3, if mac { 0x1042 } else { 0x4022 });
-            a.mov_ri(X4, -1);
-            a.mov_ri(X5, 0);
-            sys(a, os, Sys::Mmap);
-            a.b(os_error);
-        }
-        // commit(addr, size)
-        start(a, rt.os[1]);
-        aligned(a, X0, bad);
-        size_ok(a, X1, bad);
-        if win {
-            a.mov_ri(X2, 0x1000); // commit
-            a.mov_ri(X3, 4); // read and write
-            win_call(a, IMP_VIRTUAL_ALLOC);
-            a.cbz(X0, other);
-            a.mov_ri(X0, 0);
-            finish(a);
-        } else {
-            a.mov_ri(X2, 3);
-            sys(a, os, Sys::Mprotect);
-            a.b(os_error);
-        }
-        // release(addr, size)
-        start(a, rt.os[2]);
-        aligned(a, X0, bad);
-        size_ok(a, X1, bad);
-        if win {
-            a.mov_ri(X1, 0);
-            a.mov_ri(X2, 0x8000); // release
-            win_call(a, IMP_VIRTUAL_FREE);
-            a.cbz(X0, other);
-            a.mov_ri(X0, 0);
-            finish(a);
-        } else {
-            sys(a, os, Sys::Munmap);
-            a.b(os_error);
-        }
-        // remap(addr, old, new)
-        start(a, rt.os[3]);
-        aligned(a, X0, bad);
-        size_ok(a, X1, bad);
-        size_ok(a, X2, bad);
-        if win || mac {
-            // No kernel remap: a new block, the smaller size copied, the old one released.
-            // x19 the old block, x20 its size, x21 the new size, x22 the new block.
-            if !win {
-                enter(a);
-            }
-            let (fail, done) = (a.new_label(), a.new_label());
-            a.mov_rr(X19, X0);
-            a.mov_rr(X20, X1);
-            a.mov_rr(X21, X2);
-            a.mov_rr(X1, X21);
-            map_x1(a, os, 0x22);
-            failed(a, os, X0, fail);
-            a.mov_rr(X22, X0);
-            a.mov_rr(X1, X19);
-            a.mov_rr(X2, X20);
-            a.cmp_rr(X2, X21);
-            let keep = a.new_label();
-            a.b_cond(Cond::Ls, keep);
-            a.mov_rr(X2, X21);
-            a.bind(keep);
-            a.bl(rt.memcpy);
-            a.mov_rr(X0, X19);
-            if win {
-                a.mov_ri(X1, 0);
-                a.mov_ri(X2, 0x8000);
-                win_call(a, IMP_VIRTUAL_FREE);
-            } else {
-                a.mov_rr(X1, X20);
-                sys(a, os, Sys::Munmap);
-            }
-            a.mov_rr(X0, X22);
-            a.b(done);
-            a.bind(fail);
-            a.mov_ri(X0, -1);
-            a.bind(done);
-            leave(a);
-            a.ret();
-        } else {
-            a.mov_ri(X3, 1); // may move
-            sys(a, os, Sys::Mremap);
-            a.b(os_error);
-        }
-        // advise_nohuge(addr, size)
-        start(a, rt.os[4]);
-        aligned(a, X0, bad);
-        size_ok(a, X1, bad);
-        if win || mac {
-            a.mov_ri(X0, 0);
-            finish(a);
-        } else {
-            a.mov_ri(X2, 15); // MADV_NOHUGEPAGE
-            sys(a, os, Sys::Madvise);
-            a.b(os_error);
-        }
-        // The exits.
-        a.bind(bad);
-        a.mov_ri(X0, -2);
-        finish(a);
-        a.bind(nomem);
-        a.mov_ri(X0, -1);
-        finish(a);
-        a.bind(other);
-        a.mov_ri(X0, -3);
-        finish(a);
-        a.bind(os_error);
-        // Linux and macOS: `x0` is the result, or -errno in the last 4095 values.
-        let ok = a.new_label();
-        a.mov_ri(X15, -4095);
-        a.cmp_rr(X0, X15);
-        a.b_cond(Cond::Lo, ok);
-        a.mov_ri(X15, -12);
-        a.cmp_rr(X0, X15);
-        a.b_cond(Cond::Eq, nomem);
-        a.mov_ri(X15, -22);
-        a.cmp_rr(X0, X15);
-        a.b_cond(Cond::Eq, bad);
-        a.b(other);
-        a.bind(ok);
-        a.ret();
+        emit_os(a, &rt, os);
     }
 
     if uses.ctx {
@@ -1664,4 +1500,176 @@ fn advise_huge(a: &mut Asm, os: Os, addr: Reg, len: Reg) {
     a.mov_ri(X2, 14);
     sys(a, os, Sys::Madvise);
     a.bind(skip);
+}
+
+/// The OS memory calls (docs/design/os-memory.md), in a function of their own: `emit_for` is already a huge
+/// frame in debug builds.
+#[inline(never)]
+fn emit_os(a: &mut Asm, rt: &Runtime, os: Os) {
+    let win = os == Os::Windows;
+    // ---- the OS memory calls (docs/design/os-memory.md) ----------------------------------------------
+    // Sizes and addresses must be whole pages (else -2). A system error becomes -1 (no memory), -2
+    // (invalid argument) or -3. Windows routines keep a frame (the imports lose the link register).
+    let (bad, nomem, other, os_error) =
+        (a.new_label(), a.new_label(), a.new_label(), a.new_label());
+    let mac = os == Os::MacOs;
+    let finish = |a: &mut Asm| {
+        if win {
+            leave(a);
+        }
+        a.ret();
+    };
+    let size_ok = |a: &mut Asm, r: Reg, bad: Label| {
+        a.cmp_ri(r, 0);
+        a.b_cond(Cond::Le, bad);
+        assert!(a.tst_ri(r, 4095));
+        a.b_cond(Cond::Ne, bad);
+    };
+    let aligned = |a: &mut Asm, r: Reg, bad: Label| {
+        assert!(a.tst_ri(r, 4095));
+        a.b_cond(Cond::Ne, bad);
+    };
+    let start = |a: &mut Asm, l: Label| {
+        a.bind(l);
+        if win {
+            enter(a);
+        }
+    };
+    // reserve(size)
+    start(a, rt.os[0]);
+    size_ok(a, X0, bad);
+    if win {
+        a.mov_rr(X1, X0);
+        a.mov_ri(X0, 0);
+        a.mov_ri(X2, 0x2000); // reserve
+        a.mov_ri(X3, 1); // no access
+        win_call(a, IMP_VIRTUAL_ALLOC);
+        a.cbz(X0, nomem);
+        finish(a);
+    } else {
+        a.mov_rr(X1, X0);
+        a.mov_ri(X0, 0);
+        a.mov_ri(X2, 0); // no access
+        a.mov_ri(X3, if mac { 0x1042 } else { 0x4022 });
+        a.mov_ri(X4, -1);
+        a.mov_ri(X5, 0);
+        sys(a, os, Sys::Mmap);
+        a.b(os_error);
+    }
+    // commit(addr, size)
+    start(a, rt.os[1]);
+    aligned(a, X0, bad);
+    size_ok(a, X1, bad);
+    if win {
+        a.mov_ri(X2, 0x1000); // commit
+        a.mov_ri(X3, 4); // read and write
+        win_call(a, IMP_VIRTUAL_ALLOC);
+        a.cbz(X0, other);
+        a.mov_ri(X0, 0);
+        finish(a);
+    } else {
+        a.mov_ri(X2, 3);
+        sys(a, os, Sys::Mprotect);
+        a.b(os_error);
+    }
+    // release(addr, size)
+    start(a, rt.os[2]);
+    aligned(a, X0, bad);
+    size_ok(a, X1, bad);
+    if win {
+        a.mov_ri(X1, 0);
+        a.mov_ri(X2, 0x8000); // release
+        win_call(a, IMP_VIRTUAL_FREE);
+        a.cbz(X0, other);
+        a.mov_ri(X0, 0);
+        finish(a);
+    } else {
+        sys(a, os, Sys::Munmap);
+        a.b(os_error);
+    }
+    // remap(addr, old, new)
+    start(a, rt.os[3]);
+    aligned(a, X0, bad);
+    size_ok(a, X1, bad);
+    size_ok(a, X2, bad);
+    if win || mac {
+        // No kernel remap: a new block, the smaller size copied, the old one released.
+        // x19 the old block, x20 its size, x21 the new size, x22 the new block.
+        if !win {
+            enter(a);
+        }
+        let (fail, done) = (a.new_label(), a.new_label());
+        a.mov_rr(X19, X0);
+        a.mov_rr(X20, X1);
+        a.mov_rr(X21, X2);
+        a.mov_rr(X1, X21);
+        map_x1(a, os, 0x22);
+        failed(a, os, X0, fail);
+        a.mov_rr(X22, X0);
+        a.mov_rr(X1, X19);
+        a.mov_rr(X2, X20);
+        a.cmp_rr(X2, X21);
+        let keep = a.new_label();
+        a.b_cond(Cond::Ls, keep);
+        a.mov_rr(X2, X21);
+        a.bind(keep);
+        a.bl(rt.memcpy);
+        a.mov_rr(X0, X19);
+        if win {
+            a.mov_ri(X1, 0);
+            a.mov_ri(X2, 0x8000);
+            win_call(a, IMP_VIRTUAL_FREE);
+        } else {
+            a.mov_rr(X1, X20);
+            sys(a, os, Sys::Munmap);
+        }
+        a.mov_rr(X0, X22);
+        a.b(done);
+        a.bind(fail);
+        a.mov_ri(X0, -1);
+        a.bind(done);
+        leave(a);
+        a.ret();
+    } else {
+        a.mov_ri(X3, 1); // may move
+        sys(a, os, Sys::Mremap);
+        a.b(os_error);
+    }
+    // advise_nohuge(addr, size)
+    start(a, rt.os[4]);
+    aligned(a, X0, bad);
+    size_ok(a, X1, bad);
+    if win || mac {
+        a.mov_ri(X0, 0);
+        finish(a);
+    } else {
+        a.mov_ri(X2, 15); // MADV_NOHUGEPAGE
+        sys(a, os, Sys::Madvise);
+        a.b(os_error);
+    }
+    // The exits.
+    a.bind(bad);
+    a.mov_ri(X0, -2);
+    finish(a);
+    a.bind(nomem);
+    a.mov_ri(X0, -1);
+    finish(a);
+    a.bind(other);
+    a.mov_ri(X0, -3);
+    finish(a);
+    a.bind(os_error);
+    // Linux and macOS: `x0` is the result, or -errno in the last 4095 values.
+    let ok = a.new_label();
+    a.mov_ri(X15, -4095);
+    a.cmp_rr(X0, X15);
+    a.b_cond(Cond::Lo, ok);
+    a.mov_ri(X15, -12);
+    a.cmp_rr(X0, X15);
+    a.b_cond(Cond::Eq, nomem);
+    a.mov_ri(X15, -22);
+    a.cmp_rr(X0, X15);
+    a.b_cond(Cond::Eq, bad);
+    a.b(other);
+    a.bind(ok);
+    a.ret();
 }
