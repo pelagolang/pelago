@@ -6,7 +6,7 @@ pub struct link<T, W> {
     slot: W
 }
 
-//~ A growable block of equal slots. `add!` fills one (at most `2^W - 1` of them), `remove!` frees it for the next `add!`,
+//~ A growable block of equal slots, as small as the value (or the link, if that is bigger). `add!` fills one (at most `2^W - 1` of them), `remove!` frees it for the next `add!`,
 //~ and the whole pool goes in one free. Values must not need dropping (numbers, `bool`, `char`, structs and enums of those, `link`s).
 pub struct pool<T, W> {
     base: ptr
@@ -20,8 +20,8 @@ pub struct pool<T, W> {
         if !rt_is_small_uint<W>() { panic("a pool's width must be uint8, uint16 or uint32") }
         self.base = rt_null()
         self.bounce = rt_alloc(8)
-        self.stride = ((rt_size_of<T>() + 7) / 8) * 8
-        if self.stride < 8 { self.stride = 8 }
+        self.stride = rt_size_of<T>()
+        if self.stride < rt_size_of<W>() { self.stride = rt_size_of<W>() }
         self.count = 0
         self.cap = 0
         self.free = -1
@@ -54,12 +54,22 @@ impl<T, W> pool<T, W> {
     //~ Whether `l` names no slot.
     fn isNone(self, l: link<T, W>) -> bool = self.slotOf(l) == self.limit()
 
+    //~ A free slot keeps the number of the next free one in its first `W` bytes (all ones: none).
+    fn nextFree(self, at: ptr) -> int {
+        const n = self.slotOf(link<T, W> { slot: rt_read<W>(at) })
+        n == self.limit() ? -1 : n
+    }
+
+    fn setNextFree(self, at: ptr, n: int) {
+        rt_write<W>(at, self.toLink(n).slot)
+    }
+
     //~ Puts `value` in a free slot and gives its link; stops when the pool is full.
     fn add(inout self, sink value: T) -> link<T, W> {
         if rt_needs_drop<T>() { panic("a pool holds only types without drop glue") }
         var n = self.free
         if n >= 0 {
-            self.free = rt_read<int>(rt_offset(self.base, n * self.stride))
+            self.free = self.nextFree(rt_offset(self.base, n * self.stride))
         } else {
             n = self.count
             if n >= self.limit() { panic("pool full") }
@@ -100,7 +110,7 @@ impl<T, W> pool<T, W> {
     //~ Frees the slot `l` names for the next `add!`; `l` must not be used again.
     fn remove(inout self, l: link<T, W>) {
         const n = self.slotOf(l)
-        rt_write<int>(rt_offset(self.base, self.offsetOf(l)), self.free)
+        self.setNextFree(rt_offset(self.base, self.offsetOf(l)), self.free)
         self.free = n
     }
 
@@ -109,6 +119,9 @@ impl<T, W> pool<T, W> {
         self.count = 0
         self.free = -1
     }
+
+    //~ Bytes one slot takes.
+    fn slotBytes(self) -> int = self.stride
 
     //~ Slots handed out so far, free ones included.
     fn len(self) -> int = self.count
