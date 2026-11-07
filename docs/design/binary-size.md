@@ -44,8 +44,8 @@ Read from `objdump -d`; the runtime is emitted by `native/rt.rs` whatever the pr
 | fault handler (prints "stack overflow" or "invalid memory access") | 80 | no |
 | `print` 125, `flush` 51, `write_fd` 47 | 223 | yes (about 120 of it) |
 | `stop` (prints "stopped: ...", exits) | 81 | no |
-| `free` and its large-block path | 137 | no (hello never allocates) |
-| four stubs that print the task and deadlock messages | 68 | no |
+| `free` and its large-block path | 137 | no (hello never allocates; done in #224) |
+| four trap stubs (division, shift, overflow, unreachable) and their messages | 68 | no (done in #224) |
 | alignment `nop`s before `main` (functions start 48 bytes into a cache line) | 112 | no |
 | exit sequence and `main` call | 28 | yes |
 | `main` | 43 | yes |
@@ -91,7 +91,7 @@ Savings are per binary, from the table above. "Own idea" marks what uses Pelago'
 |---|---|---|---|---|
 | 1 | **No section headers or symbols by default** (`e_shnum` 0); keep them behind `--symbols`/`-g`, and keep the symbol list in a side file for the profiler | 631 to 759 (10 to 24 %) | very small (`elf.rs`) | conventional |
 | 2 | **Zeros to `.bss`**: put the runtime state last in `.data`, or in a second `bss` blob, and pass the `bss` argument that `elf::write` already has | about 325 to 370 | small | conventional |
-| 3 | **Prune the runtime per program**, not per feature set: drop `free`, the deadlock/task stubs and their strings when no `Free` or task exists; make the stop messages table-driven so unused ones vanish | about 300 for `hello`; less for larger programs | small to medium (`Uses` in `rt.rs` already does this for six flags) | conventional |
+| 3 | **Prune the runtime per program**, not per feature set: drop `free` and the trap stubs and their strings when no `Free` or check needs them (done in #224); make the stop messages table-driven so unused ones vanish | about 300 for `hello`; less for larger programs | small to medium (`Uses` in `rt.rs` already does this for six flags) | conventional |
 | 4 | **Static stack bound instead of a 1 GiB stack and a signal handler.** When the call graph has no cycle and no indirect call, the deepest stack is known at compile time: check it against the stack size once, and drop the stack `mmap`, the guard, `sigaltstack`, both `sigaction`s and the fault handler. For recursive functions, a prologue `cmp rsp, [limit]` / `jb stack_overflow` (no register needed, about 8 bytes per recursive function) replaces the guard page and also works on chips with no MMU and no signals | about 375 for non-recursive programs | medium (call graph in `lower`/`mir`) | **own idea** (exact, language-level "stopped: stack overflow", not a SIGSEGV) |
 | 5 | **Output buffer in `.bss`, sized per program** (default 4 KiB on small targets, a build setting) and no tty probe unless asked (`--line-buffered`); a program that never reads a terminal state does not need the `ioctl` | about 100 | small | conventional (the sizing is ours) |
 | 6 | **Function alignment**: the 48-byte nop pad per function (`gen.rs`, justified by `fib` and `tak`) costs 112 to 555 bytes. Keep it only for functions the optimiser marks hot (loops, `@inline_always` callees, recursion), pack the rest at 1-byte alignment; `--opt-size` turns it off everywhere | 110 to 550 (8 to 10 % of text) | small | conventional |
