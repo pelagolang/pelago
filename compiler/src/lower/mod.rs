@@ -209,8 +209,11 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         .fns
         .iter()
         .filter(|(d, e)| {
-            let in_core = program.package(program.module(e.file).package).name == "core";
-            !in_core
+            // The libraries (`core`, `std`) are lowered where the program uses them, not all at once:
+            // a program that imports `std.big` must not carry `std.io` along.
+            let name = &program.package(program.module(e.file).package).name;
+            let in_library = name == "core" || name == "std";
+            !in_library
                 && !e.mods.is_meta
                 && !matches!(e.decl.body, FnBody::None)
                 && lw.is_plain_fn(**d)
