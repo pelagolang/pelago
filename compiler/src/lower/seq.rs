@@ -3,6 +3,7 @@
 //! The work is done by library functions written in the language (`rt_str_push`, `rt_show_int`, ...)
 //! that the lowering calls by name.
 
+use super::call::ArgSource;
 use super::expr::strip_parens;
 use super::*;
 
@@ -926,9 +927,13 @@ impl<'a> Lowerer<'a> {
         body: &mut LoopBody<'a, '_>,
         keys_only: bool,
     ) -> Res {
+        let (iter, adapters) = match (pats, keys_only) {
+            ([_], false) => self.peel_adapters(iter),
+            _ => (iter, Vec::new()),
+        };
         if let ([p], false) = (pats, keys_only) {
             if let Some(src) = self.fused_source(iter) {
-                return self.for_fused(label, p, src, iter.span, body);
+                return self.for_fused(label, p, src, adapters, iter.span, body);
             }
         }
         let Some(it) = self.ty_of(iter) else {
@@ -963,6 +968,7 @@ impl<'a> Lowerer<'a> {
             Some(n) => (self.i64c(n), h),
             None => (self.load_at(h, 8, IrTy::I64), self.load_at(h, 0, IrTy::Ptr)),
         };
+        let fns = self.eval_adapters(&adapters, iter.span);
         let head = self.new_block(&[IrTy::I64]);
         let body_b = self.new_block(&[]);
         let step = self.new_block(&[]);
@@ -1025,6 +1031,9 @@ impl<'a> Lowerer<'a> {
         };
         match (pats, vp) {
             ([p], None) => {
+                let Some((ep, elem)) = self.apply_adapters(&fns, ep, elem, step, iter.span) else {
+                    return Res::Never;
+                };
                 if !self.pat_test(p, ep, elem, bind_fail) {
                     return Res::Never;
                 }
@@ -1149,6 +1158,7 @@ impl<'a> Lowerer<'a> {
         label: Option<String>,
         pat: &'a Pattern,
         src: Fused<'a>,
+        adapters: Vec<Adapter<'a>>,
         span: Span,
         body: &mut LoopBody<'a, '_>,
     ) -> Res {
@@ -1189,6 +1199,7 @@ impl<'a> Lowerer<'a> {
         } else {
             len
         };
+        let fns = self.eval_adapters(&adapters, span);
         let head = self.new_block(&[IrTy::I64]);
         let body_b = self.new_block(&[]);
         let step = self.new_block(&[]);
@@ -1267,6 +1278,9 @@ impl<'a> Lowerer<'a> {
         }
         let bind_fail = self.stop_block("pattern did not match");
         let depth = self.f.scopes.len();
+        let Some((eslot, elem_ty)) = self.apply_adapters(&fns, eslot, elem_ty, step, span) else {
+            return Res::Never;
+        };
         if !self.pat_test(pat, eslot, elem_ty, bind_fail) {
             return Res::Never;
         }
@@ -1290,5 +1304,142 @@ impl<'a> Lowerer<'a> {
         self.start(exit);
         self.pop_scope();
         Res::Unit
+    }
+}
+
+/// A `map` or `filter` step of a chain a `for` loop runs element by element (docs/design/iter.md, section 4).
+#[derive(Clone, Copy)]
+pub(crate) enum Adapter<'a> {
+    Map(&'a Expr),
+    Filter(&'a Expr),
+}
+
+/// An adapter whose function value has been made once, before the loop.
+pub(crate) struct AdapterFn {
+    map: bool,
+    ft: Ty,
+    fv: Value,
+}
+
+impl<'a> Lowerer<'a> {
+    /// `src.map(f).filter(p)...` over an iterator of plain values (no drop glue, so no element needs an owner):
+    /// the source and the steps in the order they apply. Anything else is the source itself.
+    fn peel_adapters(&mut self, e: &'a Expr) -> (&'a Expr, Vec<Adapter<'a>>) {
+        let mut steps = Vec::new();
+        let mut cur = e;
+        while let ExprKind::Call { callee, args, .. } = &strip_parens(cur).kind {
+            let ExprKind::Field {
+                base,
+                name,
+                optional: false,
+            } = &strip_parens(callee).kind
+            else {
+                break;
+            };
+            let [a] = args.as_slice() else {
+                break;
+            };
+            if a.mode.is_some() || a.label.is_some() || a.spread {
+                break;
+            }
+            let map = match self.src_text(name.span) {
+                "map" => true,
+                "filter" => false,
+                _ => break,
+            };
+            let f = &a.value;
+            if !matches!(
+                strip_parens(f).kind,
+                ExprKind::Closure(_) | ExprKind::Name(_)
+            ) {
+                break;
+            }
+            let (Some(bt), Some(rt)) = (self.ty_of(base), self.ty_of(cur)) else {
+                break;
+            };
+            let (TyKind::Iter(from), TyKind::Iter(to)) = (self.kind(bt), self.kind(rt)) else {
+                break;
+            };
+            if self.needs_drop(from) || self.needs_drop(to) {
+                break;
+            }
+            steps.push(if map {
+                Adapter::Map(f)
+            } else {
+                Adapter::Filter(f)
+            });
+            cur = base;
+        }
+        steps.reverse();
+        (cur, steps)
+    }
+
+    /// Makes the function value of each step once, before the loop (so a closure is built once, as in the eager chain).
+    fn eval_adapters(&mut self, steps: &[Adapter<'a>], span: Span) -> Vec<AdapterFn> {
+        let mut out = Vec::new();
+        for s in steps {
+            let (map, f) = match s {
+                Adapter::Map(f) => (true, *f),
+                Adapter::Filter(f) => (false, *f),
+            };
+            let Some(ft) = self.ty_of(f) else {
+                self.unsupported(span, "a function of unknown type");
+                break;
+            };
+            if let ExprKind::Closure(_) = &strip_parens(f).kind {
+                let sp = strip_parens(f).span;
+                self.f.stack_env = Some((sp.start, sp.end));
+            }
+            let Res::Val(fv) = self.expr(f) else {
+                break;
+            };
+            // The value must outlive the loop's turns: copy the two words into a slot.
+            let slot = self.slot_for(ft);
+            let code = self.load_at(fv, 0, IrTy::Ptr);
+            let env = self.load_at(fv, 8, IrTy::Ptr);
+            self.store_at(slot, 0, code);
+            self.store_at(slot, 8, env);
+            out.push(AdapterFn { map, ft, fv: slot });
+        }
+        out
+    }
+
+    /// Runs the steps on the element at `ep` (type `elem`): a `filter` that says no goes to `step`; a `map`
+    /// replaces the element with its result. Returns where the final element is and its type.
+    fn apply_adapters(
+        &mut self,
+        fns: &[AdapterFn],
+        mut ep: Value,
+        mut elem: Ty,
+        step: BlockId,
+        span: Span,
+    ) -> Option<(Value, Ty)> {
+        for f in fns {
+            let Some(sig) = self.fn_value_sig(f.ft) else {
+                self.unsupported(span, "calling something that is not a function");
+                return None;
+            };
+            if f.map {
+                let slot = self.slot_for(sig.ret);
+                let r = self.call_fn_at(span, f.ft, f.fv, vec![ArgSource::Addr(ep)], Some(slot));
+                match r {
+                    Res::Val(v) => self.store_scalar_ty(slot, v),
+                    Res::Never => return None,
+                    _ => {}
+                }
+                ep = slot;
+                elem = sig.ret;
+            } else {
+                let Res::Val(keep) =
+                    self.call_fn_at(span, f.ft, f.fv, vec![ArgSource::Addr(ep)], None)
+                else {
+                    return None;
+                };
+                let next = self.new_block(&[]);
+                self.branch(keep, next, step);
+                self.start(next);
+            }
+        }
+        Some((ep, elem))
     }
 }
