@@ -1434,6 +1434,11 @@ impl<'a> Lowerer<'a> {
     fn stmt(&mut self, s: &'a Stmt) {
         match &s.kind {
             StmtKind::Decl(d) => self.decl(d),
+            // `defer` registers with the enclosing block, not with the statement's own temporary
+            // scope (which ends at once and would run the deferred code on the spot).
+            StmtKind::Expr(e) if matches!(e.kind, ExprKind::Defer(_)) => {
+                self.expr(e);
+            }
             StmtKind::Expr(e) => {
                 self.push_scope();
                 self.expr(e);

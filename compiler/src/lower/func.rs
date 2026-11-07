@@ -284,7 +284,10 @@ impl<'a> Lowerer<'a> {
                 ScopeItem::Drop { ptr, ty, flag } => self.emit_drop(*ptr, *ty, *flag),
                 ScopeItem::Defer(e) => {
                     let e: &'a Expr = e;
+                    // Its temporaries end with it, not with whichever scope was open at the exit.
+                    self.push_scope();
                     self.expr(e);
+                    self.pop_scope();
                 }
                 ScopeItem::CoreCall(name) => {
                     self.call_core(name, vec![]);
