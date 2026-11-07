@@ -14,7 +14,7 @@ use super::gen_a64::{classify, Loc as ArgLoc};
 use super::mir::*;
 use super::regs::{folds, fused_cmp, small_copy, Base, Fold};
 use crate::ir::Target as JumpTarget;
-use crate::ir::{BinOp, CastKind, CmpOp, Const, Func, IrTy, Op, Term, Test, Value};
+use crate::ir::{BinOp, CastKind, CmpOp, Const, FUn, Func, IrTy, Op, Term, Test, Value};
 use std::collections::HashMap;
 
 fn bits(t: IrTy) -> u32 {
@@ -82,6 +82,8 @@ enum Loc {
 #[derive(Clone)]
 enum CondOp {
     Cmp(Cond, Reg, Operand),
+    /// A float comparison: the condition, both sides, and whether they are doubles.
+    FCmp(Cond, Reg, Reg, bool),
     Test(Reg),
 }
 
@@ -101,23 +103,26 @@ struct Sel<'m> {
     filled: crate::ir::opt::fx::HashSet<usize>,
 }
 
-fn is_plain(t: IrTy) -> bool {
-    !matches!(t, IrTy::F32 | IrTy::F64 | IrTy::V2I64)
+fn class_of(t: IrTy) -> Class {
+    if t.is_float() {
+        Class::Float
+    } else {
+        Class::Int
+    }
 }
 
-/// Can the selector do this function? Not yet: floats and vectors.
+/// Can the selector do this function? Not yet: vectors, and a select that moves floats.
 fn supported(f: &Func) -> bool {
-    if !is_plain(f.ret) && f.ret != IrTy::Void {
-        return false;
-    }
-    if f.values.iter().any(|t| !is_plain(*t)) {
+    if f.ret == IrTy::V2I64 || f.values.contains(&IrTy::V2I64) {
         return false;
     }
     f.blocks
         .iter()
         .flat_map(|b| &b.insts)
         .all(|&i| match &f.insts[i].op {
-            Op::CallPtr(tys, ret, ..) => is_plain(*ret) && tys.iter().all(|t| is_plain(*t)),
+            Op::Select(_, a, _) => !f.ty(*a).is_float(),
+            Op::CheckedIf(_, _, Test::Cmp(_, x, _), ..) => !f.ty(*x).is_float(),
+            Op::CallPtr(tys, ret, ..) => *ret != IrTy::V2I64 && !tys.contains(&IrTy::V2I64),
             _ => true,
         })
 }
@@ -179,7 +184,7 @@ impl<'m> Sel<'m> {
         if let Some(r) = self.vreg[v.0 as usize] {
             return r;
         }
-        let r = self.new_vreg();
+        let r = self.mf.new_vreg(class_of(self.f.ty(v)));
         self.vreg[v.0 as usize] = Some(r);
         r
     }
@@ -358,17 +363,28 @@ impl<'m> Sel<'m> {
             let r = self.reg_of(*p);
             match loc {
                 ArgLoc::Int(i) => copies.push((r, Operand::use_(Reg::Phys(INT_ARGS[*i])))),
-                ArgLoc::Float(_) => unreachable!("floats are not selected yet"),
+                ArgLoc::Float(i) => copies.push((r, Operand::use_(Reg::Phys(x::v(*i as u8))))),
                 ArgLoc::Stack(k) => {
                     let m = Operand::Mem {
                         base: MemBase::Frame(incoming.expect("stack parameters")),
                         index: None,
                         disp: 8 * *k as i32,
                     };
-                    self.emit(MInst::new(
-                        op::LOAD,
-                        vec![Operand::def(r), m, Operand::Imm(8)],
-                    ));
+                    if class_of(f.ty(*p)) == Class::Float {
+                        self.emit(MInst::new(
+                            op::FLD,
+                            vec![
+                                Operand::def(r),
+                                m,
+                                Operand::Imm(i64::from(f.ty(*p) == IrTy::F64)),
+                            ],
+                        ));
+                    } else {
+                        self.emit(MInst::new(
+                            op::LOAD,
+                            vec![Operand::def(r), m, Operand::Imm(8)],
+                        ));
+                    }
                 }
             }
         }
@@ -408,6 +424,9 @@ impl<'m> Sel<'m> {
             let (Op::Cmp(op, x, y), Some(r)) = (&f.insts[i].op, f.insts[i].result) else {
                 continue;
             };
+            if f.ty(*x).is_float() {
+                continue;
+            }
             let selects = b
                 .insts
                 .iter()
@@ -480,6 +499,21 @@ impl<'m> Sel<'m> {
                 )
                 .branch()
             }
+            CondOp::FCmp(cc, a, b, dbl) => {
+                // The inverse of each condition is true for an unordered pair, as the branch must be.
+                let cc = if inv { cc.invert() } else { cc };
+                MInst::new(
+                    op::FCMPJCC,
+                    vec![
+                        Operand::Imm(cc_num(cc)),
+                        Operand::use_(a),
+                        Operand::use_(b),
+                        Operand::Block(to),
+                        Operand::Imm(i64::from(dbl)),
+                    ],
+                )
+                .branch()
+            }
             CondOp::Test(r) => {
                 let cc = if inv { Cond::Eq } else { Cond::Ne };
                 MInst::new(
@@ -502,7 +536,11 @@ impl<'m> Sel<'m> {
             Term::Return(None) => self.emit(MInst::new(op::RET, vec![]).nofall()),
             Term::Return(Some(v)) => {
                 let s = self.src(*v);
-                let r = x::x(0);
+                let r = if f.ty(*v).is_float() {
+                    x::v(0)
+                } else {
+                    x::x(0)
+                };
                 self.emit(MInst::copy(Reg::Phys(r), s));
                 self.emit(MInst::new(op::RET, vec![Operand::use_(Reg::Phys(r))]).nofall());
             }
@@ -583,6 +621,19 @@ impl<'m> Sel<'m> {
 
     /// The condition code and operands for an integer, boolean or pointer comparison.
     fn cmp_cond(&mut self, o: CmpOp, a: Value, b: Value) -> CondOp {
+        if self.f.ty(a).is_float() {
+            // An unordered pair (a NaN) makes every condition false except `!=`.
+            let cc = match o {
+                CmpOp::Eq => Cond::Eq,
+                CmpOp::Ne => Cond::Ne,
+                CmpOp::Lt | CmpOp::ULt => Cond::Mi,
+                CmpOp::Le | CmpOp::ULe => Cond::Ls,
+                CmpOp::Gt | CmpOp::UGt => Cond::Gt,
+                _ => Cond::Ge,
+            };
+            let (ra, rb) = (self.vr(a), self.vr(b));
+            return CondOp::FCmp(cc, ra, rb, self.f.ty(a) == IrTy::F64);
+        }
         let signed = matches!(self.f.ty(a), IrTy::Int(_))
             && matches!(o, CmpOp::Lt | CmpOp::Le | CmpOp::Gt | CmpOp::Ge);
         // `cmp imm, r` does not exist: swap the sides when only the left one is a constant.
@@ -678,7 +729,27 @@ impl<'m> Sel<'m> {
             }
         }
         match &inst.op {
+            Op::Const(t, c) if t.is_float() => {
+                let Const::Float(v) = c else {
+                    panic!("a float constant of type {t:?} is {c:?}")
+                };
+                let n = if *t == IrTy::F32 {
+                    (*v as f32).to_bits() as i64
+                } else {
+                    v.to_bits() as i64
+                };
+                let d = self.reg_of(res.unwrap());
+                self.emit(MInst::new(
+                    op::FCONST,
+                    vec![
+                        Operand::def(d),
+                        Operand::Imm(n),
+                        Operand::Imm(i64::from(*t == IrTy::F64)),
+                    ],
+                ));
+            }
             Op::Const(..) => {}
+            Op::Bin(o, a, b) if f.ty(*a).is_float() => self.fbin(*o, *a, *b, res.unwrap()),
             Op::Bin(o, a, b) => self.bin(*o, *a, *b, res.unwrap()),
             Op::Checked(o, signed, a, b) => {
                 self.checked(*o, *signed, *a, *b, res.unwrap(), Vec::new())
@@ -687,6 +758,22 @@ impl<'m> Sel<'m> {
             Op::CheckedIf(o, signed, test, a, b) => {
                 let tail = self.test_ops(test);
                 self.checked(*o, *signed, *a, *b, res.unwrap(), tail);
+            }
+            Op::Cmp(o, a, b) if f.ty(*a).is_float() => {
+                let d = self.reg_of(res.unwrap());
+                let CondOp::FCmp(cc, ra, rb, dbl) = self.cmp_cond(*o, *a, *b) else {
+                    unreachable!()
+                };
+                self.emit(MInst::new(
+                    op::FCMPSET,
+                    vec![
+                        Operand::def(d),
+                        Operand::Imm(cc_num(cc)),
+                        Operand::use_(ra),
+                        Operand::use_(rb),
+                        Operand::Imm(i64::from(dbl)),
+                    ],
+                ));
             }
             Op::Cmp(o, a, b) => {
                 let r = res.unwrap();
@@ -705,6 +792,15 @@ impl<'m> Sel<'m> {
                         Operand::use_(ra),
                         rb,
                     ],
+                ));
+            }
+            Op::Neg(a) if f.ty(*a).is_float() => {
+                let d = self.reg_of(res.unwrap());
+                let s = self.vr(*a);
+                let dbl = Operand::Imm(i64::from(f.ty(*a) == IrTy::F64));
+                self.emit(MInst::new(
+                    op::FNEG,
+                    vec![Operand::def(d), Operand::use_(s), dbl],
                 ));
             }
             Op::Neg(a) => {
@@ -745,7 +841,40 @@ impl<'m> Sel<'m> {
                         let s = self.src(*a);
                         self.emit(MInst::copy(d, s));
                     }
-                    _ => unreachable!("float casts are not selected yet"),
+                    CastKind::IntToFloat => {
+                        let s = self.ext(*a, true);
+                        let dbl = Operand::Imm(i64::from(*to == IrTy::F64));
+                        self.emit(MInst::new(
+                            op::ITOF,
+                            vec![Operand::def(d), Operand::use_(s), dbl],
+                        ));
+                    }
+                    CastKind::FloatToInt => {
+                        let s = self.vr(*a);
+                        let dbl = Operand::Imm(i64::from(f.ty(*a) == IrTy::F64));
+                        self.emit(MInst::new(
+                            op::FTOI,
+                            vec![
+                                Operand::def(d),
+                                Operand::use_(s),
+                                dbl,
+                                Operand::Imm(bits(*to) as i64),
+                            ],
+                        ));
+                    }
+                    CastKind::FloatResize => {
+                        let s = self.src(*a);
+                        if f.ty(*a) == *to {
+                            self.emit(MInst::copy(d, s));
+                        } else {
+                            let r = self.vr(*a);
+                            let dbl = Operand::Imm(i64::from(*to == IrTy::F64));
+                            self.emit(MInst::new(
+                                op::FRESIZE,
+                                vec![Operand::def(d), Operand::use_(r), dbl],
+                            ));
+                        }
+                    }
                 }
             }
             Op::Call(callee, args) => {
@@ -805,6 +934,14 @@ impl<'m> Sel<'m> {
                     vec![Operand::def(d), Operand::Sym(SYM_FUNC + fid.0)],
                 ));
             }
+            Op::Load(t, p) if t.is_float() => {
+                let m = self.mem_of(*p);
+                let d = self.reg_of(res.unwrap());
+                self.emit(MInst::new(
+                    op::FLD,
+                    vec![Operand::def(d), m, Operand::Imm(i64::from(*t == IrTy::F64))],
+                ));
+            }
             Op::Load(t, p) => {
                 let m = self.mem_of(*p);
                 let d = self.reg_of(res.unwrap());
@@ -812,6 +949,12 @@ impl<'m> Sel<'m> {
                     op::LOAD,
                     vec![Operand::def(d), m, Operand::Imm(size(*t) as i64)],
                 ));
+            }
+            Op::Store(p, v) if f.ty(*v).is_float() => {
+                let m = self.mem_of(*p);
+                let s = Operand::use_(self.vr(*v));
+                let dbl = Operand::Imm(i64::from(f.ty(*v) == IrTy::F64));
+                self.emit(MInst::new(op::FST, vec![m, s, dbl]));
             }
             Op::Store(p, v) => {
                 let t = f.ty(*v);
@@ -850,9 +993,36 @@ impl<'m> Sel<'m> {
                 let (a, b) = (self.src(*s), self.src(*t));
                 self.runtime(op::RT_CTX_SWITCH, vec![(x::x(0), a), (x::x(1), b)], None);
             }
-            Op::Fma(..) | Op::FUn(..) | Op::VUn(..) | Op::VBin(..) => {
-                unreachable!("not selected")
+            Op::Fma(a, b, c) => {
+                let d = self.reg_of(res.unwrap());
+                let (ra, rb, rc) = (self.vr(*a), self.vr(*b), self.vr(*c));
+                let dbl = Operand::Imm(i64::from(f.ty(*a) == IrTy::F64));
+                self.emit(MInst::new(
+                    op::FFMA,
+                    vec![
+                        Operand::def(d),
+                        Operand::use_(ra),
+                        Operand::use_(rb),
+                        Operand::use_(rc),
+                        dbl,
+                    ],
+                ));
             }
+            Op::FUn(o, a) => {
+                let d = self.reg_of(res.unwrap());
+                let s = self.vr(*a);
+                let kind = match o {
+                    FUn::Sqrt => 0,
+                    FUn::Floor => 1,
+                    FUn::Ceil => 2,
+                };
+                let dbl = Operand::Imm(i64::from(f.ty(*a) == IrTy::F64));
+                self.emit(MInst::new(
+                    op::FUN,
+                    vec![Operand::def(d), Operand::use_(s), Operand::Imm(kind), dbl],
+                ));
+            }
+            Op::VUn(..) | Op::VBin(..) => unreachable!("vectors are not selected"),
         }
     }
 
@@ -909,7 +1079,7 @@ impl<'m> Sel<'m> {
         let mut copies = Vec::new();
         let mut stack = 0u32;
         let tys: Vec<IrTy> = args.iter().map(|a| self.f.ty(*a)).collect();
-        for (a, loc) in args.iter().zip(classify(&tys)) {
+        for (n, (a, loc)) in args.iter().zip(classify(&tys)).enumerate() {
             match loc {
                 ArgLoc::Int(i) => {
                     let p = INT_ARGS[i];
@@ -917,7 +1087,12 @@ impl<'m> Sel<'m> {
                     let s = self.src(*a);
                     copies.push((Reg::Phys(p), s));
                 }
-                ArgLoc::Float(_) => unreachable!("floats are not selected yet"),
+                ArgLoc::Float(i) => {
+                    let p = x::v(i as u8);
+                    regs.push(p);
+                    let s = self.src(*a);
+                    copies.push((Reg::Phys(p), s));
+                }
                 ArgLoc::Stack(k) => {
                     let out = match self.out_area {
                         Some(o) => o,
@@ -932,11 +1107,23 @@ impl<'m> Sel<'m> {
                         index: None,
                         disp: 8 * k as i32,
                     };
-                    let s = match self.konst(*a, false) {
-                        Some(0) => Operand::Imm(0),
-                        _ => Operand::use_(self.vr(*a)),
-                    };
-                    self.emit(MInst::new(op::STORE, vec![m, s, Operand::Imm(8)]));
+                    if tys[n].is_float() {
+                        let r = self.vr(*a);
+                        self.emit(MInst::new(
+                            op::FST,
+                            vec![
+                                m,
+                                Operand::use_(r),
+                                Operand::Imm(i64::from(tys[n] == IrTy::F64)),
+                            ],
+                        ));
+                    } else {
+                        let s = match self.konst(*a, false) {
+                            Some(0) => Operand::Imm(0),
+                            _ => Operand::use_(self.vr(*a)),
+                        };
+                        self.emit(MInst::new(op::STORE, vec![m, s, Operand::Imm(8)]));
+                    }
                     stack = stack.max(k as u32 + 1);
                 }
             }
@@ -963,8 +1150,47 @@ impl<'m> Sel<'m> {
         self.emit(MInst::new(opc, ops).call(call_clobbers()));
         if let Some(r) = res {
             let d = self.reg_of(r);
-            self.emit(MInst::copy(d, Operand::use_(Reg::Phys(x::x(0)))));
+            let from = if self.f.ty(r).is_float() {
+                x::v(0)
+            } else {
+                x::x(0)
+            };
+            self.emit(MInst::copy(d, Operand::use_(Reg::Phys(from))));
         }
+    }
+
+    /// Float arithmetic; a remainder calls the runtime's `fmod` (on doubles).
+    fn fbin(&mut self, o: BinOp, a: Value, b: Value, r: Value) {
+        let dbl = self.f.ty(a) == IrTy::F64;
+        let d = self.reg_of(r);
+        let (ra, rb) = (self.vr(a), self.vr(b));
+        if o == BinOp::Rem {
+            let (d0, d1) = (Reg::Phys(x::v(0)), Reg::Phys(x::v(1)));
+            self.copies(vec![(d0, Operand::use_(ra)), (d1, Operand::use_(rb))]);
+            // The routine works on doubles: a float is widened and rounded back, both exactly.
+            let which = if dbl { op::RT_FMOD } else { op::RT_FMOD32 };
+            let mut ops = vec![Operand::Imm(which)];
+            ops.extend([d0, d1].map(Operand::use_));
+            self.emit(MInst::new(op::CALLRT, ops).call(call_clobbers()));
+            self.emit(MInst::copy(d, Operand::use_(d0)));
+            return;
+        }
+        let kind = match o {
+            BinOp::Add => 0,
+            BinOp::Sub => 1,
+            BinOp::Mul => 2,
+            _ => 3,
+        };
+        self.emit(MInst::new(
+            op::FARITH,
+            vec![
+                Operand::def(d),
+                Operand::use_(ra),
+                Operand::use_(rb),
+                Operand::Imm(kind),
+                Operand::Imm(i64::from(dbl)),
+            ],
+        ));
     }
 
     fn bin(&mut self, o: BinOp, a: Value, b: Value, r: Value) {
