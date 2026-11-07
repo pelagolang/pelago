@@ -400,6 +400,7 @@ fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
             let opts = gen::Options {
                 leak_check: true,
                 target: os,
+                symbols: false,
             };
             let image = match gen::compile(m, "main", &opts) {
                 Ok(i) => i,
@@ -1580,6 +1581,7 @@ fn agree(src: &str) {
         let opts = gen::Options {
             leak_check: false,
             target: os,
+            symbols: false,
         };
         gen::REG_LIMIT.with(|l| l.set(limit));
         let image = gen::compile(m, "main", &opts).unwrap();
@@ -2573,6 +2575,7 @@ fn native_runaway_recursion_stops_cleanly() {
             let opts = gen::Options {
                 leak_check: false,
                 target: os,
+                symbols: false,
             };
             let image = gen::compile(&l.module, "main", &opts).unwrap();
             let r = exec::run_image(os, &image).unwrap();

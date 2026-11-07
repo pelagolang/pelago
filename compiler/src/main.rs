@@ -92,7 +92,7 @@ fn real_main() {
                     eprintln!("usage: pelago {cmd} [--opt|--no-opt] [--stats] [--timings] <file or directory>");
                     eprintln!("       pelago run [--no-opt] <path>    build natively and run (the default where supported)");
                     eprintln!("       pelago run --interp <path>      run in the IR interpreter (`--opt`, `--stats`)");
-                    eprintln!("       pelago build [--no-opt] [--leak-check] [--target=linux|windows] [-o out] <path>");
+                    eprintln!("       pelago build [--no-opt] [--leak-check] [--symbols] [--target=linux|windows] [-o out] <path>");
                     std::process::exit(2);
                 }
             }
@@ -599,6 +599,7 @@ fn native_build(
     let opts = pelago::native::gen::Options {
         leak_check: flags.contains(&"--leak-check"),
         target: os,
+        symbols: flags.contains(&"--symbols"),
     };
     let compile = match arch {
         pelago::native::Arch::X86_64 => pelago::native::gen::compile,

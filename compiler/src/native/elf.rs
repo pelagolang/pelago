@@ -7,7 +7,7 @@
 //!           .text                            | segment 1: read + execute
 //!           .rodata                          |
 //! .data (a page later in memory), .bss (zeroed) | segment 2: read + write
-//! (file end) section headers, symbols        (for gdb and objdump; the loader ignores them)
+//! (file end) section headers, symbols        (for gdb and objdump; the loader ignores them; only with `--symbols`)
 //! ```
 
 use super::x86::{Asm, SectAddrs};
@@ -112,13 +112,14 @@ impl W {
 }
 
 /// Builds the executable: `asm` is the code (entry at offset 0), `rodata` and `data` the sections,
-/// `bss` the zeroed bytes that follow `data`, `syms` the functions to name.
+/// `bss` the zeroed bytes that follow `data`, `syms` the functions to name (`None`: no section
+/// headers, symbols or string tables at all; the loader does not read them, and they are 0.6 to 0.8 KB).
 pub fn write(
     asm: &Asm,
     rodata: &Blob,
     data: &Blob,
     bss: usize,
-    syms: &[Symbol],
+    syms: Option<&[Symbol]>,
 ) -> Result<Vec<u8>, String> {
     write_with(
         Arch::X86_64,
@@ -137,7 +138,7 @@ pub fn write_a64(
     rodata: &Blob,
     data: &Blob,
     bss: usize,
-    syms: &[Symbol],
+    syms: Option<&[Symbol]>,
 ) -> Result<Vec<u8>, String> {
     write_with(
         Arch::Aarch64,
@@ -158,7 +159,7 @@ fn write_with(
     rodata: &Blob,
     data: &Blob,
     bss: usize,
-    syms: &[Symbol],
+    syms: Option<&[Symbol]>,
 ) -> Result<Vec<u8>, String> {
     let align = page(arch);
     let lay = layout_for(arch, code_len, rodata.bytes.len(), data.bytes.len());
@@ -231,6 +232,9 @@ fn write_with(
     w.0.extend_from_slice(&data.bytes);
 
     // Section headers, symbols and names (for tools only).
+    let Some(syms) = syms else {
+        return Ok(w.0);
+    };
     let mut shstr: Vec<u8> = vec![0];
     let name = |s: &str, tab: &mut Vec<u8>| -> u32 {
         let at = tab.len() as u32;

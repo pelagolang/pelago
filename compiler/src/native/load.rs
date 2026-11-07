@@ -162,7 +162,7 @@ mod tests {
         ro.add(b"abc", 1);
         let mut data = Blob::default();
         data.add(b"xy", 1);
-        let img = write(&asm, &ro, &data, 16, &[] as &[Symbol]).unwrap();
+        let img = write(&asm, &ro, &data, 16, Some(&[] as &[Symbol])).unwrap();
         let (entry, segs) = segments(&img).unwrap();
         assert_eq!(entry, 0x40_0100);
         assert_eq!(segs.len(), 2);

@@ -71,7 +71,7 @@ The tool is called `pelago`; on Windows (PowerShell) use `cargo run -- ...` the 
 |---|---|
 | `pelago check <path>` | parse, resolve names and check types of a file or a directory |
 | `pelago run <path>` | build machine code and run `main` (optimised; `--no-opt`, `--leak-check`); `--interp` runs the IR interpreter instead (`--opt` optimises first, `--stats` counts steps) |
-| `pelago build [-o out] <path>` | build a native executable (x86-64, or AArch64 Linux with `--arch=aarch64`), optimised by default (`--no-opt`, `--target=linux\|windows`, `--leak-check`) |
+| `pelago build [-o out] <path>` | build a native executable (x86-64, or AArch64 Linux with `--arch=aarch64`), optimised by default (`--no-opt`, `--target=linux\|windows`, `--leak-check`, `--symbols` keeps the section headers and symbol table, 0.6 to 0.8 KB, for gdb, objdump and callgrind) |
 | `pelago ir <path>` | check, lower to the IR, verify and print it |
 | `pelago fmt [--check] <path>...` | format `.pel` files in place; `-` filters standard input to standard output |
 | `pelago lsp` | the language server, over stdio |

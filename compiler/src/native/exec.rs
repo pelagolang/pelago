@@ -188,7 +188,11 @@ pub fn build_and_run_a64(m: &crate::ir::Module, leak_check: bool) -> Option<Ran>
         super::gen::REG_LIMIT.with(|l| l.set(limit));
         #[cfg(not(test))]
         let _ = limit;
-        let opts = super::gen::Options { leak_check, target };
+        let opts = super::gen::Options {
+            leak_check,
+            target,
+            symbols: false,
+        };
         let image = super::gen_a64::compile(m, "main", &opts)
             .unwrap_or_else(|e| panic!("the AArch64 build failed: {e}"));
         let ran = run_image_arch(Arch::Aarch64, target, &image).unwrap();
