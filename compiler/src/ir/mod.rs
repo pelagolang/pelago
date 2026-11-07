@@ -508,6 +508,12 @@ pub struct Func {
     /// Set for a function written `@leaf`: a promise that, once optimised, it makes no calls and keeps
     /// no stack slot, so the code generator needs no frame for it; the build fails otherwise.
     pub leaf: Option<(u32, Span)>,
+    /// The pointer parameters that are `let` parameters passed in memory: what they reach is not written during
+    /// the call (docs/design/mir.md 8.1). Set by lowering.
+    pub let_ptrs: Vec<Value>,
+    /// The loads (instruction numbers) whose address comes from a `let` pointer parameter through `ptradd` and
+    /// other such loads: frozen for the whole call. Set by `opt::frozen`; an inlined copy never has the mark.
+    pub frozen: std::collections::HashSet<usize>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -567,6 +573,8 @@ impl Func {
             checkfree: None,
             inline_always: None,
             leaf: None,
+            let_ptrs: Vec::new(),
+            frozen: std::collections::HashSet::new(),
         };
         let entry = f.new_block(params);
         debug_assert_eq!(entry, BlockId(0));

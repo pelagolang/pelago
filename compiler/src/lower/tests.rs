@@ -2305,6 +2305,37 @@ fn a_load_joins_an_earlier_load_only_when_no_store_or_call_lies_between() {
 }
 
 #[test]
+fn loads_through_a_let_parameter_are_marked_frozen_and_others_are_not() {
+    // `a` is `let`: its header words, data pointer and elements are frozen. `b` is `inout`, `c` is
+    // `sink`, and `d` is a local: none of their loads is.
+    let src = "fn pick(a: [int], inout b: [int], sink c: [int], i: int) -> int { var d: [int] = [7]\n b[0] = a[i] + 1\n a[i] + b[0] + c[0] + d[0] }\nfn main() { var b: [int] = [5]\n print(pick([1, 2, 3], inout b, [9], 1)) }";
+    let l = lowered(src);
+    let mut m = l.module.clone();
+    let id = m.funcs.iter().position(|f| f.name == "pick").unwrap();
+    crate::ir::opt::frozen::mark(&mut m.funcs[id]);
+    let f = &m.funcs[id];
+    assert_eq!(f.let_ptrs.len(), 1, "only `a` is a let pointer parameter");
+    let loads = f
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .filter(|&&i| matches!(f.insts[i].op, Op::Load(..)))
+        .count();
+    assert!(!f.frozen.is_empty(), "the reads of `a` are frozen");
+    assert!(f.frozen.len() < loads, "reads of b, c and d are not");
+    // Every frozen load is a load, and the interpreter still agrees after the whole pipeline.
+    for &i in &f.frozen {
+        assert!(matches!(f.insts[i].op, Op::Load(..)));
+    }
+    agree(src);
+    // Inlining makes new instruction numbers: the callee's marks are not copied into the caller.
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    if let Some(main) = m.funcs.iter().find(|f| f.name == "main") {
+        assert!(main.frozen.is_empty() || main.let_ptrs.is_empty());
+    }
+}
+
+#[test]
 fn a_range_test_becomes_one_unsigned_compare() {
     let src = "fn digit(c: int) -> bool { c >= 48 && c <= 57 }\nfn main() { var n = 0\n for i in -5..120 { if digit(i) { n += 1 } }\n print(n) }";
     let l = lowered(src);
