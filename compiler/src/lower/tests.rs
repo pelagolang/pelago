@@ -940,7 +940,19 @@ fn program_localfn() {
 #[test]
 fn program_defer() {
     let src = "fn main() { defer print(\"bye\")\n print(\"hi\") }\n";
-    assert_eq!(output_of(src), "bye\nhi\n");
+    assert_eq!(output_of(src), "hi\nbye\n");
+}
+
+#[test]
+fn program_defer_order_and_exits() {
+    // Several defers run in reverse order, on every way out: the end, `return`, `?`, `continue`.
+    let src = "fn f(x: int) -> int {\n defer print(\"d1\")\n defer { print(\"d2\") }\n print(\"body\")\n if x > 0 { return 1 }\n print(\"end\")\n 2 }\n\
+fn first(x: int?) -> int? {\n defer print(\"first-end\")\n const v: int = x?\n return v }\n\
+fn main() {\n print(f(1))\n print(f(0))\n var i = 0\n while i < 3 {\n defer print(\"iter-end\", i)\n i += 1\n if i == 2 { continue }\n print(\"body\", i) }\n { defer print(\"inner\")\n print(\"in block\") }\n const a: int? = 4\n print(first(a))\n print(first(none)) }\n";
+    assert_eq!(
+        output_of(src),
+        "body\nd2\nd1\n1\nbody\nend\nd2\nd1\n2\nbody 1\niter-end 1\niter-end 2\nbody 3\niter-end 3\nin block\ninner\nfirst-end\nsome(4)\nfirst-end\nnone\n"
+    );
 }
 
 #[test]
