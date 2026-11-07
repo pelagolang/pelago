@@ -228,9 +228,11 @@ impl<T> list<T> {
         const h = rt_addr_of(self)
         const size = rt_size_of<T>()
         const len = rt_hdr_len(h)
-        rt_grow(h, size, len + 1)
-        rt_write<T>(rt_offset(rt_hdr_data(h), len * size), sink item)
-        rt_hdr_set_len(h, len + 1)
+        const next = len +% 1
+        rt_grow(h, size, next)
+        /// `len < capacity` after the grow and `capacity * size` was allocated, so neither step can overflow.
+        rt_write<T>(rt_offset(rt_hdr_data(h), len *% size), sink item)
+        rt_hdr_set_len(h, next)
     }
 
     //~ Makes room for `extra` more elements, so that pushing them never grows the buffer.
