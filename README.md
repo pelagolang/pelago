@@ -124,7 +124,7 @@ A snapshot (best of 5, one container, native `--opt`): geometric mean 1.04x of C
 - `docs/design/`: design drafts for each part of the language and compiler (start with [basics](docs/design/basics.md), [types](docs/design/types.md), [memory](docs/design/memory.md), [checker](docs/design/checker.md), [ir](docs/design/ir.md)).
 - `docs/plans/`: the task board and one card per piece of work.
 - `editors/`: the generated TextMate grammar.
-- [ROADMAP.md](ROADMAP.md): vision, decisions table and phases. [docs/NEXT.md](docs/NEXT.md): where we stopped. [NAMES.md](NAMES.md): how the name was chosen.
+- [ROADMAP.md](ROADMAP.md): vision, decisions table and phases. [docs/NEXT.md](docs/NEXT.md): where we stopped.
 
 ## Contributing
 
