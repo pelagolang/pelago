@@ -109,6 +109,22 @@ M2 to M4 can be one PR each or fewer if the diff stays readable. M5 touches `gen
 | `strsplit` (2.0x) | library: an `iter<str>` list and a `result` per number | No: library and IR |
 | `switchwork` (1.2x) | jump table and enum payload loads | Partly: the selector can emit a table jump and load folding |
 
+## 8. Facts the language gives the back end (Build phase design, 2026-11-07)
+
+C compilers recover alias facts with runtime overlap tests, `restrict`, or whole-program guesses. Pelago states them in the language, so the IR should carry them instead of guessing. Three facts, in the order they are cheap to add. None changes what a program means; each lets a pass delete work (and none needs a register, which is the rule for small chips).
+
+**8.1 Frozen loads.** Everything reachable from a `let` parameter is not written for the whole call: a borrowed value cannot be changed while borrowed, and `inout` access to it is rejected by the checker. The same holds for a `const` local after its initialiser. Lowering knows this when it emits the load, so the load carries it: `Op::Load` gets a `frozen: bool` (printed `load.frozen`), set for header words, data pointers and elements read through a `let` or `const` list, string or struct. Inlining copies the flag with the instruction, so it survives (`dist` inlined into `main` keeps `a.data` frozen). Effect, once passes use it (Optimise phase): LICM may hoist a frozen load past any store or call (it still must not fault early: header loads through a valid pointer cannot, element loads need the bounds proof the loop already has), and CSE may join two frozen loads of one address across stores and calls. Levenshtein's inner loop reads `a.data`, `b.data` and `a[i]` every pass (5 loads of about 25 instructions); with the flag they are read once, or are memory operands when registers are short.
+
+Build-phase work: the field, the lowering rule, printer and verifier, interpreter debug check (a frozen load must read the same value at its first and last execution within a call: a test mode that records it), tests that the flag is set exactly for `let` and `const` paths and is absent after `inout` or `sink`. The passes that use it are a separate perf PR.
+
+**8.2 Exact write sets for runtime routines.** A call site that is a runtime routine (`rt_grow_slow`, `rt_print`, the allocator) is assumed to write every register today. Each routine writes a fixed, known set (the hand-written assembly is small). Record the set per routine in `native/clobber.rs`, checked by a test that disassembles each routine and compares (a routine that starts using a register fails the test). PR 199 measured only 2 of 40 programs changing with the per-callee sets we already have, so this is low yield and waits behind 8.1.
+
+**8.3 Recursion fixed point.** A cycle in the call graph keeps the full set. The sets can be computed as a fixed point over the strongly connected components (start from each function's own writes, union in callees until nothing changes). Same yield as 8.2; same place in the queue.
+
+**8.4 Register-poor rule.** Each of these removes instructions or live values, and every change is measured at `PELAGO_REG_LIMIT=6` and `=8` next to full size (see `docs/perf/w4-benchmark-gap-plan.md`).
+
+Questions: (a) is `frozen` on the load the right place, or should the parameter carry it and the IR derive the loads (more work in every pass, but one source of truth)? Recommendation: on the load, because inlining and CSE already move loads freely. (b) Should a `const` local's loads count as frozen from the end of its initialiser only? Recommendation: yes, and only inside straight-line code after the initialiser, so the first version covers `let` parameters only.
+
 ## Questions
 
 1. **Scope.** Replace both generators as in section 4 (recommended), or stop after M4 (x86-64 only) and decide on AArch64 afterwards?
