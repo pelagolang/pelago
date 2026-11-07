@@ -35,6 +35,7 @@ pub ext fn rt_load_bool(p: ptr) -> bool
 pub ext fn rt_store_bool(p: ptr, v: bool)
 pub ext fn rt_print(p: ptr, n: int)
 pub ext fn rt_to_byte(n: int) -> uint8
+pub ext fn rt_wrap<T>(n: int) -> T
 pub ext fn rt_to_int(x: float) -> int
 pub ext fn rt_fma(a: float, b: float, c: float) -> float
 pub ext fn rt_sqrt(a: float) -> float
