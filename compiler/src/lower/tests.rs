@@ -2943,6 +2943,43 @@ fn guarded_loops_stop_where_the_checked_loop_did() {
     );
 }
 
+/// A test that repeats with the counter (`i % 3`, `i & 1`) stays a branch: the processor predicts it, and
+/// a `select` would put the counters it updates onto the dependency chain. A test on a value computed
+/// otherwise (the parity of a collatz step) still becomes a `select`.
+#[test]
+fn periodic_tests_stay_branches_and_data_tests_become_selects() {
+    let selects = |src: &str| {
+        let l = lowered(src);
+        let mut m = l.module.clone();
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        let f = m.funcs.iter().find(|f| f.name == "main").unwrap();
+        crate::ir::print_func(f, None).matches("select").count()
+    };
+    let periodic = "fn main() {
+            var a = 0
+            var b = 0
+            var t = 0
+            for i in 0..100000 {
+                if i & 1 == 1 { a += 1 } else { b += 1; t += i & 255 }
+            }
+            print(a, b, t)
+        }";
+    assert_eq!(selects(periodic), 0);
+    agree(periodic);
+    let data = "fn main() {
+            var n = 27
+            var steps = 0
+            for i in 0..100000 {
+                if n & 1 == 1 { n = n * 3 + 1 } else { n = n >> 1 }
+                if n == 1 { n = 27 + i % 50 }
+                steps += 1
+            }
+            print(n, steps)
+        }";
+    assert!(selects(data) > 0);
+    agree(data);
+}
+
 /// A loop that pushes to one list is grown once in front of the loop and runs without capacity tests;
 /// the results, the stops and their order are those of the interpreter, whatever the list held before.
 #[test]
