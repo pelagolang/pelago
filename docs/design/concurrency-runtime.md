@@ -156,16 +156,18 @@ C1 to C5 touch no OS service beyond what the backend already has (mmap, exit, a 
 C6 is the one that needs the OS layer in full; its `os_*` functions are written to this table and implemented in the
 runtime period, with the interpreter version making it testable in the meantime.
 
-## 9. Questions for the owner
+## 9. Decisions (owner, 2026-11-07; answered through the coordinator)
 
-1. **Stackful tasks (this plan) or stackless state machines** for tasks and coroutines? Recommend stackful: simplest,
-   no new checker rules, one mechanism for threads, coroutines and async. Cost: a stack per task (reserve 256 KiB,
-   guard page, committed on touch; a million tasks is not a goal).
-2. **`async` on top of tasks** instead of state machines (S-04)? Recommend yes; keep the `async`/`await` keywords.
-3. **Dropping a suspended coroutine or task**: run the pending drops by switching into it with a "cancelled" mode that
-   makes it unwind through its drops (not a stop), or just free its stack and leak its locals? Recommend the first,
-   scoped to coroutines and cancelled tasks only, as an explicit exception to "no unwinding". It never runs on a stop.
-4. **Detached tasks at the end of `main`**: abandon (recommended; same as threads in C and Rust) or wait for them.
-5. **Default stack size** per task: 256 KiB, overridable `spawn(f, stack: 1 MiB)`.
+1. **Stackful tasks and coroutines**, not state machines. Guard page on every task stack still to do.
+2. **`async` runs on tasks**: no separate coloured function world (C7).
+3. **No unwinding, ever.** This replaces the "unwind a cancelled coroutine" proposal. Dropping a suspended coroutine
+   sets its cancelled flag and resumes it once, so a body that checks `cancelled()` can finish; whatever it still
+   holds after that is not dropped (its stack is freed). A cancelled task stops at its next check of `cancelled()`;
+   its scope releases locks and arenas. Both are consistent with CC1 (a stop never unwinds).
+4. **Detached tasks are abandoned when `main` ends** (structured `scope`s still join). Not yet implemented: `main`
+   still waits for unfinished tasks.
+5. **Default stack 256 KiB** (coroutines use 64 KiB), with a guard page and the task stack pool from the heap work.
 
-Until answered, stages C1 to C3 and C5 are independent of the answers; C4 and C7 wait for 2 and 3.
+Library names: `yield` is a hard keyword kept for a later generator syntax, so a coroutine hands a value out with
+`co.emit(v)`; `coroutine<T>(co ~> ...)`, `g.next()`, `g.iter()`, `co.cancelled()`; `t.cancel()` and `cancelled()` for tasks.
+`s.cancel()` for a whole scope and `case cancelled()` in `select` are still to do.

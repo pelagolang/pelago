@@ -800,6 +800,30 @@ fn program_select_send_waits_for_room_in_a_bounded_channel() {
 }
 
 #[test]
+fn program_coroutine_next_and_iter() {
+    let src = "fn main() {\n const g = coroutine<int>(co ~> { for i of 0..3 { co.emit(i * 10) } })\n print(g.next())\n print(g.next())\n const h = coroutine<string>(co ~> { co.emit(\"a\")\n co.emit(\"b\") })\n for s of h.iter() { print(s) }\n print(g.next(), g.next())\n}\n";
+    assert_eq!(output_of(src), "some(0)\nsome(10)\na\nb\nsome(20) none\n");
+}
+
+#[test]
+fn program_coroutine_dropped_before_it_starts_or_while_suspended() {
+    let src = "fn main() {\n const never = coroutine<int>(co ~> { co.emit(1) })\n const g = coroutine<string>(co ~> { var n = 0\n while !co.cancelled() { co.emit(\"x#n\")\n  n += 1 }\n print(\"stopped\") })\n print(g.next())\n print(g.next())\n}\n";
+    assert_eq!(output_of(src), "some(\"x0\")\nsome(\"x1\")\nstopped\n");
+}
+
+#[test]
+fn program_coroutines_nest_and_run_inside_tasks() {
+    let src = "fn main() {\n const t = spawn(() ~> { const g = coroutine<int>(co ~> { const inner = coroutine<int>(c2 ~> { c2.emit(1)\n  c2.emit(2) })\n  while true {\n   const v = inner.next()\n   switch v {\n    case some(x): co.emit(x + 100)\n    case none: return\n   }\n  } })\n var t = 0\n for x of g.iter() { t += x }\n t })\n print(t.join!!())\n}\n";
+    assert_eq!(output_of(src), "203\n");
+}
+
+#[test]
+fn program_task_cancel_is_cooperative() {
+    let src = "fn main() {\n const t = spawn(() ~> { var n = 0\n while !cancelled() { n += 1\n  yield_now() }\n n > 0 })\n yield_now()\n t.cancel()\n print(t.join!!(), cancelled())\n}\n";
+    assert_eq!(output_of(src), "true false\n");
+}
+
+#[test]
 fn program_sp2() {
     let src = "fn main() { const (tx, rx) = chan<int>()\n const p = spawn([sink tx] ~> { for i of 0..3 { tx.send(i * 10) } })\n for v of rx.iter() { print(v) }\n p.join!!() }\n";
     assert_eq!(output_of(src), "0\n10\n20\n");

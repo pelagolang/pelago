@@ -25,7 +25,7 @@ pub struct task<T> {
     }
 }
 
-/// The task block: [state: 0 live, 1 done][saved context][detached][stack][closure: 16 bytes][pad][result].
+/// The task block: [state: 0 live, 1 done][saved context][detached][stack][closure: 16 bytes][cancelled][pad][result].
 /// The running task is `rt_cur`; `rt_tasks` lists every live task, the one `main` runs in first.
 
 //~ Addresses of the live task blocks (0 is `main`'s, made on first use).
@@ -182,7 +182,20 @@ pub fn rt_task_body<T>(s: ptr, sink f: once fn() -> T) {
     }
 }
 
+//~ Whether the running task was asked to stop (`t.cancel()`). A task that wants to stop early looks at this between
+//~ steps; nothing is interrupted and nothing unwinds. Always false in `main`.
+pub fn cancelled() -> bool {
+    if rt_cur == 0 { return false }
+    rt_load_int(rt_offset(rt_cast<int, ptr>(rt_cur), 48)) != 0
+}
+
 impl<T> task<T> {
+    //~ Asks the task to stop: it sees `cancelled()` become true. It still has to be joined (or dropped) as usual.
+    fn cancel(self) {
+        rt_store_int(rt_offset(self.state, 48), 1)
+        rt_idle = 0
+    }
+
     fn join(sink self) -> T {
         const s = self.state
         while rt_load_int(s) != 1 {
@@ -556,5 +569,110 @@ impl clone for barrier {
     fn clone(self) -> barrier {
         rt_store_int(rt_offset(self.p, 24), rt_load_int(rt_offset(self.p, 24)) + 1)
         barrier { p: self.p }
+    }
+}
+
+//~ The coroutine's block: [done][coroutine context][resumer context][stack][closure: 16 bytes][value ready][started]
+//~ [cancelled][value]. A coroutine runs on a stack of its own and only when its owner calls `next()`.
+pub var rt_co_cur: int = 0
+
+const RT_CO_STACK = 65536
+
+//~ A function that produces values one at a time: `coroutine<int>(co ~> { co.emit(1) })`; `g.next()` runs it up to
+//~ its next `emit`. Dropping an unfinished one asks it to stop (`co.cancelled()`) and resumes it once; whatever it
+//~ still holds then is not dropped, since nothing unwinds.
+pub struct coroutine<T> {
+    p: ptr
+
+    init(sink f: once fn(yielder<T>)) {
+        const p = rt_alloc(72 + rt_size_of<T>())
+        const stack = rt_alloc(RT_CO_STACK)
+        rt_store_ptr(rt_offset(p, 24), stack)
+        const runner = [sink f, sink p] () ~> rt_co_body<T>(p, sink f)
+        rt_write<once fn()>(rt_offset(p, 32), sink runner)
+        rt_store_ptr(rt_offset(p, 8), rt_ctx_init(stack, RT_CO_STACK, rt_fn_addr(rt_co_entry), rt_null()))
+        self.p = p
+    }
+
+    deinit {
+        const p = self.p
+        if rt_load_int(rt_offset(p, 56)) == 0 {
+            /// Never started: only the closure is left.
+            rt_drop_at<once fn()>(rt_offset(p, 32))
+        } else if rt_load_int(p) == 0 {
+            rt_store_int(rt_offset(p, 56 + 8), 1)
+            if rt_co_resume(p) { rt_drop_at<T>(rt_offset(p, 72)) }
+        }
+        rt_free(rt_load_ptr(rt_offset(p, 24)))
+        rt_free(p)
+    }
+}
+
+//~ What a coroutine's body receives: `emit` hands a value out and waits for the next `next()`.
+pub struct yielder<T> {
+    p: ptr
+}
+
+pub fn rt_co_body<T>(p: ptr, sink f: once fn(yielder<T>)) {
+    f!!(yielder<T> { p: p })
+}
+
+fn rt_co_entry() {
+    const p = rt_cast<int, ptr>(rt_co_cur)
+    rt_co_run_closure(p)
+    rt_store_int(p, 1)
+    rt_ctx_switch(rt_offset(p, 8), rt_load_ptr(rt_offset(p, 16)))
+    panic("a finished coroutine ran again")
+}
+
+//~ Its own function so the closure is dropped before the coroutine ends: `rt_co_entry` never returns.
+fn rt_co_run_closure(p: ptr) {
+    const g = rt_read<once fn()>(rt_offset(p, 32))
+    g!!()
+}
+
+//~ Runs the coroutine until it emits or ends; whether a value is waiting in its block.
+fn rt_co_resume(p: ptr) -> bool {
+    const saved = rt_co_cur
+    rt_co_cur = rt_addr_int(p)
+    rt_store_int(rt_offset(p, 56), 1)
+    rt_ctx_switch(rt_offset(p, 16), rt_load_ptr(rt_offset(p, 8)))
+    rt_co_cur = saved
+    rt_load_int(rt_offset(p, 48)) != 0
+}
+
+impl<T> yielder<T> {
+    fn emit(self, sink v: T) {
+        rt_write<T>(rt_offset(self.p, 72), sink v)
+        rt_store_int(rt_offset(self.p, 48), 1)
+        rt_ctx_switch(rt_offset(self.p, 8), rt_load_ptr(rt_offset(self.p, 16)))
+    }
+
+    //~ True once the coroutine's owner dropped it: finish up and return.
+    fn cancelled(self) -> bool = rt_load_int(rt_offset(self.p, 64)) != 0
+}
+
+impl<T> coroutine<T> {
+    //~ Runs the coroutine to its next `emit`; `none` once it has ended.
+    fn next(self) -> T? {
+        const p = self.p
+        if rt_load_int(p) == 1 { return none }
+        if !rt_co_resume(p) { return none }
+        rt_store_int(rt_offset(p, 48), 0)
+        return rt_read<T>(rt_offset(p, 72))
+    }
+
+    //~ Runs it to the end and collects what it emits.
+    fn iter(self) -> iter<T> {
+        var out: list<T> = []
+        var more = true
+        while more {
+            const v = self.next()
+            switch v {
+                case some(x): out.push!(x)
+                case none: more = false
+            }
+        }
+        rt_cast<list<T>, iter<T>>(sink out)
     }
 }
