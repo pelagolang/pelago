@@ -311,7 +311,7 @@ impl Em<'_, '_> {
                     return;
                 }
                 if is_vec(d) {
-                    self.a().fmov_rr(true, vr(d), vr(*s));
+                    self.a().vmov(vr(d), vr(*s));
                 } else {
                     self.a().mov_rr(gp(d), gp(*s));
                 }
@@ -792,7 +792,11 @@ impl Em<'_, '_> {
             }
             op::FLD => {
                 let d = vr(phys(&ops[0]));
-                let size = if imm(&ops[2]) == 1 { 8 } else { 4 };
+                let size = match imm(&ops[2]) {
+                    2 => 16,
+                    1 => 8,
+                    _ => 4,
+                };
                 match self.ea(&ops[1], size) {
                     Ea::Off(b, off) => self.a().ldr_f(d, b, off, size),
                     Ea::Idx(b, x, scaled) => self.a().ldr_f_idx(d, b, x, size, scaled),
@@ -800,7 +804,11 @@ impl Em<'_, '_> {
             }
             op::FST => {
                 let s = vr(phys(&ops[1]));
-                let size = if imm(&ops[2]) == 1 { 8 } else { 4 };
+                let size = match imm(&ops[2]) {
+                    2 => 16,
+                    1 => 8,
+                    _ => 4,
+                };
                 match self.ea(&ops[0], size) {
                     Ea::Off(b, off) => self.a().str_f(s, b, off, size),
                     Ea::Idx(b, x, scaled) => self.a().str_f_idx(s, b, x, size, scaled),
@@ -873,6 +881,42 @@ impl Em<'_, '_> {
                 let d = vr(phys(&ops[0]));
                 let (x, y, z) = (vr(phys(&ops[1])), vr(phys(&ops[2])), vr(phys(&ops[3])));
                 self.a().fmadd(imm(&ops[4]) == 1, d, x, y, z);
+            }
+            op::VSPLAT => {
+                let (d, s) = (vr(phys(&ops[0])), r(&ops[1]));
+                self.a().vdup(d, s);
+            }
+            op::VSHIFT => {
+                let d = vr(phys(&ops[0]));
+                let k = imm(&ops[2]) as u32;
+                if imm(&ops[1]) == 1 {
+                    self.a().vshl(d, d, k);
+                } else {
+                    self.a().vushr(d, d, k);
+                }
+            }
+            op::VREDUCE => {
+                let (d, s) = (r(&ops[0]), vr(phys(&ops[1])));
+                // `addp d31, vS.2d` sums the lanes into a scratch register.
+                self.a().vaddp(hw::V(31), s);
+                self.a().fmov_to_gp(true, d, hw::V(31));
+            }
+            op::VBUILD => {
+                let d = vr(phys(&ops[0]));
+                let (x, y) = (r(&ops[1]), r(&ops[2]));
+                self.a().vins(d, 0, x);
+                self.a().vins(d, 1, y);
+            }
+            op::VALU => {
+                let d = vr(phys(&ops[0]));
+                let (x, y) = (vr(phys(&ops[1])), vr(phys(&ops[2])));
+                match imm(&ops[3]) {
+                    0 => self.a().vadd(d, x, y),
+                    1 => self.a().vsub(d, x, y),
+                    2 => self.a().vand(d, x, y),
+                    3 => self.a().vorr(d, x, y),
+                    _ => self.a().veor(d, x, y),
+                }
             }
             o => panic!("the AArch64 emitter does not know opcode {o}"),
         }

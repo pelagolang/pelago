@@ -14,7 +14,7 @@ use super::gen_a64::{classify, Loc as ArgLoc};
 use super::mir::*;
 use super::regs::{folds, fused_cmp, small_copy, Base, Fold};
 use crate::ir::Target as JumpTarget;
-use crate::ir::{BinOp, CastKind, CmpOp, Const, FUn, Func, IrTy, Op, Term, Test, Value};
+use crate::ir::{BinOp, CastKind, CmpOp, Const, FUn, Func, IrTy, Op, Term, Test, VBin, VUn, Value};
 use std::collections::HashMap;
 
 fn bits(t: IrTy) -> u32 {
@@ -106,6 +106,8 @@ struct Sel<'m> {
 fn class_of(t: IrTy) -> Class {
     if t.is_float() {
         Class::Float
+    } else if t == IrTy::V2I64 {
+        Class::Vec
     } else {
         Class::Int
     }
@@ -113,7 +115,8 @@ fn class_of(t: IrTy) -> Class {
 
 /// Can the selector do this function? Not yet: vectors, and a select that moves floats.
 fn supported(f: &Func) -> bool {
-    if f.ret == IrTy::V2I64 || f.values.contains(&IrTy::V2I64) {
+    let vec = |t: IrTy| t == IrTy::V2I64;
+    if vec(f.ret) || f.block_params(f.entry()).iter().any(|p| vec(f.ty(*p))) {
         return false;
     }
     f.blocks
@@ -122,7 +125,10 @@ fn supported(f: &Func) -> bool {
         .all(|&i| match &f.insts[i].op {
             Op::Select(_, a, _) => !f.ty(*a).is_float(),
             Op::CheckedIf(_, _, Test::Cmp(_, x, _), ..) => !f.ty(*x).is_float(),
-            Op::CallPtr(tys, ret, ..) => *ret != IrTy::V2I64 && !tys.contains(&IrTy::V2I64),
+            Op::Call(_, args) => !args.iter().any(|a| vec(f.ty(*a))),
+            Op::CallPtr(tys, ret, _, args) => {
+                !vec(*ret) && !tys.iter().any(|t| vec(*t)) && !args.iter().any(|a| vec(f.ty(*a)))
+            }
             _ => true,
         })
 }
@@ -934,12 +940,17 @@ impl<'m> Sel<'m> {
                     vec![Operand::def(d), Operand::Sym(SYM_FUNC + fid.0)],
                 ));
             }
-            Op::Load(t, p) if t.is_float() => {
+            Op::Load(t, p) if t.is_float() || *t == IrTy::V2I64 => {
                 let m = self.mem_of(*p);
                 let d = self.reg_of(res.unwrap());
+                let w = if *t == IrTy::V2I64 {
+                    2
+                } else {
+                    i64::from(*t == IrTy::F64)
+                };
                 self.emit(MInst::new(
                     op::FLD,
-                    vec![Operand::def(d), m, Operand::Imm(i64::from(*t == IrTy::F64))],
+                    vec![Operand::def(d), m, Operand::Imm(w)],
                 ));
             }
             Op::Load(t, p) => {
@@ -950,10 +961,14 @@ impl<'m> Sel<'m> {
                     vec![Operand::def(d), m, Operand::Imm(size(*t) as i64)],
                 ));
             }
-            Op::Store(p, v) if f.ty(*v).is_float() => {
+            Op::Store(p, v) if f.ty(*v).is_float() || f.ty(*v) == IrTy::V2I64 => {
                 let m = self.mem_of(*p);
                 let s = Operand::use_(self.vr(*v));
-                let dbl = Operand::Imm(i64::from(f.ty(*v) == IrTy::F64));
+                let dbl = Operand::Imm(if f.ty(*v) == IrTy::V2I64 {
+                    2
+                } else {
+                    i64::from(f.ty(*v) == IrTy::F64)
+                });
                 self.emit(MInst::new(op::FST, vec![m, s, dbl]));
             }
             Op::Store(p, v) => {
@@ -1022,7 +1037,61 @@ impl<'m> Sel<'m> {
                     vec![Operand::def(d), Operand::use_(s), Operand::Imm(kind), dbl],
                 ));
             }
-            Op::VUn(..) | Op::VBin(..) => unreachable!("vectors are not selected"),
+            Op::VUn(o, a) => {
+                let d = self.reg_of(res.unwrap());
+                match o {
+                    VUn::Splat => {
+                        let s = self.vr(*a);
+                        self.emit(MInst::new(
+                            op::VSPLAT,
+                            vec![Operand::def(d), Operand::use_(s)],
+                        ));
+                    }
+                    VUn::Shl(k) | VUn::UShr(k) => {
+                        let s = self.src(*a);
+                        self.emit(MInst::copy(d, s));
+                        let left = Operand::Imm(i64::from(matches!(o, VUn::Shl(_))));
+                        self.emit(MInst::new(
+                            op::VSHIFT,
+                            vec![Operand::use_def(d), left, Operand::Imm(*k as i64)],
+                        ));
+                    }
+                    VUn::ReduceAdd => {
+                        let s = self.vr(*a);
+                        self.emit(MInst::new(
+                            op::VREDUCE,
+                            vec![Operand::def(d), Operand::use_(s)],
+                        ));
+                    }
+                }
+            }
+            Op::VBin(o, a, b) => {
+                let d = self.reg_of(res.unwrap());
+                let (ra, rb) = (self.vr(*a), self.vr(*b));
+                if *o == VBin::Build {
+                    self.emit(MInst::new(
+                        op::VBUILD,
+                        vec![Operand::def(d), Operand::use_(ra), Operand::use_(rb)],
+                    ));
+                    return;
+                }
+                let kind = match o {
+                    VBin::Add => 0,
+                    VBin::Sub => 1,
+                    VBin::And => 2,
+                    VBin::Or => 3,
+                    _ => 4,
+                };
+                self.emit(MInst::new(
+                    op::VALU,
+                    vec![
+                        Operand::def(d),
+                        Operand::use_(ra),
+                        Operand::use_(rb),
+                        Operand::Imm(kind),
+                    ],
+                ));
+            }
         }
     }
 

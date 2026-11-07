@@ -727,9 +727,16 @@ impl Asm {
     /// `opc` bit 4 (0x10) selects the vector register file.
     fn idx_op(&mut self, opc: u32, rt: Reg, base: Reg, index: Reg, size: u8, scaled: bool) {
         let v = if opc & 0x10 != 0 { 0x0400_0000 } else { 0 };
-        let opc = opc & 0xF;
+        let mut opc = opc & 0xF;
+        // A 128-bit `q` register: size 00 and opc 1x.
+        let log = if size == 16 {
+            opc |= 2;
+            0
+        } else {
+            size.trailing_zeros()
+        };
         self.word(
-            size.trailing_zeros() << 30
+            log << 30
                 | v
                 | 0x3820_6800
                 | opc << 22

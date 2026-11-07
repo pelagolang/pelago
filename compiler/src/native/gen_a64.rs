@@ -695,6 +695,9 @@ impl<'m> Gen<'m> {
                 super::a64_emit::emit(&mut env, &mf, label);
                 return Ok(());
             }
+            if std::env::var("PELAGO_MIR_DUMP").is_ok_and(|v| v == "1") {
+                eprintln!("mir: `{}` falls back to the old generator", f.name);
+            }
         }
         self.layout(f);
         self.stops = [None; 4];
