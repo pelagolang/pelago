@@ -68,7 +68,7 @@ const FUNC_BASE: usize = 1 << 40;
 const STACK_SIZE: usize = 8 << 20;
 /// Deep chains (a list of ten thousand boxes) recurse once per node; the host thread that runs the
 /// machine gets a big stack for it.
-const HOST_STACK: usize = 1 << 30;
+const HOST_STACK: usize = if cfg!(windows) { 3 << 29 } else { 1 << 30 };
 const MAX_DEPTH: u32 = 200_000;
 /// A context started by `CtxInit` runs on a host thread of its own; it gets a smaller host stack and call depth.
 const CTX_HOST_STACK: usize = 64 << 20;
