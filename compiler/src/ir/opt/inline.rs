@@ -126,6 +126,9 @@ fn find_site(
             if g == fi || recursive[g] || seen_bad.contains(&g) {
                 continue;
             }
+            if m.funcs[g].inline_always.is_some() {
+                return Some((bi, pos, g));
+            }
             if m.funcs[g].name.ends_with(COLD_SUFFIX) || m.funcs[g].checkfree.is_some() {
                 continue;
             }
@@ -137,6 +140,21 @@ fn find_site(
         }
     }
     None
+}
+
+/// Whether `f` calls `g` directly.
+pub fn calls(f: &Func, g: FuncId) -> bool {
+    self_calls(f, g) > 0
+}
+
+/// Whether `f` makes no call and keeps no stack slot (the promise of `@leaf`).
+pub fn is_leaf(f: &Func) -> bool {
+    !f.blocks.iter().flat_map(|b| &b.insts).any(|&i| {
+        matches!(
+            &f.insts[i].op,
+            Op::Call(..) | Op::CallPtr(..) | Op::Slot(..)
+        )
+    })
 }
 
 /// How many calls to itself the function makes.

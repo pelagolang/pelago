@@ -2,7 +2,7 @@
 
 use pelago::keyword::{Keyword, Strength};
 use pelago::lexer::tokenize;
-use pelago::span::LineIndex;
+use pelago::span::{LineIndex, Span};
 use pelago::token::{Punct, TokenKind};
 
 /// The compiler runs on a thread with a big stack: the parser and the checker recurse, and the
@@ -416,6 +416,33 @@ fn ir_or_run(path: &str, cmd: &str, flags: &[&str], out_name: Option<String>) {
             pelago::ir::opt::time_passes();
         }
         pelago::ir::opt::optimize(&mut module, pelago::ir::opt::Options::default());
+        // `@inline_always` and `@leaf` are promises checked on the optimised code.
+        for (fi, f) in module.funcs.iter().enumerate() {
+            let mut report = |at: Option<(u32, Span)>, what: &str| {
+                let Some((file, span)) = at else {
+                    return;
+                };
+                let module = program.module(pelago::package::ModuleId(file));
+                let index = LineIndex::new(&module.src);
+                let (line, col) = index.line_col(&module.src, span.start);
+                eprintln!("{}:{line}:{col}: error: `{}` {what}", module.path, f.name);
+                failed = true;
+            };
+            if f.inline_always.is_some() {
+                let called = module.funcs.iter().enumerate().any(|(gi, g)| {
+                    gi != fi && pelago::ir::opt::calls(g, pelago::ir::FuncId(fi as u32))
+                });
+                if called || pelago::ir::opt::calls(f, pelago::ir::FuncId(fi as u32)) {
+                    report(
+                        f.inline_always,
+                        "is `@inline_always` but a call to it is left (it is recursive)",
+                    );
+                }
+            }
+            if f.leaf.is_some() && !pelago::ir::opt::is_leaf(f) {
+                report(f.leaf, "is `@leaf` but makes a call or keeps a stack slot");
+            }
+        }
         pelago::ir::opt::prune(&mut module, &["main"]);
         // `@checkfree` is judged on the optimised code.
         for f in &module.funcs {
