@@ -163,3 +163,30 @@ mod ralloc_tests;
 mod tests;
 #[cfg(test)]
 mod x86_golden;
+
+/// Places the module's static data in the `.data` blob and gives the offset of each block. With `bss`, the blocks that are
+/// all zero go last and are left out of the blob (the loader gives zeroed memory right after it, ELF `.bss`): the
+/// executable is smaller by their size. Gives the offsets and the number of zeroed bytes that follow the blob.
+pub(super) fn place_module_data(
+    blocks: &[Vec<u8>],
+    data: &mut elf::Blob,
+    bss: bool,
+) -> (Vec<u32>, usize) {
+    let mut offs = vec![0u32; blocks.len()];
+    let zero = |b: &Vec<u8>| bss && b.iter().all(|&x| x == 0);
+    for (i, b) in blocks.iter().enumerate() {
+        if !zero(b) {
+            offs[i] = data.add(b, 16);
+        }
+    }
+    let start = data.add(&[], 16) as usize;
+    let mut end = start;
+    for (i, b) in blocks.iter().enumerate() {
+        if zero(b) {
+            end = end.div_ceil(16) * 16;
+            offs[i] = end as u32;
+            end += b.len();
+        }
+    }
+    (offs, end - start)
+}

@@ -35,10 +35,8 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         super::Uses::of(m),
     );
     g.rt = Some(rt);
-    for d in &m.data {
-        let at = g.data.add(d, 16);
-        g.data_off.push(at);
-    }
+    let (offs, bss) = super::place_module_data(&m.data, &mut g.data, opts.target == Os::Linux);
+    g.data_off = offs;
     // Callees are selected and allocated first, so that a call can be told what its callee writes;
     // the code is laid out in the order of the module.
     let mut sets: Vec<Option<super::mir::RegSet>> = vec![None; m.funcs.len()];
@@ -60,7 +58,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         });
     }
     match opts.target {
-        Os::Linux => elf::write_a64(&g.a, &g.ro, &g.data, 0, &syms),
+        Os::Linux => elf::write_a64(&g.a, &g.ro, &g.data, bss, &syms),
         Os::Windows => super::pe::write_a64(&g.a, &g.ro, &g.data, 0),
         Os::MacOs => super::macho::write_a64(&g.a, &g.ro, &g.data, 0),
     }

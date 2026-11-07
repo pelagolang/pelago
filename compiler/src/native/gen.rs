@@ -99,7 +99,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         super::Uses::of(m),
     );
     g.rt = Some(rt);
-    g.place_data();
+    let bss = g.place_data(opts.target == Os::Linux);
     g.stop_stubs();
     // Callees are selected and allocated first, so that a call can be told what its callee writes;
     // the code is laid out in the order of the module.
@@ -127,7 +127,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         });
     }
     match opts.target {
-        Os::Linux => elf::write(&g.a, &g.ro, &g.data, 0, &syms),
+        Os::Linux => elf::write(&g.a, &g.ro, &g.data, bss, &syms),
         Os::Windows => pe::write(&g.a, &g.ro, &g.data, 0),
         Os::MacOs => Err("macOS programs are built for AArch64 only (use --arch=aarch64)".into()),
     }
@@ -173,11 +173,10 @@ impl<'m> Gen<'m> {
     }
 
     /// All static data goes into `.data` (the lowering writes to some tables at run time).
-    fn place_data(&mut self) {
-        for d in &self.m.data {
-            let at = self.data.add(d, 16);
-            self.data_off.push(at);
-        }
+    fn place_data(&mut self, bss: bool) -> usize {
+        let (offs, zeroed) = super::place_module_data(&self.m.data, &mut self.data, bss);
+        self.data_off = offs;
+        zeroed
     }
 
     /// The shared exits for the checks that stop the program.
