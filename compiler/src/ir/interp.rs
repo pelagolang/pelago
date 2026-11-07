@@ -590,6 +590,13 @@ impl Machine<'_> {
 
     /// The OS memory calls on the interpreter's heap: a reservation is a zeroed block, a commit and an
     /// advice change nothing, a remap is a reallocation. The error values are those of the compiled code.
+    #[inline(never)]
+    fn os_op(&mut self, vals: &[Val], k: OsKind, v: [&Value; 3]) -> Result<Val, String> {
+        let g = |x: &Value| vals[x.0 as usize];
+        Ok(Val::int(self.os_call(k, g(v[0]), g(v[1]), g(v[2]))?))
+    }
+
+    #[inline(never)]
     fn os_call(&mut self, k: OsKind, a: Val, b: Val, c: Val) -> Result<i64, String> {
         const PAGE: i64 = 4096;
         let (a, b, c) = (
@@ -841,7 +848,7 @@ impl Machine<'_> {
                 addr(&get(code))?,
                 get(env),
             )?,
-            Op::Os(k, a, b, c) => Val::int(self.os_call(*k, get(a), get(b), get(c))?),
+            Op::Os(k, a, b, c) => self.os_op(vals, *k, [a, b, c])?,
             Op::CtxSwitch(save, to) => {
                 self.ctx_switch(addr(&get(save))?, addr(&get(to))?)?;
                 Val::Unit
