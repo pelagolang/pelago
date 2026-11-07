@@ -45,6 +45,8 @@ pub ext fn rt_show_to<T>(src: ptr, out: ptr)
 pub ext fn rt_show_item_to<T>(src: ptr, out: ptr)
 pub ext fn rt_size_of<T>() -> int
 pub ext fn rt_is_int<T>() -> bool
+//~ Whether `T` is `uint8`, `uint16` or `uint32`.
+pub ext fn rt_is_small_uint<T>() -> bool
 //~ Whether a `T` has drop glue (owns memory or has a `deinit`).
 pub ext fn rt_needs_drop<T>() -> bool
 pub ext fn rt_addr_of<T>(x: T) -> ptr
