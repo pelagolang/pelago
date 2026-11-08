@@ -117,7 +117,8 @@ In dependency order; each can be one PR.
 - **CLI:** `pelago run <path> -- args...` passes the arguments; a program that uses the layer runs as a process
   of its own (the in-process loader has no kernel start block), so `argv[0]` is the temporary executable's path
   natively and the source path in the interpreter.
-- **Not yet:** files, directories, environment lookup, time, random, a status returned from `main`, `main` returning
+- **Files (2026-11-08):** `os_open(path, flags)` (read-only, `open(2)` natively, a real file in the interpreter) and `os_close(fd)`, `rtOsOpen` / `rtOsClose`; `std.io` has `readFile(path)`. Writing and directories are not built.
+- **Not yet:** writing files, directories, environment lookup, time, random, a status returned from `main`, `main` returning
   `void ! E`, the same on AArch64, Windows and macOS.
 
 ## Related work already on the board

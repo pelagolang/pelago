@@ -112,6 +112,8 @@ struct OsState {
     env: Vec<String>,
     stdin: Vec<u8>,
     stdin_pos: usize,
+    /// Files opened with `os_open` (descriptor 3 is the first): contents and read position; `None` once closed.
+    files: Vec<Option<(Vec<u8>, usize)>>,
     /// What was written to file descriptor 2.
     err: Vec<u8>,
     exit: Option<i32>,
@@ -262,6 +264,7 @@ fn run_inner(
             env: os.env,
             stdin: os.stdin,
             stdin_pos: 0,
+            files: Vec::new(),
             err: Vec::new(),
             exit: None,
             block: 0,
@@ -674,9 +677,12 @@ impl Machine<'_> {
                 .is_some_and(|(at, (size, live))| *live && p as usize + n as usize <= at + size)
         };
         Ok(match k {
-            OsKind::Write | OsKind::Read | OsKind::Exit | OsKind::Argv => {
-                return self.os_layer(k, a, b, c)
-            }
+            OsKind::Write
+            | OsKind::Read
+            | OsKind::Open
+            | OsKind::Close
+            | OsKind::Exit
+            | OsKind::Argv => return self.os_layer(k, a, b, c),
             OsKind::Reserve => {
                 if !sized(a) {
                     OS_BAD
@@ -765,6 +771,15 @@ impl Machine<'_> {
             OsKind::Read => {
                 let (p, n) = (b as usize, c.max(0) as usize);
                 self.check(p, n)?;
+                if a >= 3 {
+                    let Some(Some((bytes, pos))) = self.os.files.get_mut(a as usize - 3) else {
+                        return Ok(-9);
+                    };
+                    let k = (bytes.len() - *pos).min(n);
+                    self.mem[p..p + k].copy_from_slice(&bytes[*pos..*pos + k]);
+                    *pos += k;
+                    return Ok(k as i64);
+                }
                 if a != 0 {
                     return Ok(-9);
                 }
@@ -776,6 +791,27 @@ impl Machine<'_> {
                 self.os.stdin_pos += k;
                 k as i64
             }
+            OsKind::Open => {
+                let p = a as usize;
+                self.check(p, 1)?;
+                let end = self.mem[p..].iter().position(|b| *b == 0).unwrap_or(0);
+                let path = String::from_utf8_lossy(&self.mem[p..p + end]).to_string();
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        self.os.files.push(Some((bytes, 0)));
+                        self.os.files.len() as i64 + 2
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => -2,
+                    Err(_) => -13,
+                }
+            }
+            OsKind::Close => match self.os.files.get_mut((a as usize).wrapping_sub(3)) {
+                Some(f @ Some(_)) => {
+                    *f = None;
+                    0
+                }
+                _ => -9,
+            },
             OsKind::Exit => {
                 self.os.exit = Some(a as i32);
                 return Err(EXIT.to_string());

@@ -305,7 +305,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `rdi`, `rsi`, `rdx`, the result in `rax` (an address or 0, or a negative error).
-    pub os: [Label; 9],
+    pub os: [Label; 11],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -354,7 +354,7 @@ pub fn emit_for(
         write_u64: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 9].map(|_| a.new_label()),
+        os: [(); 11].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -1512,6 +1512,20 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool) {
         a.syscall();
         a.alu_ri(Alu::Cmp, RAX, -4, 8);
         a.jcc(Cc::E, retry);
+        a.ret();
+        // open(path, flags): `open(2)` read-only, retried when interrupted; the descriptor or -errno.
+        a.bind(rt.os[9]);
+        let retry = a.new_label();
+        a.bind(retry);
+        a.alu_rr(Alu::Xor, RDX, RDX, 4);
+        a.mov_ri(RAX, 2);
+        a.syscall();
+        a.alu_ri(Alu::Cmp, RAX, -4, 8);
+        a.jcc(Cc::E, retry);
+        a.ret();
+        a.bind(rt.os[10]);
+        a.mov_ri(RAX, 3);
+        a.syscall();
         a.ret();
         a.bind(rt.os[7]);
         a.jmp(rt.exit);

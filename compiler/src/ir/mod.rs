@@ -338,6 +338,11 @@ pub enum OsKind {
     Write,
     /// `(fd, address, count)`: read from a file descriptor; the count read, 0 at the end, or a negative error.
     Read,
+    /// `(path, flags)`: open a file for reading (`path` is the address of zero-terminated text; flags 0); the
+    /// descriptor or a negative error number (`-2` is "no such file").
+    Open,
+    /// `(fd)`: close a descriptor from `Open`; 0 or a negative error number.
+    Close,
     /// `(status)`: end the program at once.
     Exit,
     /// `()`: the address of the start-up block (argument count, argument pointers, 0, environment pointers, 0).
@@ -345,7 +350,7 @@ pub enum OsKind {
 }
 
 impl OsKind {
-    pub const ALL: [OsKind; 9] = [
+    pub const ALL: [OsKind; 11] = [
         OsKind::Reserve,
         OsKind::Commit,
         OsKind::Release,
@@ -355,13 +360,20 @@ impl OsKind {
         OsKind::Read,
         OsKind::Exit,
         OsKind::Argv,
+        OsKind::Open,
+        OsKind::Close,
     ];
 
     /// Whether the call reaches the process (arguments, descriptors, exit) rather than memory.
     pub fn is_process(self) -> bool {
         matches!(
             self,
-            OsKind::Write | OsKind::Read | OsKind::Exit | OsKind::Argv
+            OsKind::Write
+                | OsKind::Read
+                | OsKind::Open
+                | OsKind::Close
+                | OsKind::Exit
+                | OsKind::Argv
         )
     }
 
@@ -374,6 +386,8 @@ impl OsKind {
             OsKind::AdviseNoHuge => "os_advise_nohuge",
             OsKind::Write => "os_write",
             OsKind::Read => "os_read",
+            OsKind::Open => "os_open",
+            OsKind::Close => "os_close",
             OsKind::Exit => "os_exit",
             OsKind::Argv => "os_argv",
         }
@@ -383,8 +397,8 @@ impl OsKind {
     pub fn arity(self) -> usize {
         match self {
             OsKind::Argv => 0,
-            OsKind::Reserve | OsKind::Exit => 1,
-            OsKind::Commit | OsKind::Release | OsKind::AdviseNoHuge => 2,
+            OsKind::Reserve | OsKind::Exit | OsKind::Close => 1,
+            OsKind::Commit | OsKind::Release | OsKind::AdviseNoHuge | OsKind::Open => 2,
             OsKind::Remap | OsKind::Write | OsKind::Read => 3,
         }
     }

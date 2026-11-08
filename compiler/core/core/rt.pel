@@ -56,6 +56,10 @@ pub ext fn rtPrint(p: ptr, n: int)
 //~ pointers to zero-terminated texts, a zero, then the environment the same way.
 pub ext fn rtOsWrite(fd: int, p: ptr, n: int) -> int
 pub ext fn rtOsRead(fd: int, p: ptr, n: int) -> int
+//~ `rtOsOpen` opens the file named by zero-terminated text for reading and gives the descriptor or a negative
+//~ error number (-2: no such file); `rtOsClose` closes it.
+pub ext fn rtOsOpen(path: ptr, flags: int) -> int
+pub ext fn rtOsClose(fd: int) -> int
 pub ext fn rtOsExit(code: int)
 pub ext fn rtOsArgv() -> int
 pub ext fn rtToByte(n: int) -> uint8

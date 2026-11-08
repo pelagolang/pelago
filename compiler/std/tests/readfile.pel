@@ -1,0 +1,15 @@
+/// Reading a whole file: its text, a file that is not there, and a file bigger than one read.
+import std.io
+import { io_error } = std.io
+
+fn size(path: str) -> int ! io_error {
+    const text = io.readFile(path)?
+    ok(text.len())
+}
+
+fn main() {
+    print(io.readFile("std/tests/data/readfile.txt"))
+    print(size("std/tests/data/readfile.txt"))
+    print(size("std/tests/data/no-such-file.txt"))
+    print(size("std/tests/data/big.txt"))
+}

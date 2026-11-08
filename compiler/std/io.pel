@@ -79,3 +79,49 @@ pub fn readLine() -> string? {
     }
     out
 }
+
+//~ A file could not be read: the message names the path and the system's error number.
+pub struct io_error {
+    pub message: string
+}
+
+impl show for io_error {
+    fn show(self) -> string = copy self.message
+}
+
+//~ The whole file, as text. A missing or unreadable file is an `io_error`.
+pub fn readFile(path: str) -> string ! io_error {
+    var name = ""
+    var i = 0
+    while i < path.len() {
+        name.pushByte!(path.byteAt(i))
+        i += 1
+    }
+    name.pushByte!(0 to byte)
+    const fd = rtOsOpen(rtLoadPtr(rtAddrOf(name)), 0)
+    if fd < 0 {
+        return err(io_error { message: "cannot open `#path` (error #(0 - fd))" })
+    }
+    var out = ""
+    const buf = rtAlloc(4096)
+    var failed = 0
+    while true {
+        const k = rtOsRead(fd, buf, 4096)
+        if k < 0 {
+            failed = 0 - k
+            break
+        }
+        if k == 0 { break }
+        var j = 0
+        while j < k {
+            out.pushByte!(rtLoadByte(rtOffset(buf, j)))
+            j += 1
+        }
+    }
+    rtFree(buf)
+    rtOsClose(fd)
+    if failed != 0 {
+        return err(io_error { message: "cannot read `#path` (error #failed)" })
+    }
+    ok(out)
+}

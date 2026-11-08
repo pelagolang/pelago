@@ -1,0 +1,6 @@
+ok("first line
+second line, with é
+")
+ok(32)
+err(cannot open `std/tests/data/no-such-file.txt` (error 2))
+ok(11600)
