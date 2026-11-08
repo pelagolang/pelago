@@ -1,6 +1,6 @@
 # Typed JSON decoding, and reading files (draft 1)
 
-Status: draft, written 2026-11-08 at the owner's request ("do the typed JSON decoding and the file and stdin input").
+Status: step 1 to 4 built (2026-11-08). Written 2026-11-08 at the owner's request ("do the typed JSON decoding and the file and stdin input").
 Card: [S-08](../plans/cards/S-08-json-decode.md). Today `std.json` parses into a `json.value` tree and stops there;
 `std.io` reads standard input but there is no way to read a file.
 
@@ -14,8 +14,8 @@ import std.io
 struct server { host: string, port: uint16, tags: [string], tls: bool = false, note: string? }
 
 fn main() {
-    const text = io.readFile("server.json")?         // or io.readAll() for standard input
-    const s = server.decode(text)?                    // one call: parse, then fill a `server`
+    const text = fs.readText("server.json")?        // or io.readAll() for standard input
+    const s = serverDecode(text)?                     // one call: parse, then fill a `server`
     print(s.host, s.port)
 }
 ```
@@ -35,9 +35,17 @@ by walking the text along the same numbers. This replaces the `json.reader` of D
 sub-tree (a function cannot return a view of part of its argument), while a function that takes the child as a `let` argument copies
 nothing. A hand-written decoder is `std/tests/json_decode.pel`; `@derive(fromJson)` (step 4) will write that code.
 
+**Changes while building step 4.** (a) A call on a type, `server.decode(text)`, is not in the checker yet (`point.polar` in `types.md`
+section 3 is still a promise), so the derive writes free functions named after the type: `serverFromJson(value, inout at)` and
+`serverDecode(text)`; a hand-written decoder for your own type follows the same naming and a derived struct can have it as a field. (b) File
+and standard input came from another thread first (card for `std.fs`, `docs/design/input.md`, PR 227: `fs.readText`, `io_error`, `os_open` and
+`os_close` on every target), so step 2 below was dropped. (c) Not built yet: `map<string, V>` fields, tuples, generic types, `@json(name: ...)`
+renaming and a strict mode. The derive reports a field type it cannot read as an error at the field.
+
 ## 2. The decisions, with the trade-offs
 
-**D1. Decoding is ordinary Pelago code over the `json.value` tree, and `@derive(fromJson)` writes that code.**
+**D1. Decoding is ordinary Pelago code over the `json.value` tree, and `@derive(fromJson)` writes that code.** (Built as
+`compiler/src/derive.rs`: the module's source gets the generated text appended before it is checked.)
 Pelago has no reflection yet (`functions.md`, `meta`: "reflection later") and interfaces cannot name a function that has no
 `self` from a generic parameter (`T.make()` is refused), so `decode<T>(text)` as one generic function is not possible. Two layers instead:
 
