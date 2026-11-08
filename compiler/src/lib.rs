@@ -7,6 +7,7 @@ pub mod ast;
 pub mod ast_print;
 pub mod check;
 pub mod config;
+pub mod derive;
 pub mod editors;
 pub mod fmt;
 pub mod highlight;

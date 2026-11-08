@@ -239,8 +239,39 @@ impl Program {
                 warning: false,
             });
         }
+        let mut src = src;
+        let mut file = out.file;
+        // `@derive(fromJson)` appends the decoders it writes and the module is read again.
+        let derived = crate::derive::expand(&src, &file);
+        for (span, message) in derived.errors {
+            self.diagnostics.push(Diagnostic {
+                module: id,
+                span,
+                message,
+                warning: false,
+            });
+        }
+        if !derived.text.is_empty() {
+            let original = src.len() as u32;
+            src.push('\n');
+            src.push_str(&derived.text);
+            let (again, _) = parse_and_check_with(&src, ParseOptions::compile());
+            for e in again
+                .errors
+                .into_iter()
+                .filter(|e| e.span.start >= original)
+            {
+                self.diagnostics.push(Diagnostic {
+                    module: id,
+                    span: e.span,
+                    message: e.message,
+                    warning: false,
+                });
+            }
+            file = again.file;
+        }
         let m = &mut self.modules[id.0 as usize];
-        m.file = out.file;
+        m.file = file;
         m.src = src;
     }
 

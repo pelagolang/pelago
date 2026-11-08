@@ -972,7 +972,7 @@ fn program_generic() {
 #[test]
 fn example_programs_run() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/programs");
-    for name in ["shapes", "words", "stack", "tree", "tables"] {
+    for name in ["shapes", "words", "stack", "tree", "tables", "config"] {
         let mut program = Program::with_core();
         program
             .add_package_from_path(&dir.join(format!("{name}.pel")))

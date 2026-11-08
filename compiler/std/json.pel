@@ -477,6 +477,9 @@ fn problem(sink message: string, at: [int]) -> json_error {
     json_error { message: message, trail: copy at, path: "", line: 0, column: 0 }
 }
 
+//~ A decode error at the place `at` names, for decoders written by hand (and by `@derive(fromJson)`).
+pub fn failure(sink message: string, at: [int]) -> json_error = problem(sink message, at)
+
 /// The place `trail` names in `root`, written `$.servers[2].port`.
 fn pathOf(root: value, trail: [int]) -> string {
     var out = "$"
