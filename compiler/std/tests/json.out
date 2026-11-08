@@ -1,7 +1,7 @@
 {"name":"Pé\n😀","tags":[1,2.5,-300,true,null],"o":{}}
 some("Pé\n😀") none 3
 ok(0)
-err(the array is not closed) err(a `:` is missing after the key) err(unknown word) err(text after the end of the document) err(a high surrogate needs a low surrogate)
+err(the array is not closed (line 1, column 6)) err(a `:` is missing after the key (line 1, column 6)) err(unknown word (line 1, column 1)) err(text after the end of the document (line 1, column 5)) err(a high surrogate needs a low surrogate (line 1, column 8))
 ok(0.1) ok(1000) ok(-0.025) err(bad number)
 [
    [

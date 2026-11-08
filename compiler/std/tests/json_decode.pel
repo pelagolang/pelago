@@ -1,0 +1,79 @@
+/// Decoding by hand with the reader helpers of `std.json`: exact integers, range errors, paths and positions.
+/// `@derive(fromJson)` writes this same code (docs/design/json.md).
+import std.json
+import { json_error } = std.json
+
+struct pt { x: int, y: uint8, name: string, tags: [string], extra: float? }
+
+fn decodeTags(v: json.value, inout at: [int]) -> [string] ! json_error {
+    var out: [string] = []
+    switch v {
+        case .items(values):
+            for i in 0..values.len() {
+                at.push!(i)
+                out.push!(values[i].toText(at)?)
+                at.pop!()
+            }
+        case _: return err(v.mismatch("an array", at))
+    }
+    ok(out)
+}
+
+fn decodePt(v: json.value, inout at: [int]) -> pt ! json_error {
+    switch v {
+        case .fields(_, values):
+            const ix = v.indexOf("x")
+            if ix < 0 { return err(v.missing("x", at)) }
+            at.push!(ix)
+            const x = values[ix].toInt(at)?
+            at.pop!()
+            const iy = v.indexOf("y")
+            if iy < 0 { return err(v.missing("y", at)) }
+            at.push!(iy)
+            const y = values[iy].toRanged(0, 255, "uint8", at)?
+            at.pop!()
+            const it = v.indexOf("tags")
+            var tags: [string] = []
+            if it >= 0 {
+                at.push!(it)
+                tags = decodeTags(values[it], inout at)?
+                at.pop!()
+            }
+            ok(pt { x: x, y: y.wrapToByte(), name: "n", tags: tags, extra: none })
+        case _: err(v.mismatch("an object", at))
+    }
+}
+
+fn decode(text: str) -> pt ! json_error {
+    const root = json.document(text)?
+    var at: [int] = []
+    const r = decodePt(root, inout at)
+    if r.isErr() {
+        switch r {
+            case err(e): return err(json.located(text, root, e))
+            case ok(_):
+        }
+    }
+    return r
+}
+
+fn show(r: pt ! json_error) -> string {
+    switch r {
+        case ok(p): "ok x=#(p.x) y=#(p.y) tags=#(p.tags)"
+        case err(e): "error #e"
+    }
+}
+
+fn main() {
+    print(show(decode("{\"x\": 9223372036854775807, \"y\": 7, \"tags\": [\"a\", \"b\"]}")))
+    print(show(decode("{\"x\": 1,\n \"y\": 300}")))
+    print(show(decode("{\"x\": 1, \"y\": 2, \"tags\": [\"a\", 5]}")))
+    print(show(decode("{\"x\": 1.0, \"y\": 2}")))
+    print(show(decode("{\"y\": 2}")))
+    print(show(decode("[1]")))
+    print(show(decode("{\"x\": 1, \"y\": 2,")))
+    print(
+        json.parse("12345678901234567890").or(json.value.nothing),
+        json.parse("9007199254740993").or(json.value.nothing),
+    )
+}

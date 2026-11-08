@@ -26,6 +26,15 @@ A wrong document is an error with a path and a position, never a half-filled val
 server.json:3:12: $.port: 70000 does not fit in uint16 (0 to 65535)
 ```
 
+## 1b. Built so far (2026-11-08)
+
+Step 2 (`io.readFile`) and step 3 (exact integers, positions, the helpers). One change from the plan below: the decoders carry the
+place as a **trail**, a `[int]` of member numbers (`at.push!(i)` before a member, `at.pop!()` after; a `?` that returns early leaves the
+trail where the error is). The strings of the path are made only on failure, by walking the tree along the trail, and the text position
+by walking the text along the same numbers. This replaces the `json.reader` of D1: a reader value would have to hold a copy of each
+sub-tree (a function cannot return a view of part of its argument), while a function that takes the child as a `let` argument copies
+nothing. A hand-written decoder is `std/tests/json_decode.pel`; `@derive(fromJson)` (step 4) will write that code.
+
 ## 2. The decisions, with the trade-offs
 
 **D1. Decoding is ordinary Pelago code over the `json.value` tree, and `@derive(fromJson)` writes that code.**
