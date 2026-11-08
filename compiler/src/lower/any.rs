@@ -158,7 +158,7 @@ impl<'a> Lowerer<'a> {
                 Some(x) => x,
                 None if name == "show" && self.res.def(iface).name == "show" => {
                     // Built-in shapes show through the library.
-                    if let Some(def) = self.core_fn("rt_any_show") {
+                    if let Some(def) = self.core_fn("rtAnyShow") {
                         let g = self.typed.fn_infos.get(&def).map(|i| i.generics.clone());
                         let map: HashMap<DefId, Ty> =
                             g.unwrap_or_default().into_iter().zip([t]).collect();
@@ -358,7 +358,7 @@ impl<'a> Lowerer<'a> {
         );
         let d = self.load_at(tmp, 0, IrTy::Ptr);
         let n = self.load_at(tmp, 8, IrTy::I64);
-        self.call_core("rt_str_push", vec![out, d, n]);
+        self.call_core("rtStrPush", vec![out, d, n]);
         self.drop_at(tmp, string);
     }
 

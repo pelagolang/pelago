@@ -2,16 +2,16 @@
 
 impl<T> range<T> {
     fn contains(self, item: T) -> bool {
-        const h = rt_addr_of(self)
-        const size = rt_size_of<T>()
-        const cmp = rt_cmp_fn<T>()
-        const probe = rt_addr_of(item)
-        if rt_load_bool(rt_offset(h, size * 2 + 1)) {
-            if rt_call_int2(cmp, probe, h) < 0 { return false }
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        const cmp = rtCmpFn<T>()
+        const probe = rtAddrOf(item)
+        if rtLoadBool(rtOffset(h, size * 2 + 1)) {
+            if rtCallInt2(cmp, probe, h) < 0 { return false }
         }
-        if rt_load_bool(rt_offset(h, size * 2 + 2)) {
-            const c = rt_call_int2(cmp, probe, rt_offset(h, size))
-            return if rt_load_bool(rt_offset(h, size * 2)) { c <= 0 } else { c < 0 }
+        if rtLoadBool(rtOffset(h, size * 2 + 2)) {
+            const c = rtCallInt2(cmp, probe, rtOffset(h, size))
+            return if rtLoadBool(rtOffset(h, size * 2)) { c <= 0 } else { c < 0 }
         }
         true
     }
@@ -19,74 +19,74 @@ impl<T> range<T> {
 
 impl range<int> {
     fn iter(self) -> iter<int> {
-        const h = rt_addr_of(self)
-        if !rt_load_bool(rt_offset(h, 17)) { panic("an open range with no start cannot be iterated") }
-        if !rt_load_bool(rt_offset(h, 18)) { panic("an open range with no end cannot be iterated") }
+        const h = rtAddrOf(self)
+        if !rtLoadBool(rtOffset(h, 17)) { panic("an open range with no start cannot be iterated") }
+        if !rtLoadBool(rtOffset(h, 18)) { panic("an open range with no end cannot be iterated") }
         var out: list<int> = []
-        var i = rt_load_int(h)
-        var end = rt_load_int(rt_offset(h, 8))
-        if rt_load_bool(rt_offset(h, 16)) { end += 1 }
+        var i = rtLoadInt(h)
+        var end = rtLoadInt(rtOffset(h, 8))
+        if rtLoadBool(rtOffset(h, 16)) { end += 1 }
         while i < end {
             out.push!(i)
             i += 1
         }
-        rt_cast<list<int>, iter<int>>(sink out)
+        rtCast<list<int>, iter<int>>(sink out)
     }
 }
 
 impl int {
     //~ The low bits of `self` as a `uint8`: the rest is cut off, so a value out of range wraps.
-    fn wrapToByte(self) -> uint8 = rt_wrap<uint8>(self)
+    fn wrapToByte(self) -> uint8 = rtWrap<uint8>(self)
 
     //~ `self` as a `uint8`, or `none` when it does not fit (0 to 255).
     fn toByteChecked(self) -> uint8? {
         if self < 0 || self > 255 { return none }
-        return rt_wrap<uint8>(self)
+        return rtWrap<uint8>(self)
     }
 
     //~ The low bits of `self` as a `int8`: the rest is cut off, so a value out of range wraps.
-    fn wrapToInt8(self) -> int8 = rt_wrap<int8>(self)
+    fn wrapToInt8(self) -> int8 = rtWrap<int8>(self)
 
     //~ `self` as a `int8`, or `none` when it does not fit (-128 to 127).
     fn toInt8Checked(self) -> int8? {
         if self < -128 || self > 127 { return none }
-        return rt_wrap<int8>(self)
+        return rtWrap<int8>(self)
     }
 
     //~ The low bits of `self` as a `int16`: the rest is cut off, so a value out of range wraps.
-    fn wrapToInt16(self) -> int16 = rt_wrap<int16>(self)
+    fn wrapToInt16(self) -> int16 = rtWrap<int16>(self)
 
     //~ `self` as a `int16`, or `none` when it does not fit (-32768 to 32767).
     fn toInt16Checked(self) -> int16? {
         if self < -32768 || self > 32767 { return none }
-        return rt_wrap<int16>(self)
+        return rtWrap<int16>(self)
     }
 
     //~ The low bits of `self` as a `uint16`: the rest is cut off, so a value out of range wraps.
-    fn wrapToUint16(self) -> uint16 = rt_wrap<uint16>(self)
+    fn wrapToUint16(self) -> uint16 = rtWrap<uint16>(self)
 
     //~ `self` as a `uint16`, or `none` when it does not fit (0 to 65535).
     fn toUint16Checked(self) -> uint16? {
         if self < 0 || self > 65535 { return none }
-        return rt_wrap<uint16>(self)
+        return rtWrap<uint16>(self)
     }
 
     //~ The low bits of `self` as a `int32`: the rest is cut off, so a value out of range wraps.
-    fn wrapToInt32(self) -> int32 = rt_wrap<int32>(self)
+    fn wrapToInt32(self) -> int32 = rtWrap<int32>(self)
 
     //~ `self` as a `int32`, or `none` when it does not fit (-2147483648 to 2147483647).
     fn toInt32Checked(self) -> int32? {
         if self < -2147483648 || self > 2147483647 { return none }
-        return rt_wrap<int32>(self)
+        return rtWrap<int32>(self)
     }
 
     //~ The low bits of `self` as a `uint32`: the rest is cut off, so a value out of range wraps.
-    fn wrapToUint32(self) -> uint32 = rt_wrap<uint32>(self)
+    fn wrapToUint32(self) -> uint32 = rtWrap<uint32>(self)
 
     //~ `self` as a `uint32`, or `none` when it does not fit (0 to 4294967295).
     fn toUint32Checked(self) -> uint32? {
         if self < 0 || self > 4294967295 { return none }
-        return rt_wrap<uint32>(self)
+        return rtWrap<uint32>(self)
     }
 
     fn abs(self) -> int = self < 0 ? 0 - self : self
@@ -149,22 +149,22 @@ impl float {
     fn abs(self) -> float = self < 0.0 ? 0.0 - self : self
     //~ `self * b + c` rounded once, not twice: the same result on every target and in the interpreter.
     //~ Plain `a * b + c` is never fused, so it keeps rounding after the product.
-    fn fma(self, b: float, c: float) -> float = rt_fma(self, b, c)
+    fn fma(self, b: float, c: float) -> float = rtFma(self, b, c)
     fn min(self, other: float) -> float = self < other ? self : other
     fn max(self, other: float) -> float = self > other ? self : other
 
     //~ The square root, correctly rounded (`sqrtsd` on x86-64, `fsqrt` on AArch64). A negative number gives NaN.
-    fn sqrt(self) -> float = rt_sqrt(self)
+    fn sqrt(self) -> float = rtSqrt(self)
 
     //~ The largest whole number not above `self`; exact for every float, and NaN and infinities stay as they are.
-    fn floor(self) -> float = rt_floor(self)
+    fn floor(self) -> float = rtFloor(self)
 
     //~ The smallest whole number not below `self`.
-    fn ceil(self) -> float = rt_ceil(self)
+    fn ceil(self) -> float = rtCeil(self)
 
     //~ The nearest whole number; a half goes away from zero. `self - floor` is exact, so no rounding error creeps in.
     fn round(self) -> float {
-        const f = rt_floor(self)
+        const f = rtFloor(self)
         const d = self - f
         (self < 0.0 ? d > 0.5 : d >= 0.5) ? f + 1.0 : f
     }
@@ -174,7 +174,7 @@ impl float {
         if !(self >= -9223372036854775808.0 && self < 9223372036854775808.0) {
             panic("float does not fit an int")
         }
-        rt_to_int(self)
+        rtToInt(self)
     }
 
     //~ The largest whole number not above `self`, as an `int`.
@@ -187,7 +187,7 @@ impl float {
     fn roundInt(self) -> int = self.round().truncInt()
 
     fn pow(self, exponent: float) -> float {
-        const n = rt_to_int(exponent)
+        const n = rtToInt(exponent)
         if (n to float) != exponent { panic("pow: only whole exponents are supported") }
         var result = 1.0
         var i = 0
@@ -205,7 +205,7 @@ impl char {
     fn isUpper(self) -> bool = (self to int) >= 65 && (self to int) <= 90
     fn isLower(self) -> bool = (self to int) >= 97 && (self to int) <= 122
     fn isAlpha(self) -> bool = self.isUpper() || self.isLower()
-    fn isSpace(self) -> bool = rt_is_space(self to int)
-    fn toUpper(self) -> char = self.isLower() ? rt_to_char((self to int) - 32) : self
-    fn toLower(self) -> char = self.isUpper() ? rt_to_char((self to int) + 32) : self
+    fn isSpace(self) -> bool = rtIsSpace(self to int)
+    fn toUpper(self) -> char = self.isLower() ? rtToChar((self to int) - 32) : self
+    fn toLower(self) -> char = self.isUpper() ? rtToChar((self to int) + 32) : self
 }

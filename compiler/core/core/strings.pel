@@ -2,8 +2,8 @@
 
 //~ Decodes the character at byte `i` of `n` bytes at `p`: its code point shifted left by 3, plus its width in bytes.
 //~ `for c of s.chars()` calls it in place, so the loop builds no list.
-pub fn rt_char_at_slow(p: ptr, i: int, n: int) -> int {
-    const b = rt_load_byte(rt_offset(p, i)) to int
+pub fn rtCharAtSlow(p: ptr, i: int, n: int) -> int {
+    const b = rtLoadByte(rtOffset(p, i)) to int
     var c = b
     var width = 1
     if b >= 240 {
@@ -18,7 +18,7 @@ pub fn rt_char_at_slow(p: ptr, i: int, n: int) -> int {
     }
     var k = 1
     while k < width && i + k < n {
-        c = (c << 6) | ((rt_load_byte(rt_offset(p, i + k)) to int) & 63)
+        c = (c << 6) | ((rtLoadByte(rtOffset(p, i + k)) to int) & 63)
         k += 1
     }
     (c << 3) | width
@@ -26,15 +26,15 @@ pub fn rt_char_at_slow(p: ptr, i: int, n: int) -> int {
 
 //~ Where the piece of `n` bytes at `p` that starts at `pos` ends: at the next `sep` (`sn` bytes at `sp`), or at `n`.
 //~ An empty separator never matches. `for w of s.split(sep)` calls it in place, so the loop builds no list.
-pub fn rt_split_end(p: ptr, n: int, sp: ptr, sn: int, pos: int) -> int {
+pub fn rtSplitEnd(p: ptr, n: int, sp: ptr, sn: int, pos: int) -> int {
     if sn == 0 { return n }
     /// One byte is compared per position; the rest of the separator only when that byte matches (for a one-byte separator, never).
-    const first = rt_load_byte(sp)
+    const first = rtLoadByte(sp)
     const last = n - sn
     var i = pos
     while i <= last {
-        if rt_load_byte(rt_offset(p, i)) == first {
-            if sn == 1 || rt_bytes_eq(rt_offset(p, i + 1), rt_offset(sp, 1), sn - 1) { return i }
+        if rtLoadByte(rtOffset(p, i)) == first {
+            if sn == 1 || rtBytesEq(rtOffset(p, i + 1), rtOffset(sp, 1), sn - 1) { return i }
         }
         i += 1
     }
@@ -42,101 +42,101 @@ pub fn rt_split_end(p: ptr, n: int, sp: ptr, sn: int, pos: int) -> int {
 }
 
 //~ Where the search for the next piece starts once the piece ended at `end`: after the separator, or `n + 1` for "no more".
-pub fn rt_split_after(end: int, n: int, sn: int) -> int {
+pub fn rtSplitAfter(end: int, n: int, sn: int) -> int {
     if end < n { end + sn } else { n + 1 }
 }
 
 impl str {
-    fn len(self) -> int = rt_hdr_len(rt_addr_of(self))
-    fn isEmpty(self) -> bool = rt_hdr_len(rt_addr_of(self)) == 0
+    fn len(self) -> int = rtHdrLen(rtAddrOf(self))
+    fn isEmpty(self) -> bool = rtHdrLen(rtAddrOf(self)) == 0
 
     //~ The characters, decoded from UTF-8.
     fn chars(self) -> iter<char> {
         var out: [char] = []
-        const h = rt_addr_of(self)
-        const p = rt_hdr_data(h)
-        const n = rt_hdr_len(h)
+        const h = rtAddrOf(self)
+        const p = rtHdrData(h)
+        const n = rtHdrLen(h)
         var i = 0
         while i < n {
-            const r = rt_char_at_slow(p, i, n)
-            out.push!(rt_to_char(r >> 3))
+            const r = rtCharAtSlow(p, i, n)
+            out.push!(rtToChar(r >> 3))
             i += r & 7
         }
-        rt_cast<list<char>, iter<char>>(sink out)
+        rtCast<list<char>, iter<char>>(sink out)
     }
 
     //~ The bytes of the UTF-8 encoding.
     fn bytes(self) -> iter<byte> {
         var out: [byte] = []
-        const h = rt_addr_of(self)
-        const p = rt_hdr_data(h)
-        const n = rt_hdr_len(h)
+        const h = rtAddrOf(self)
+        const p = rtHdrData(h)
+        const n = rtHdrLen(h)
         var i = 0
         while i < n {
-            out.push!(rt_load_byte(rt_offset(p, i)))
+            out.push!(rtLoadByte(rtOffset(p, i)))
             i += 1
         }
-        rt_cast<list<byte>, iter<byte>>(sink out)
+        rtCast<list<byte>, iter<byte>>(sink out)
     }
 
     //~ The byte at `index`; stops the program when the index is out of range.
     fn byteAt(self, index: int) -> byte {
-        const h = rt_addr_of(self)
-        if index < 0 || index >= rt_hdr_len(h) { panic("byteAt: index out of range") }
-        rt_load_byte(rt_offset(rt_hdr_data(h), index))
+        const h = rtAddrOf(self)
+        if index < 0 || index >= rtHdrLen(h) { panic("byteAt: index out of range") }
+        rtLoadByte(rtOffset(rtHdrData(h), index))
     }
 
     fn split(self, separator: str) -> iter<str> {
         var out: [str] = []
         const n = self.len()
         const sn = separator.len()
-        const p = rt_hdr_data(rt_addr_of(self))
-        const sp = rt_hdr_data(rt_addr_of(separator))
+        const p = rtHdrData(rtAddrOf(self))
+        const sp = rtHdrData(rtAddrOf(separator))
         var pos = 0
         while pos <= n {
-            const end = rt_split_end(p, n, sp, sn, pos)
+            const end = rtSplitEnd(p, n, sp, sn, pos)
             out.push!(self[pos..end])
-            pos = rt_split_after(end, n, sn)
+            pos = rtSplitAfter(end, n, sn)
         }
-        rt_cast<list<str>, iter<str>>(sink out)
+        rtCast<list<str>, iter<str>>(sink out)
     }
 
     fn trim(self) -> str {
-        const p = rt_hdr_data(rt_addr_of(self))
+        const p = rtHdrData(rtAddrOf(self))
         var a = 0
         var b = self.len()
-        while a < b && rt_is_space(rt_load_byte(rt_offset(p, a)) to int) { a += 1 }
-        while b > a && rt_is_space(rt_load_byte(rt_offset(p, b - 1)) to int) { b -= 1 }
+        while a < b && rtIsSpace(rtLoadByte(rtOffset(p, a)) to int) { a += 1 }
+        while b > a && rtIsSpace(rtLoadByte(rtOffset(p, b - 1)) to int) { b -= 1 }
         self[a..b]
     }
 
     fn startsWith(self, prefix: str) -> bool {
         const pn = prefix.len()
         if pn > self.len() { return false }
-        rt_bytes_eq(rt_hdr_data(rt_addr_of(self)), rt_hdr_data(rt_addr_of(prefix)), pn)
+        rtBytesEq(rtHdrData(rtAddrOf(self)), rtHdrData(rtAddrOf(prefix)), pn)
     }
 
     fn endsWith(self, suffix: str) -> bool {
         const sn = suffix.len()
         const n = self.len()
         if sn > n { return false }
-        rt_bytes_eq(
-            rt_offset(rt_hdr_data(rt_addr_of(self)), n - sn),
-            rt_hdr_data(rt_addr_of(suffix)),
+        rtBytesEq(
+            rtOffset(rtHdrData(rtAddrOf(self)), n - sn),
+            rtHdrData(rtAddrOf(suffix)),
             sn,
         )
     }
 
-    fn contains(self, part: str) -> bool = rt_find(self, part) >= 0
+    fn contains(self, part: str) -> bool = rtFind(self, part) >= 0
 
     fn toUpper(self) -> string {
         var out = ""
-        const p = rt_hdr_data(rt_addr_of(self))
+        const p = rtHdrData(rtAddrOf(self))
         var i = 0
         const n = self.len()
         while i < n {
-            const b = rt_load_byte(rt_offset(p, i)) to int
-            rt_push_byte(rt_addr_of(out), b >= 97 && b <= 122 ? b - 32 : b)
+            const b = rtLoadByte(rtOffset(p, i)) to int
+            rtPushByte(rtAddrOf(out), b >= 97 && b <= 122 ? b - 32 : b)
             i += 1
         }
         out
@@ -144,12 +144,12 @@ impl str {
 
     fn toLower(self) -> string {
         var out = ""
-        const p = rt_hdr_data(rt_addr_of(self))
+        const p = rtHdrData(rtAddrOf(self))
         var i = 0
         const n = self.len()
         while i < n {
-            const b = rt_load_byte(rt_offset(p, i)) to int
-            rt_push_byte(rt_addr_of(out), b >= 65 && b <= 90 ? b + 32 : b)
+            const b = rtLoadByte(rtOffset(p, i)) to int
+            rtPushByte(rtAddrOf(out), b >= 65 && b <= 90 ? b + 32 : b)
             i += 1
         }
         out
@@ -159,18 +159,18 @@ impl str {
         var out = ""
         const fnn = from.len()
         const n = self.len()
-        const p = rt_hdr_data(rt_addr_of(self))
+        const p = rtHdrData(rtAddrOf(self))
         var i = 0
         while i < n {
-            if fnn > 0 && i + fnn <= n && rt_bytes_eq(
-                rt_offset(p, i),
-                rt_hdr_data(rt_addr_of(from)),
+            if fnn > 0 && i + fnn <= n && rtBytesEq(
+                rtOffset(p, i),
+                rtHdrData(rtAddrOf(from)),
                 fnn,
             ) {
-                rt_str_push(rt_addr_of(out), rt_hdr_data(rt_addr_of(to)), to.len())
+                rtStrPush(rtAddrOf(out), rtHdrData(rtAddrOf(to)), to.len())
                 i += fnn
             } else {
-                rt_push_byte(rt_addr_of(out), rt_load_byte(rt_offset(p, i)) to int)
+                rtPushByte(rtAddrOf(out), rtLoadByte(rtOffset(p, i)) to int)
                 i += 1
             }
         }
@@ -178,22 +178,22 @@ impl str {
     }
 
     fn parseInt(self) -> int ! parse_error {
-        const p = rt_hdr_data(rt_addr_of(self))
+        const p = rtHdrData(rtAddrOf(self))
         const n = self.len()
         if n == 0 { return err(parse_error { message: "empty text is not a number" }) }
         var i = 0
         var negative = false
-        if rt_load_byte(p) == 45 {
+        if rtLoadByte(p) == 45 {
             negative = true
             i = 1
-        } else if rt_load_byte(p) == 43 {
+        } else if rtLoadByte(p) == 43 {
             i = 1
         }
         if i == n { return err(parse_error { message: "no digits" }) }
         /// Accumulated as a negative number, so the smallest int fits.
         var value = 0
         while i < n {
-            const d = (rt_load_byte(rt_offset(p, i)) to int) - 48
+            const d = (rtLoadByte(rtOffset(p, i)) to int) - 48
             if d < 0 || d > 9 { return err(parse_error { message: "bad digit at position #i" }) }
             if value < (-9223372036854775808 + d) / 10 { return err(parse_error { message: "the number is too large" }) }
             value = value * 10 - d
@@ -207,12 +207,12 @@ impl str {
     }
 
     fn parseFloat(self) -> float ! parse_error {
-        const p = rt_hdr_data(rt_addr_of(self))
+        const p = rtHdrData(rtAddrOf(self))
         const n = self.len()
         if n == 0 { return err(parse_error { message: "empty text is not a number" }) }
         var i = 0
         var negative = false
-        if rt_load_byte(p) == 45 {
+        if rtLoadByte(p) == 45 {
             negative = true
             i = 1
         }
@@ -222,9 +222,9 @@ impl str {
         var kept = 0
         var scale10 = 0
         var digits = 0
-        while i < n && rt_is_digit(rt_load_byte(rt_offset(p, i)) to int) {
+        while i < n && rtIsDigit(rtLoadByte(rtOffset(p, i)) to int) {
             if kept < 18 {
-                mantissa = mantissa * 10 + ((rt_load_byte(rt_offset(p, i)) to int) - 48)
+                mantissa = mantissa * 10 + ((rtLoadByte(rtOffset(p, i)) to int) - 48)
                 if mantissa > 0 { kept += 1 }
             } else {
                 scale10 += 1
@@ -232,11 +232,11 @@ impl str {
             digits += 1
             i += 1
         }
-        if i < n && rt_load_byte(rt_offset(p, i)) == 46 {
+        if i < n && rtLoadByte(rtOffset(p, i)) == 46 {
             i += 1
-            while i < n && rt_is_digit(rt_load_byte(rt_offset(p, i)) to int) {
+            while i < n && rtIsDigit(rtLoadByte(rtOffset(p, i)) to int) {
                 if kept < 18 {
-                    mantissa = mantissa * 10 + ((rt_load_byte(rt_offset(p, i)) to int) - 48)
+                    mantissa = mantissa * 10 + ((rtLoadByte(rtOffset(p, i)) to int) - 48)
                     if mantissa > 0 { kept += 1 }
                     scale10 -= 1
                 }
@@ -245,17 +245,17 @@ impl str {
             }
         }
         if digits == 0 { return err(parse_error { message: "bad number" }) }
-        if i < n && (rt_load_byte(rt_offset(p, i)) == 101 || rt_load_byte(rt_offset(p, i)) == 69) {
+        if i < n && (rtLoadByte(rtOffset(p, i)) == 101 || rtLoadByte(rtOffset(p, i)) == 69) {
             i += 1
             var expNegative = false
-            if i < n && (rt_load_byte(rt_offset(p, i)) == 43 || rt_load_byte(rt_offset(p, i)) == 45) {
-                expNegative = rt_load_byte(rt_offset(p, i)) == 45
+            if i < n && (rtLoadByte(rtOffset(p, i)) == 43 || rtLoadByte(rtOffset(p, i)) == 45) {
+                expNegative = rtLoadByte(rtOffset(p, i)) == 45
                 i += 1
             }
             var exp = 0
             var expDigits = 0
-            while i < n && rt_is_digit(rt_load_byte(rt_offset(p, i)) to int) {
-                if exp < 100000 { exp = exp * 10 + ((rt_load_byte(rt_offset(p, i)) to int) - 48) }
+            while i < n && rtIsDigit(rtLoadByte(rtOffset(p, i)) to int) {
+                if exp < 100000 { exp = exp * 10 + ((rtLoadByte(rtOffset(p, i)) to int) - 48) }
                 expDigits += 1
                 i += 1
             }
@@ -275,19 +275,19 @@ impl str {
     }
 }
 
-pub fn rt_is_space(b: int) -> bool = b == 32 || b == 9 || b == 10 || b == 13
-pub fn rt_is_digit(b: int) -> bool = b >= 48 && b <= 57
+pub fn rtIsSpace(b: int) -> bool = b == 32 || b == 9 || b == 10 || b == 13
+pub fn rtIsDigit(b: int) -> bool = b >= 48 && b <= 57
 
 //~ The position of the first occurrence of `part` in `text`, or -1.
-pub fn rt_find(text: str, part: str) -> int {
+pub fn rtFind(text: str, part: str) -> int {
     const n = text.len()
     const pn = part.len()
     if pn == 0 { return 0 }
     var i = 0
     while i + pn <= n {
-        if rt_bytes_eq(
-            rt_offset(rt_hdr_data(rt_addr_of(text)), i),
-            rt_hdr_data(rt_addr_of(part)),
+        if rtBytesEq(
+            rtOffset(rtHdrData(rtAddrOf(text)), i),
+            rtHdrData(rtAddrOf(part)),
             pn,
         ) { return i }
         i += 1
@@ -297,21 +297,21 @@ pub fn rt_find(text: str, part: str) -> int {
 
 impl string {
     fn pushStr(inout self, text: str) {
-        rt_str_push(rt_addr_of(self), rt_hdr_data(rt_addr_of(text)), rt_hdr_len(rt_addr_of(text)))
+        rtStrPush(rtAddrOf(self), rtHdrData(rtAddrOf(text)), rtHdrLen(rtAddrOf(text)))
     }
 
     //~ Appends a character, encoded as UTF-8.
     fn pushChar(inout self, c: char) {
-        rt_push_char(rt_addr_of(self), c)
+        rtPushChar(rtAddrOf(self), c)
     }
 
     //~ Appends one byte as it is.
     fn pushByte(inout self, b: byte) {
-        rt_push_byte(rt_addr_of(self), b to int)
+        rtPushByte(rtAddrOf(self), b to int)
     }
 
     fn clear(inout self) {
-        rt_hdr_set_len(rt_addr_of(self), 0)
+        rtHdrSetLen(rtAddrOf(self), 0)
     }
 }
 
@@ -319,8 +319,8 @@ impl list<byte> {
     //~ The text these UTF-8 bytes spell. The bytes are not checked.
     fn toText(self) -> string {
         var out = ""
-        const h = rt_addr_of(self)
-        rt_str_push(rt_addr_of(out), rt_hdr_data(h), rt_hdr_len(h))
+        const h = rtAddrOf(self)
+        rtStrPush(rtAddrOf(out), rtHdrData(h), rtHdrLen(h))
         out
     }
 }

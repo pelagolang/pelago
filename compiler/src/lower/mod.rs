@@ -254,7 +254,7 @@ pub fn lower_with(
 impl Lowerer<'_> {
     /// `fn main(args: [string])` takes the argument list; the process starts `main` with nothing. So the
     /// function gets another name and a new `main` builds the list from the start-up block
-    /// (`core`'s `rt_args_into`), calls it and frees the list's buffer (the texts are borrowed).
+    /// (`core`'s `rtArgsInto`), calls it and frees the list's buffer (the texts are borrowed).
     fn add_entry(&mut self) {
         let Some(idx) = self
             .module
@@ -274,7 +274,7 @@ impl Lowerer<'_> {
         let sp = Span::new(0, 0);
         let slot = self.emit(Op::Slot(24, 8), Some(IrTy::Ptr), sp);
         let Some(slot) = slot else { return };
-        self.call_core("rt_args_into", vec![slot]);
+        self.call_core("rtArgsInto", vec![slot]);
         self.emit(Op::Call(user, vec![slot]), None, sp);
         if let Some(buf) = self.emit(Op::Load(IrTy::Ptr, slot), Some(IrTy::Ptr), sp) {
             self.emit(Op::Free(buf), None, sp);
@@ -286,7 +286,7 @@ impl Lowerer<'_> {
             func.compact();
             self.module.add(func);
         }
-        // `rt_args_into` was asked for just now.
+        // `rtArgsInto` was asked for just now.
         self.run_jobs();
     }
 }
@@ -767,7 +767,7 @@ impl<'a> Lowerer<'a> {
             && self.src_text(decl.name.span) == "main"
         {
             if let Some(s) = self.f.scopes.last_mut() {
-                s.push(ScopeItem::CoreCall("rt_run_pending"));
+                s.push(ScopeItem::CoreCall("rtRunPending"));
             }
         }
         // The parameters: the receiver, then the declared ones.

@@ -32,7 +32,7 @@ mod ifconv;
 mod inline;
 mod ivopt;
 mod ivtest;
-pub use inline::COLD_SUFFIX;
+pub use inline::is_cold;
 mod layout;
 mod licm;
 mod loops;

@@ -14,13 +14,13 @@
 /// is flushed first, so the lines of the two streams come out in the order the program wrote them.
 
 fn writeAll(fd: int, text: str) {
-    const h = rt_addr_of(text)
-    var p = rt_load_ptr(h)
-    var n = rt_hdr_len(h)
+    const h = rtAddrOf(text)
+    var p = rtLoadPtr(h)
+    var n = rtHdrLen(h)
     while n > 0 {
-        const k = rt_os_write(fd, p, n)
+        const k = rtOsWrite(fd, p, n)
         if k <= 0 { return }
-        p = rt_offset(p, k)
+        p = rtOffset(p, k)
         n -= k
     }
 }
@@ -39,17 +39,17 @@ pub fn eprintln(text: str) {
 //~ Everything left on standard input, as text.
 pub fn readAll() -> string {
     var out = ""
-    const buf = rt_alloc(4096)
+    const buf = rtAlloc(4096)
     while true {
-        const k = rt_os_read(0, buf, 4096)
+        const k = rtOsRead(0, buf, 4096)
         if k <= 0 { break }
         var i = 0
         while i < k {
-            out.pushByte!(rt_load_byte(rt_offset(buf, i)))
+            out.pushByte!(rtLoadByte(rtOffset(buf, i)))
             i += 1
         }
     }
-    rt_free(buf)
+    rtFree(buf)
     out
 }
 
@@ -57,16 +57,16 @@ pub fn readAll() -> string {
 pub fn readLine() -> string? {
     var out = ""
     var got = false
-    const buf = rt_alloc(8)
+    const buf = rtAlloc(8)
     while true {
-        const k = rt_os_read(0, buf, 1)
+        const k = rtOsRead(0, buf, 1)
         if k <= 0 { break }
         got = true
-        const b = rt_load_byte(buf)
+        const b = rtLoadByte(buf)
         if b == 10 { break }
         out.pushByte!(b)
     }
-    rt_free(buf)
+    rtFree(buf)
     if !got { return none }
     if out.len() > 0 && out.byteAt(out.len() - 1) == 13 {
         var cut = ""

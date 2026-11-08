@@ -57,9 +57,9 @@ impl<'a> Lowerer<'a> {
                     };
                     let ch = self.load_at(p, 0, IrTy::Ptr);
                     let check = if matches!(kind, ArmKind::Send(_)) {
-                        "rt_chan_room"
+                        "rtChanRoom"
                     } else {
-                        "rt_chan_ready"
+                        "rtChanReady"
                     };
                     let Some(ready) = self.call_core(check, vec![ch]) else {
                         return Res::Never;
@@ -79,7 +79,7 @@ impl<'a> Lowerer<'a> {
                     self.select_body(d, done, void);
                 }
                 _ => {
-                    let Some(ran) = self.call_core("rt_run_one_pending", vec![]) else {
+                    let Some(ran) = self.call_core("rtRunOnePending", vec![]) else {
                         return Res::Never;
                     };
                     let retry = self.new_block(&[]);

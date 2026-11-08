@@ -89,7 +89,7 @@ impl<'a> Lowerer<'a> {
                 true
             }
             TyKind::String | TyKind::Str => {
-                if let Some(c) = self.call_core("rt_str_eq", vec![a, b]) {
+                if let Some(c) = self.call_core("rtStrEq", vec![a, b]) {
                     self.require_true(c, fail);
                 }
                 true
@@ -226,7 +226,7 @@ impl<'a> Lowerer<'a> {
                 true
             }
             TyKind::String | TyKind::Str => {
-                if let Some(r) = self.call_core("rt_str_cmp", vec![a, b]) {
+                if let Some(r) = self.call_core("rtStrCmp", vec![a, b]) {
                     self.return_if_nonzero(r);
                 }
                 true
@@ -398,7 +398,7 @@ impl<'a> Lowerer<'a> {
                 true
             }
             TyKind::String | TyKind::Str => {
-                if let Some(h) = self.call_core("rt_str_hash", vec![a]) {
+                if let Some(h) = self.call_core("rtStrHash", vec![a]) {
                     self.mix(acc, h);
                 }
                 true
@@ -495,7 +495,7 @@ impl<'a> Lowerer<'a> {
             self.emit(Op::Call(f, vec![tmp, arg]), None, sp);
             let d = self.load_at(tmp, 0, IrTy::Ptr);
             let n = self.load_at(tmp, 8, IrTy::I64);
-            self.call_core("rt_str_push", vec![out, d, n]);
+            self.call_core("rtStrPush", vec![out, d, n]);
             self.drop_at(tmp, string);
             return;
         }

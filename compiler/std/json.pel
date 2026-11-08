@@ -69,7 +69,7 @@ fn readString(s: str, inout p: int) -> string ! parse_error {
         const e = s.byteAt(p) to int
         p += 1
         if e == 34 || e == 92 || e == 47 {
-            out.pushByte!(rt_to_byte(e))
+            out.pushByte!(rtToByte(e))
         } else if e == 98 {
             out.pushByte!(8 to byte)
         } else if e == 102 {
@@ -96,7 +96,7 @@ fn readString(s: str, inout p: int) -> string ! parse_error {
             } else if cp >= 56320 && cp <= 57343 {
                 return err(fail("a low surrogate without a high surrogate"))
             }
-            out.pushChar!(rt_to_char(cp))
+            out.pushChar!(rtToChar(cp))
         } else {
             return err(fail("unknown escape in a string"))
         }

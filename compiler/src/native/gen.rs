@@ -206,11 +206,7 @@ impl<'m> Gen<'m> {
     /// The `Sym` numbers of the module's rarely called functions (see `MFunc::cold_syms`).
     pub(super) fn cold_syms(&self, base: u32) -> Vec<u32> {
         (0..self.m.funcs.len() as u32)
-            .filter(|i| {
-                self.m.funcs[*i as usize]
-                    .name
-                    .ends_with(crate::ir::opt::COLD_SUFFIX)
-            })
+            .filter(|i| crate::ir::opt::is_cold(&self.m.funcs[*i as usize].name))
             .map(|i| base + i)
             .collect()
     }

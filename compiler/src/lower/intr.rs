@@ -1,10 +1,10 @@
-//! Functions the compiler supplies: the `rt_*` intrinsics the library is written over, and the
+//! Functions the compiler supplies: the `rt*` intrinsics the library is written over, and the
 //! built-in `print`, `assert`, `panic`, `todo` and `unreachable`.
 //!
 //! The library (`compiler/core/core.pel`) implements lists, text, maps and so on in the language
-//! itself, on top of a small set of operations: raw memory (`rt_alloc`, `rt_load_*`, `rt_offset`, ...),
-//! knowledge about a type (`rt_size_of<T>`, `rt_drop_fn<T>`, ...) and moving values in and out of
-//! memory (`rt_write`, `rt_read`). Each is expanded inline where it is called.
+//! itself, on top of a small set of operations: raw memory (`rtAlloc`, `rtLoad*`, `rtOffset`, ...),
+//! knowledge about a type (`rtSizeOf<T>`, `rtDropFn<T>`, ...) and moving values in and out of
+//! memory (`rtWrite`, `rtRead`). Each is expanded inline where it is called.
 
 use super::*;
 
@@ -23,7 +23,7 @@ impl<'a> Lowerer<'a> {
             == "core";
         let name = &self.res.def(def).name;
         in_core
-            && (name.starts_with("rt_")
+            && (is_rt_name(name)
                 || matches!(
                     name.as_str(),
                     "print" | "assert" | "panic" | "todo" | "unreachable"
@@ -39,7 +39,7 @@ impl<'a> Lowerer<'a> {
     ) {
     }
 
-    /// The type argument of an intrinsic such as `rt_size_of<T>`.
+    /// The type argument of an intrinsic such as `rtSizeOf<T>`.
     fn intr_type(&mut self, def: DefId, map: &HashMap<DefId, Ty>) -> Option<Ty> {
         let g = self.typed.fn_infos.get(&def)?.generics.first().copied()?;
         let t = *map.get(&g)?;
@@ -85,46 +85,39 @@ impl<'a> Lowerer<'a> {
         let sp = e.span;
         let ptr = IrTy::Ptr;
         match name.as_str() {
-            "rt_soa_len" | "rt_soa_push" | "rt_soa_insert" | "rt_soa_remove" | "rt_soa_clear" => {
+            "rtSoaLen" | "rtSoaPush" | "rtSoaInsert" | "rtSoaRemove" | "rtSoaClear" => {
                 let Some(t) = self.intr_type(def, map) else {
                     return self.unsupported(sp, "a `soa` operation on an unknown type");
                 };
                 self.intr_soa(&name, e, t, args, dst)
             }
-            "rt_null" => {
+            "rtNull" => {
                 let z = self.i64c(0);
                 self.wrap(Op::Cast(CastKind::IntToPtr, z, ptr), ptr, sp)
             }
-            "rt_alloc" => {
+            "rtAlloc" => {
                 let Some(n) = self.arg_scalar(args, 0) else {
                     return Res::Never;
                 };
                 self.wrap(Op::Alloc(n), ptr, sp)
             }
-            "rt_realloc" => {
+            "rtRealloc" => {
                 let (Some(p), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {
                     return Res::Never;
                 };
                 self.wrap(Op::Realloc(p, n), ptr, sp)
             }
-            "rt_free" => {
+            "rtFree" => {
                 let Some(p) = self.arg_scalar(args, 0) else {
                     return Res::Never;
                 };
                 self.emit(Op::Free(p), None, sp);
                 Res::Unit
             }
-            "rt_os_reserve"
-            | "rt_os_commit"
-            | "rt_os_release"
-            | "rt_os_remap"
-            | "rt_os_advise_nohuge"
-            | "rt_os_write"
-            | "rt_os_read"
-            | "rt_os_exit"
-            | "rt_os_argv" => self.intr_os(&name, args, sp),
-            "rt_data_word" => {
+            "rtOsReserve" | "rtOsCommit" | "rtOsRelease" | "rtOsRemap" | "rtOsAdviseNohuge"
+            | "rtOsWrite" | "rtOsRead" | "rtOsExit" | "rtOsArgv" => self.intr_os(&name, args, sp),
+            "rtDataWord" => {
                 // The address of the k-th word of the block the compiler keeps for the library's own
                 // state; `k` is a literal, so a bad one is a compile error, not a stop.
                 let k = args.first().and_then(|a| match a.value.kind {
@@ -136,7 +129,7 @@ impl<'a> Lowerer<'a> {
                 else {
                     return self.unsupported(
                         sp,
-                        "`rt_data_word` needs a number literal below 64 (`DATA_WORDS`)",
+                        "`rtDataWord` needs a number literal below 64 (`DATA_WORDS`)",
                     );
                 };
                 let d = self.module.word_block();
@@ -147,13 +140,13 @@ impl<'a> Lowerer<'a> {
                 };
                 self.wrap(Op::PtrAdd(base, off), ptr, sp)
             }
-            "rt_int_addr" => {
+            "rtIntAddr" => {
                 let Some(n) = self.arg_scalar(args, 0) else {
                     return Res::Never;
                 };
                 self.wrap(Op::Cast(CastKind::IntToPtr, n, ptr), ptr, sp)
             }
-            "rt_ctx_init" => {
+            "rtCtxInit" => {
                 let (Some(b), Some(n), Some(c), Some(e)) = (
                     self.arg_scalar(args, 0),
                     self.arg_scalar(args, 1),
@@ -164,19 +157,19 @@ impl<'a> Lowerer<'a> {
                 };
                 self.wrap(Op::CtxInit(b, n, c, e), ptr, sp)
             }
-            "rt_fn_addr" => {
+            "rtFnAddr" => {
                 let Some(ExprKind::Name(id)) = args.first().map(|a| &a.value.kind) else {
-                    return self.unsupported(sp, "`rt_fn_addr` needs the name of a function");
+                    return self.unsupported(sp, "`rtFnAddr` needs the name of a function");
                 };
                 let Some(def) = self.res.use_at(self.f.file, id.span.start) else {
-                    return self.unsupported(sp, "`rt_fn_addr` of an unknown name");
+                    return self.unsupported(sp, "`rtFnAddr` of an unknown name");
                 };
                 let Some(f) = self.request_fn(def, &HashMap::new()) else {
-                    return self.unsupported(sp, "`rt_fn_addr` of this function");
+                    return self.unsupported(sp, "`rtFnAddr` of this function");
                 };
                 self.wrap(Op::FuncAddr(f), ptr, sp)
             }
-            "rt_ctx_switch" => {
+            "rtCtxSwitch" => {
                 let (Some(s), Some(t)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {
                     return Res::Never;
@@ -184,14 +177,14 @@ impl<'a> Lowerer<'a> {
                 self.emit(Op::CtxSwitch(s, t), None, sp);
                 Res::Unit
             }
-            "rt_offset" => {
+            "rtOffset" => {
                 let (Some(p), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {
                     return Res::Never;
                 };
                 self.wrap(Op::PtrAdd(p, n), ptr, sp)
             }
-            "rt_copy" => {
+            "rtCopy" => {
                 let (Some(d), Some(s), Some(n)) = (
                     self.arg_scalar(args, 0),
                     self.arg_scalar(args, 1),
@@ -202,7 +195,7 @@ impl<'a> Lowerer<'a> {
                 self.emit(Op::MemCopy(d, s, n), None, sp);
                 Res::Unit
             }
-            "rt_is_null" => {
+            "rtIsNull" => {
                 let Some(p) = self.arg_scalar(args, 0) else {
                     return Res::Never;
                 };
@@ -216,20 +209,20 @@ impl<'a> Lowerer<'a> {
                 let z = self.i64c(0);
                 self.wrap(Op::Cmp(CmpOp::Eq, n, z), IrTy::Bool, sp)
             }
-            "rt_addr_int" => {
+            "rtAddrInt" => {
                 let Some(p) = self.arg_scalar(args, 0) else {
                     return Res::Never;
                 };
                 self.wrap(Op::Cast(CastKind::PtrToInt, p, IrTy::I64), IrTy::I64, sp)
             }
-            "rt_load_int" | "rt_load_byte" | "rt_load_ptr" | "rt_load_float" | "rt_load_char"
-            | "rt_load_bool" => {
+            "rtLoadInt" | "rtLoadByte" | "rtLoadPtr" | "rtLoadFloat" | "rtLoadChar"
+            | "rtLoadBool" => {
                 let t = match name.as_str() {
-                    "rt_load_int" => IrTy::I64,
-                    "rt_load_byte" => IrTy::Int(8),
-                    "rt_load_ptr" => ptr,
-                    "rt_load_float" => IrTy::F64,
-                    "rt_load_bool" => IrTy::Bool,
+                    "rtLoadInt" => IrTy::I64,
+                    "rtLoadByte" => IrTy::Int(8),
+                    "rtLoadPtr" => ptr,
+                    "rtLoadFloat" => IrTy::F64,
+                    "rtLoadBool" => IrTy::Bool,
                     _ => IrTy::Int(32),
                 };
                 let Some(p) = self.arg_scalar(args, 0) else {
@@ -237,8 +230,8 @@ impl<'a> Lowerer<'a> {
                 };
                 self.wrap(Op::Load(t, p), t, sp)
             }
-            "rt_store_int" | "rt_store_byte" | "rt_store_ptr" | "rt_store_float"
-            | "rt_store_char" | "rt_store_bool" => {
+            "rtStoreInt" | "rtStoreByte" | "rtStorePtr" | "rtStoreFloat" | "rtStoreChar"
+            | "rtStoreBool" => {
                 let (Some(p), Some(v)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {
                     return Res::Never;
@@ -246,7 +239,7 @@ impl<'a> Lowerer<'a> {
                 self.emit(Op::Store(p, v), None, sp);
                 Res::Unit
             }
-            "rt_print" => {
+            "rtPrint" => {
                 let (Some(p), Some(n)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {
                     return Res::Never;
@@ -254,15 +247,15 @@ impl<'a> Lowerer<'a> {
                 self.emit(Op::Print(p, n), None, sp);
                 Res::Unit
             }
-            "rt_to_byte" => {
+            "rtToByte" => {
                 let Some(n) = self.arg_scalar(args, 0) else {
                     return Res::Never;
                 };
                 self.wrap(Op::Cast(CastKind::Trunc, n, IrTy::Int(8)), IrTy::Int(8), sp)
             }
-            "rt_wrap" => {
+            "rtWrap" => {
                 let Some(t) = self.intr_type(def, map) else {
-                    return self.unsupported(sp, "`rt_wrap` of an unknown type");
+                    return self.unsupported(sp, "`rtWrap` of an unknown type");
                 };
                 let (Some(n), Some(to)) = (self.arg_scalar(args, 0), self.scalar_of(t)) else {
                     return Res::Never;
@@ -272,7 +265,7 @@ impl<'a> Lowerer<'a> {
                 }
                 self.wrap(Op::Cast(CastKind::Trunc, n, to), to, sp)
             }
-            "rt_to_char" => {
+            "rtToChar" => {
                 let Some(n) = self.arg_scalar(args, 0) else {
                     return Res::Never;
                 };
@@ -282,21 +275,21 @@ impl<'a> Lowerer<'a> {
                     sp,
                 )
             }
-            "rt_show_to" | "rt_show_item_to" => {
+            "rtShowTo" | "rtShowItemTo" => {
                 let Some(t) = self.intr_type(def, map) else {
-                    return self.unsupported(sp, "`rt_show_to` of an unknown type");
+                    return self.unsupported(sp, "`rtShowTo` of an unknown type");
                 };
                 let (Some(p), Some(out)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {
                     return Res::Never;
                 };
-                if self.show_at(p, t, out, name == "rt_show_item_to") {
+                if self.show_at(p, t, out, name == "rtShowItemTo") {
                     Res::Unit
                 } else {
                     Res::Never
                 }
             }
-            "rt_fma" => {
+            "rtFma" => {
                 let (Some(a), Some(b), Some(c)) = (
                     self.arg_scalar(args, 0),
                     self.arg_scalar(args, 1),
@@ -306,40 +299,40 @@ impl<'a> Lowerer<'a> {
                 };
                 self.wrap(Op::Fma(a, b, c), IrTy::F64, sp)
             }
-            "rt_sqrt" | "rt_floor" | "rt_ceil" => {
+            "rtSqrt" | "rtFloor" | "rtCeil" => {
                 let Some(x) = self.arg_scalar(args, 0) else {
                     return Res::Never;
                 };
                 let o = match name.as_str() {
-                    "rt_sqrt" => FUn::Sqrt,
-                    "rt_floor" => FUn::Floor,
+                    "rtSqrt" => FUn::Sqrt,
+                    "rtFloor" => FUn::Floor,
                     _ => FUn::Ceil,
                 };
                 self.wrap(Op::FUn(o, x), IrTy::F64, sp)
             }
-            "rt_to_int" => {
+            "rtToInt" => {
                 let Some(x) = self.arg_scalar(args, 0) else {
                     return Res::Never;
                 };
                 self.wrap(Op::Cast(CastKind::FloatToInt, x, IrTy::I64), IrTy::I64, sp)
             }
-            "rt_size_of" => {
+            "rtSizeOf" => {
                 let Some(t) = self.intr_type(def, map) else {
-                    return self.unsupported(sp, "`rt_size_of` of an unknown type");
+                    return self.unsupported(sp, "`rtSizeOf` of an unknown type");
                 };
                 let n = self.layout(t).size;
                 Res::Val(self.i64c(n as i64))
             }
-            "rt_is_int" => {
+            "rtIsInt" => {
                 let Some(t) = self.intr_type(def, map) else {
-                    return self.unsupported(sp, "`rt_is_int` of an unknown type");
+                    return self.unsupported(sp, "`rtIsInt` of an unknown type");
                 };
                 let yes = matches!(self.kind(t), TyKind::Int(crate::types::IntKind::I64));
                 Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
             }
-            "rt_is_small_uint" => {
+            "rtIsSmallUint" => {
                 let Some(t) = self.intr_type(def, map) else {
-                    return self.unsupported(sp, "`rt_is_small_uint` of an unknown type");
+                    return self.unsupported(sp, "`rtIsSmallUint` of an unknown type");
                 };
                 let yes = matches!(
                     self.kind(t),
@@ -351,17 +344,17 @@ impl<'a> Lowerer<'a> {
                 );
                 Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
             }
-            "rt_needs_drop" => {
+            "rtNeedsDrop" => {
                 let Some(t) = self.intr_type(def, map) else {
-                    return self.unsupported(sp, "`rt_needs_drop` of an unknown type");
+                    return self.unsupported(sp, "`rtNeedsDrop` of an unknown type");
                 };
                 let yes = self.needs_drop(t);
                 Res::Val(self.konst(IrTy::Bool, Const::Bool(yes), sp))
             }
-            "rt_addr_of" => self.intr_addr_of(e, args),
-            "rt_write" => {
+            "rtAddrOf" => self.intr_addr_of(e, args),
+            "rtWrite" => {
                 let Some(t) = self.intr_type(def, map) else {
-                    return self.unsupported(sp, "`rt_write` of an unknown type");
+                    return self.unsupported(sp, "`rtWrite` of an unknown type");
                 };
                 let (Some(d), Some(v)) = (self.arg_scalar(args, 0), args.get(1)) else {
                     return Res::Never;
@@ -371,9 +364,9 @@ impl<'a> Lowerer<'a> {
                     _ => Res::Unit,
                 }
             }
-            "rt_read" => {
+            "rtRead" => {
                 let Some(t) = self.intr_type(def, map) else {
-                    return self.unsupported(sp, "`rt_read` of an unknown type");
+                    return self.unsupported(sp, "`rtRead` of an unknown type");
                 };
                 let Some(p) = self.arg_scalar(args, 0) else {
                     return Res::Never;
@@ -395,10 +388,10 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
-            "rt_cast" => {
+            "rtCast" => {
                 let tys = self.intr_types(def, map);
                 let [a, b] = tys.as_slice() else {
-                    return self.unsupported(sp, "`rt_cast` of unknown types");
+                    return self.unsupported(sp, "`rtCast` of unknown types");
                 };
                 let (a, b) = (*a, *b);
                 let Some(arg) = args.first() else {
@@ -441,9 +434,9 @@ impl<'a> Lowerer<'a> {
                     },
                 }
             }
-            "rt_clone" => {
+            "rtClone" => {
                 let Some(t) = self.intr_type(def, map) else {
-                    return self.unsupported(sp, "`rt_clone` of an unknown type");
+                    return self.unsupported(sp, "`rtClone` of an unknown type");
                 };
                 let Some(src) = self.arg_scalar(args, 0) else {
                     return Res::Never;
@@ -465,9 +458,9 @@ impl<'a> Lowerer<'a> {
                     Repr::Zst => Res::Unit,
                 }
             }
-            "rt_clone_to" => {
+            "rtCloneTo" => {
                 let Some(t) = self.intr_type(def, map) else {
-                    return self.unsupported(sp, "`rt_clone_to` of an unknown type");
+                    return self.unsupported(sp, "`rtCloneTo` of an unknown type");
                 };
                 let (Some(s), Some(d)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
                 else {
@@ -476,9 +469,9 @@ impl<'a> Lowerer<'a> {
                 self.clone_into(s, d, t);
                 Res::Unit
             }
-            "rt_drop_at" => {
+            "rtDropAt" => {
                 let Some(t) = self.intr_type(def, map) else {
-                    return self.unsupported(sp, "`rt_drop_at` of an unknown type");
+                    return self.unsupported(sp, "`rtDropAt` of an unknown type");
                 };
                 let Some(p) = self.arg_scalar(args, 0) else {
                     return Res::Never;
@@ -486,17 +479,16 @@ impl<'a> Lowerer<'a> {
                 self.drop_at(p, t);
                 Res::Unit
             }
-            "rt_drop_fn" | "rt_clone_fn" | "rt_eq_fn" | "rt_cmp_fn" | "rt_hash_fn"
-            | "rt_show_fn" => {
+            "rtDropFn" | "rtCloneFn" | "rtEqFn" | "rtCmpFn" | "rtHashFn" | "rtShowFn" => {
                 let Some(t) = self.intr_type(def, map) else {
                     return self.unsupported(sp, "a glue function of an unknown type");
                 };
                 let kind = match name.as_str() {
-                    "rt_drop_fn" => GlueKind::Drop,
-                    "rt_clone_fn" => GlueKind::Clone,
-                    "rt_eq_fn" => GlueKind::Eq,
-                    "rt_cmp_fn" => GlueKind::Cmp,
-                    "rt_hash_fn" => GlueKind::Hash,
+                    "rtDropFn" => GlueKind::Drop,
+                    "rtCloneFn" => GlueKind::Clone,
+                    "rtEqFn" => GlueKind::Eq,
+                    "rtCmpFn" => GlueKind::Cmp,
+                    "rtHashFn" => GlueKind::Hash,
                     _ => GlueKind::Show,
                 };
                 match self.glue_fn(kind, t) {
@@ -507,8 +499,7 @@ impl<'a> Lowerer<'a> {
                     }
                 }
             }
-            "rt_call_void1" | "rt_call_void2" | "rt_call_bool2" | "rt_call_int2"
-            | "rt_call_int1" => {
+            "rtCallVoid1" | "rtCallVoid2" | "rtCallBool2" | "rtCallInt2" | "rtCallInt1" => {
                 let Some(f) = self.arg_scalar(args, 0) else {
                     return Res::Never;
                 };
@@ -521,9 +512,9 @@ impl<'a> Lowerer<'a> {
                     }
                 }
                 let ps = vec![ptr; n];
-                let (ret, res) = if name.contains("void") {
+                let (ret, res) = if name.contains("Void") {
                     (IrTy::Void, None)
-                } else if name.contains("bool") {
+                } else if name.contains("Bool") {
                     (IrTy::Bool, Some(IrTy::Bool))
                 } else {
                     (IrTy::I64, Some(IrTy::I64))
@@ -618,11 +609,11 @@ impl<'a> Lowerer<'a> {
 
     fn intr_addr_of(&mut self, e: &'a Expr, args: &'a [Arg]) -> Res {
         let Some(a) = args.first() else {
-            return self.unsupported(e.span, "`rt_addr_of` without an argument");
+            return self.unsupported(e.span, "`rtAddrOf` without an argument");
         };
         let arg = &a.value;
         let Some(t) = self.ty_of(arg) else {
-            return self.unsupported(arg.span, "`rt_addr_of` of an unknown type");
+            return self.unsupported(arg.span, "`rtAddrOf` of an unknown type");
         };
         if let Some(p) = self.place(arg) {
             return Res::Val(p);
@@ -653,14 +644,14 @@ impl<'a> Lowerer<'a> {
     #[inline(never)]
     fn intr_os(&mut self, name: &str, args: &'a [Arg], sp: Span) -> Res {
         let kind = match name {
-            "rt_os_write" => crate::ir::OsKind::Write,
-            "rt_os_read" => crate::ir::OsKind::Read,
-            "rt_os_exit" => crate::ir::OsKind::Exit,
-            "rt_os_argv" => crate::ir::OsKind::Argv,
-            "rt_os_reserve" => crate::ir::OsKind::Reserve,
-            "rt_os_commit" => crate::ir::OsKind::Commit,
-            "rt_os_release" => crate::ir::OsKind::Release,
-            "rt_os_remap" => crate::ir::OsKind::Remap,
+            "rtOsWrite" => crate::ir::OsKind::Write,
+            "rtOsRead" => crate::ir::OsKind::Read,
+            "rtOsExit" => crate::ir::OsKind::Exit,
+            "rtOsArgv" => crate::ir::OsKind::Argv,
+            "rtOsReserve" => crate::ir::OsKind::Reserve,
+            "rtOsCommit" => crate::ir::OsKind::Commit,
+            "rtOsRelease" => crate::ir::OsKind::Release,
+            "rtOsRemap" => crate::ir::OsKind::Remap,
             _ => crate::ir::OsKind::AdviseNoHuge,
         };
         let mut vs = Vec::new();
@@ -710,4 +701,11 @@ impl<'a> Lowerer<'a> {
         }
         self.wrap(Op::Os(kind, a, b, c), IrTy::I64, sp)
     }
+}
+
+/// The library intrinsics and runtime functions are named `rt` and a capital: `rtAlloc`, `rtLoadInt`.
+pub(crate) fn is_rt_name(name: &str) -> bool {
+    name.strip_prefix("rt")
+        .and_then(|rest| rest.chars().next())
+        .is_some_and(|c| c.is_ascii_uppercase())
 }

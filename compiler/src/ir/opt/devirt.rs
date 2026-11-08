@@ -1,6 +1,6 @@
 //! Calls through a pointer that is the address of a known function (card A-11). The maps and sets
 //! of the library call the hash and the equality of their key type through pointers
-//! (`rt_call_int1(hash, key)`); where the pointer is made in the same function (`rt_hash_fn<K>()`)
+//! (`rtCallInt1(hash, key)`); where the pointer is made in the same function (`rtHashFn<K>()`)
 //! the call goes straight to the function, which the inliner can then take in.
 
 use crate::ir::*;

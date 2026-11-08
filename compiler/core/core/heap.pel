@@ -10,13 +10,13 @@ const HEAP_LANES: int = 24
 const HEAP_SHIFT: int = 32
 const HEAP_SHIFT_MIN: int = 24
 
-pub fn heap_ld(a: int) -> int = rt_load_int(rt_int_addr(a))
+pub fn heap_ld(a: int) -> int = rtLoadInt(rtIntAddr(a))
 
 pub fn heap_st(a: int, v: int) {
-    rt_store_int(rt_int_addr(a), v)
+    rtStoreInt(rtIntAddr(a), v)
 }
 
-fn heap_words() -> int = rt_addr_int(rt_data_word(0))
+fn heap_words() -> int = rtAddrInt(rtDataWord(0))
 
 //~ The lane (size class) for `n` bytes: the smallest `k` with `16 << k` at least `n`.
 pub fn heap_class(n: int) -> int {
@@ -31,20 +31,20 @@ pub fn heap_class(n: int) -> int {
 
 //~ Out of memory: stops the program with a store through the null address (no message yet).
 fn heap_stop() {
-    rt_store_int(rt_null(), 1)
+    rtStoreInt(rtNull(), 1)
 }
 
 //~ Reserves the range on first use (no access): as much as the system grants, halving the lane size until it agrees. Lanes are made usable one MiB step at a time as they grow (see `heap_alloc`).
 fn heap_init_slow() {
     var shift = HEAP_SHIFT
-    var r = rt_os_reserve(HEAP_LANES << (shift & 63))
+    var r = rtOsReserve(HEAP_LANES << (shift & 63))
     while r <= 0 && shift > HEAP_SHIFT_MIN {
         shift = shift -% 1
-        r = rt_os_reserve(HEAP_LANES << (shift & 63))
+        r = rtOsReserve(HEAP_LANES << (shift & 63))
     }
     const size = HEAP_LANES << (shift & 63)
     if r <= 0 { heap_stop() }
-    rt_os_advise_nohuge(rt_int_addr(r), size)
+    rtOsAdviseNohuge(rtIntAddr(r), size)
     heap_st(heap_words() +% 480, r)
     heap_st(heap_words() +% 488, shift)
 }
@@ -78,7 +78,7 @@ pub fn heap_alloc(n: int) -> int {
     const at = r +% (k << (shift & 63))
     const lo = (used +% 1048575) & -1048576
     const hi = (used +% size +% 1048575) & -1048576
-    if hi > lo && rt_os_commit(rt_int_addr(at +% lo), hi -% lo) != 0 { heap_stop() }
+    if hi > lo && rtOsCommit(rtIntAddr(at +% lo), hi -% lo) != 0 { heap_stop() }
     at +% used
 }
 
@@ -102,7 +102,7 @@ pub fn heap_realloc(p: int, n: int) -> int {
     const size = 16 << (heap_lane(p) & 63)
     if n <= size { return p }
     const q = heap_alloc(n)
-    rt_copy(rt_int_addr(q), rt_int_addr(p), size)
+    rtCopy(rtIntAddr(q), rtIntAddr(p), size)
     heap_free(p)
     q
 }
@@ -112,7 +112,7 @@ pub fn heap_trim() {
     const w = heap_words()
     const r = heap_ld(w +% 480)
     if r == 0 { return }
-    rt_os_release(rt_int_addr(r), HEAP_LANES << (heap_ld(w +% 488) & 63))
+    rtOsRelease(rtIntAddr(r), HEAP_LANES << (heap_ld(w +% 488) & 63))
     var i = 0
     while i < 496 {
         heap_st(w +% i, 0)

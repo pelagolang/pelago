@@ -132,11 +132,7 @@ impl<'m> Gen<'m> {
             ));
         };
         mf.cold_syms = (0..self.m.funcs.len() as u32)
-            .filter(|i| {
-                self.m.funcs[*i as usize]
-                    .name
-                    .ends_with(crate::ir::opt::COLD_SUFFIX)
-            })
+            .filter(|i| crate::ir::opt::is_cold(&self.m.funcs[*i as usize].name))
             .map(|i| super::a64_mir::SYM_FUNC + i)
             .collect();
         let target = super::a64_mir::A64::new();

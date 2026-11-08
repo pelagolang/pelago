@@ -1,6 +1,6 @@
 //! Lists, text and printing: literals, loops over lists, joining and comparing text, `print`.
 //!
-//! The work is done by library functions written in the language (`rt_str_push`, `rt_show_int`, ...)
+//! The work is done by library functions written in the language (`rtStrPush`, `rtShowInt`, ...)
 //! that the lowering calls by name.
 
 use super::call::ArgSource;
@@ -124,7 +124,7 @@ impl<'a> Lowerer<'a> {
             return;
         }
         let (p, n) = self.static_bytes(bytes);
-        self.call_core("rt_str_push", vec![out, p, n]);
+        self.call_core("rtStrPush", vec![out, p, n]);
     }
 
     pub(crate) fn string_lit(
@@ -214,7 +214,7 @@ impl<'a> Lowerer<'a> {
             TyKind::Int(k) => {
                 let signed = k.signed();
                 let w = self.resize(v, IrTy::I64, signed, Span::new(0, 0));
-                self.call_core("rt_show_int", vec![out, w]);
+                self.call_core("rtShowInt", vec![out, w]);
                 true
             }
             TyKind::Float(_) => {
@@ -228,15 +228,15 @@ impl<'a> Lowerer<'a> {
                 } else {
                     v
                 };
-                self.call_core("rt_show_float", vec![out, w]);
+                self.call_core("rtShowFloat", vec![out, w]);
                 true
             }
             TyKind::Bool => {
-                self.call_core("rt_show_bool", vec![out, v]);
+                self.call_core("rtShowBool", vec![out, v]);
                 true
             }
             TyKind::Char => {
-                self.call_core("rt_push_char", vec![out, v]);
+                self.call_core("rtPushChar", vec![out, v]);
                 true
             }
             _ => {
@@ -258,7 +258,7 @@ impl<'a> Lowerer<'a> {
                 }
                 let d = self.load_at(p, 0, IrTy::Ptr);
                 let n = self.load_at(p, 8, IrTy::I64);
-                self.call_core("rt_str_push", vec![out, d, n]);
+                self.call_core("rtStrPush", vec![out, d, n]);
                 if quoted {
                     self.push_static(out, b"\"");
                 }
@@ -267,7 +267,7 @@ impl<'a> Lowerer<'a> {
             TyKind::Char if quoted => {
                 self.push_static(out, b"'");
                 let c = self.load_at(p, 0, IrTy::Int(32));
-                self.call_core("rt_push_char", vec![out, c]);
+                self.call_core("rtPushChar", vec![out, c]);
                 self.push_static(out, b"'");
                 true
             }
@@ -379,7 +379,7 @@ impl<'a> Lowerer<'a> {
         };
         let w = self.resize(v, IrTy::I64, k.signed(), Span::new(0, 0));
         let buf = self.slot_bytes(INT_LINE, 8);
-        let at = self.call_core("rt_fmt_int_line", vec![buf, w])?;
+        let at = self.call_core("rtFmtIntLine", vec![buf, w])?;
         let d = self
             .emit(Op::PtrAdd(buf, at), Some(IrTy::Ptr), e.span)
             .unwrap_or(buf);
@@ -397,7 +397,7 @@ impl<'a> Lowerer<'a> {
         let Res::Val(b) = self.expr(r) else {
             return Res::Never;
         };
-        self.call_core("rt_str_concat", vec![dst, a, b]);
+        self.call_core("rtStrConcat", vec![dst, a, b]);
         Res::Unit
     }
 
@@ -451,7 +451,7 @@ impl<'a> Lowerer<'a> {
             };
             let d = self.load_at(b, 0, IrTy::Ptr);
             let n = self.load_at(b, 8, IrTy::I64);
-            self.call_core("rt_str_push", vec![p, d, n]);
+            self.call_core("rtStrPush", vec![p, d, n]);
         }
         Some(Res::Unit)
     }
@@ -533,7 +533,7 @@ impl<'a> Lowerer<'a> {
             };
             let d = self.load_at(b, 0, IrTy::Ptr);
             let n = self.load_at(b, 8, IrTy::I64);
-            self.call_core("rt_str_push", vec![p, d, n]);
+            self.call_core("rtStrPush", vec![p, d, n]);
             return Res::Unit;
         }
         self.unsupported(e.span, "this assignment")
@@ -550,7 +550,7 @@ impl<'a> Lowerer<'a> {
         let Res::Val(l) = self.expr(lit) else {
             return None;
         };
-        self.call_core("rt_str_eq", vec![ptr, l])
+        self.call_core("rtStrEq", vec![ptr, l])
     }
 
     // ---- Comparison of memory values ----------------------------------------------------------------------------------------
@@ -591,7 +591,7 @@ impl<'a> Lowerer<'a> {
         let _ = cmp_val;
         if !ordering {
             let eq = if text {
-                self.call_core("rt_str_eq", vec![a, b])
+                self.call_core("rtStrEq", vec![a, b])
             } else {
                 match self.glue_fn(GlueKind::Eq, lt) {
                     Some(g) => self.emit(Op::Call(g, vec![a, b]), Some(IrTy::Bool), e.span),
@@ -605,7 +605,7 @@ impl<'a> Lowerer<'a> {
             return Res::Val(eq);
         }
         let c = if text {
-            self.call_core("rt_str_cmp", vec![a, b])
+            self.call_core("rtStrCmp", vec![a, b])
         } else {
             match self.glue_fn(GlueKind::Cmp, lt) {
                 Some(g) => self.emit(Op::Call(g, vec![a, b]), Some(IrTy::I64), e.span),
@@ -738,7 +738,7 @@ impl<'a> Lowerer<'a> {
                 let Res::Val(src) = self.expr(&it.value) else {
                     return Res::Never;
                 };
-                self.call_core_g("rt_list_spread", &[elem], vec![dst, src]);
+                self.call_core_g("rtListSpread", &[elem], vec![dst, src]);
                 continue;
             }
             // Push one element.
@@ -748,7 +748,7 @@ impl<'a> Lowerer<'a> {
                 .emit(Op::Bin(BinOp::Add, len, one), Some(IrTy::I64), e.span)
                 .unwrap_or(len);
             let sz = self.i64c(esize);
-            self.call_core("rt_grow", vec![dst, sz, need]);
+            self.call_core("rtGrow", vec![dst, sz, need]);
             let data = self.load_at(dst, 0, IrTy::Ptr);
             let off = self
                 .emit(Op::Bin(BinOp::Mul, len, sz), Some(IrTy::I64), e.span)
@@ -1214,7 +1214,7 @@ impl<'a> Lowerer<'a> {
         self.start(body_b);
         match src {
             Fused::Chars(_) => {
-                // ASCII is the common case: one load, one compare, no decoding. Anything else calls `rt_char_at_slow`.
+                // ASCII is the common case: one load, one compare, no decoding. Anything else calls `rtCharAtSlow`.
                 let p = self
                     .emit(Op::PtrAdd(data, i), Some(IrTy::Ptr), span)
                     .unwrap_or(data);
@@ -1254,7 +1254,7 @@ impl<'a> Lowerer<'a> {
                 self.store_scalar_ty(eslot, ch);
                 self.jump(join_b, vec![]);
                 self.start(wide_b);
-                let Some(r) = self.call_core("rt_char_at_slow", vec![data, i, len]) else {
+                let Some(r) = self.call_core("rtCharAtSlow", vec![data, i, len]) else {
                     self.f.scopes.pop();
                     return Res::Never;
                 };
@@ -1299,11 +1299,11 @@ impl<'a> Lowerer<'a> {
                 let sh = sh.unwrap_or(h);
                 let sn = self.load_at(sh, 8, IrTy::I64);
                 let sp = self.load_at(sh, 0, IrTy::Ptr);
-                let Some(end) = self.call_core("rt_split_end", vec![data, len, sp, sn, i]) else {
+                let Some(end) = self.call_core("rtSplitEnd", vec![data, len, sp, sn, i]) else {
                     self.f.scopes.pop();
                     return Res::Never;
                 };
-                let Some(next) = self.call_core("rt_split_after", vec![end, len, sn]) else {
+                let Some(next) = self.call_core("rtSplitAfter", vec![end, len, sn]) else {
                     self.f.scopes.pop();
                     return Res::Never;
                 };

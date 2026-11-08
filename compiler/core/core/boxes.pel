@@ -3,10 +3,10 @@
 /// ---- Boxes -------------------------------------------------------------------------------------
 
 //~ `box(value)`: one value on the heap with a single owner. The block holds the bare value.
-pub fn rt_box_new<T>(sink value: T) -> box<T> {
-    const p = rt_alloc(rt_size_of<T>() + 1)
-    rt_write<T>(p, sink value)
-    rt_cast<ptr, box<T>>(p)
+pub fn rtBoxNew<T>(sink value: T) -> box<T> {
+    const p = rtAlloc(rtSizeOf<T>() + 1)
+    rtWrite<T>(p, sink value)
+    rtCast<ptr, box<T>>(p)
 }
 
 impl<T> box<T> {
@@ -15,16 +15,16 @@ impl<T> box<T> {
 
     //~ Drops the old value and puts a new one in.
     fn set(inout self, sink value: T) {
-        const p = rt_load_ptr(rt_addr_of(self))
-        rt_drop_at<T>(p)
-        rt_write<T>(p, sink value)
+        const p = rtLoadPtr(rtAddrOf(self))
+        rtDropAt<T>(p)
+        rtWrite<T>(p, sink value)
     }
 
     //~ Takes the value out and frees the block.
     fn take(sink self) -> T {
-        const p = rt_cast<box<T>, ptr>(sink self)
-        const v = rt_read<T>(p)
-        rt_free(p)
+        const p = rtCast<box<T>, ptr>(sink self)
+        const v = rtRead<T>(p)
+        rtFree(p)
         v
     }
 }
@@ -38,7 +38,7 @@ pub struct future<T> {
 }
 
 impl<T> future<T> {
-    fn wait(sink self) -> T = rt_cast<future<T>, T>(sink self)
+    fn wait(sink self) -> T = rtCast<future<T>, T>(sink self)
 }
 
 //~ Runs a future to the end from ordinary code.

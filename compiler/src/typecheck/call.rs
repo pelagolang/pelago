@@ -989,11 +989,11 @@ impl<'p> Checker<'p> {
         self.tt.result(okt, errt)
     }
 
-    /// `box(value)`: calls the library function `rt_box_new`, which fixes the type to `box<T>`.
+    /// `box(value)`: calls the library function `rtBoxNew`, which fixes the type to `box<T>`.
     fn box_ctor(&mut self, e: &'p Expr, args: &'p [Arg], exp: Exp) -> Ty {
         let found = (0..self.res.defs.len() as u32).map(DefId).find(|d| {
             let def = self.def(*d);
-            def.kind == DefKind::Fn && def.name == "rt_box_new" && self.is_core_def(*d)
+            def.kind == DefKind::Fn && def.name == "rtBoxNew" && self.is_core_def(*d)
         });
         match found {
             Some(def) => {

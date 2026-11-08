@@ -14,7 +14,7 @@ small pieces.
 | Part | State |
 |---|---|
 | Start, exit, `Stop(msg)`, output buffer, allocator, stack guard, traps | built, x86-64 and AArch64, Linux, Windows, macOS (`backend.md` section 3) |
-| Lists, strings, maps, sets, sort, objects, closures | built, written in Pelago in `compiler/core/core.pel` over the `rt_*` intrinsics |
+| Lists, strings, maps, sets, sort, objects, closures | built, written in Pelago in `compiler/core/core.pel` over the `rt*` intrinsics |
 | Tasks, channels, `shared`, `lock`, `select`, `async` | semantics built, run one after another (`concurrency-runtime.md`) |
 | stdin, stderr, `exit`, `main(args)` | built on x86-64 Linux and in the interpreter (section 9); files and directories missing |
 | environment, status returned by `main`, `void ! E` from `main` | missing |
@@ -105,13 +105,13 @@ In dependency order; each can be one PR.
 - **IR:** one operation, `Os(op, operands)`, with `os_write(fd, p, n)`, `os_read(fd, p, n)`, `os_exit(code)` and
   `os_argv()` (`OsKind::Write`, `Read`, `Exit` and `Argv` in `ir/mod.rs`, next to the memory calls of `os-memory.md`, verified, printed, never removed or moved by the optimiser).
 - **Native (x86-64 Linux):** `_start` saves the kernel's start block; `os_write` flushes the print buffer and
-  makes one `write`, `os_read` one `read` (both retry on `EINTR`), `os_exit` is `rt_exit`, `os_argv` returns the
+  makes one `write`, `os_read` one `read` (both retry on `EINTR`), `os_exit` is `rtExit`, `os_argv` returns the
   saved block. Both generators (`gen.rs` and the MIR path) emit them. AArch64 and Windows refuse a program that
   uses them with a clear message until their versions are written (work package 5).
 - **Interpreter:** a stand-in with the same results: arguments, environment and standard input come from
   `OsEnv`; `Outcome` has `err` (what went to descriptor 2) and `status`. Standard error is kept apart from
   standard output, so the interleaving is only visible natively.
-- **Library:** `core.rt` has the four `rt_os_*` intrinsics and `rt_args_into`; `std.io` and `std.os` are the
+- **Library:** `core.rt` has the four `rtOs*` intrinsics and `rtArgsInto`; `std.io` and `std.os` are the
   user-facing modules. `fn main(args: [string])` gets a generated entry that builds the list from the start block
   (the texts are borrowed from it, only the array of headers is allocated and freed).
 - **CLI:** `pelago run <path> -- args...` passes the arguments; a program that uses the layer runs as a process
