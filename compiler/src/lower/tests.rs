@@ -391,6 +391,10 @@ fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
         if !exec::can_run(os) || (os == Os::Windows && what != "plain") {
             continue;
         }
+        // The operating system layer (files, standard input) is built for Linux x86-64 so far.
+        if os != Os::Linux && crate::native::uses_process(m) {
+            continue;
+        }
         // Also with few registers (every spill and split path).
         for limit in REG_SETS {
             if os == Os::Windows && limit != usize::MAX {
@@ -418,6 +422,9 @@ fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
         }
     }
     // The AArch64 build (run under qemu on other machines) must print the same and leak nothing.
+    if crate::native::uses_process(m) {
+        return;
+    }
     if let Some(r) = exec::build_and_run_a64(m, true) {
         assert_eq!(r.out, want, "AArch64 output ({what}) differs in {src}");
         assert_eq!(
