@@ -21,7 +21,8 @@
 use super::a64::*;
 use super::elf::Blob;
 use super::rt::{
-    IMP_ADD_VEH, IMP_EXIT_PROCESS, IMP_GET_CONSOLE_MODE, IMP_GET_STD_HANDLE, IMP_VIRTUAL_ALLOC,
+    IMP_ADD_VEH, IMP_CLOSE_HANDLE, IMP_CREATE_FILE, IMP_EXIT_PROCESS, IMP_GET_CONSOLE_MODE,
+    IMP_GET_LAST_ERROR, IMP_GET_STD_HANDLE, IMP_MULTI_BYTE, IMP_READ_FILE, IMP_VIRTUAL_ALLOC,
     IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT, IMP_WRITE_FILE, REGION_BYTES, REGION_MAX, REGION_MIN,
     SPAN_TABLE,
 };
@@ -65,6 +66,9 @@ enum Sys {
     Mmap,
     Mprotect,
     Madvise,
+    Read,
+    Open,
+    Close,
 }
 
 /// The call numbers: the generic Linux ones, and the BSD ones of macOS (`mremap` and `madvise`
@@ -81,6 +85,10 @@ fn number(os: Os, call: Sys) -> i64 {
         Sys::Mmap => (222, 197),
         Sys::Mprotect => (226, 74),
         Sys::Madvise => (233, 75),
+        // `openat` on Linux (there is no `open`), `open` on macOS.
+        Sys::Read => (63, 3),
+        Sys::Open => (56, 5),
+        Sys::Close => (57, 6),
     };
     if os == Os::MacOs {
         mac
@@ -119,7 +127,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `x0` to `x2`, the result in `x0` (an address or 0, or a negative error).
-    pub os: [Label; 5],
+    pub os: [Label; 11],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -441,7 +449,7 @@ pub fn emit_for(
         fmod: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 5].map(|_| a.new_label()),
+        os: [(); 11].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -1104,7 +1112,7 @@ pub fn emit_for(
     }
 
     if uses.os {
-        emit_os(a, &rt, os);
+        emit_os(a, &rt, os, flush, uses.print);
     }
 
     if uses.ctx {
@@ -1489,6 +1497,139 @@ pub fn emit_for(
     rt
 }
 
+/// Windows: `WriteFile` or `ReadFile` on descriptor `x0` (0, 1, 2: the standard handles; others are handles
+/// from `open`), buffer `x1`, count `x2`, the frame already entered. The count transferred, or -3; a read
+/// from a pipe whose writer is gone (error 109) is the end of the input, 0.
+fn win_std_io(a: &mut Asm, import: usize, read: bool) {
+    let (raw, have, fail, out) = (a.new_label(), a.new_label(), a.new_label(), a.new_label());
+    a.sub_ri(SP, SP, 16);
+    a.mov_rr(X20, X1);
+    a.mov_rr(X21, X2);
+    a.cmp_ri(X0, 3);
+    a.b_cond(Cond::Ge, raw);
+    a.mov_ri(X9, -10);
+    a.sub_rr(X0, X9, X0);
+    win_call(a, IMP_GET_STD_HANDLE);
+    a.b(have);
+    a.bind(raw);
+    a.bind(have);
+    a.mov_rr(X1, X20);
+    a.mov_rr(X2, X21);
+    a.mov_from_sp(X3);
+    a.mov_ri(X4, 0); // no overlapped I/O
+    win_call(a, import);
+    a.uxt(X0, X0, 32); // a BOOL
+    a.cbz(X0, fail);
+    a.ldr(X0, SP, 0, 4);
+    a.b(out);
+    a.bind(fail);
+    if read {
+        let eof = a.new_label();
+        win_call(a, IMP_GET_LAST_ERROR);
+        a.cmp_ri(X0, 109);
+        a.b_cond(Cond::Eq, eof);
+        a.mov_ri(X0, -3);
+        a.b(out);
+        a.bind(eof);
+        a.mov_ri(X0, 0);
+    } else {
+        a.mov_ri(X0, -3);
+    }
+    a.bind(out);
+    a.add_ri(SP, SP, 16);
+    leave(a);
+    a.ret();
+}
+
+/// Windows `open(path = x0, mode = x1)` with the frame entered: the zero-terminated UTF-8 path becomes UTF-16
+/// in a block of its own, then `CreateFileW` (permissive sharing). The handle, or -4 (not found), -5
+/// (denied) or -3. `x19` the path, `x20` the mode, `x21` its length, `x22` the block.
+fn win_open(a: &mut Asm, rt: &Runtime) {
+    let (sl, sd) = (a.new_label(), a.new_label());
+    a.mov_rr(X19, X0);
+    a.mov_rr(X20, X1);
+    a.mov_ri(X21, 0);
+    a.bind(sl);
+    a.add_rr(X10, X19, X21);
+    a.ldr(X9, X10, 0, 1);
+    a.cbz(X9, sd);
+    a.add_ri(X21, X21, 1);
+    a.b(sl);
+    a.bind(sd);
+    a.lsl_ri(X0, X21, 1);
+    a.add_ri(X0, X0, 2);
+    a.bl(rt.alloc);
+    a.mov_rr(X22, X0);
+    a.mov_ri(X0, 65001); // CP_UTF8
+    a.mov_ri(X1, 0);
+    a.mov_rr(X2, X19);
+    a.mov_ri(X3, -1);
+    a.mov_rr(X4, X22);
+    a.add_ri(X5, X21, 1);
+    win_call(a, IMP_MULTI_BYTE);
+    let (converted, created, failed, noent, acces, out) = (
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+        a.new_label(),
+    );
+    a.uxt(X0, X0, 32);
+    a.cbnz(X0, converted);
+    a.mov_ri(X19, -1);
+    a.b(created);
+    a.bind(converted);
+    let (rd, wr, go) = (a.new_label(), a.new_label(), a.new_label());
+    a.cbz(X20, rd);
+    a.cmp_ri(X20, 1);
+    a.b_cond(Cond::Eq, wr);
+    a.mov_ri(X1, 4); // FILE_APPEND_DATA
+    a.mov_ri(X4, 4); // OPEN_ALWAYS
+    a.b(go);
+    a.bind(wr);
+    a.mov_ri(X1, 0x4000_0000); // GENERIC_WRITE
+    a.mov_ri(X4, 2); // CREATE_ALWAYS
+    a.b(go);
+    a.bind(rd);
+    a.mov_ri(X1, 0x8000_0000); // GENERIC_READ
+    a.mov_ri(X4, 3); // OPEN_EXISTING
+    a.bind(go);
+    a.mov_rr(X0, X22);
+    a.mov_ri(X2, 7); // share read, write, delete
+    a.mov_ri(X3, 0);
+    a.mov_ri(X5, 0x80); // FILE_ATTRIBUTE_NORMAL
+    a.mov_ri(X6, 0);
+    win_call(a, IMP_CREATE_FILE);
+    a.mov_rr(X19, X0);
+    a.bind(created);
+    win_call(a, IMP_GET_LAST_ERROR);
+    a.mov_rr(X20, X0);
+    a.mov_rr(X0, X22);
+    a.bl(rt.free);
+    a.adds_ri(XZR, X19, 1); // the handle is -1 on failure
+    a.b_cond(Cond::Eq, failed);
+    a.mov_rr(X0, X19);
+    a.b(out);
+    a.bind(failed);
+    a.cmp_ri(X20, 2);
+    a.b_cond(Cond::Eq, noent);
+    a.cmp_ri(X20, 3);
+    a.b_cond(Cond::Eq, noent);
+    a.cmp_ri(X20, 5);
+    a.b_cond(Cond::Eq, acces);
+    a.mov_ri(X0, -3);
+    a.b(out);
+    a.bind(noent);
+    a.mov_ri(X0, -4);
+    a.b(out);
+    a.bind(acces);
+    a.mov_ri(X0, -5);
+    a.bind(out);
+    leave(a);
+    a.ret();
+}
+
 /// `madvise(addr, len, MADV_HUGEPAGE)` for a big mapping; `addr` and `len` registers are kept.
 fn advise_huge(a: &mut Asm, os: Os, addr: Reg, len: Reg) {
     let skip = a.new_label();
@@ -1505,7 +1646,7 @@ fn advise_huge(a: &mut Asm, os: Os, addr: Reg, len: Reg) {
 /// The OS memory calls (docs/design/os-memory.md), in a function of their own: `emit_for` is already a huge
 /// frame in debug builds.
 #[inline(never)]
-fn emit_os(a: &mut Asm, rt: &Runtime, os: Os) {
+fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool) {
     let win = os == Os::Windows;
     // ---- the OS memory calls (docs/design/os-memory.md) ----------------------------------------------
     // Sizes and addresses must be whole pages (else -2). A system error becomes -1 (no memory), -2
@@ -1646,6 +1787,122 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os) {
         a.mov_ri(X2, 15); // MADV_NOHUGEPAGE
         sys(a, os, Sys::Madvise);
         a.b(os_error);
+    }
+    // ---- the process calls: write(fd, ptr, len), read(fd, ptr, len), exit(status), argv(), open(path, mode),
+    // close(fd). Results: a count or descriptor, or a negative error. ---------------------------------------
+    // write flushes standard output first, so output keeps its order.
+    start(a, rt.os[5]);
+    if print {
+        if win {
+            // `enter` already pushed a frame; keep the arguments in callee-saved registers across the flush.
+            a.mov_rr(X19, X0);
+            a.mov_rr(X20, X1);
+            a.mov_rr(X21, X2);
+            a.bl(flush);
+            a.mov_rr(X0, X19);
+            a.mov_rr(X1, X20);
+            a.mov_rr(X2, X21);
+        } else {
+            a.stp_pre(X0, X1, SP, -32);
+            a.stp(X2, LR, SP, 16);
+            a.bl(flush);
+            a.ldp(X2, LR, SP, 16);
+            a.ldp_post(X0, X1, SP, 32);
+        }
+    }
+    if win {
+        win_std_io(a, IMP_WRITE_FILE, false);
+        start(a, rt.os[6]);
+        win_std_io(a, IMP_READ_FILE, true);
+    } else {
+        // One call, retried when interrupted (-4).
+        for (l, call, first) in [(rt.os[5], Sys::Write, true), (rt.os[6], Sys::Read, false)] {
+            if !first {
+                a.bind(l);
+            }
+            let retry = a.new_label();
+            a.mov_rr(X9, X0);
+            a.mov_rr(X10, X1);
+            a.mov_rr(X11, X2);
+            a.bind(retry);
+            a.mov_rr(X0, X9);
+            a.mov_rr(X1, X10);
+            a.mov_rr(X2, X11);
+            sys(a, os, call);
+            a.adds_ri(XZR, X0, 4);
+            a.b_cond(Cond::Eq, retry);
+            a.ret();
+        }
+    }
+    start(a, rt.os[7]);
+    a.b(rt.exit);
+    // argv: no start block yet on the AArch64 targets; programs that ask for it are refused at build time.
+    start(a, rt.os[8]);
+    a.mov_ri(X0, 0);
+    finish(a);
+    // open(path, mode): mode 0 reads, 1 writes (create, empty), else appends (create).
+    start(a, rt.os[9]);
+    if win {
+        win_open(a, rt);
+    } else {
+        let (rd, wr, go) = (a.new_label(), a.new_label(), a.new_label());
+        a.mov_rr(X4, X0);
+        a.cbz(X1, rd);
+        a.cmp_ri(X1, 1);
+        a.b_cond(Cond::Eq, wr);
+        a.mov_ri(X2, if mac { 0x209 } else { 0x441 }); // write only, create, append
+        a.b(go);
+        a.bind(wr);
+        a.mov_ri(X2, if mac { 0x601 } else { 0x241 }); // write only, create, truncate
+        a.b(go);
+        a.bind(rd);
+        a.mov_ri(X2, 0);
+        a.bind(go);
+        if mac {
+            a.mov_rr(X0, X4);
+            a.mov_rr(X1, X2);
+            a.mov_ri(X2, 0o666);
+        } else {
+            a.mov_ri(X0, -100); // AT_FDCWD
+            a.mov_rr(X1, X4);
+            a.mov_ri(X3, 0o666);
+        }
+        sys(a, os, Sys::Open);
+        let (done, noent, acces) = (a.new_label(), a.new_label(), a.new_label());
+        a.mov_ri(X15, -4095);
+        a.cmp_rr(X0, X15);
+        a.b_cond(Cond::Lo, done);
+        a.mov_ri(X15, -2);
+        a.cmp_rr(X0, X15);
+        a.b_cond(Cond::Eq, noent);
+        a.mov_ri(X15, -13);
+        a.cmp_rr(X0, X15);
+        a.b_cond(Cond::Eq, acces);
+        a.mov_ri(X0, -3);
+        a.ret();
+        a.bind(noent);
+        a.mov_ri(X0, -4);
+        a.ret();
+        a.bind(acces);
+        a.mov_ri(X0, -5);
+        a.bind(done);
+        a.ret();
+    }
+    // close(fd)
+    start(a, rt.os[10]);
+    if win {
+        win_call(a, IMP_CLOSE_HANDLE);
+        let bad_close = a.new_label();
+        a.uxt(X0, X0, 32); // a BOOL
+        a.cbz(X0, bad_close);
+        a.mov_ri(X0, 0);
+        finish(a);
+        a.bind(bad_close);
+        a.mov_ri(X0, -3);
+        finish(a);
+    } else {
+        sys(a, os, Sys::Close);
+        a.ret();
     }
     // The exits.
     a.bind(bad);

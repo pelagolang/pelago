@@ -123,7 +123,9 @@ impl<'a> Lowerer<'a> {
             | "rt_os_write"
             | "rt_os_read"
             | "rt_os_exit"
-            | "rt_os_argv" => self.intr_os(&name, args, sp),
+            | "rt_os_argv"
+            | "rt_os_open"
+            | "rt_os_close" => self.intr_os(&name, args, sp),
             "rt_data_word" => {
                 // The address of the k-th word of the block the compiler keeps for the library's own
                 // state; `k` is a literal, so a bad one is a compile error, not a stop.
@@ -657,6 +659,8 @@ impl<'a> Lowerer<'a> {
             "rt_os_read" => crate::ir::OsKind::Read,
             "rt_os_exit" => crate::ir::OsKind::Exit,
             "rt_os_argv" => crate::ir::OsKind::Argv,
+            "rt_os_open" => crate::ir::OsKind::Open,
+            "rt_os_close" => crate::ir::OsKind::Close,
             "rt_os_reserve" => crate::ir::OsKind::Reserve,
             "rt_os_commit" => crate::ir::OsKind::Commit,
             "rt_os_release" => crate::ir::OsKind::Release,
@@ -676,8 +680,10 @@ impl<'a> Lowerer<'a> {
                 0
             };
             let v = if i == addr_at
-                && !matches!(kind, crate::ir::OsKind::Reserve | crate::ir::OsKind::Exit)
-            {
+                && !matches!(
+                    kind,
+                    crate::ir::OsKind::Reserve | crate::ir::OsKind::Exit | crate::ir::OsKind::Close
+                ) {
                 let Some(n) = self.emit(
                     Op::Cast(CastKind::PtrToInt, v, IrTy::I64),
                     Some(IrTy::I64),

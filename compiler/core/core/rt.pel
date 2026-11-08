@@ -58,6 +58,11 @@ pub ext fn rt_os_write(fd: int, p: ptr, n: int) -> int
 pub ext fn rt_os_read(fd: int, p: ptr, n: int) -> int
 pub ext fn rt_os_exit(code: int)
 pub ext fn rt_os_argv() -> int
+//~ Files: `rt_os_open(path, mode)` opens the zero-terminated path (mode 0 reads, 1 writes and creates or empties
+//~ the file, 2 appends) and gives a descriptor of 3 or more, or a negative error (-4 no such file, -5 permission
+//~ denied, other values: some other failure). `rt_os_close(fd)` gives 0 or a negative error.
+pub ext fn rt_os_open(path: ptr, mode: int) -> int
+pub ext fn rt_os_close(fd: int) -> int
 pub ext fn rt_to_byte(n: int) -> uint8
 pub ext fn rt_wrap<T>(n: int) -> T
 pub ext fn rt_to_int(x: float) -> int

@@ -37,7 +37,7 @@ const STACK_WIN: i64 = 1 << 28;
 const COMMIT_WIN: i64 = 512 * 1024;
 
 /// The kernel32 functions the Windows image imports, in the order of its import table.
-pub const IMPORTS: [&str; 8] = [
+pub const IMPORTS: [&str; 13] = [
     "GetStdHandle",
     "WriteFile",
     "ExitProcess",
@@ -46,6 +46,11 @@ pub const IMPORTS: [&str; 8] = [
     "AddVectoredExceptionHandler",
     "VirtualProtect",
     "GetConsoleMode",
+    "ReadFile",
+    "CreateFileW",
+    "CloseHandle",
+    "MultiByteToWideChar",
+    "GetLastError",
 ];
 pub(super) const IMP_GET_STD_HANDLE: usize = 0;
 pub(super) const IMP_WRITE_FILE: usize = 1;
@@ -55,6 +60,11 @@ pub(super) const IMP_VIRTUAL_FREE: usize = 4;
 pub(super) const IMP_ADD_VEH: usize = 5;
 pub(super) const IMP_VIRTUAL_PROTECT: usize = 6;
 pub(super) const IMP_GET_CONSOLE_MODE: usize = 7;
+pub(super) const IMP_READ_FILE: usize = 8;
+pub(super) const IMP_CREATE_FILE: usize = 9;
+pub(super) const IMP_CLOSE_HANDLE: usize = 10;
+pub(super) const IMP_MULTI_BYTE: usize = 11;
+pub(super) const IMP_GET_LAST_ERROR: usize = 12;
 
 /// Linux: the lowest 1 MiB of our stack is mapped inaccessible, so running into it is a fault.
 const GUARD_LINUX: i64 = 1 << 20;
@@ -74,6 +84,17 @@ fn win_call(a: &mut Asm, import: usize, setup: impl FnOnce(&mut Asm)) {
     a.mov_rr(RBP, RSP, 8);
     a.alu_ri(Alu::And, RSP, -16, 8);
     a.alu_ri(Alu::Sub, RSP, 48, 8);
+    setup(a);
+    a.call_mem_sect(Sect::Idata, super::pe::iat_slot(import));
+    a.mov_rr(RSP, RBP, 8);
+    a.pop(RBP);
+}
+/// Like [`win_call`] with room for seven arguments (three beyond the registers).
+fn win_call7(a: &mut Asm, import: usize, setup: impl FnOnce(&mut Asm)) {
+    a.push(RBP);
+    a.mov_rr(RBP, RSP, 8);
+    a.alu_ri(Alu::And, RSP, -16, 8);
+    a.alu_ri(Alu::Sub, RSP, 64, 8);
     setup(a);
     a.call_mem_sect(Sect::Idata, super::pe::iat_slot(import));
     a.mov_rr(RSP, RBP, 8);
@@ -305,7 +326,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `rdi`, `rsi`, `rdx`, the result in `rax` (an address or 0, or a negative error).
-    pub os: [Label; 9],
+    pub os: [Label; 11],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -354,7 +375,7 @@ pub fn emit_for(
         write_u64: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 9].map(|_| a.new_label()),
+        os: [(); 11].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -1518,6 +1539,237 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool) {
         a.bind(rt.os[8]);
         state(a, RAX, 168);
         a.load(RAX, mem(RAX, 0), 8);
+        a.ret();
+        // open(path = rdi, mode = rsi): 0 reads, 1 writes (create, truncate), else appends; permissions 0666
+        // before the umask. The descriptor, or -4 (no such file), -5 (denied) or -3 (anything else).
+        a.bind(rt.os[9]);
+        let (ro, wr, go) = (a.new_label(), a.new_label(), a.new_label());
+        a.test_rr(RSI, RSI, 8);
+        a.jcc(Cc::E, ro);
+        a.alu_ri(Alu::Cmp, RSI, 1, 8);
+        a.jcc(Cc::E, wr);
+        a.mov_ri(RSI, 0x441); // O_WRONLY | O_CREAT | O_APPEND
+        a.jmp(go);
+        a.bind(wr);
+        a.mov_ri(RSI, 0x241); // O_WRONLY | O_CREAT | O_TRUNC
+        a.jmp(go);
+        a.bind(ro);
+        a.mov_ri(RSI, 0); // O_RDONLY
+        a.bind(go);
+        a.mov_ri(RDX, 0o666);
+        a.mov_ri(RAX, 2);
+        a.syscall();
+        let (done, noent, acces) = (a.new_label(), a.new_label(), a.new_label());
+        a.alu_ri(Alu::Cmp, RAX, -4095, 8);
+        a.jcc(Cc::B, done);
+        a.alu_ri(Alu::Cmp, RAX, -2, 8);
+        a.jcc(Cc::E, noent);
+        a.alu_ri(Alu::Cmp, RAX, -13, 8);
+        a.jcc(Cc::E, acces);
+        a.mov_ri(RAX, -3);
+        a.ret();
+        a.bind(noent);
+        a.mov_ri(RAX, -4);
+        a.ret();
+        a.bind(acces);
+        a.mov_ri(RAX, -5);
+        a.bind(done);
+        a.ret();
+        // close(fd = rdi)
+        a.bind(rt.os[10]);
+        a.mov_ri(RAX, 3);
+        a.syscall();
+        a.ret();
+    }
+    if win {
+        // The handle for descriptor `rdi` in `rax`: 0, 1 and 2 are the standard handles, anything else is a
+        // handle from `open`.
+        let std_handle = |a: &mut Asm| {
+            let (raw, have) = (a.new_label(), a.new_label());
+            a.alu_ri(Alu::Cmp, RDI, 3, 8);
+            a.jcc(Cc::Ge, raw);
+            a.mov_ri(RCX, -10);
+            a.alu_rr(Alu::Sub, RCX, RDI, 8);
+            win_call(a, IMP_GET_STD_HANDLE, |_| {});
+            a.jmp(have);
+            a.bind(raw);
+            a.mov_rr(RAX, RDI, 8);
+            a.bind(have);
+        };
+        // write(fd = rdi, ptr = rsi, count = rdx): standard output is flushed first; one `WriteFile`; the
+        // count written or -3.
+        a.bind(rt.os[5]);
+        if print {
+            a.push(RDI);
+            a.push(RSI);
+            a.push(RDX);
+            a.call(flush);
+            a.pop(RDX);
+            a.pop(RSI);
+            a.pop(RDI);
+        }
+        for (slot, import) in [(5, IMP_WRITE_FILE), (6, IMP_READ_FILE)] {
+            if slot == 6 {
+                a.bind(rt.os[6]);
+            }
+            a.push(RBX);
+            a.push(R12);
+            a.push(R13);
+            a.alu_ri(Alu::Sub, RSP, 16, 8);
+            a.mov_rr(R12, RSI, 8);
+            a.mov_rr(R13, RDX, 8);
+            std_handle(a);
+            a.mov_rr(RCX, RAX, 8);
+            a.mov_rr(RDX, R12, 8);
+            a.mov_rr(R8, R13, 4);
+            a.lea(R9, mem(RSP, 0));
+            win_call(a, import, |a| {
+                a.store_imm(mem(RSP, 32), 0, 8); // no overlapped I/O
+            });
+            let (fail, out) = (a.new_label(), a.new_label());
+            a.test_rr(RAX, RAX, 4);
+            a.jcc(Cc::E, fail);
+            a.load(RAX, mem(RSP, 0), 4);
+            a.jmp(out);
+            a.bind(fail);
+            if slot == 6 {
+                // A pipe whose writer has gone (ERROR_BROKEN_PIPE, 109) is the end of the input.
+                let (eof, other_err) = (a.new_label(), a.new_label());
+                win_call(a, IMP_GET_LAST_ERROR, |_| {});
+                a.alu_ri(Alu::Cmp, RAX, 109, 4);
+                a.jcc(Cc::E, eof);
+                a.bind(other_err);
+                a.mov_ri(RAX, -3);
+                a.jmp(out);
+                a.bind(eof);
+                a.alu_rr(Alu::Xor, RAX, RAX, 4);
+            } else {
+                a.mov_ri(RAX, -3);
+            }
+            a.bind(out);
+            a.alu_ri(Alu::Add, RSP, 16, 8);
+            a.pop(R13);
+            a.pop(R12);
+            a.pop(RBX);
+            a.ret();
+        }
+        a.bind(rt.os[7]);
+        a.jmp(rt.exit);
+        // argv: there is no start block on Windows yet; programs that ask for it are refused at build time.
+        a.bind(rt.os[8]);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.ret();
+        // open(path = rdi, mode = rsi): the zero-terminated UTF-8 path is converted to UTF-16 in a block of
+        // its own (never longer than twice the bytes), then `CreateFileW`: mode 0 reads an existing file, 1
+        // creates or empties one, else appends (creating). Sharing is permissive, as on Linux.
+        a.bind(rt.os[9]);
+        a.push(RBX);
+        a.push(R12);
+        a.push(R13);
+        a.push(R14);
+        a.mov_rr(RBX, RDI, 8);
+        a.mov_rr(R12, RSI, 8);
+        a.alu_rr(Alu::Xor, R13, R13, 4);
+        let (sl, sd) = (a.new_label(), a.new_label());
+        a.bind(sl);
+        a.load_ext(RAX, mem_idx(RBX, R13, 1, 0), 1, false, true);
+        a.test_rr(RAX, RAX, 4);
+        a.jcc(Cc::E, sd);
+        a.alu_ri(Alu::Add, R13, 1, 8);
+        a.jmp(sl);
+        a.bind(sd);
+        a.lea(RDI, mem_idx(R13, R13, 1, 2));
+        a.call(rt.alloc);
+        a.mov_rr(R14, RAX, 8);
+        a.mov_ri(RCX, 65001); // CP_UTF8
+        a.alu_rr(Alu::Xor, RDX, RDX, 4);
+        a.mov_rr(R8, RBX, 8);
+        a.mov_ri(R9, -1);
+        win_call(a, IMP_MULTI_BYTE, |a| {
+            a.store(mem(RSP, 32), R14, 8);
+            a.lea(RAX, mem(R13, 1));
+            a.store(mem(RSP, 40), RAX, 8);
+        });
+        let (converted, created, failed, noent, acces, out) = (
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+        );
+        a.test_rr(RAX, RAX, 4);
+        a.jcc(Cc::Ne, converted);
+        a.mov_ri(RBX, -1);
+        a.jmp(created);
+        a.bind(converted);
+        let (rd, wr, go) = (a.new_label(), a.new_label(), a.new_label());
+        a.test_rr(R12, R12, 8);
+        a.jcc(Cc::E, rd);
+        a.alu_ri(Alu::Cmp, R12, 1, 8);
+        a.jcc(Cc::E, wr);
+        a.mov_ri(R13, 4); // FILE_APPEND_DATA
+        a.mov_ri(R12, 4); // OPEN_ALWAYS
+        a.jmp(go);
+        a.bind(wr);
+        a.mov_ri(R13, 0x4000_0000); // GENERIC_WRITE
+        a.mov_ri(R12, 2); // CREATE_ALWAYS
+        a.jmp(go);
+        a.bind(rd);
+        a.mov_ri(R13, 0x8000_0000); // GENERIC_READ
+        a.mov_ri(R12, 3); // OPEN_EXISTING
+        a.bind(go);
+        a.mov_rr(RCX, R14, 8);
+        a.mov_rr(RDX, R13, 8);
+        a.mov_ri(R8, 7); // share read, write, delete
+        a.alu_rr(Alu::Xor, R9, R9, 4);
+        win_call7(a, IMP_CREATE_FILE, |a| {
+            a.store(mem(RSP, 32), R12, 8);
+            a.store_imm(mem(RSP, 40), 0x80, 8); // FILE_ATTRIBUTE_NORMAL
+            a.store_imm(mem(RSP, 48), 0, 8);
+        });
+        a.mov_rr(RBX, RAX, 8);
+        a.bind(created);
+        // The error number must be read before anything else can change it.
+        win_call(a, IMP_GET_LAST_ERROR, |_| {});
+        a.mov_rr(R13, RAX, 8);
+        a.mov_rr(RDI, R14, 8);
+        a.call(rt.free);
+        a.alu_ri(Alu::Cmp, RBX, -1, 8);
+        a.jcc(Cc::E, failed);
+        a.mov_rr(RAX, RBX, 8);
+        a.jmp(out);
+        a.bind(failed);
+        a.alu_ri(Alu::Cmp, R13, 2, 8);
+        a.jcc(Cc::E, noent);
+        a.alu_ri(Alu::Cmp, R13, 3, 8);
+        a.jcc(Cc::E, noent);
+        a.alu_ri(Alu::Cmp, R13, 5, 8);
+        a.jcc(Cc::E, acces);
+        a.mov_ri(RAX, -3);
+        a.jmp(out);
+        a.bind(noent);
+        a.mov_ri(RAX, -4);
+        a.jmp(out);
+        a.bind(acces);
+        a.mov_ri(RAX, -5);
+        a.bind(out);
+        a.pop(R14);
+        a.pop(R13);
+        a.pop(R12);
+        a.pop(RBX);
+        a.ret();
+        // close(fd = rdi): 0, or -3.
+        a.bind(rt.os[10]);
+        a.mov_rr(RCX, RDI, 8);
+        win_call(a, IMP_CLOSE_HANDLE, |_| {});
+        let bad_close = a.new_label();
+        a.test_rr(RAX, RAX, 4);
+        a.jcc(Cc::E, bad_close);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.ret();
+        a.bind(bad_close);
+        a.mov_ri(RAX, -3);
         a.ret();
     }
     a.bind(os_error);

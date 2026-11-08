@@ -37,6 +37,7 @@ pub const CORE_MODULES: &[(&str, &str)] = &[
 pub const STD_MODULES: &[(&str, &str)] = &[
     ("big", include_str!("../std/big.pel")),
     ("io", include_str!("../std/io.pel")),
+    ("fs", include_str!("../std/fs.pel")),
     ("os", include_str!("../std/os.pel")),
     ("json", include_str!("../std/json.pel")),
     ("regex", include_str!("../std/regex.pel")),

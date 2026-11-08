@@ -15,8 +15,8 @@ const MAX_FLOAT_REGS: usize = 8;
 
 /// Compiles the module to an AArch64 Linux executable whose entry runs the function named `entry`.
 pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, String> {
-    if super::uses_process(m) {
-        return Err(super::PROCESS_REFUSED.to_string());
+    if super::uses_argv(m) {
+        return Err(super::ARGV_REFUSED.to_string());
     }
     let main_fn = m
         .funcs

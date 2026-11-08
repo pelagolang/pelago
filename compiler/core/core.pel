@@ -66,6 +66,25 @@ impl show for parse_error {
     fn show(self) -> string = copy self.message
 }
 
+//~ Why a file or stream operation failed, for a program that wants to react to the common cases.
+pub enum io_kind {
+    notFound
+    denied
+    invalid
+    other
+}
+
+//~ A failed file or stream operation: `kind` for the cases a program tells apart, `message` for the person
+//~ (it names the path when there is one).
+pub struct io_error {
+    pub kind: io_kind
+    pub message: string
+}
+
+impl show for io_error {
+    fn show(self) -> string = copy self.message
+}
+
 pub ext fn print(...values: any show)
 pub ext fn assert(condition: bool)
 pub ext fn panic(message: string) -> never
