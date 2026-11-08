@@ -14,7 +14,7 @@ small pieces.
 | Part | State |
 |---|---|
 | Start, exit, `Stop(msg)`, output buffer, allocator, stack guard, traps | built, x86-64 and AArch64, Linux, Windows, macOS (`backend.md` section 3) |
-| Lists, strings, maps, sets, sort, objects, closures | built, written in Pelago in `compiler/core/core.pel` over the `rt_*` intrinsics |
+| Lists, strings, maps, sets, sort, objects, closures | built, written in Pelago in `compiler/core/core.pel` over the `rt*` intrinsics |
 | Tasks, channels, `shared`, `lock`, `select`, `async` | semantics built, run one after another (`concurrency-runtime.md`) |
 | stdin, stderr, `exit`, `main(args)` | built on x86-64 Linux and in the interpreter (section 9); files and directories missing |
 | environment, status returned by `main`, `void ! E` from `main` | missing |

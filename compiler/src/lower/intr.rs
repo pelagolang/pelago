@@ -1,4 +1,4 @@
-//! Functions the compiler supplies: the `rt_*` intrinsics the library is written over, and the
+//! Functions the compiler supplies: the `rt*` intrinsics the library is written over, and the
 //! built-in `print`, `assert`, `panic`, `todo` and `unreachable`.
 //!
 //! The library (`compiler/core/core.pel`) implements lists, text, maps and so on in the language

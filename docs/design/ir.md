@@ -142,7 +142,7 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
   eager list), maps and sets (4 words, below), function values (`code, env`), `any` (`data, table`).
 - **IR10** Ownership is run with drop flags: every owned value has a flag byte, set when it is made and cleared when it moves or is
   dropped. Glue functions (drop, copy, equal, order, hash, print) are generated once per type and shared.
-- **IR11** The library is written in the language (`compiler/core/core.pel`) over `rt_*` intrinsics (`rtAlloc`, `rtRead<T>`, `rtSizeOf<T>`,
+- **IR11** The library is written in the language (`compiler/core/core.pel`) over `rt*` intrinsics (`rtAlloc`, `rtRead<T>`, `rtSizeOf<T>`,
   `rtClone<T>`, `rtDropAt<T>`, ...): lists, text, `option` / `result` methods, maps, sets, ranges, tasks, channels, `shared`, `lock`. The
   lowering only calls them.
 - **IR12** Maps and sets keep insertion order: a block of keys (then values), a length, a capacity and an open-addressing index table of
