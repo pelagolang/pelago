@@ -349,6 +349,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Try(inner) => self.try_expr(e, inner, Some(dst)),
             ExprKind::Copy(inner) => self.copy_expr(e, inner, Some(dst)),
             ExprKind::Tuple(es) => self.tuple_lit(e, es, dst, t),
+            ExprKind::BraidRepeat { items, .. } => self.braid_repeat_lit(e, items, dst, t),
             ExprKind::StructLit { fields, .. } => self.struct_lit(e, fields, dst, t),
             ExprKind::Str(parts) => self.string_lit(e, parts, dst, t),
             ExprKind::List(items) => self.list_lit(e, items, dst, t),
@@ -731,6 +732,32 @@ impl<'a> Lowerer<'a> {
                 let sz = self.i64c(size as i64);
                 let off = self.emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), e.span)?;
                 self.emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), e.span)
+            }
+            // A braid: a constant position is the field of that slot; a run-time position is only
+            // accepted by the checker when every slot has one type, so the slots lie like an array.
+            TyKind::AltTuple(_, len) => {
+                let p = match inside {
+                    Some(p) => p,
+                    None => match self.expr(base) {
+                        Res::Val(p) => p,
+                        _ => return None,
+                    },
+                };
+                if matches!(index.kind, ExprKind::Int) {
+                    let text = self.src_text(index.span).replace('_', "");
+                    let i: usize = text.parse().ok()?;
+                    let fs = self.struct_fields(bt);
+                    let f = fs.get(i)?;
+                    return Some(self.addr(p, f.off));
+                }
+                let i = self.scalar(index)?;
+                let n = self.array_len(len);
+                let len = self.i64c(n);
+                let bad = self.emit(Op::Cmp(CmpOp::UGe, i, len), Some(IrTy::Bool), e.span)?;
+                self.stop_if(bad, "index out of range");
+                let sz = self.i64c(size as i64);
+                let off = self.emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), e.span)?;
+                self.emit(Op::PtrAdd(p, off), Some(IrTy::Ptr), e.span)
             }
             TyKind::Array(_, len) => {
                 let p = match inside {

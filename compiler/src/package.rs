@@ -30,6 +30,7 @@ pub const CORE_MODULES: &[(&str, &str)] = &[
     ("core.heap", include_str!("../core/core/heap.pel")),
     ("core.columns", include_str!("../core/core/columns.pel")),
     ("core.objects", include_str!("../core/core/objects.pel")),
+    ("core.braid", include_str!("../core/core/braid.pel")),
 ];
 
 /// The modules of the `std` package: `(module name, source)`. The files live in `compiler/std/`.

@@ -253,6 +253,7 @@ enum Head {
     Array,
     Soa,
     Tuple,
+    Braid,
     Option,
     Result,
     Map,
@@ -1054,6 +1055,7 @@ impl<'p> Checker<'p> {
             TyKind::Array(..) => Head::Array,
             TyKind::Soa(..) => Head::Soa,
             TyKind::Tuple(_) => Head::Tuple,
+            TyKind::AltTuple(..) => Head::Braid,
             TyKind::Option(_) => Head::Option,
             TyKind::Result(..) => Head::Result,
             TyKind::Map(..) => Head::Map,
@@ -1327,7 +1329,7 @@ impl<'p> Checker<'p> {
                 let v = ts.iter().map(|t| self.lower_type(t)).collect();
                 self.tt.tuple(v)
             }
-            TypeKind::FixedTuple(ts, n) => {
+            TypeKind::FixedTuple(ts, n, _) => {
                 let v = ts.iter().map(|t| self.lower_type(t)).collect();
                 let len = self.array_len(n);
                 self.tt.mk(TyKind::AltTuple(v, len))

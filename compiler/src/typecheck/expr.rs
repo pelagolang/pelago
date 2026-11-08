@@ -252,7 +252,8 @@ impl<'p> Checker<'p> {
             ExprKind::Underscore => self.tt.unknown,
             ExprKind::DotName(name) => self.dot_name(e, name, exp),
             ExprKind::Paren(inner) => self.check_expr(inner, exp),
-            ExprKind::Tuple(items) => self.tuple_expr(items, exp),
+            ExprKind::Tuple(items) => self.tuple_expr(e, items, exp),
+            ExprKind::BraidRepeat { items, count } => self.braid_repeat_expr(e, items, count, exp),
             ExprKind::List(items) => self.list_expr(e, items, exp),
             ExprKind::Soa(items) => self.soa_expr(e, items, exp),
             ExprKind::Set(items) => self.set_expr(e, items, exp),
@@ -587,9 +588,88 @@ impl<'p> Checker<'p> {
 
     // ---- Collections ------------------------------------------------------------------------------
 
-    fn tuple_expr(&mut self, items: &'p [Expr], exp: Exp) -> Ty {
+    /// The slot types and the length of the braid type that is expected here, when the length is known.
+    fn expected_braid(&mut self, exp: Exp) -> Option<(Vec<Ty>, u64)> {
+        let t = exp.ty()?;
+        match self.kind_of(t) {
+            TyKind::AltTuple(ts, ArrayLen::Known(n)) => Some((ts, n)),
+            _ => None,
+        }
+    }
+
+    /// A parenthesised list where the type says it is a braid: one item per slot, item `i` of the type of
+    /// slot `i mod k` (rule L1 of docs/design/alternating.md).
+    fn braid_literal(&mut self, e: &'p Expr, items: &'p [Expr], ts: Vec<Ty>, n: u64) -> Ty {
+        if items.len() as u64 != n {
+            self.err(
+                e.span,
+                format!(
+                    "this braid has {n} slots but the list has {} items; slot {} has no value",
+                    items.len(),
+                    items.len().min(n as usize)
+                ),
+            );
+        }
+        for (i, x) in items.iter().enumerate() {
+            let want = ts[i % ts.len().max(1)];
+            let t = self.check_expr(x, Exp::Is(want));
+            if !self.try_coerce(t, want) {
+                let (a, b) = (self.show(want), self.show(t));
+                self.err(
+                    x.span,
+                    format!("slot {i} of this braid is `{a}`, but this is `{b}`"),
+                );
+            }
+        }
+        self.tt.mk(TyKind::AltTuple(ts, ArrayLen::Known(n)))
+    }
+
+    /// `(a, b; 6)`: the cycle `a, b` repeated up to the length (rule L2).
+    fn braid_repeat_expr(
+        &mut self,
+        e: &'p Expr,
+        items: &'p [Expr],
+        count: &'p Expr,
+        exp: Exp,
+    ) -> Ty {
+        let len = self.len_of(count);
+        self.check_expr(count, Exp::Is(self.tt.int));
+        let ArrayLen::Known(n) = len else {
+            self.err(count.span, "the length of a braid must be a constant number");
+            for x in items {
+                self.check_expr(x, Exp::Any);
+            }
+            return self.tt.unknown;
+        };
+        let want = self.expected_braid(exp);
+        let tys: Vec<Ty> = items
+            .iter()
+            .enumerate()
+            .map(|(i, x)| match &want {
+                Some((w, _)) if w.len() == items.len() => {
+                    let t = self.check_expr(x, Exp::Is(w[i]));
+                    if self.try_coerce(t, w[i]) {
+                        w[i]
+                    } else {
+                        t
+                    }
+                }
+                _ => self.check_expr(x, Exp::Any),
+            })
+            .collect();
+        if items.len() < 2 {
+            self.err(e.span, "a braid cycle needs at least two types: `(a, b; 6)`");
+        }
+        self.tt.mk(TyKind::AltTuple(tys, ArrayLen::Known(n)))
+    }
+
+    fn tuple_expr(&mut self, e: &'p Expr, items: &'p [Expr], exp: Exp) -> Ty {
         if items.is_empty() {
             return self.tt.void;
+        }
+        // The annotation decides: a list where a braid is expected is a braid (rule L3).
+        if let Some((ts, n)) = self.expected_braid(exp) {
+            return self.braid_literal(e, items, ts, n);
         }
         let want: Option<Vec<Ty>> = match exp.ty().map(|t| self.kind_of(t)) {
             Some(TyKind::Tuple(ts)) if ts.len() == items.len() => Some(ts),
@@ -875,10 +955,20 @@ impl<'p> Checker<'p> {
                     self.tt.unknown
                 }
             },
-            TyKind::AltTuple(ts, _) => ts
-                .get(i % ts.len().max(1))
-                .copied()
-                .unwrap_or(self.tt.unknown),
+            TyKind::AltTuple(ts, n) => {
+                if let ArrayLen::Known(n) = n {
+                    if i as u64 >= n {
+                        self.err(
+                            e.span,
+                            format!("this braid has {n} slots; there is no slot {i}"),
+                        );
+                        return self.tt.unknown;
+                    }
+                }
+                ts.get(i % ts.len().max(1))
+                    .copied()
+                    .unwrap_or(self.tt.unknown)
+            }
             TyKind::Unknown | TyKind::Var(_) => self.tt.unknown,
             _ => {
                 let s = self.show(bt);
@@ -906,6 +996,7 @@ impl<'p> Checker<'p> {
                 self.check_coerce(index, self.tt.int);
                 elem
             }
+            TyKind::AltTuple(ts, n) => self.braid_index(e, index, ts, n),
             TyKind::Map(key, val) => {
                 self.check_coerce(index, key);
                 val
@@ -934,6 +1025,41 @@ impl<'p> Checker<'p> {
                 self.tt.unknown
             }
         }
+    }
+
+    /// `x[3]` on a braid: a constant position has the type of its slot (rule A1); a position known only at
+    /// run time has a type only when every type of the cycle is the same (rule A2).
+    fn braid_index(&mut self, e: &'p Expr, index: &'p Expr, ts: Vec<Ty>, n: ArrayLen) -> Ty {
+        let k = ts.len().max(1);
+        if matches!(index.kind, ExprKind::Int) {
+            self.check_coerce(index, self.tt.int);
+            let text = self.program.module(self.file).src
+                [index.span.start as usize..index.span.end as usize]
+                .replace('_', "");
+            let i: u64 = text.parse().unwrap_or(u64::MAX);
+            if let ArrayLen::Known(len) = n {
+                if i >= len {
+                    self.err(
+                        e.span,
+                        format!("this braid has {len} slots; there is no slot {i}"),
+                    );
+                    return self.tt.unknown;
+                }
+            }
+            return ts.get(i as usize % k).copied().unwrap_or(self.tt.unknown);
+        }
+        self.check_coerce(index, self.tt.int);
+        let first = ts.first().copied().unwrap_or(self.tt.unknown);
+        let first = self.tt.zonk(first);
+        let same = ts.iter().all(|t| self.tt.zonk(*t) == first);
+        if same {
+            return first;
+        }
+        self.err(
+            e.span,
+            "the type of this slot depends on the position; use `.first(p)` and `.second(p)` for pair `p`, or a constant position like `x[3]`",
+        );
+        self.tt.unknown
     }
 
     fn range_expr(

@@ -715,7 +715,7 @@ impl TypeTable {
                     ArrayLen::Unknown => "_".to_string(),
                 };
                 format!(
-                    "({}; {len})",
+                    "braid<{}; {len}>",
                     ts.iter().map(|a| d(*a)).collect::<Vec<_>>().join(", ")
                 )
             }

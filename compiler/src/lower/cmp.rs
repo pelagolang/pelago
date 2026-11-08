@@ -95,7 +95,7 @@ impl<'a> Lowerer<'a> {
                 true
             }
             TyKind::Void | TyKind::Never => true,
-            TyKind::Tuple(_) | TyKind::Range(_) => self.eq_fields(a, b, ty, fail),
+            TyKind::Tuple(_) | TyKind::AltTuple(..) | TyKind::Range(_) => self.eq_fields(a, b, ty, fail),
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Enum => self.eq_enum(a, b, ty, fail),
                 DefKind::Obj => false,
@@ -232,7 +232,7 @@ impl<'a> Lowerer<'a> {
                 true
             }
             TyKind::Void | TyKind::Never => true,
-            TyKind::Tuple(_) => self.cmp_fields(a, b, ty),
+            TyKind::Tuple(_) | TyKind::AltTuple(..) => self.cmp_fields(a, b, ty),
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Enum => self.cmp_enum(a, b, ty),
                 DefKind::Obj => false,
@@ -403,7 +403,7 @@ impl<'a> Lowerer<'a> {
                 }
                 true
             }
-            TyKind::Tuple(_) => {
+            TyKind::Tuple(_) | TyKind::AltTuple(..) => {
                 for f in self.struct_fields(ty) {
                     let p = self.addr(a, f.off);
                     if !self.hash_part(p, f.ty, acc) {
@@ -609,7 +609,7 @@ impl<'a> Lowerer<'a> {
                     self.start(done);
                 }
             }
-            TyKind::Tuple(_) => {
+            TyKind::Tuple(_) | TyKind::AltTuple(..) => {
                 self.push_static(out, b"(");
                 for (i, f) in self.struct_fields(ty).into_iter().enumerate() {
                     if i > 0 {

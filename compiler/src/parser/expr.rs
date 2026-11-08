@@ -865,9 +865,24 @@ impl Parser<'_> {
                 self.bump();
             }
         }
+        // `(a, b; 6)`: the cycle repeated up to 6 slots, like `[0; 9]`.
+        let count = if !items.is_empty() && self.eat(Punct::Semi) {
+            Some(self.parse_expr())
+        } else {
+            None
+        };
         self.leave_brackets();
         let close = self.expect(Punct::RParen);
         let span = open.span.to(close);
+        if let Some(count) = count {
+            return Expr {
+                kind: ExprKind::BraidRepeat {
+                    items,
+                    count: Box::new(count),
+                },
+                span,
+            };
+        }
         if items.len() == 1 && !trailing_comma {
             if let Some(inner) = items.pop() {
                 return Expr {

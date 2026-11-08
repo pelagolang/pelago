@@ -325,6 +325,24 @@ impl<'a> Lowerer<'a> {
                 let n = self.layout(t).size;
                 Res::Val(self.i64c(n as i64))
             }
+            "rtSlotOff" => {
+                let Some(t) = self.intr_type(def, map) else {
+                    return self.unsupported(sp, "`rtSlotOff` of an unknown type");
+                };
+                let slot = args.first().and_then(|a| match a.value.kind {
+                    ExprKind::Int => self.src_text(a.value.span).parse::<usize>().ok(),
+                    _ => None,
+                });
+                let Some(i) = slot else {
+                    return self.unsupported(sp, "`rtSlotOff` with a slot that is not a plain number");
+                };
+                let fs = self.struct_fields(t);
+                let Some(f) = fs.get(i) else {
+                    return self.unsupported(sp, "`rtSlotOff` past the last slot");
+                };
+                let off = f.off;
+                Res::Val(self.i64c(off as i64))
+            }
             "rtIsInt" => {
                 let Some(t) = self.intr_type(def, map) else {
                     return self.unsupported(sp, "`rtIsInt` of an unknown type");

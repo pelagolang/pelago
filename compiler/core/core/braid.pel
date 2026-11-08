@@ -1,0 +1,34 @@
+/// The braid: `(A, B; N)` or `braid<A, B; N>`, a fixed run of N slots whose types alternate (docs/design/alternating.md).
+///
+/// The slots are laid out one after the other, like the fields of a struct (section 5 of the design), so
+/// a pair `p` starts at `p * rtSizeOf<(A, B)>()` and slot B sits at the offset B has inside a pair. Every
+/// method here is written for a cycle of two types; a longer cycle has the type and the slot rules only.
+
+impl<A, B, meta N: int> (A, B; N) {
+    //~ Slots, `N`.
+    fn len(self) -> int = N
+
+    //~ Full pairs: `N / 2`, rounded down.
+    fn pairs(self) -> int = N / 2
+
+    //~ Pair `p` of this braid: slot `2p` has type A. Counts from the end for a negative `p`; stops the program when
+    //~ `p` is out of range.
+    fn first(self, p: int) -> A {
+        const at = rtPairAt(p, N / 2)
+        return rtClone<A>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B)>()))
+    }
+
+    //~ Slot `2p + 1`, of type B.
+    fn second(self, p: int) -> B {
+        const at = rtPairAt(p, N / 2)
+        return rtClone<B>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B)>() + rtSlotOff<(A, B)>(1)))
+    }
+}
+
+//~ The pair number for `p`, counting from the end when negative; stops when there is no such pair.
+pub fn rtPairAt(p: int, pairs: int) -> int {
+    var at = p
+    if at < 0 { at += pairs }
+    if at < 0 || at >= pairs { panic("pair #p out of range: #pairs pairs") }
+    return at
+}
