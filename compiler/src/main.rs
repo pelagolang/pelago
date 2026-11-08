@@ -216,8 +216,8 @@ fn print_punct() {
 }
 
 /// `pelago fmt [--check] <file or directory>...`
-/// The `[fmt]` settings that apply to `path`: the closest `pelago.toml` above it. A broken
-/// `pelago.toml` is reported and stops the run.
+/// The `[fmt]` settings that apply to `path`: the closest `pelago.yaml` above it. A broken
+/// `pelago.yaml` is reported and stops the run.
 fn fmt_config(path: &std::path::Path) -> pelago::config::FmtConfig {
     match pelago::config::Config::find(path) {
         Ok(c) => c.fmt,

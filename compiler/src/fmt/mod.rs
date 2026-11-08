@@ -64,7 +64,7 @@ pub fn format(src: &str) -> Result<String, String> {
     format_with(src, &FmtConfig::default())
 }
 
-/// Like [`format`], with the settings of a `pelago.toml`.
+/// Like [`format`], with the settings of a `pelago.yaml`.
 pub fn format_with(src: &str, config: &FmtConfig) -> Result<String, String> {
     let crlf = src.contains("\r\n");
     let src_lf = src.replace("\r\n", "\n");
