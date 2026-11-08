@@ -91,7 +91,7 @@ fmt:
   width: 100  # 20 to 400; not used yet, it is for line wrapping
 ```
 
-The file is a strict block-style YAML subset (no anchors, tags, quotes, lists or `{}`; `format: 1` first). An old `pelago.toml` is still read, with a deprecation warning, until it is removed.
+The file is a strict block-style YAML subset (no anchors, tags, quotes, lists or `{}`; `format: 1` first).
 
 Unknown sections and keys are errors. Line wrapping from the syntax tree is next; see [S-07](docs/plans/cards/S-07-formatter.md).
 

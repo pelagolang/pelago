@@ -18,12 +18,13 @@ The formatter is on the roadmap ("Formatter, language server, editor syntax high
 
 **Former limit of stage 1** (fixed by the tree-based indentation below): a line indented one level too far was kept, because without the tree it cannot be told from a `case` body.
 
-**Configuration (owner: yes):** a `fmt` section in `pelago.yaml`, found by walking up from the file; `indent` and `width` first. Built (`compiler/src/config.rs`): `indent` (1 to 8, default 4) and `width` (20 to 400, default 100; used by stage 2 wrapping). `pelago.yaml` is the general (it was `pelago.toml`; that name is read with a deprecation warning for now) config file for everything language-related, so other sections can come later; unknown sections and keys are errors with a line number; the YAML is a strict block subset, shared in spirit with Islet's reader. The CLI and the language server both read it.
+**Configuration (owner: yes):** a `fmt` section in `pelago.yaml`, found by walking up from the file; `indent` and `width` first. Built (`compiler/src/config.rs`): `indent` (1 to 8, default 4) and `width` (20 to 400, default 100; used by stage 2 wrapping). `pelago.yaml` replaces `pelago.toml` (no longer read) as the general config file for everything language-related, so other sections can come later; unknown sections and keys are errors with a line number; the YAML is a strict block subset, shared in spirit with Islet's reader. The CLI and the language server both read it.
 
-```toml
-[fmt]
-indent = 2
-width = 100
+```yaml
+format: 1
+fmt:
+  indent: 2
+  width: 100
 ```
 
 **Stage 2a built** (`fmt/wrap.rs`, `fmt/imports.rs`): a line longer than `width` is broken at the rightmost outermost `( )` or `[ ]` group that has a comma, one element per line with a trailing comma (question 5, 6); lines that are still long are broken again, element by element. Not broken: lines with comments or multi-line tokens, groups with a single element, groups with a top-level `;` or `of` (comprehensions, array types) or unbalanced `<` `>` (generic arguments), and `{ }` blocks. Names in `import { ... }` lists are sorted, `...` last (question 10); a list with a comment is left alone. The result must also parse and print the same tree as the input, and a test formats every example at widths 60, 40 and 20 and checks idempotence.

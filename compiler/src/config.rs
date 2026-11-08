@@ -9,8 +9,6 @@
 //! and keys are errors, so a typo does not silently do nothing.
 //!
 //! A tool looks for the file from the directory of the file it works on, upwards ([`Config::find`]).
-//! A `pelago.toml` (the old name, TOML syntax) is still read when no `pelago.yaml` sits next to
-//! it, with a deprecation warning on standard error; that support will be removed.
 
 use std::path::Path;
 
@@ -127,56 +125,8 @@ impl Config {
         Ok(config)
     }
 
-    /// Reads the text of a `pelago.toml` (deprecated).
-    pub fn parse_toml(text: &str) -> Result<Config, String> {
-        let mut config = Config::default();
-        let mut section: Option<String> = None;
-        for (i, raw) in text.lines().enumerate() {
-            let at = |m: &str| format!("line {}: {m}", i + 1);
-            let line = strip_comment(raw).trim();
-            if line.is_empty() {
-                continue;
-            }
-            if let Some(name) = line.strip_prefix('[') {
-                let name = name
-                    .strip_suffix(']')
-                    .ok_or_else(|| at("a section header must end with `]`"))?
-                    .trim();
-                if name != "fmt" {
-                    return Err(at(&format!("unknown section `[{name}]` (known: `[fmt]`)")));
-                }
-                section = Some(name.to_string());
-                continue;
-            }
-            let (key, value) = line
-                .split_once('=')
-                .ok_or_else(|| at("expected `key = value`"))?;
-            let (key, value) = (key.trim(), value.trim());
-            match section.as_deref() {
-                None => return Err(at(&format!("`{key}` is outside any section"))),
-                Some("fmt") => {
-                    let n = int(value).ok_or_else(|| at(&format!("`{key}` must be a number")))?;
-                    match key {
-                        "indent" if (1..=8).contains(&n) => config.fmt.indent = n,
-                        "indent" => return Err(at("`indent` must be from 1 to 8")),
-                        "width" if (20..=400).contains(&n) => config.fmt.width = n,
-                        "width" => return Err(at("`width` must be from 20 to 400")),
-                        _ => {
-                            return Err(at(&format!(
-                                "unknown key `{key}` in `[fmt]` (known: `indent`, `width`)"
-                            )))
-                        }
-                    }
-                }
-                Some(_) => unreachable!("only known sections are accepted"),
-            }
-        }
-        Ok(config)
-    }
-
     /// The `pelago.yaml` closest above `path` (a file or a directory), or the defaults when there
-    /// is none. An old `pelago.toml` counts when no `pelago.yaml` is in the same directory, and
-    /// prints a deprecation warning. An error names the file that could not be read.
+    /// is none. An error names the file that could not be read.
     pub fn find(path: &Path) -> Result<Config, String> {
         let start = if path.is_dir() {
             Some(path)
@@ -192,21 +142,11 @@ impl Config {
         });
         while let Some(d) = dir {
             let file = d.join("pelago.yaml");
-            let old = d.join("pelago.toml");
             let read =
                 |f: &Path| std::fs::read_to_string(f).map_err(|e| format!("{}: {e}", f.display()));
             if file.is_file() {
                 return Config::parse(&read(&file)?)
                     .map_err(|e| format!("{}: {e}", file.display()));
-            }
-            if old.is_file() {
-                eprintln!(
-                    "warning: {} is deprecated; rename it to pelago.yaml and write it in YAML \
-                     (`format: 1`, then `fmt:` with indented `indent: 4` and `width: 100`)",
-                    old.display()
-                );
-                return Config::parse_toml(&read(&old)?)
-                    .map_err(|e| format!("{}: {e}", old.display()));
             }
             dir = d.parent();
         }
@@ -224,11 +164,6 @@ fn strip_yaml_comment(line: &str) -> &str {
         prev_space = c == ' ';
     }
     line
-}
-
-fn strip_comment(line: &str) -> &str {
-    // No value holds a `#` yet (strings are not used), so the first one starts a comment.
-    line.split('#').next().unwrap_or("")
 }
 
 fn int(value: &str) -> Option<usize> {
@@ -305,19 +240,6 @@ mod tests {
     }
 
     #[test]
-    fn the_old_toml_still_parses() {
-        let c = Config::parse_toml("# top\n[fmt]\nindent = 2  # two\nwidth = 80\n").unwrap();
-        assert_eq!(
-            c.fmt,
-            FmtConfig {
-                indent: 2,
-                width: 80
-            }
-        );
-        assert!(Config::parse_toml("[fmt]\nindnt = 2\n").is_err());
-    }
-
-    #[test]
     fn the_closest_file_above_wins() {
         let base = std::env::temp_dir().join(format!("pelago-config-{}", std::process::id()));
         let inner = base.join("a").join("b");
@@ -330,17 +252,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(Config::find(&inner.join("x.pel")).unwrap().fmt.indent, 2);
-        // an old pelago.toml is read when no pelago.yaml shares its directory
-        std::fs::remove_file(base.join("a").join("pelago.yaml")).unwrap();
-        std::fs::write(base.join("a").join("pelago.toml"), "[fmt]\nindent = 5\n").unwrap();
-        assert_eq!(Config::find(&inner.join("x.pel")).unwrap().fmt.indent, 5);
-        // pelago.yaml beats pelago.toml in the same directory
-        std::fs::write(
-            base.join("a").join("pelago.yaml"),
-            "format: 1\nfmt:\n  indent: 6\n",
-        )
-        .unwrap();
-        assert_eq!(Config::find(&inner.join("x.pel")).unwrap().fmt.indent, 6);
         std::fs::write(
             base.join("a").join("pelago.yaml"),
             "format: 1\nfmt:\n  indent: 9\n",
