@@ -517,23 +517,13 @@ fn ir_or_run(
         if failed {
             std::process::exit(1);
         }
-        let reads = module
-            .funcs
-            .iter()
-            .flat_map(|f| &f.insts)
-            .any(|i| matches!(&i.op, pelago::ir::Op::Os(pelago::ir::OsKind::Read, ..)));
         let env = pelago::ir::OsEnv {
             argv: std::iter::once(path.to_string())
                 .chain(prog_args.iter().cloned())
                 .collect(),
             env: std::env::vars().map(|(k, v)| format!("{k}={v}")).collect(),
-            stdin: if reads {
-                let mut buf = Vec::new();
-                let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut buf);
-                buf
-            } else {
-                Vec::new()
-            },
+            stdin: Vec::new(),
+            live_stdin: true,
         };
         let out = pelago::ir::run_os(&module, "main", &[], env);
         print!("{}", out.output);

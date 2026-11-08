@@ -735,7 +735,9 @@ impl Em<'_, '_> {
                     op::RT_REALLOC => rt.realloc,
                     op::RT_CTX_INIT => rt.ctx_init,
                     op::RT_CTX_SWITCH => rt.ctx_switch,
-                    k if (op::RT_OS..op::RT_OS + 5).contains(&k) => rt.os[(k - op::RT_OS) as usize],
+                    k if (op::RT_OS..op::RT_OS + 11).contains(&k) => {
+                        rt.os[(k - op::RT_OS) as usize]
+                    }
                     op::RT_MEMCPY => rt.memcpy,
                     op::RT_FMOD | op::RT_FMOD32 => rt.fmod,
                     _ => rt.print,

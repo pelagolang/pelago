@@ -112,11 +112,16 @@ struct OsState {
     env: Vec<String>,
     stdin: Vec<u8>,
     stdin_pos: usize,
+    /// Read standard input from the real process when the program asks (the command line), instead of from
+    /// `stdin`.
+    live_stdin: bool,
     /// What was written to file descriptor 2.
     err: Vec<u8>,
     exit: Option<i32>,
     /// The start-up block, made the first time `os_argv` is used.
     block: usize,
+    /// Files opened by `os_open`: descriptor `3 + i` is `files[i]` (a closed one is `None`).
+    files: Vec<Option<std::fs::File>>,
 }
 
 /// The process the interpreter pretends to be in: its arguments (the first is the program's name), its
@@ -126,6 +131,8 @@ pub struct OsEnv {
     pub argv: Vec<String>,
     pub env: Vec<String>,
     pub stdin: Vec<u8>,
+    /// Take standard input from the real process, a read at a time, rather than from `stdin`.
+    pub live_stdin: bool,
 }
 
 struct Machine<'m> {
@@ -262,9 +269,11 @@ fn run_inner(
             env: os.env,
             stdin: os.stdin,
             stdin_pos: 0,
+            live_stdin: os.live_stdin,
             err: Vec::new(),
             exit: None,
             block: 0,
+            files: Vec::new(),
         },
         steps: 0,
         max_steps,
@@ -674,9 +683,12 @@ impl Machine<'_> {
                 .is_some_and(|(at, (size, live))| *live && p as usize + n as usize <= at + size)
         };
         Ok(match k {
-            OsKind::Write | OsKind::Read | OsKind::Exit | OsKind::Argv => {
-                return self.os_layer(k, a, b, c)
-            }
+            OsKind::Write
+            | OsKind::Read
+            | OsKind::Exit
+            | OsKind::Argv
+            | OsKind::Open
+            | OsKind::Close => return self.os_layer(k, a, b, c),
             OsKind::Reserve => {
                 if !sized(a) {
                     OS_BAD
@@ -758,15 +770,53 @@ impl Machine<'_> {
                 match a {
                     1 => self.out.extend_from_slice(&bytes),
                     2 => self.os.err.extend_from_slice(&bytes),
-                    _ => return Ok(-9),
+                    _ => {
+                        use std::io::Write;
+                        let slot = (a - 3) as usize;
+                        match self.os.files.get_mut(slot).and_then(|f| f.as_mut()) {
+                            Some(f) if a >= 3 => {
+                                return Ok(match f.write_all(&bytes) {
+                                    Ok(()) => n as i64,
+                                    Err(e) => -(e.raw_os_error().unwrap_or(5) as i64),
+                                })
+                            }
+                            _ => return Ok(-9),
+                        }
+                    }
                 }
                 n as i64
             }
             OsKind::Read => {
                 let (p, n) = (b as usize, c.max(0) as usize);
                 self.check(p, n)?;
+                if a >= 3 {
+                    use std::io::Read;
+                    let slot = (a - 3) as usize;
+                    let Some(f) = self.os.files.get_mut(slot).and_then(|f| f.as_mut()) else {
+                        return Ok(-9);
+                    };
+                    let mut chunk = vec![0u8; n];
+                    return Ok(match f.read(&mut chunk) {
+                        Ok(k) => {
+                            self.mem[p..p + k].copy_from_slice(&chunk[..k]);
+                            k as i64
+                        }
+                        Err(e) => -(e.raw_os_error().unwrap_or(5) as i64),
+                    });
+                }
                 if a != 0 {
                     return Ok(-9);
+                }
+                if self.os.live_stdin {
+                    use std::io::Read;
+                    let mut chunk = vec![0u8; n];
+                    return Ok(match std::io::stdin().read(&mut chunk) {
+                        Ok(k) => {
+                            self.mem[p..p + k].copy_from_slice(&chunk[..k]);
+                            k as i64
+                        }
+                        Err(e) => -(e.raw_os_error().unwrap_or(5) as i64),
+                    });
                 }
                 let left = self.os.stdin.len() - self.os.stdin_pos;
                 let k = left.min(n);
@@ -776,6 +826,41 @@ impl Machine<'_> {
                 self.os.stdin_pos += k;
                 k as i64
             }
+            OsKind::Open => {
+                let mut end = a as usize;
+                while self.mem.get(end).is_some_and(|&b| b != 0) {
+                    end += 1;
+                }
+                self.check(a as usize, end - a as usize + 1)?;
+                let path = String::from_utf8_lossy(&self.mem[a as usize..end]).into_owned();
+                let mut o = std::fs::OpenOptions::new();
+                match b {
+                    0 => o.read(true),
+                    1 => o.write(true).create(true).truncate(true),
+                    _ => o.append(true).create(true),
+                };
+                match o.open(&path) {
+                    Ok(f) => {
+                        self.os.files.push(Some(f));
+                        self.os.files.len() as i64 + 2
+                    }
+                    Err(e) => match e.kind() {
+                        std::io::ErrorKind::NotFound => OS_NOENT,
+                        std::io::ErrorKind::PermissionDenied => OS_ACCES,
+                        _ => OS_FAIL,
+                    },
+                }
+            }
+            OsKind::Close => match a - 3 {
+                i if i >= 0 && (i as usize) < self.os.files.len() => {
+                    if self.os.files[i as usize].take().is_some() {
+                        0
+                    } else {
+                        OS_BAD
+                    }
+                }
+                _ => OS_BAD,
+            },
             OsKind::Exit => {
                 self.os.exit = Some(a as i32);
                 return Err(EXIT.to_string());

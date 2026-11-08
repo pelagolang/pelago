@@ -81,7 +81,10 @@ pub(super) fn classify(tys: &[IrTy]) -> Vec<Loc> {
 
 /// Compiles the module to an executable whose entry runs the function named `entry`.
 pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, String> {
-    if opts.target != super::Os::Linux && super::uses_process(m) {
+    if opts.target == super::Os::Windows && super::uses_argv(m) {
+        return Err(super::ARGV_REFUSED.to_string());
+    }
+    if !matches!(opts.target, super::Os::Linux | super::Os::Windows) && super::uses_process(m) {
         return Err(super::PROCESS_REFUSED.to_string());
     }
     let main_fn = m

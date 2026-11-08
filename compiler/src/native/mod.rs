@@ -83,8 +83,20 @@ pub struct Uses {
 }
 
 /// What a program that talks to its process (arguments, descriptors, exit) cannot yet be built for.
-pub const PROCESS_REFUSED: &str =
-    "the operating system layer (args, stdin, stderr, exit) is built for x86-64 Linux only so far";
+pub const PROCESS_REFUSED: &str = "the operating system layer is not built for this target";
+
+/// What a program that reads its arguments cannot yet be built for on Windows.
+pub const ARGV_REFUSED: &str =
+    "`main(args)` is built for x86-64 Linux only so far (the other targets have no start block yet)";
+
+/// Whether the module uses `OsKind::Argv`.
+pub fn uses_argv(m: &crate::ir::Module) -> bool {
+    use crate::ir::{Op, OsKind};
+    m.funcs
+        .iter()
+        .flat_map(|f| &f.insts)
+        .any(|i| matches!(&i.op, Op::Os(OsKind::Argv, ..)))
+}
 
 /// Whether the module uses `OsKind::Write`, `Read`, `Exit` or `Argv`.
 pub fn uses_process(m: &crate::ir::Module) -> bool {
@@ -129,7 +141,14 @@ impl Uses {
                     Op::Realloc(..) => u.realloc = true,
                     Op::MemCopy(..) => u.memcpy = true,
                     Op::CtxInit(..) | Op::CtxSwitch(..) => u.ctx = true,
-                    Op::Os(..) => u.os = true,
+                    Op::Os(k, ..) => {
+                        u.os = true;
+                        // Opening a file builds a block for the path on Windows.
+                        if *k == crate::ir::OsKind::Open {
+                            u.alloc = true;
+                            u.free = true;
+                        }
+                    }
                     Op::Bin(BinOp::Rem, a, _) if f.ty(*a).is_float() => u.fmod = true,
                     _ => {}
                 }

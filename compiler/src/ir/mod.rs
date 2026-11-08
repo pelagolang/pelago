@@ -342,10 +342,15 @@ pub enum OsKind {
     Exit,
     /// `()`: the address of the start-up block (argument count, argument pointers, 0, environment pointers, 0).
     Argv,
+    /// `(path, mode)`: open the file at the zero-terminated path; mode 0 reads, 1 writes (created or
+    /// emptied), 2 appends. The descriptor (3 or more), or a negative `OS_*` error.
+    Open,
+    /// `(fd)`: close a descriptor from `Open`; 0, or a negative `OS_*` error.
+    Close,
 }
 
 impl OsKind {
-    pub const ALL: [OsKind; 9] = [
+    pub const ALL: [OsKind; 11] = [
         OsKind::Reserve,
         OsKind::Commit,
         OsKind::Release,
@@ -355,13 +360,20 @@ impl OsKind {
         OsKind::Read,
         OsKind::Exit,
         OsKind::Argv,
+        OsKind::Open,
+        OsKind::Close,
     ];
 
     /// Whether the call reaches the process (arguments, descriptors, exit) rather than memory.
     pub fn is_process(self) -> bool {
         matches!(
             self,
-            OsKind::Write | OsKind::Read | OsKind::Exit | OsKind::Argv
+            OsKind::Write
+                | OsKind::Read
+                | OsKind::Exit
+                | OsKind::Argv
+                | OsKind::Open
+                | OsKind::Close
         )
     }
 
@@ -376,6 +388,8 @@ impl OsKind {
             OsKind::Read => "os_read",
             OsKind::Exit => "os_exit",
             OsKind::Argv => "os_argv",
+            OsKind::Open => "os_open",
+            OsKind::Close => "os_close",
         }
     }
 
@@ -383,8 +397,8 @@ impl OsKind {
     pub fn arity(self) -> usize {
         match self {
             OsKind::Argv => 0,
-            OsKind::Reserve | OsKind::Exit => 1,
-            OsKind::Commit | OsKind::Release | OsKind::AdviseNoHuge => 2,
+            OsKind::Reserve | OsKind::Exit | OsKind::Close => 1,
+            OsKind::Commit | OsKind::Release | OsKind::AdviseNoHuge | OsKind::Open => 2,
             OsKind::Remap | OsKind::Write | OsKind::Read => 3,
         }
     }
@@ -394,6 +408,10 @@ impl OsKind {
 pub const OS_NOMEM: i64 = -1;
 pub const OS_BAD: i64 = -2;
 pub const OS_FAIL: i64 = -3;
+/// `Open` only: no such file or directory, and permission denied. (A directory opens for reading on Linux and
+/// fails at the first read with `EISDIR` (-21); on Windows it fails to open with `OS_ACCES`.)
+pub const OS_NOENT: i64 = -4;
+pub const OS_ACCES: i64 = -5;
 
 #[derive(Clone, PartialEq, Debug)]
 pub enum Op {

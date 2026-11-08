@@ -76,17 +76,14 @@ and skips the tree; it is the natural next step once `meta` can write it per typ
 
 ## 3. Reading files
 
-`std.io` gets `io.readFile(path) -> string ! io.error`, built on two new operating-system operations next to `os_read`: `os_open(path, flags)`
-(read-only first) and `os_close(fd)` (`OsKind::Open`, `Close` in the IR, `rtOsOpen`, `rtOsClose` in `core.rt`). Native: Linux x86-64
-(`open`, `close` syscalls), and the interpreter (real files through the host). AArch64, Windows and macOS refuse a program that uses them with a
-clear message, as `os_read` does today (`runtime.md` work package 5). `io.readAll()` and `io.readLine()` already cover standard input, so
-`json.decode` from a pipe is `server.decode(io.readAll())`. `io.error` has a `message` (with the path and the system error number). Writing files
-(`writeFile`, append) is a follow-up on the same two operations.
+Built and specified in [`input.md`](input.md) (2026-11-08): `std.fs` (`fs.readText(path)`, `fs.readBytes`, `fs.writeText`, `fs.open`, ...) and the
+`file` type in `std.io`, with `io_error` as the error, `OsKind::Open` and `Close` on every target. This replaces the `io.readFile` sketch that stood here.
+`json.decode` from a file is `server.decode(fs.readText(path)?)`, from a pipe `server.decode(io.readAll())`.
 
 ## 4. Order of work (small PRs)
 
 1. This document and card S-08.
-2. `io.readFile`, `OsKind::Open`/`Close` (interpreter and Linux x86-64), tests.
+2. File input: done, see `input.md`.
 3. `value.integer`, line and column in `parse` errors, `json.error`, `json.reader`, hand-written decoder test; `std.md` updated.
 4. `@derive(fromJson)`: source expansion, errors for unsupported field types, `T.decode`, example in `examples/programs/`.
 

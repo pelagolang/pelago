@@ -1,4 +1,4 @@
-/// Standard error and standard input. Standard output is `print`, in the prelude.
+/// Streams and files: standard input and error, and files read or written through a `file`.
 ///
 /// ```
 /// import std.io
@@ -10,19 +10,26 @@
 /// }
 /// ```
 ///
-/// Reading and `eprint` go through the operating system layer (`docs/design/runtime.md`). Standard output
-/// is flushed first, so the lines of the two streams come out in the order the program wrote them.
+/// Standard output is `print`, in the prelude. A `file` is an owned value: the descriptor is closed when the
+/// value goes out of scope (`deinit`), so there is no `close` to forget. Every operation that can fail on the
+/// outside world gives a `result` with an `io_error` (docs/design/input.md). `io.readLine` and `io.readAll`
+/// are the short forms for standard input: a failed read ends the input there. Writing and `eprint` go through
+/// the operating system layer (`docs/design/runtime.md`); standard output is flushed first, so the lines of the
+/// two streams come out in the order the program wrote them.
 
-fn writeAll(fd: int, text: str) {
+const chunk: int = 4096
+
+fn writeAll(fd: int, text: str) -> int {
     const h = rtAddrOf(text)
     var p = rtLoadPtr(h)
     var n = rtHdrLen(h)
     while n > 0 {
         const k = rtOsWrite(fd, p, n)
-        if k <= 0 { return }
+        if k <= 0 { return if k < 0 { k } else { -3 } }
         p = rtOffset(p, k)
         n -= k
     }
+    0
 }
 
 //~ Writes the text to standard error.
@@ -36,46 +43,212 @@ pub fn eprintln(text: str) {
     writeAll(2, "\n")
 }
 
-//~ Everything left on standard input, as text.
-pub fn readAll() -> string {
-    var out = ""
-    const buf = rtAlloc(4096)
-    while true {
-        const k = rtOsRead(0, buf, 4096)
-        if k <= 0 { break }
-        var i = 0
-        while i < k {
-            out.pushByte!(rtLoadByte(rtOffset(buf, i)))
-            i += 1
-        }
-    }
-    rtFree(buf)
-    out
+fn kindOf(code: int) -> io_kind {
+    if code == -4 { return io_kind.notFound }
+    if code == -5 { return io_kind.denied }
+    io_kind.other
 }
 
-//~ The next line of standard input without its line ending, or `none` at the end of the input.
-pub fn readLine() -> string? {
-    var out = ""
-    var got = false
-    const buf = rtAlloc(8)
-    while true {
-        const k = rtOsRead(0, buf, 1)
-        if k <= 0 { break }
-        got = true
-        const b = rtLoadByte(buf)
-        if b == 10 { break }
-        out.pushByte!(b)
+//~ The `io_error` for a negative code from the operating system layer: `verb` and `name` say what was being
+//~ done to what ("reading", "standard input").
+pub fn failure(code: int, verb: str, name: str) -> io_error {
+    const kind = kindOf(code)
+    var message = ""
+    message.pushStr!(verb)
+    message.pushStr!(" ")
+    message.pushStr!(name)
+    if kind == io_kind.notFound {
+        message.pushStr!(": no such file or directory")
+    } else if kind == io_kind.denied {
+        message.pushStr!(": permission denied")
+    } else if code == -21 {
+        message.pushStr!(": is a directory")
+    } else {
+        message.pushStr!(": the operating system reported an error")
     }
-    rtFree(buf)
-    if !got { return none }
-    if out.len() > 0 && out.byteAt(out.len() - 1) == 13 {
-        var cut = ""
-        var i = 0
-        while i < out.len() - 1 {
-            cut.pushByte!(out.byteAt(i))
-            i += 1
-        }
-        return cut
-    }
-    out
+    io_error { kind: kind, message: message }
 }
+
+//~ A byte source or sink: standard input, or a file from `fs.open`, `fs.create` or `fs.append`. Reading goes
+//~ through a buffer, so `readLine` costs one system call per few thousand bytes, not one per byte.
+pub struct file {
+    fd: int
+    name: string
+    buf: string
+    pos: int
+    /// The error number that stopped the last read (0: none). The short forms read it, so they never build an
+    /// `io_error` (and a program that only uses them does not carry the code that makes one).
+    code: int
+
+    init(fd: int, sink name: string) {
+        self.fd = fd
+        self.name = name
+        self.buf = ""
+        self.pos = 0
+        self.code = 0
+    }
+
+    deinit {
+        if self.fd >= 3 { rtOsClose(self.fd) }
+    }
+}
+
+impl file {
+    /// Reads another chunk into the buffer: the count read, 0 at the end, or a negative error.
+    fn fill(inout self) -> int {
+        const h = rtAddrOf(self.buf)
+        var len = rtHdrLen(h)
+        if self.pos > 0 {
+            const rest = len - self.pos
+            if rest == 0 {
+                len = 0
+                self.pos = 0
+                rtHdrSetLen(h, 0)
+            } else if rest <= self.pos {
+                rtCopy(rtHdrData(h), rtOffset(rtHdrData(h), self.pos), rest)
+                len = rest
+                self.pos = 0
+                rtHdrSetLen(h, rest)
+            }
+        }
+        rtGrow(h, 1, len + chunk)
+        const k = rtOsRead(self.fd, rtOffset(rtHdrData(h), len), chunk)
+        if k > 0 { rtHdrSetLen(h, len + k) }
+        k
+    }
+
+    /// Gives the buffer back when nothing is left in it, so a file that is read to its end holds no memory
+    /// (and a program's leak check stays clean).
+    fn release(inout self) {
+        self.buf = ""
+        self.pos = 0
+    }
+
+    /// The buffered bytes from `from` up to `to`, as text.
+    fn slice(self, from: int, to: int) -> string {
+        var out = ""
+        if to > from { rtStrPush(rtAddrOf(out), rtOffset(rtHdrData(rtAddrOf(self.buf)), from), to - from) }
+        out
+    }
+
+    /// The next line, or `none` at the end of the input or when a read fails (`code` tells which).
+    fn nextLine(inout self) -> string? {
+        self.code = 0
+        var from = self.pos
+        while true {
+            const h = rtAddrOf(self.buf)
+            const len = rtHdrLen(h)
+            const data = rtHdrData(h)
+            var i = from
+            while i < len && rtLoadByte(rtOffset(data, i)) != 10 { i += 1 }
+            if i < len {
+                var end = i
+                if end > self.pos && rtLoadByte(rtOffset(data, end - 1)) == 13 { end -= 1 }
+                const line = self.slice(self.pos, end)
+                self.pos = i + 1
+                if self.pos == len { self.release!() }
+                return line
+            }
+            const scanned = len - self.pos
+            const k = self.fill!()
+            if k < 0 {
+                self.code = k
+                return none
+            }
+            if k == 0 {
+                const end = rtHdrLen(rtAddrOf(self.buf))
+                if end == self.pos {
+                    self.release!()
+                    return none
+                }
+                var stop = end
+                if rtLoadByte(rtOffset(rtHdrData(rtAddrOf(self.buf)), stop - 1)) == 13 { stop -= 1 }
+                const line = self.slice(self.pos, stop)
+                self.release!()
+                return line
+            }
+            from = self.pos + scanned
+        }
+        none
+    }
+
+    /// Everything left; when a read fails, what was read before it (`code` tells).
+    fn rest(inout self) -> string {
+        self.code = 0
+        var out = self.slice(self.pos, rtHdrLen(rtAddrOf(self.buf)))
+        self.release!()
+        const o = rtAddrOf(out)
+        while true {
+            const len = rtHdrLen(o)
+            rtGrow(o, 1, len + chunk)
+            const room = rtHdrCap(o) - len
+            const k = rtOsRead(self.fd, rtOffset(rtHdrData(o), len), room)
+            if k < 0 {
+                self.code = k
+                break
+            }
+            if k == 0 { break }
+            rtHdrSetLen(o, len + k)
+        }
+        out
+    }
+
+    /// Text as bytes (a copy).
+    fn toBytes(self, text: str) -> [byte] {
+        var out: [byte] = []
+        const n = text.len()
+        const o = rtAddrOf(out)
+        rtGrow(o, 1, n)
+        rtCopy(rtHdrData(o), rtHdrData(rtAddrOf(text)), n)
+        rtHdrSetLen(o, n)
+        out
+    }
+
+    //~ The next line without its line ending (`\n` or `\r\n`), `none` at the end of the input, or the error
+    //~ that stopped the read. A last line with no ending still counts as a line.
+    fn readLine(inout self) -> string? ! io_error {
+        const line = self.nextLine!()
+        if self.code < 0 { return err(failure(self.code, "reading", self.name)) }
+        ok(line)
+    }
+
+    //~ Everything left, as text (the bytes are not checked to be UTF-8), or the error that stopped the read.
+    fn readAll(inout self) -> string ! io_error {
+        const text = self.rest!()
+        if self.code < 0 { return err(failure(self.code, "reading", self.name)) }
+        ok(text)
+    }
+
+    //~ Everything left, as bytes.
+    fn readBytes(inout self) -> [byte] ! io_error {
+        const text = self.rest!()
+        if self.code < 0 { return err(failure(self.code, "reading", self.name)) }
+        ok(self.toBytes(text))
+    }
+
+    //~ Writes all of the text (no buffering: build the text first, then write it once).
+    fn write(inout self, text: str) -> void ! io_error {
+        const k = writeAll(self.fd, text)
+        if k < 0 { return err(failure(k, "writing", self.name)) }
+    }
+}
+
+var stdin: file = file(0, sink "standard input")
+
+//~ The next line of standard input without its line ending, or `none` at the end of the input.
+pub fn readLine() -> string? = stdin.nextLine!()
+
+//~ Everything left on standard input, as text.
+pub fn readAll() -> string = stdin.rest!()
+
+//~ Everything left on standard input, as bytes.
+pub fn readBytes() -> [byte] {
+    const text = stdin.rest!()
+    stdin.toBytes(text)
+}
+
+//~ The same as `readLine`, but a failed read is an error instead of the end of the input.
+pub fn tryReadLine() -> string? ! io_error = stdin.readLine!()
+
+//~ The same as `readAll`, but a failed read is an error.
+pub fn tryReadAll() -> string ! io_error = stdin.readAll!()

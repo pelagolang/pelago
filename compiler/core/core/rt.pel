@@ -58,6 +58,11 @@ pub ext fn rtOsWrite(fd: int, p: ptr, n: int) -> int
 pub ext fn rtOsRead(fd: int, p: ptr, n: int) -> int
 pub ext fn rtOsExit(code: int)
 pub ext fn rtOsArgv() -> int
+//~ Files: `rtOsOpen(path, mode)` opens the zero-terminated path (mode 0 reads, 1 writes and creates or empties
+//~ the file, 2 appends) and gives a descriptor of 3 or more, or a negative error (-4 no such file, -5 permission
+//~ denied, other values: some other failure). `rtOsClose(fd)` gives 0 or a negative error.
+pub ext fn rtOsOpen(path: ptr, mode: int) -> int
+pub ext fn rtOsClose(fd: int) -> int
 pub ext fn rtToByte(n: int) -> uint8
 pub ext fn rtWrap<T>(n: int) -> T
 pub ext fn rtToInt(x: float) -> int

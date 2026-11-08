@@ -1,0 +1,78 @@
+/// Files by path: whole-file helpers, and `open`, `create` and `append` for reading or writing in pieces.
+///
+/// ```
+/// import std.fs
+///
+/// fn main() -> void ! io_error {
+///     fs.writeText("notes.txt", "one\ntwo\n")?
+///     var f = fs.open("notes.txt")?
+///     while const line = f.readLine!()? {
+///         print(line)
+///     }
+/// }
+/// ```
+///
+/// Paths are UTF-8 text and are passed to the operating system unchanged. Every function gives an `io_error` as
+/// a value; none stops the program (docs/design/input.md).
+
+import std.io
+
+/// Whether the path holds a zero byte, which no operating system accepts in a name.
+fn hasZero(path: str) -> bool {
+    var i = 0
+    while i < path.len() {
+        if path.byteAt(i) == 0 { return true }
+        i += 1
+    }
+    false
+}
+
+fn openMode(path: str, mode: int) -> io.file ! io_error {
+    if hasZero(path) {
+        return err(io_error { kind: io_kind.invalid, message: "opening #path: the path contains a zero byte" })
+    }
+    /// The path as a zero-terminated block for the system call.
+    const n = path.len()
+    const p = rtAlloc(n + 1)
+    if n > 0 { rtCopy(p, rtHdrData(rtAddrOf(path)), n) }
+    rtStoreByte(rtOffset(p, n), 0)
+    const fd = rtOsOpen(p, mode)
+    rtFree(p)
+    if fd < 0 { return err(io.failure(fd, "opening", path)) }
+    var name = ""
+    name.pushStr!(path)
+    ok(io.file(fd, sink name))
+}
+
+//~ Opens an existing file for reading.
+pub fn open(path: str) -> io.file ! io_error = openMode(path, 0)
+
+//~ Creates the file, or empties it if it exists, and opens it for writing.
+pub fn create(path: str) -> io.file ! io_error = openMode(path, 1)
+
+//~ Opens the file for writing at its end, creating it if it does not exist.
+pub fn append(path: str) -> io.file ! io_error = openMode(path, 2)
+
+//~ The whole file as text (the bytes are not checked to be UTF-8).
+pub fn readText(path: str) -> string ! io_error {
+    var f = open(path)?
+    f.readAll!()
+}
+
+//~ The whole file as bytes.
+pub fn readBytes(path: str) -> [byte] ! io_error {
+    var f = open(path)?
+    f.readBytes!()
+}
+
+//~ Writes the text as the whole content of the file, creating or emptying it first.
+pub fn writeText(path: str, text: str) -> void ! io_error {
+    var f = create(path)?
+    f.write!(text)
+}
+
+//~ Adds the text at the end of the file, creating it if needed.
+pub fn appendText(path: str, text: str) -> void ! io_error {
+    var f = append(path)?
+    f.write!(text)
+}
