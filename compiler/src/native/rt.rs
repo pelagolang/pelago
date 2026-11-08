@@ -1037,7 +1037,7 @@ pub fn emit_for(
     }
 
     if uses.os {
-        emit_os(a, &rt, win, flush, uses.print);
+        emit_os(a, &rt, win, flush, uses.print, alloc_used && free_used);
     }
 
     if uses.ctx {
@@ -1349,7 +1349,7 @@ fn map_failed(a: &mut Asm, r: Reg, oom: Label, win: bool) {
 /// The OS memory calls (docs/design/os-memory.md), in a function of their own: `emit_for` is already a huge
 /// frame in debug builds.
 #[inline(never)]
-fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool) {
+fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap: bool) {
     // ---- the OS memory calls (docs/design/os-memory.md) ----------------------------------------------
     // Sizes and addresses must be whole pages (else -2). A system error becomes -1 (no memory), -2
     // (invalid argument) or -3. Callers treat every register but the callee-saved ones as lost.
@@ -1663,102 +1663,108 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool) {
         // its own (never longer than twice the bytes), then `CreateFileW`: mode 0 reads an existing file, 1
         // creates or empties one, else appends (creating). Sharing is permissive, as on Linux.
         a.bind(rt.os[9]);
-        a.push(RBX);
-        a.push(R12);
-        a.push(R13);
-        a.push(R14);
-        a.mov_rr(RBX, RDI, 8);
-        a.mov_rr(R12, RSI, 8);
-        a.alu_rr(Alu::Xor, R13, R13, 4);
-        let (sl, sd) = (a.new_label(), a.new_label());
-        a.bind(sl);
-        a.load_ext(RAX, mem_idx(RBX, R13, 1, 0), 1, false, true);
-        a.test_rr(RAX, RAX, 4);
-        a.jcc(Cc::E, sd);
-        a.alu_ri(Alu::Add, R13, 1, 8);
-        a.jmp(sl);
-        a.bind(sd);
-        a.lea(RDI, mem_idx(R13, R13, 1, 2));
-        a.call(rt.alloc);
-        a.mov_rr(R14, RAX, 8);
-        a.mov_ri(RCX, 65001); // CP_UTF8
-        a.alu_rr(Alu::Xor, RDX, RDX, 4);
-        a.mov_rr(R8, RBX, 8);
-        a.mov_ri(R9, -1);
-        win_call(a, IMP_MULTI_BYTE, |a| {
-            a.store(mem(RSP, 32), R14, 8);
-            a.lea(RAX, mem(R13, 1));
-            a.store(mem(RSP, 40), RAX, 8);
-        });
-        let (converted, created, failed, noent, acces, out) = (
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-        );
-        a.test_rr(RAX, RAX, 4);
-        a.jcc(Cc::Ne, converted);
-        a.mov_ri(RBX, -1);
-        a.jmp(created);
-        a.bind(converted);
-        let (rd, wr, go) = (a.new_label(), a.new_label(), a.new_label());
-        a.test_rr(R12, R12, 8);
-        a.jcc(Cc::E, rd);
-        a.alu_ri(Alu::Cmp, R12, 1, 8);
-        a.jcc(Cc::E, wr);
-        a.mov_ri(R13, 4); // FILE_APPEND_DATA
-        a.mov_ri(R12, 4); // OPEN_ALWAYS
-        a.jmp(go);
-        a.bind(wr);
-        a.mov_ri(R13, 0x4000_0000); // GENERIC_WRITE
-        a.mov_ri(R12, 2); // CREATE_ALWAYS
-        a.jmp(go);
-        a.bind(rd);
-        a.mov_ri(R13, 0x8000_0000); // GENERIC_READ
-        a.mov_ri(R12, 3); // OPEN_EXISTING
-        a.bind(go);
-        a.mov_rr(RCX, R14, 8);
-        a.mov_rr(RDX, R13, 8);
-        a.mov_ri(R8, 7); // share read, write, delete
-        a.alu_rr(Alu::Xor, R9, R9, 4);
-        win_call7(a, IMP_CREATE_FILE, |a| {
-            a.store(mem(RSP, 32), R12, 8);
-            a.store_imm(mem(RSP, 40), 0x80, 8); // FILE_ATTRIBUTE_NORMAL
-            a.store_imm(mem(RSP, 48), 0, 8);
-        });
-        a.mov_rr(RBX, RAX, 8);
-        a.bind(created);
-        // The error number must be read before anything else can change it.
-        win_call(a, IMP_GET_LAST_ERROR, |_| {});
-        a.mov_rr(R13, RAX, 8);
-        a.mov_rr(RDI, R14, 8);
-        a.call(rt.free);
-        a.alu_ri(Alu::Cmp, RBX, -1, 8);
-        a.jcc(Cc::E, failed);
-        a.mov_rr(RAX, RBX, 8);
-        a.jmp(out);
-        a.bind(failed);
-        a.alu_ri(Alu::Cmp, R13, 2, 8);
-        a.jcc(Cc::E, noent);
-        a.alu_ri(Alu::Cmp, R13, 3, 8);
-        a.jcc(Cc::E, noent);
-        a.alu_ri(Alu::Cmp, R13, 5, 8);
-        a.jcc(Cc::E, acces);
-        a.mov_ri(RAX, -3);
-        a.jmp(out);
-        a.bind(noent);
-        a.mov_ri(RAX, -4);
-        a.jmp(out);
-        a.bind(acces);
-        a.mov_ri(RAX, -5);
-        a.bind(out);
-        a.pop(R14);
-        a.pop(R13);
-        a.pop(R12);
-        a.pop(RBX);
-        a.ret();
+        // Without the allocator (a program that never opens a file) there is nothing to convert with.
+        if !heap {
+            a.mov_ri(RAX, -3);
+            a.ret();
+        } else {
+            a.push(RBX);
+            a.push(R12);
+            a.push(R13);
+            a.push(R14);
+            a.mov_rr(RBX, RDI, 8);
+            a.mov_rr(R12, RSI, 8);
+            a.alu_rr(Alu::Xor, R13, R13, 4);
+            let (sl, sd) = (a.new_label(), a.new_label());
+            a.bind(sl);
+            a.load_ext(RAX, mem_idx(RBX, R13, 1, 0), 1, false, true);
+            a.test_rr(RAX, RAX, 4);
+            a.jcc(Cc::E, sd);
+            a.alu_ri(Alu::Add, R13, 1, 8);
+            a.jmp(sl);
+            a.bind(sd);
+            a.lea(RDI, mem_idx(R13, R13, 1, 2));
+            a.call(rt.alloc);
+            a.mov_rr(R14, RAX, 8);
+            a.mov_ri(RCX, 65001); // CP_UTF8
+            a.alu_rr(Alu::Xor, RDX, RDX, 4);
+            a.mov_rr(R8, RBX, 8);
+            a.mov_ri(R9, -1);
+            win_call(a, IMP_MULTI_BYTE, |a| {
+                a.store(mem(RSP, 32), R14, 8);
+                a.lea(RAX, mem(R13, 1));
+                a.store(mem(RSP, 40), RAX, 8);
+            });
+            let (converted, created, failed, noent, acces, out) = (
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+            );
+            a.test_rr(RAX, RAX, 4);
+            a.jcc(Cc::Ne, converted);
+            a.mov_ri(RBX, -1);
+            a.jmp(created);
+            a.bind(converted);
+            let (rd, wr, go) = (a.new_label(), a.new_label(), a.new_label());
+            a.test_rr(R12, R12, 8);
+            a.jcc(Cc::E, rd);
+            a.alu_ri(Alu::Cmp, R12, 1, 8);
+            a.jcc(Cc::E, wr);
+            a.mov_ri(R13, 4); // FILE_APPEND_DATA
+            a.mov_ri(R12, 4); // OPEN_ALWAYS
+            a.jmp(go);
+            a.bind(wr);
+            a.mov_ri(R13, 0x4000_0000); // GENERIC_WRITE
+            a.mov_ri(R12, 2); // CREATE_ALWAYS
+            a.jmp(go);
+            a.bind(rd);
+            a.mov_ri(R13, 0x8000_0000); // GENERIC_READ
+            a.mov_ri(R12, 3); // OPEN_EXISTING
+            a.bind(go);
+            a.mov_rr(RCX, R14, 8);
+            a.mov_rr(RDX, R13, 8);
+            a.mov_ri(R8, 7); // share read, write, delete
+            a.alu_rr(Alu::Xor, R9, R9, 4);
+            win_call7(a, IMP_CREATE_FILE, |a| {
+                a.store(mem(RSP, 32), R12, 8);
+                a.store_imm(mem(RSP, 40), 0x80, 8); // FILE_ATTRIBUTE_NORMAL
+                a.store_imm(mem(RSP, 48), 0, 8);
+            });
+            a.mov_rr(RBX, RAX, 8);
+            a.bind(created);
+            // The error number must be read before anything else can change it.
+            win_call(a, IMP_GET_LAST_ERROR, |_| {});
+            a.mov_rr(R13, RAX, 8);
+            a.mov_rr(RDI, R14, 8);
+            a.call(rt.free);
+            a.alu_ri(Alu::Cmp, RBX, -1, 8);
+            a.jcc(Cc::E, failed);
+            a.mov_rr(RAX, RBX, 8);
+            a.jmp(out);
+            a.bind(failed);
+            a.alu_ri(Alu::Cmp, R13, 2, 8);
+            a.jcc(Cc::E, noent);
+            a.alu_ri(Alu::Cmp, R13, 3, 8);
+            a.jcc(Cc::E, noent);
+            a.alu_ri(Alu::Cmp, R13, 5, 8);
+            a.jcc(Cc::E, acces);
+            a.mov_ri(RAX, -3);
+            a.jmp(out);
+            a.bind(noent);
+            a.mov_ri(RAX, -4);
+            a.jmp(out);
+            a.bind(acces);
+            a.mov_ri(RAX, -5);
+            a.bind(out);
+            a.pop(R14);
+            a.pop(R13);
+            a.pop(R12);
+            a.pop(RBX);
+            a.ret();
+        }
         // close(fd = rdi): 0, or -3.
         a.bind(rt.os[10]);
         a.mov_rr(RCX, RDI, 8);

@@ -1112,7 +1112,7 @@ pub fn emit_for(
     }
 
     if uses.os {
-        emit_os(a, &rt, os, flush, uses.print);
+        emit_os(a, &rt, os, flush, uses.print, alloc_used && free_used);
     }
 
     if uses.ctx {
@@ -1646,7 +1646,7 @@ fn advise_huge(a: &mut Asm, os: Os, addr: Reg, len: Reg) {
 /// The OS memory calls (docs/design/os-memory.md), in a function of their own: `emit_for` is already a huge
 /// frame in debug builds.
 #[inline(never)]
-fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool) {
+fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: bool) {
     let win = os == Os::Windows;
     // ---- the OS memory calls (docs/design/os-memory.md) ----------------------------------------------
     // Sizes and addresses must be whole pages (else -2). A system error becomes -1 (no memory), -2
@@ -1842,7 +1842,11 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool) {
     finish(a);
     // open(path, mode): mode 0 reads, 1 writes (create, empty), else appends (create).
     start(a, rt.os[9]);
-    if win {
+    if win && !heap {
+        // No allocator in this program (it never opens a file): nothing to convert the path with.
+        a.mov_ri(X0, -3);
+        finish(a);
+    } else if win {
         win_open(a, rt);
     } else {
         let (rd, wr, go) = (a.new_label(), a.new_label(), a.new_label());
