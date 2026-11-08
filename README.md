@@ -82,13 +82,16 @@ The tool is called `pelago`; on Windows (PowerShell) use `cargo run -- ...` the 
 
 ### Formatter
 
-`pelago fmt` is a token-based formatter: indentation, trailing spaces, blank lines, spacing around commas. It never touches comments, refuses files with errors, and checks that the result has the same tokens. `--check` exits non-zero if a file would change, which is what CI uses on `examples/`. The formatter is also served through the language server. It is configured by a `[fmt]` section in `pelago.toml`, read from the closest such file above the one being formatted:
+`pelago fmt` is a token-based formatter: indentation, trailing spaces, blank lines, spacing around commas. It never touches comments, refuses files with errors, and checks that the result has the same tokens. `--check` exits non-zero if a file would change, which is what CI uses on `examples/`. The formatter is also served through the language server. It is configured by a `fmt` section in `pelago.yaml`, read from the closest such file above the one being formatted:
 
-```toml
-[fmt]
-indent = 4   # spaces per level, 1 to 8
-width = 100  # 20 to 400; not used yet, it is for line wrapping
+```yaml
+format: 1
+fmt:
+  indent: 4   # spaces per level, 1 to 8
+  width: 100  # 20 to 400; not used yet, it is for line wrapping
 ```
+
+The file is a strict block-style YAML subset (no anchors, tags, quotes, lists or `{}`; `format: 1` first). An old `pelago.toml` is still read, with a deprecation warning, until it is removed.
 
 Unknown sections and keys are errors. Line wrapping from the syntax tree is next; see [S-07](docs/plans/cards/S-07-formatter.md).
 

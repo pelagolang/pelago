@@ -34,7 +34,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 
 | Card | What | Where |
 |---|---|---|
-| [S-07](cards/S-07-formatter.md) | `pelago fmt` and LSP formatting: token layout, `[fmt]` in `pelago.toml`, wrapping, import sorting, tree-based indentation | `compiler/src/fmt/` |
+| [S-07](cards/S-07-formatter.md) | `pelago fmt` and LSP formatting: token layout, `fmt` in `pelago.yaml`, wrapping, import sorting, tree-based indentation | `compiler/src/fmt/` |
 | [S-05](cards/S-05-zed-and-tree-sitter.md) | Tree-sitter grammar (`pelagolang/tree-sitter-pelago`) and Zed extension (`pelagolang/zed-pelago`), the VS Code extension split out to `pelagolang/vscode-pelago`; done (owner) | the three repositories |
 | [A-01](cards/A-01-cleanup.md) | `stubs.rs` removed | `compiler/src/lower/` |
 | [A-07](cards/A-07-async.md) | `async fn` / `await` / `future<T>` / `blockOn` at stage 0 (eager); suspension is S-04 | `core.pel`, IR26 |
