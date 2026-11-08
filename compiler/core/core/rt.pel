@@ -5,116 +5,116 @@
 /// The library below is written in the language over these few operations. `ptr` is a raw address;
 /// nothing here is checked, so only this file uses them.
 
-pub ext fn rt_null() -> ptr
-pub ext fn rt_alloc(size: int) -> ptr
-pub ext fn rt_free(p: ptr)
+pub ext fn rtNull() -> ptr
+pub ext fn rtAlloc(size: int) -> ptr
+pub ext fn rtFree(p: ptr)
 //~ A block of `size` bytes holding the first bytes of `p` (null allocates), the rest zero; `p` is dead afterwards.
-pub ext fn rt_realloc(p: ptr, size: int) -> ptr
+pub ext fn rtRealloc(p: ptr, size: int) -> ptr
 //~ The operating system's memory, for allocators (`docs/design/os-memory.md`). Each gives an address or `0`, or a negative
 //~ error: -1 out of memory, -2 a bad argument (a size or address that is not a whole number of 4096-byte pages), -3 another failure.
 //~ Address space of `size` bytes with no access.
-pub ext fn rt_os_reserve(size: int) -> int
+pub ext fn rtOsReserve(size: int) -> int
 //~ Makes a reserved range readable and writable.
-pub ext fn rt_os_commit(p: ptr, size: int) -> int
+pub ext fn rtOsCommit(p: ptr, size: int) -> int
 //~ Gives a range back.
-pub ext fn rt_os_release(p: ptr, size: int) -> int
+pub ext fn rtOsRelease(p: ptr, size: int) -> int
 //~ Moves or grows a block from `old` to `new` bytes, keeping the first bytes; gives the new address (the old one is dead).
-pub ext fn rt_os_remap(p: ptr, old: int, new: int) -> int
+pub ext fn rtOsRemap(p: ptr, old: int, new: int) -> int
 //~ Asks the system not to use huge pages for a range (only a hint; does nothing where there are none).
-pub ext fn rt_os_advise_nohuge(p: ptr, size: int) -> int
+pub ext fn rtOsAdviseNohuge(p: ptr, size: int) -> int
 //~ The address a number names, for the results of the calls above.
-pub ext fn rt_int_addr(n: int) -> ptr
+pub ext fn rtIntAddr(n: int) -> ptr
 //~ The address of the k-th (0 to 63, a literal) word of a zeroed, writable block of static data the compiler keeps for the library's own state.
-pub ext fn rt_data_word(k: int) -> ptr
+pub ext fn rtDataWord(k: int) -> ptr
 //~ A context: a stack at `base` of `size` bytes that starts by calling `code(env)` (a closure's two words), which must never return.
 //~ Nothing runs until something switches to the handle it returns.
-pub ext fn rt_ctx_init(base: ptr, size: int, code: ptr, env: ptr) -> ptr
+pub ext fn rtCtxInit(base: ptr, size: int, code: ptr, env: ptr) -> ptr
 //~ Saves where this context stands at `save` and continues the context `to`; comes back when something switches to the saved handle.
-pub ext fn rt_ctx_switch(save: ptr, to: ptr)
-//~ The address of a function declared with no parameters, for `rt_ctx_init`.
-pub ext fn rt_fn_addr<F>(f: F) -> ptr
-pub ext fn rt_offset(p: ptr, bytes: int) -> ptr
-pub ext fn rt_copy(dst: ptr, src: ptr, bytes: int)
-pub ext fn rt_is_null(p: ptr) -> bool
-pub ext fn rt_addr_int(p: ptr) -> int
-pub ext fn rt_load_int(p: ptr) -> int
-pub ext fn rt_store_int(p: ptr, v: int)
-pub ext fn rt_load_byte(p: ptr) -> uint8
-pub ext fn rt_store_byte(p: ptr, v: uint8)
-pub ext fn rt_load_ptr(p: ptr) -> ptr
-pub ext fn rt_store_ptr(p: ptr, v: ptr)
-pub ext fn rt_load_float(p: ptr) -> float
-pub ext fn rt_store_float(p: ptr, v: float)
-pub ext fn rt_load_char(p: ptr) -> char
-pub ext fn rt_store_char(p: ptr, v: char)
-pub ext fn rt_load_bool(p: ptr) -> bool
-pub ext fn rt_store_bool(p: ptr, v: bool)
-pub ext fn rt_print(p: ptr, n: int)
-//~ The operating system layer (docs/design/runtime.md). `rt_os_write` flushes standard output first and
-//~ writes once: it gives the count written or a negative error number; `rt_os_read` gives the count read,
-//~ 0 at the end, or a negative error number. `rt_os_argv` is the start-up block: the count, that many
+pub ext fn rtCtxSwitch(save: ptr, to: ptr)
+//~ The address of a function declared with no parameters, for `rtCtxInit`.
+pub ext fn rtFnAddr<F>(f: F) -> ptr
+pub ext fn rtOffset(p: ptr, bytes: int) -> ptr
+pub ext fn rtCopy(dst: ptr, src: ptr, bytes: int)
+pub ext fn rtIsNull(p: ptr) -> bool
+pub ext fn rtAddrInt(p: ptr) -> int
+pub ext fn rtLoadInt(p: ptr) -> int
+pub ext fn rtStoreInt(p: ptr, v: int)
+pub ext fn rtLoadByte(p: ptr) -> uint8
+pub ext fn rtStoreByte(p: ptr, v: uint8)
+pub ext fn rtLoadPtr(p: ptr) -> ptr
+pub ext fn rtStorePtr(p: ptr, v: ptr)
+pub ext fn rtLoadFloat(p: ptr) -> float
+pub ext fn rtStoreFloat(p: ptr, v: float)
+pub ext fn rtLoadChar(p: ptr) -> char
+pub ext fn rtStoreChar(p: ptr, v: char)
+pub ext fn rtLoadBool(p: ptr) -> bool
+pub ext fn rtStoreBool(p: ptr, v: bool)
+pub ext fn rtPrint(p: ptr, n: int)
+//~ The operating system layer (docs/design/runtime.md). `rtOsWrite` flushes standard output first and
+//~ writes once: it gives the count written or a negative error number; `rtOsRead` gives the count read,
+//~ 0 at the end, or a negative error number. `rtOsArgv` is the start-up block: the count, that many
 //~ pointers to zero-terminated texts, a zero, then the environment the same way.
-pub ext fn rt_os_write(fd: int, p: ptr, n: int) -> int
-pub ext fn rt_os_read(fd: int, p: ptr, n: int) -> int
-pub ext fn rt_os_exit(code: int)
-pub ext fn rt_os_argv() -> int
-pub ext fn rt_to_byte(n: int) -> uint8
-pub ext fn rt_wrap<T>(n: int) -> T
-pub ext fn rt_to_int(x: float) -> int
-pub ext fn rt_fma(a: float, b: float, c: float) -> float
-pub ext fn rt_sqrt(a: float) -> float
-pub ext fn rt_floor(a: float) -> float
-pub ext fn rt_ceil(a: float) -> float
-pub ext fn rt_to_char(n: int) -> char
-pub ext fn rt_show_to<T>(src: ptr, out: ptr)
-pub ext fn rt_show_item_to<T>(src: ptr, out: ptr)
-pub ext fn rt_size_of<T>() -> int
-pub ext fn rt_is_int<T>() -> bool
+pub ext fn rtOsWrite(fd: int, p: ptr, n: int) -> int
+pub ext fn rtOsRead(fd: int, p: ptr, n: int) -> int
+pub ext fn rtOsExit(code: int)
+pub ext fn rtOsArgv() -> int
+pub ext fn rtToByte(n: int) -> uint8
+pub ext fn rtWrap<T>(n: int) -> T
+pub ext fn rtToInt(x: float) -> int
+pub ext fn rtFma(a: float, b: float, c: float) -> float
+pub ext fn rtSqrt(a: float) -> float
+pub ext fn rtFloor(a: float) -> float
+pub ext fn rtCeil(a: float) -> float
+pub ext fn rtToChar(n: int) -> char
+pub ext fn rtShowTo<T>(src: ptr, out: ptr)
+pub ext fn rtShowItemTo<T>(src: ptr, out: ptr)
+pub ext fn rtSizeOf<T>() -> int
+pub ext fn rtIsInt<T>() -> bool
 //~ Whether `T` is `uint8`, `uint16` or `uint32`.
-pub ext fn rt_is_small_uint<T>() -> bool
+pub ext fn rtIsSmallUint<T>() -> bool
 //~ Whether a `T` has drop glue (owns memory or has a `deinit`).
-pub ext fn rt_needs_drop<T>() -> bool
-pub ext fn rt_addr_of<T>(x: T) -> ptr
-pub ext fn rt_write<T>(dst: ptr, sink value: T)
-pub ext fn rt_read<T>(src: ptr) -> T
-pub ext fn rt_clone<T>(src: ptr) -> T
-pub ext fn rt_clone_to<T>(src: ptr, dst: ptr)
-pub ext fn rt_drop_at<T>(p: ptr)
-pub ext fn rt_cast<A, B>(sink x: A) -> B
-pub ext fn rt_drop_fn<T>() -> ptr
-pub ext fn rt_clone_fn<T>() -> ptr
-pub ext fn rt_eq_fn<T>() -> ptr
-pub ext fn rt_cmp_fn<T>() -> ptr
-pub ext fn rt_hash_fn<T>() -> ptr
-pub ext fn rt_show_fn<T>() -> ptr
+pub ext fn rtNeedsDrop<T>() -> bool
+pub ext fn rtAddrOf<T>(x: T) -> ptr
+pub ext fn rtWrite<T>(dst: ptr, sink value: T)
+pub ext fn rtRead<T>(src: ptr) -> T
+pub ext fn rtClone<T>(src: ptr) -> T
+pub ext fn rtCloneTo<T>(src: ptr, dst: ptr)
+pub ext fn rtDropAt<T>(p: ptr)
+pub ext fn rtCast<A, B>(sink x: A) -> B
+pub ext fn rtDropFn<T>() -> ptr
+pub ext fn rtCloneFn<T>() -> ptr
+pub ext fn rtEqFn<T>() -> ptr
+pub ext fn rtCmpFn<T>() -> ptr
+pub ext fn rtHashFn<T>() -> ptr
+pub ext fn rtShowFn<T>() -> ptr
 //~ The `show` slot of an `any show` table for a type that has no `show` method of its own (numbers, lists, ...).
-pub fn rt_any_show<T>(out: ptr, src: ptr) {
-    rt_show_to<T>(src, out)
+pub fn rtAnyShow<T>(out: ptr, src: ptr) {
+    rtShowTo<T>(src, out)
 }
-pub ext fn rt_call_void1(f: ptr, a: ptr)
-pub ext fn rt_call_void2(f: ptr, a: ptr, b: ptr)
-pub ext fn rt_call_bool2(f: ptr, a: ptr, b: ptr) -> bool
-pub ext fn rt_call_int2(f: ptr, a: ptr, b: ptr) -> int
-pub ext fn rt_call_int1(f: ptr, a: ptr) -> int
+pub ext fn rtCallVoid1(f: ptr, a: ptr)
+pub ext fn rtCallVoid2(f: ptr, a: ptr, b: ptr)
+pub ext fn rtCallBool2(f: ptr, a: ptr, b: ptr) -> bool
+pub ext fn rtCallInt2(f: ptr, a: ptr, b: ptr) -> int
+pub ext fn rtCallInt1(f: ptr, a: ptr) -> int
 
 //~ Writes the program's arguments as a `[string]` header (pointer, length, capacity) at `dst`. The texts stay
 //~ in the start-up block (capacity 0: borrowed); only the array of headers is allocated, and its owner frees it.
-pub fn rt_args_into(dst: ptr) {
-    const blk = rt_int_addr(rt_os_argv())
-    const n = rt_load_int(blk)
-    const buf = rt_alloc(n * 24)
+pub fn rtArgsInto(dst: ptr) {
+    const blk = rtIntAddr(rtOsArgv())
+    const n = rtLoadInt(blk)
+    const buf = rtAlloc(n * 24)
     var i = 0
     while i < n {
-        const s = rt_load_ptr(rt_offset(blk, 8 + 8 * i))
+        const s = rtLoadPtr(rtOffset(blk, 8 + 8 * i))
         var len = 0
-        while rt_load_byte(rt_offset(s, len)) != 0 { len += 1 }
-        const h = rt_offset(buf, i * 24)
-        rt_store_ptr(h, s)
-        rt_store_int(rt_offset(h, 8), len)
-        rt_store_int(rt_offset(h, 16), 0)
+        while rtLoadByte(rtOffset(s, len)) != 0 { len += 1 }
+        const h = rtOffset(buf, i * 24)
+        rtStorePtr(h, s)
+        rtStoreInt(rtOffset(h, 8), len)
+        rtStoreInt(rtOffset(h, 16), 0)
         i += 1
     }
-    rt_store_ptr(dst, buf)
-    rt_store_int(rt_offset(dst, 8), n)
-    rt_store_int(rt_offset(dst, 16), n)
+    rtStorePtr(dst, buf)
+    rtStoreInt(rtOffset(dst, 8), n)
+    rtStoreInt(rtOffset(dst, 16), n)
 }

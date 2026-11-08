@@ -32,7 +32,7 @@ Not yet blessed or run for all three sizes: the harness run was stopped on Denni
 
 ## Findings (for the speed thread, later)
 
-1. **`float.sqrt` is a software loop.** `compiler/core/core.pel` computes it with 80 Newton iterations (about 780 ns per call). `nbody` is 70x to 95x slower than gcc -O2 because of it, and `spectralnorm` and any distance computation pay too. The fix is a backend instruction (`sqrtsd` on x86-64, `fsqrt` on AArch64, which `a64.rs` can already encode), wired the way `rt_fma` is. The same goes for `floor` / `ceil` / `round`, which round through `rt_to_int`.
+1. **`float.sqrt` is a software loop.** `compiler/core/core.pel` computes it with 80 Newton iterations (about 780 ns per call). `nbody` is 70x to 95x slower than gcc -O2 because of it, and `spectralnorm` and any distance computation pay too. The fix is a backend instruction (`sqrtsd` on x86-64, `fsqrt` on AArch64, which `a64.rs` can already encode), wired the way `rtFma` is. The same goes for `floor` / `ceil` / `round`, which round through `rtToInt`.
 2. `str.chars()` builds a full list before iterating (seen in `lexer`, 5x behind at the large size).
 3. `levenshtein` is 4x behind gcc and clang at medium: two heap rows per call and bounds checks in the inner loop.
 4. `loops` is 1.7x behind clang and rustc and level with gcc -O2 (they vectorise or strength-reduce `j % u`).

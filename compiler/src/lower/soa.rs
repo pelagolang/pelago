@@ -110,7 +110,7 @@ impl<'a> Lowerer<'a> {
         for (k, (off, ft)) in fields.iter().enumerate() {
             let col = self.soa_col(h, k);
             let s = self.addr(src, *off);
-            self.call_core_g("rt_col_push", &[*ft], vec![col, s]);
+            self.call_core_g("rtColPush", &[*ft], vec![col, s]);
         }
     }
 
@@ -137,7 +137,7 @@ impl<'a> Lowerer<'a> {
         Res::Unit
     }
 
-    /// The `rt_soa_*` library intrinsics: field loops over the columns.
+    /// The `rtSoa*` library intrinsics: field loops over the columns.
     pub(crate) fn intr_soa(
         &mut self,
         name: &str,
@@ -152,8 +152,8 @@ impl<'a> Lowerer<'a> {
         };
         let fields = self.soa_fields(elem);
         match name {
-            "rt_soa_len" => Res::Val(self.soa_len(h)),
-            "rt_soa_push" => {
+            "rtSoaLen" => Res::Val(self.soa_len(h)),
+            "rtSoaPush" => {
                 let Some(a) = args.get(1) else {
                     return Res::Never;
                 };
@@ -164,7 +164,7 @@ impl<'a> Lowerer<'a> {
                 self.soa_push(h, tmp, elem);
                 Res::Unit
             }
-            "rt_soa_insert" => {
+            "rtSoaInsert" => {
                 let (Some(i), Some(a)) = (self.arg_value(args, 1), args.get(2)) else {
                     return Res::Never;
                 };
@@ -175,11 +175,11 @@ impl<'a> Lowerer<'a> {
                 for (k, (off, ft)) in fields.iter().enumerate() {
                     let col = self.soa_col(h, k);
                     let s = self.addr(tmp, *off);
-                    self.call_core_g("rt_col_insert", &[*ft], vec![col, i, s]);
+                    self.call_core_g("rtColInsert", &[*ft], vec![col, i, s]);
                 }
                 Res::Unit
             }
-            "rt_soa_remove" => {
+            "rtSoaRemove" => {
                 let Some(i) = self.arg_value(args, 1) else {
                     return Res::Never;
                 };
@@ -190,7 +190,7 @@ impl<'a> Lowerer<'a> {
                 for (k, (off, ft)) in fields.iter().enumerate() {
                     let col = self.soa_col(h, k);
                     let o = self.addr(d, *off);
-                    self.call_core_g("rt_col_remove", &[*ft], vec![col, i, o]);
+                    self.call_core_g("rtColRemove", &[*ft], vec![col, i, o]);
                 }
                 if dst.is_none() {
                     self.own(d, elem, false);
@@ -198,10 +198,10 @@ impl<'a> Lowerer<'a> {
                 }
                 Res::Unit
             }
-            "rt_soa_clear" => {
+            "rtSoaClear" => {
                 for (k, (_, ft)) in fields.iter().enumerate() {
                     let col = self.soa_col(h, k);
-                    self.call_core_g("rt_col_clear", &[*ft], vec![col]);
+                    self.call_core_g("rtColClear", &[*ft], vec![col]);
                 }
                 Res::Unit
             }

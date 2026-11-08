@@ -1413,7 +1413,7 @@ fn meta_code_has_rules() {
             .any(|m| m.contains("not available at compile time")),
         "{e:?}"
     );
-    let e = run("ext fn puts(s: ptr) -> int\nmeta fn f() -> int { puts(rt_null())\n 4 }").errors();
+    let e = run("ext fn puts(s: ptr) -> int\nmeta fn f() -> int { puts(rtNull())\n 4 }").errors();
     assert!(
         e.iter().any(|m| m.contains("defined outside the language")),
         "{e:?}"

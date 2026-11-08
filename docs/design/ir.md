@@ -142,8 +142,8 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
   eager list), maps and sets (4 words, below), function values (`code, env`), `any` (`data, table`).
 - **IR10** Ownership is run with drop flags: every owned value has a flag byte, set when it is made and cleared when it moves or is
   dropped. Glue functions (drop, copy, equal, order, hash, print) are generated once per type and shared.
-- **IR11** The library is written in the language (`compiler/core/core.pel`) over `rt_*` intrinsics (`rt_alloc`, `rt_read<T>`, `rt_size_of<T>`,
-  `rt_clone<T>`, `rt_drop_at<T>`, ...): lists, text, `option` / `result` methods, maps, sets, ranges, tasks, channels, `shared`, `lock`. The
+- **IR11** The library is written in the language (`compiler/core/core.pel`) over `rt_*` intrinsics (`rtAlloc`, `rtRead<T>`, `rtSizeOf<T>`,
+  `rtClone<T>`, `rtDropAt<T>`, ...): lists, text, `option` / `result` methods, maps, sets, ranges, tasks, channels, `shared`, `lock`. The
   lowering only calls them.
 - **IR12** Maps and sets keep insertion order: a block of keys (then values), a length, a capacity and an open-addressing index table of
   positions. Removing shifts the entries down (O(n)) and rebuilds the index. `==` ignores order.
@@ -171,8 +171,8 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 - **IR20** Not lowered, on purpose: `meta` (compile-time code), `soa` and `async` (see the plans in `docs/plans/`).
 - **IR28** The operating system layer shares the one operation `Os(kind, a, b, c)` with the OS memory calls (`OsKind`): `os_write(fd, p, n) -> i64` and `os_read(fd, p, n) -> i64` (one system call each: the count or a negative error number; `os_write` flushes `Print`'s buffer first), `os_exit(code)` (flushes, never returns, nothing is dropped) and `os_argv() -> i64` (the address of the start block: count, argument pointers, zero, environment pointers, zero). Addresses travel as `i64`. Not pure and not moved. The interpreter has a stand-in (`OsEnv`, `Outcome.err`, `Outcome.status`). Native code has it on x86-64 Linux only; other targets refuse the program. Design: `runtime.md`.
 - **IR27** Small closing fixes. `any show` tables for types without a `show` method of their own (numbers, lists, strings...) point their `show`
-  slot at the library function `rt_any_show<T>`; this was the real cause of `print(if c { 8 } else { 4 })` failing (the table had no `show`).
-  `meta` results can hold `box`, maps and sets (`Cv::Boxed`, `Cv::Entries`; maps and sets are rebuilt with `rt_map_put`/`rt_set_put`).
+  slot at the library function `rtAnyShow<T>`; this was the real cause of `print(if c { 8 } else { 4 })` failing (the table had no `show`).
+  `meta` results can hold `box`, maps and sets (`Cv::Boxed`, `Cv::Entries`; maps and sets are rebuilt with `rtMapPut`/`rtSetPut`).
   The interpreter records the call chain of a failing run (`Outcome.trace`) and meta errors print it. Types carry `+ - *` on compile-time
   numbers (`TyKind::ConstOp`).
 - **IR26** `async fn` is lowered as an ordinary function that returns its value; the checker gives callers `future<T>`, and a call site puts a scalar
@@ -186,7 +186,7 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
   column header itself, read as a `[float]`; a whole element (`const p = points[i]`) is gathered into a temporary; `points[i] = v` drops the old
   fields and writes the new ones; `for p of points` gathers each element, and `for inout p` scatters the turn's changes back. Drop, clone
   and `==` are those of the tuple of columns; `show` prints a list of structs. `push`, `insert`, `remove`, `clear` loop over the columns
-  with the library functions `rt_col_*`. `soa<T, N>` is accepted (N a power of two) and behaves exactly the same; the blocked
+  with the library functions `rtCol*`. `soa<T, N>` is accepted (N a power of two) and behaves exactly the same; the blocked
   memory layout waits for the backend, where it can be measured. Not supported: `inout points[i]` as a whole-element argument (use a
   field), `soa` of enums, objects or tuples (an error), `...` in a `soa` literal.
 - **IR23** **The optimiser** (`compiler/src/ir/opt/`, `pelago run --opt`, `pelago ir --opt --stats`). Per function, repeated until nothing
@@ -205,7 +205,7 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
   the statement's scope. Today the entries use a flag slot, as variables do; the optimiser (A-04) turns these into constants.
   Entry and consumers: `fresh_scalar`, `settle`, `pop_scope_carrying` in `lower/func.rs`.
 - **IR21** `box<T>` is a bare pointer to a heap block that holds the `T` (no header, unlike `obj`). `box(v)` calls the library function
-  `rt_box_new<T>`; `b.get()` is a place (the pointer itself); fields, methods and indexing go through the pointer; `set` and `take` are
+  `rtBoxNew<T>`; `b.get()` is a place (the pointer itself); fields, methods and indexing go through the pointer; `set` and `take` are
   library methods. Environments of closures that are not passed straight to a call live on the heap, so a closure can be boxed or returned.
   The interpreter runs on a thread with a large host stack so that dropping or walking a chain of ten thousand boxes works.
 

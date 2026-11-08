@@ -210,7 +210,7 @@ impl<'a> Lowerer<'a> {
                 .trace
                 .iter()
                 .map(String::as_str)
-                .filter(|n| *n != name && !n.starts_with("rt_"))
+                .filter(|n| *n != name && !super::intr::is_rt_name(n))
                 .collect();
             let what = if chain.is_empty() {
                 what
@@ -511,10 +511,10 @@ impl<'a> Lowerer<'a> {
                         (Some(v), Some(val)) => {
                             let vt = self.slot_for(v);
                             self.emit_cv(val, vt, v, span);
-                            self.call_core_g("rt_map_put", &[k, v], vec![dst, kt, vt]);
+                            self.call_core_g("rtMapPut", &[k, v], vec![dst, kt, vt]);
                         }
                         _ => {
-                            self.call_core_g("rt_set_put", &[k], vec![dst, kt]);
+                            self.call_core_g("rtSetPut", &[k], vec![dst, kt]);
                         }
                     }
                 }

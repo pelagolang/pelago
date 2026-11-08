@@ -38,8 +38,8 @@ The interpreter (`ir/interp.rs`) is the specification. Every row is a test (card
 
 ## 3. Runtime (emitted by the backend)
 
-- `rt_write(ptr, len)`: loops over `write` until everything is written or an error occurs.
-- `rt_stop(msg_ptr, msg_len)`: writes `stopped: `, the message and a newline to standard error, then `exit_group(1)`.
+- `rtWrite(ptr, len)`: loops over `write` until everything is written or an error occurs.
+- `rtStop(msg_ptr, msg_len)`: writes `stopped: `, the message and a newline to standard error, then `exit_group(1)`.
 - **Allocator, Linux x86-64 and AArch64** (`docs/design/heap.md`, stage H1; `rt_a64.rs` is a port of `rt.rs`): one region of address space (64 GiB, halved until the system agrees, `MAP_NORESERVE`, no huge pages) is
   reserved at the first allocation. Blocks up to 8 KiB come from 64 KiB spans, each dedicated to one size class (16-byte steps up to 256 B, then four per doubling), carved by a
   bump pointer; a one-byte-per-span table at the start of the region names a block's class, so a block has **no header**. Freed blocks go on the class's free list and are cleared on reuse.
@@ -146,7 +146,7 @@ float, small `MemCopy` uses `rep movsb`, and no value is split between a registe
 
 ### Fused multiply-add
 
-`Op::Fma(a, b, c)` is `a * b + c` with a single rounding, reached only through `float.fma` (`rt_fma`); the compiler never fuses a multiply and an add by itself. x86 emits `vfmadd231sd/ss` (FMA3, so a Haswell or newer CPU; `b` is read from its register or frame slot, `c` is loaded into `xmm0`); AArch64 emits `fmadd`, with `v31` as the third scratch. The interpreter uses `mul_add`.
+`Op::Fma(a, b, c)` is `a * b + c` with a single rounding, reached only through `float.fma` (`rtFma`); the compiler never fuses a multiply and an add by itself. x86 emits `vfmadd231sd/ss` (FMA3, so a Haswell or newer CPU; `b` is read from its register or frame slot, `c` is loaded into `xmm0`); AArch64 emits `fmadd`, with `v31` as the third scratch. The interpreter uses `mul_add`.
 
 ### Floats in SSE registers (A-11 W11)
 
@@ -191,10 +191,10 @@ or without the padding, so the erratum does not show here; the padding is there 
 | `Checked` narrow | the operation in 64 bits, then the result compared with its own `sxt`/`uxt` |
 | float compares with NaN | `fcmp` and the conditions `eq`, `ne`, `mi`, `ls`, `gt`, `ge`: unordered sets C and V, which makes all of them false but `ne` |
 | `FloatToInt` | `fcvtzs`: saturates and turns NaN into 0 by itself; then cut to the width |
-| float `%` | `rt_fmod`, bit by bit (musl's algorithm); `float32` is widened and rounded back, both exact |
+| float `%` | `rtFmod`, bit by bit (musl's algorithm); `float32` is widened and rounded back, both exact |
 | vectors (`v2i64`) | NEON: `dup`, `add`, `sub`, `and`, `orr`, `eor`, `shl`, `ushr`, `addp`, `ins` |
 
-**Runtime.** The same routines and state layout as `rt.rs`, over the generic system call numbers (`write` 64, `exit_group` 94, `mmap` 222, `munmap` 215, `mremap` 216, `mprotect` 226, `madvise` 233, `ioctl` 29, `rt_sigaction` 134, `sigaltstack` 132). The `sigaction` structure is built so that it is right with and without a restorer word. Arguments follow the generator's convention (`rt_print(ptr = x0, len = x1)` and so on, see the `Runtime` struct).
+**Runtime.** The same routines and state layout as `rt.rs`, over the generic system call numbers (`write` 64, `exit_group` 94, `mmap` 222, `munmap` 215, `mremap` 216, `mprotect` 226, `madvise` 233, `ioctl` 29, `rtSigaction` 134, `sigaltstack` 132). The `sigaction` structure is built so that it is right with and without a restorer word. Arguments follow the generator's convention (`rtPrint(ptr = x0, len = x1)` and so on, see the `Runtime` struct).
 
 **ELF.** Segments are aligned to 64 KiB (the largest page size AArch64 kernels use), so the file is at least that large before the data; x86-64 keeps 4 KiB.
 

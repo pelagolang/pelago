@@ -7,11 +7,14 @@
 use super::fx::{HashMap, HashSet};
 use crate::ir::*;
 
-/// A function whose name ends like this is the rarely taken half of a fast path (`rt_grow_slow`:
+/// A function whose name ends like this is the rarely taken half of a fast path (`rtGrowSlow`:
 /// the buffer is full). It stays a call, so the fast path around it stays small enough to be copied
 /// into every caller and its callers stay free of the call.
 /// Functions with this ending run rarely: never inlined, and calls to them weigh little in register allocation.
-pub const COLD_SUFFIX: &str = "_slow";
+/// The house style writes it `Slow` (`rtGrowSlow`); `_slow` is accepted for the other naming style.
+pub fn is_cold(name: &str) -> bool {
+    name.ends_with("Slow") || name.ends_with("_slow")
+}
 
 /// A callee at most this big (instructions plus two per block) is always copied.
 const SMALL: usize = 60;
@@ -129,7 +132,7 @@ fn find_site(
             if m.funcs[g].inline_always.is_some() {
                 return Some((bi, pos, g));
             }
-            if m.funcs[g].name.ends_with(COLD_SUFFIX) || m.funcs[g].checkfree.is_some() {
+            if is_cold(&m.funcs[g].name) || m.funcs[g].checkfree.is_some() {
                 continue;
             }
             let c = cost(&m.funcs[g]);
@@ -290,19 +293,19 @@ fn inline_at(f: &mut Func, bi: usize, pos: usize, callee: &Func) {
 }
 
 /// A program that starts no task has none to finish when `main` ends: takes out the calls of
-/// `rt_run_pending` (the library function that runs the tasks nobody waited for) when no function
+/// `rtRunPending` (the library function that runs the tasks nobody waited for) when no function
 /// reachable from `main` starts one, so the task queue, and what it needs of the heap, stay out of
-/// the program. Tasks start in `spawn`, whose instances call `rt_task_body`.
+/// the program. Tasks start in `spawn`, whose instances call `rtTaskBody`.
 pub fn drop_idle_task_drain(m: &mut Module) {
     let id_of = |m: &Module, name: &str| m.funcs.iter().position(|f| f.name == name);
-    let (Some(main), Some(drain)) = (id_of(m, "main"), id_of(m, "rt_run_pending")) else {
+    let (Some(main), Some(drain)) = (id_of(m, "main"), id_of(m, "rtRunPending")) else {
         return;
     };
     let mut seen = vec![false; m.funcs.len()];
     seen[main] = true;
     let mut stack = vec![main];
     while let Some(x) = stack.pop() {
-        if m.funcs[x].name.starts_with("rt_task_body<") {
+        if m.funcs[x].name.starts_with("rtTaskBody<") {
             return;
         }
         for b in &m.funcs[x].blocks {

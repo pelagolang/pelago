@@ -50,7 +50,7 @@ pub(crate) enum ScopeItem<'a> {
     },
     /// Code to run when the scope ends.
     Defer(&'a Expr),
-    /// A library function to call when the scope ends (`rt_run_pending` at the end of `main`).
+    /// A library function to call when the scope ends (`rtRunPending` at the end of `main`).
     CoreCall(&'static str),
 }
 

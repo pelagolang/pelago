@@ -1,20 +1,20 @@
 fn main() {
     const page = 4096
     /// Reserve, commit, write, read back, grow, release.
-    const base = rt_os_reserve(16 * page)
+    const base = rtOsReserve(16 * page)
     print(base > 0)
-    const p = rt_int_addr(base)
-    print(rt_os_commit(p, 4 * page))
-    rt_store_int(p, 1234)
-    rt_store_int(rt_offset(p, 4 * page - 8), 99)
-    const q = rt_os_remap(p, 4 * page, 8 * page)
+    const p = rtIntAddr(base)
+    print(rtOsCommit(p, 4 * page))
+    rtStoreInt(p, 1234)
+    rtStoreInt(rtOffset(p, 4 * page - 8), 99)
+    const q = rtOsRemap(p, 4 * page, 8 * page)
     print(q > 0)
-    const np = rt_int_addr(q)
-    print(rt_load_int(np), rt_load_int(rt_offset(np, 4 * page - 8)))
-    print(rt_os_advise_nohuge(np, 8 * page))
-    print(rt_os_release(np, 8 * page))
+    const np = rtIntAddr(q)
+    print(rtLoadInt(np), rtLoadInt(rtOffset(np, 4 * page - 8)))
+    print(rtOsAdviseNohuge(np, 8 * page))
+    print(rtOsRelease(np, 8 * page))
     /// Bad arguments are errors, not stops.
-    print(rt_os_reserve(0), rt_os_reserve(100), rt_os_reserve(-4096))
-    print(rt_os_commit(rt_int_addr(base + 8), page))
-    print(rt_os_release(p, 0))
+    print(rtOsReserve(0), rtOsReserve(100), rtOsReserve(-4096))
+    print(rtOsCommit(rtIntAddr(base + 8), page))
+    print(rtOsRelease(p, 0))
 }

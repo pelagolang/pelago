@@ -17,35 +17,35 @@ pub struct pool<T, W> {
     free: int
 
     init() {
-        if !rt_is_small_uint<W>() { panic("a pool's width must be uint8, uint16 or uint32") }
-        self.base = rt_null()
-        self.bounce = rt_alloc(8)
-        self.stride = rt_size_of<T>()
-        if self.stride < rt_size_of<W>() { self.stride = rt_size_of<W>() }
+        if !rtIsSmallUint<W>() { panic("a pool's width must be uint8, uint16 or uint32") }
+        self.base = rtNull()
+        self.bounce = rtAlloc(8)
+        self.stride = rtSizeOf<T>()
+        if self.stride < rtSizeOf<W>() { self.stride = rtSizeOf<W>() }
         self.count = 0
         self.cap = 0
         self.free = -1
     }
 
     deinit {
-        if self.cap > 0 { rt_free(self.base) }
-        rt_free(self.bounce)
+        if self.cap > 0 { rtFree(self.base) }
+        rtFree(self.bounce)
     }
 }
 
 impl<T, W> pool<T, W> {
     //~ The most slots this pool can name: one number of `W` is kept for no slot.
-    fn limit(self) -> int = (1 << (8 * rt_size_of<W>())) - 1
+    fn limit(self) -> int = (1 << (8 * rtSizeOf<W>())) - 1
 
     fn toLink(self, n: int) -> link<T, W> {
-        rt_write<int>(self.bounce, n)
-        link<T, W> { slot: rt_read<W>(self.bounce) }
+        rtWrite<int>(self.bounce, n)
+        link<T, W> { slot: rtRead<W>(self.bounce) }
     }
 
     fn slotOf(self, l: link<T, W>) -> int {
-        rt_write<int>(self.bounce, 0)
-        rt_write<W>(self.bounce, l.slot)
-        rt_read<int>(self.bounce)
+        rtWrite<int>(self.bounce, 0)
+        rtWrite<W>(self.bounce, l.slot)
+        rtRead<int>(self.bounce)
     }
 
     //~ The link that names no slot.
@@ -56,27 +56,27 @@ impl<T, W> pool<T, W> {
 
     //~ A free slot keeps the number of the next free one in its first `W` bytes (all ones: none).
     fn nextFree(self, at: ptr) -> int {
-        const n = self.slotOf(link<T, W> { slot: rt_read<W>(at) })
+        const n = self.slotOf(link<T, W> { slot: rtRead<W>(at) })
         n == self.limit() ? -1 : n
     }
 
     fn setNextFree(self, at: ptr, n: int) {
-        rt_write<W>(at, self.toLink(n).slot)
+        rtWrite<W>(at, self.toLink(n).slot)
     }
 
     //~ Puts `value` in a free slot and gives its link; stops when the pool is full.
     fn add(inout self, sink value: T) -> link<T, W> {
-        if rt_needs_drop<T>() { panic("a pool holds only types without drop glue") }
+        if rtNeedsDrop<T>() { panic("a pool holds only types without drop glue") }
         var n = self.free
         if n >= 0 {
-            self.free = self.nextFree(rt_offset(self.base, n * self.stride))
+            self.free = self.nextFree(rtOffset(self.base, n * self.stride))
         } else {
             n = self.count
             if n >= self.limit() { panic("pool full") }
             if (n + 1) * self.stride > self.cap { self.grow!((n + 1) * self.stride) }
             self.count = n + 1
         }
-        rt_write<T>(rt_offset(self.base, n * self.stride), sink value)
+        rtWrite<T>(rtOffset(self.base, n * self.stride), sink value)
         self.toLink(n)
     }
 
@@ -86,9 +86,9 @@ impl<T, W> pool<T, W> {
         if ncap < 4096 { ncap = 4096 }
         if ncap < needed { ncap = needed }
         if self.cap > 0 {
-            self.base = rt_realloc(self.base, ncap)
+            self.base = rtRealloc(self.base, ncap)
         } else {
-            self.base = rt_alloc(ncap)
+            self.base = rtAlloc(ncap)
         }
         self.cap = ncap
     }
@@ -100,17 +100,17 @@ impl<T, W> pool<T, W> {
     }
 
     //~ The value `l` names (a plain value, so this is a bit-for-bit copy).
-    fn get(self, l: link<T, W>) -> T = rt_clone<T>(rt_offset(self.base, self.offsetOf(l)))
+    fn get(self, l: link<T, W>) -> T = rtClone<T>(rtOffset(self.base, self.offsetOf(l)))
 
     //~ Overwrites the value `l` names.
     fn set(inout self, l: link<T, W>, sink value: T) {
-        rt_write<T>(rt_offset(self.base, self.offsetOf(l)), sink value)
+        rtWrite<T>(rtOffset(self.base, self.offsetOf(l)), sink value)
     }
 
     //~ Frees the slot `l` names for the next `add!`; `l` must not be used again.
     fn remove(inout self, l: link<T, W>) {
         const n = self.slotOf(l)
-        self.setNextFree(rt_offset(self.base, self.offsetOf(l)), self.free)
+        self.setNextFree(rtOffset(self.base, self.offsetOf(l)), self.free)
         self.free = n
     }
 

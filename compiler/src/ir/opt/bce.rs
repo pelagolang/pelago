@@ -36,7 +36,7 @@ use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 
 thread_local! {
-    /// The function that makes room in a list (`rt_grow_slow`), while a module is optimised.
+    /// The function that makes room in a list (`rtGrowSlow`), while a module is optimised.
     static GROW: Cell<Option<u32>> = const { Cell::new(None) };
 }
 
@@ -45,7 +45,7 @@ pub fn set_grow(m: Option<&Module>) {
     let id = m.and_then(|m| {
         m.funcs
             .iter()
-            .position(|f| f.name == "rt_grow_slow" && f.params.len() == 3)
+            .position(|f| f.name == "rtGrowSlow" && f.params.len() == 3)
             .map(|i| i as u32)
     });
     GROW.with(|g| g.set(id));
@@ -539,14 +539,14 @@ struct Hoist {
     off: i64,
 }
 
-/// A loop whose only calls are `rt_grow_slow`, behind a capacity test, and whose stores are pushes to
+/// A loop whose only calls are `rtGrowSlow`, behind a capacity test, and whose stores are pushes to
 /// one list (`out.push!(x)` four times a pass, say). Its length, capacity and data pointer live in
 /// the header parameters of the loop. The guard grows the list once, to the length it has after every
 /// pass (the capacity is not observable), so the fast copy has no capacity tests and no calls, and
 /// nothing in it can reach the words it reads from other lists: those loads happen once, in the guard.
 /// The checked copy is the loop as it was.
 struct Push {
-    /// The slot that holds the list header while `rt_grow_slow` runs.
+    /// The slot that holds the list header while `rtGrowSlow` runs.
     h: Value,
     /// Bytes per element.
     size: i64,
@@ -753,7 +753,7 @@ fn push_plan(x: &Facts, dom: &Dom, counter: &Counter) -> Option<Push> {
             (CmpOp::Gt, true) | (CmpOp::Le, false) => (b2, a),
             _ => return None,
         };
-        // The call: `rt_grow_slow(h, size, need)`, with `h` a slot made before the loop.
+        // The call: `rtGrowSlow(h, size, need)`, with `h` a slot made before the loop.
         let mut call = None;
         for &ii in &sb.insts {
             if let Op::Call(cf, args) = &f.insts[ii].op {
@@ -1310,7 +1310,7 @@ fn apply(f: &mut Func, lp: &Loop, plan: Plan) {
             ),
         );
         g.cur = grows;
-        // The header as `rt_grow_slow` reads it: data, length, capacity.
+        // The header as `rtGrowSlow` reads it: data, length, capacity.
         for (off, v) in [(0, d0), (8, l0), (16, c0)] {
             let a = g.at(p.h, off);
             let b = g.cur;
