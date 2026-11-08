@@ -1,0 +1,8 @@
+ok x=9223372036854775807 y=7 tags=["a", "b"]
+error 2:7: $.y: 300 does not fit in uint8 (0 to 255)
+error 1:32: $.tags[1]: expected text, found an integer
+error 1:7: $.x: expected a whole number, found a number
+error 1:1: $: missing field "x"
+error 1:1: $: expected an object, found an array
+error 1:17: $: a key must be a string
+9223372036854775807 9007199254740993

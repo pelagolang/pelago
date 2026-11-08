@@ -6,12 +6,15 @@
 /// const doc = json.parse("{\"name\": \"Pelago\", \"tags\": [1, 2]}")?
 /// print(doc.get("name"), doc.encode())
 /// ```
-/// Numbers are floats. Objects keep their keys in the order they were written.
+/// A number without fraction or exponent that fits `int` is an `integer`, so large ids stay exact; every other
+/// number is a `number` (a float). Objects keep their keys in the order they were written.
+/// Typed decoding into your own structs: `docs/design/json.md`.
 
 //~ One JSON value.
 pub enum value {
     nothing
     flag(value: bool)
+    integer(value: int)
     number(value: float)
     text(value: string)
     items(values: [value])
@@ -104,8 +107,9 @@ fn readString(s: str, inout p: int) -> string ! parse_error {
     ok(out)
 }
 
-fn readNumber(s: str, inout p: int) -> float ! parse_error {
+fn readNumber(s: str, inout p: int) -> value ! parse_error {
     const start = p
+    var whole = true
     if p < s.len() && s.byteAt(p) == 45 { p += 1 }
     var digits = 0
     while p < s.len() && s.byteAt(p) >= 48 && s.byteAt(p) <= 57 {
@@ -121,9 +125,11 @@ fn readNumber(s: str, inout p: int) -> float ! parse_error {
             frac += 1
         }
         if frac == 0 { return err(fail("a number needs digits after the point")) }
+        whole = false
     }
     if p < s.len() && (s.byteAt(p) == 101 || s.byteAt(p) == 69) {
         p += 1
+        whole = false
         if p < s.len() && (s.byteAt(p) == 43 || s.byteAt(p) == 45) { p += 1 }
         var exp = 0
         while p < s.len() && s.byteAt(p) >= 48 && s.byteAt(p) <= 57 {
@@ -133,7 +139,13 @@ fn readNumber(s: str, inout p: int) -> float ! parse_error {
         if exp == 0 { return err(fail("a number needs digits in the exponent")) }
     }
     const text = s[start..p]
-    text.parseFloat()
+    if whole {
+        /// Too large for `int`: falls through to a float.
+        const n = text.parseInt()
+        if n.isOk() { return ok(value.integer(value: n.or(0))) }
+    }
+    const f = text.parseFloat()?
+    ok(value.number(value: f))
 }
 
 fn expectWord(s: str, inout p: int, word: str) -> bool {
@@ -226,19 +238,64 @@ fn readValue(s: str, inout p: int, depth: int) -> value ! parse_error {
         return err(fail("unknown word"))
     }
     if c == 45 || (c >= 48 && c <= 57) {
-        const n = readNumber(s, inout p)?
-        return ok(value.number(value: n))
+        return readNumber(s, inout p)
     }
     err(fail("unexpected character"))
 }
 
-//~ Reads a document. The whole text must be one value, with spaces around it allowed.
-pub fn parse(text: str) -> value ! parse_error {
-    var p = 0
+/// The line and column (counting characters, from 1) of a byte offset.
+fn lineColumn(s: str, upTo: int, inout line: int, inout column: int) {
+    line = 1
+    column = 1
+    var i = 0
+    while i < upTo && i < s.len() {
+        const b = s.byteAt(i) to int
+        if b == 10 {
+            line += 1
+            column = 1
+        } else if b < 128 || b >= 192 {
+            column += 1
+        }
+        i += 1
+    }
+}
+
+fn where(s: str, upTo: int) -> string {
+    var line = 1
+    var column = 1
+    lineColumn(s, upTo, inout line, inout column)
+    "line #line, column #column"
+}
+
+fn rawMessage(r: value ! parse_error) -> string {
+    switch r {
+        case err(e): copy e.message
+        case ok(_): ""
+    }
+}
+
+fn withPosition(s: str, p: int, r: value ! parse_error) -> string {
+    switch r {
+        case err(e): "#(e.message) (#(where(s, p)))"
+        case ok(_): ""
+    }
+}
+
+/// The document, with the raw messages; `p` ends where the error was found.
+fn parseDoc(text: str, inout p: int) -> value ! parse_error {
     const v = readValue(text, inout p, 0)?
     skip(text, inout p)
     if p < text.len() { return err(fail("text after the end of the document")) }
     ok(v)
+}
+
+//~ Reads a document. The whole text must be one value, with spaces around it allowed. An error says where it
+//~ is: `the string is not closed (line 3, column 9)`.
+pub fn parse(text: str) -> value ! parse_error {
+    var p = 0
+    const r = parseDoc(text, inout p)
+    if r.isErr() { return err(parse_error { message: withPosition(text, p, r) }) }
+    return r
 }
 
 fn quote(inout out: string, s: str) {
@@ -273,6 +330,7 @@ fn write(inout out: string, v: value, indent: int, level: int) {
     switch v {
         case .nothing: out.pushStr!("null")
         case .flag(b): out.pushStr!(b ? "true" : "false")
+        case .integer(n): out.pushStr!("#n")
         case .number(n): out.pushStr!("#n")
         case .text(t): quote(inout out, t)
         case .items(values):
@@ -363,6 +421,7 @@ impl value {
     fn asNumber(self) -> float? {
         switch self {
             case .number(n): n
+            case .integer(n): n to float
             case _: none
         }
     }
@@ -393,4 +452,212 @@ impl value {
 
 impl show for value {
     fn show(self) -> string = self.encode()
+}
+
+//~ A document did not fit the type being filled. `path` is where (`$.servers[2].port`), `line` and `column`
+//~ say where in the text (both 0 when the error did not come from text). `trail` is the same place as member
+//~ numbers, the form the decoders work with.
+pub struct json_error {
+    pub message: string
+    pub trail: [int]
+    pub path: string
+    pub line: int
+    pub column: int
+}
+
+impl show for json_error {
+    fn show(self) -> string {
+        const where = self.line > 0 ? "#(self.line):#(self.column): " : ""
+        "#where#(self.path): #(self.message)"
+    }
+}
+
+/// A new error at the place `at` names.
+fn problem(sink message: string, at: [int]) -> json_error {
+    json_error { message: message, trail: copy at, path: "", line: 0, column: 0 }
+}
+
+/// The place `trail` names in `root`, written `$.servers[2].port`.
+fn pathOf(root: value, trail: [int]) -> string {
+    var out = "$"
+    var d = 0
+    var here = copy root
+    while d < trail.len() {
+        const i = trail[d]
+        switch here {
+            case .fields(keys, values):
+                if i < 0 || i >= keys.len() { return out }
+                out.pushStr!(".")
+                out.pushStr!(keys[i])
+                here = copy values[i]
+            case .items(values):
+                if i < 0 || i >= values.len() { return out }
+                out.pushStr!("[#i]")
+                here = copy values[i]
+            case _: return out
+        }
+        d += 1
+    }
+    out
+}
+
+/// The byte offset where the value `trail` names starts in the text (the text is a valid document).
+fn locate(s: str, trail: [int]) -> int {
+    var p = 0
+    skip(s, inout p)
+    var d = 0
+    while d < trail.len() {
+        if p >= s.len() { return p }
+        const c = s.byteAt(p) to int
+        if c != 123 && c != 91 { return p }
+        const isObject = c == 123
+        const target = trail[d]
+        p += 1
+        var j = 0
+        while true {
+            skip(s, inout p)
+            if p >= s.len() { return p }
+            const e = s.byteAt(p) to int
+            if e == 93 || e == 125 { return p }
+            if isObject {
+                if readString(s, inout p).isErr() { return p }
+                skip(s, inout p)
+                p += 1
+                skip(s, inout p)
+            }
+            if j == target { break }
+            if readValue(s, inout p, 0).isErr() { return p }
+            skip(s, inout p)
+            if p < s.len() && s.byteAt(p) == 44 { p += 1 }
+            j += 1
+        }
+        d += 1
+    }
+    p
+}
+
+//~ Fills in the path, line and column of an error that came from decoding `root`, which was read from `text`.
+pub fn located(text: str, root: value, e: json_error) -> json_error {
+    var line = 1
+    var column = 1
+    lineColumn(text, locate(text, e.trail), inout line, inout column)
+    json_error {
+        message: copy e.message,
+        trail: copy e.trail,
+        path: pathOf(root, e.trail),
+        line: line,
+        column: column
+    }
+}
+
+//~ Fills in the path of an error from a tree that has no text (line and column stay 0).
+pub fn pathed(root: value, e: json_error) -> json_error {
+    json_error {
+        message: copy e.message,
+        trail: copy e.trail,
+        path: pathOf(root, e.trail),
+        line: 0,
+        column: 0
+    }
+}
+
+impl converts<json_error> for parse_error {
+    fn convert(self) -> json_error {
+        json_error { message: copy self.message, trail: [], path: "$", line: 0, column: 0 }
+    }
+}
+
+//~ Reads a document, with the errors as `json_error` (the place is in `line` and `column`).
+pub fn document(text: str) -> value ! json_error {
+    var p = 0
+    const r = parseDoc(text, inout p)
+    if r.isErr() {
+        var line = 1
+        var column = 1
+        lineColumn(text, p, inout line, inout column)
+        return err(json_error { message: rawMessage(r), trail: [], path: "$", line: line, column: column })
+    }
+    ok(r?)
+}
+
+/// What kind of value this is, for messages.
+fn describe(v: value) -> string {
+    switch v {
+        case .nothing: "null"
+        case .flag(_): "a boolean"
+        case .integer(_): "an integer"
+        case .number(_): "a number"
+        case .text(_): "text"
+        case .items(_): "an array"
+        case .fields(_, _): "an object"
+    }
+}
+
+impl value {
+    //~ The error for a value of the wrong kind: `expected an object, found text`.
+    fn mismatch(self, expected: str, at: [int]) -> json_error {
+        problem("expected #expected, found #(describe(self))", at)
+    }
+
+    //~ The error for a missing member of an object.
+    fn missing(self, key: str, at: [int]) -> json_error {
+        problem("missing field \"#key\"", at)
+    }
+
+    //~ The number of the member `key` of an object, or -1 when there is none (or this is not an object).
+    fn indexOf(self, key: str) -> int {
+        switch self {
+            case .fields(keys, _):
+                var i = 0
+                while i < keys.len() {
+                    if keys[i] == key { return i }
+                    i += 1
+                }
+                -1
+            case _: -1
+        }
+    }
+
+    //~ A whole number from `lo` to `hi`: `name` is the type's name for the message. `1.0` is not a whole number
+    //~ and a number outside the range is an error, never wrapped.
+    fn toRanged(self, lo: int, hi: int, name: str, at: [int]) -> int ! json_error {
+        switch self {
+            case .integer(n):
+                if n < lo || n > hi {
+                    return err(problem("#n does not fit in #name (#lo to #hi)", at))
+                }
+                ok(n)
+            case _: err(self.mismatch("a whole number", at))
+        }
+    }
+
+    fn toInt(self, at: [int]) -> int ! json_error = self.toRanged(
+        -9223372036854775808,
+        9223372036854775807,
+        "int",
+        at,
+    )
+
+    //~ A float; a whole number is accepted too (`1` for `1.0`).
+    fn toFloat(self, at: [int]) -> float ! json_error {
+        switch self {
+            case .number(n): ok(n)
+            case .integer(n): ok(n to float)
+            case _: err(self.mismatch("a number", at))
+        }
+    }
+
+    fn toBool(self, at: [int]) -> bool ! json_error {
+        switch self {
+            case .flag(b): ok(b)
+            case _: err(self.mismatch("a boolean", at))
+        }
+    }
+
+    fn toText(self, at: [int]) -> string ! json_error {
+        switch self {
+            case .text(t): ok(copy t)
+            case _: err(self.mismatch("text", at))
+        }
+    }
 }
