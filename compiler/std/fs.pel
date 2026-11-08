@@ -33,11 +33,11 @@ fn openMode(path: str, mode: int) -> io.file ! io_error {
     }
     /// The path as a zero-terminated block for the system call.
     const n = path.len()
-    const p = rt_alloc(n + 1)
-    if n > 0 { rt_copy(p, rt_hdr_data(rt_addr_of(path)), n) }
-    rt_store_byte(rt_offset(p, n), 0)
-    const fd = rt_os_open(p, mode)
-    rt_free(p)
+    const p = rtAlloc(n + 1)
+    if n > 0 { rtCopy(p, rtHdrData(rtAddrOf(path)), n) }
+    rtStoreByte(rtOffset(p, n), 0)
+    const fd = rtOsOpen(p, mode)
+    rtFree(p)
     if fd < 0 { return err(io.failure(fd, "opening", path)) }
     var name = ""
     name.pushStr!(path)

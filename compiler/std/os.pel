@@ -12,6 +12,6 @@
 //~ Ends the program at once with this status: standard output is flushed, `defer` and `deinit` do not run
 //~ (like a panic, but without a message).
 pub fn exit(code: int) -> never {
-    rt_os_exit(code)
+    rtOsExit(code)
     unreachable()
 }

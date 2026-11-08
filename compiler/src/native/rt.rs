@@ -104,7 +104,7 @@ fn win_call7(a: &mut Asm, import: usize, setup: impl FnOnce(&mut Asm)) {
 const SMALL_MAX: i32 = 64 * 1024;
 const LARGE_CLASS: i32 = 255;
 /// Windows: a large block of at least this many bytes reserves eight times its size up front and
-/// commits pages as it grows, so `rt_realloc` extends it in place (there is no `mremap`).
+/// commits pages as it grows, so `rtRealloc` extends it in place (there is no `mremap`).
 const RESERVE_MIN: i32 = 1 << 20;
 
 /// Linux: the largest payload served from the region; bigger blocks get their own mapping.
@@ -117,7 +117,7 @@ pub(super) const REGION_MIN: i32 = 1 << 24;
 /// pointer, bump limit, block size) and then the span table at this offset (one byte per 64 KiB span).
 pub(super) const SPAN_TABLE: i32 = 2048;
 
-/// Emits the Linux small-block allocator for `rt_alloc` (payload size in `rdi`, `rbx` and `r12` saved
+/// Emits the Linux small-block allocator for `rtAlloc` (payload size in `rdi`, `rbx` and `r12` saved
 /// by the caller): classes 16 to 256 bytes in steps of 16, then four per doubling up to
 /// [`REGION_MAX`]; blocks come from 64 KiB spans bump-carved out of one reserved region, with no header.
 /// A reused block is cleared; a carved one is zero already. Ends with `ret`; larger sizes jump to `large`.
@@ -301,27 +301,27 @@ fn emit_region_alloc(a: &mut Asm, large: Label, oom: Label) {
 
 /// The entry points of the runtime.
 pub struct Runtime {
-    /// `rt_write(fd = rdi, ptr = rsi, len = rdx)`: writes everything or gives up on an error.
+    /// `rtWrite(fd = rdi, ptr = rsi, len = rdx)`: writes everything or gives up on an error.
     pub write_fd: Label,
-    /// `rt_print(ptr = rsi, len = rdx)`: appends to the output buffer; clobbers the argument registers.
+    /// `rtPrint(ptr = rsi, len = rdx)`: appends to the output buffer; clobbers the argument registers.
     pub print: Label,
-    /// `rt_stop(ptr = rdi, len = rsi)`: prints `stopped: <message>` to standard error and exits with status 1.
+    /// `rtStop(ptr = rdi, len = rsi)`: prints `stopped: <message>` to standard error and exits with status 1.
     pub stop: Label,
-    /// `rt_alloc(size = rdi) -> rax`: zeroed memory, 16-byte aligned; never fails (stops when out of memory).
+    /// `rtAlloc(size = rdi) -> rax`: zeroed memory, 16-byte aligned; never fails (stops when out of memory).
     pub alloc: Label,
-    /// `rt_free(ptr = rdi)`: accepts null.
+    /// `rtFree(ptr = rdi)`: accepts null.
     pub free: Label,
-    /// `rt_realloc(ptr = rdi, size = rsi) -> rax`: a block of the new size holding the old contents (null
+    /// `rtRealloc(ptr = rdi, size = rsi) -> rax`: a block of the new size holding the old contents (null
     /// allocates); the rest is zero. A large block is remapped, so growing a big buffer copies nothing.
     pub realloc: Label,
-    /// `rt_exit(status = rdi)`
+    /// `rtExit(status = rdi)`
     pub exit: Label,
-    /// `rt_write_u64(fd = rdi, value = rsi)`: decimal digits.
+    /// `rtWriteU64(fd = rdi, value = rsi)`: decimal digits.
     pub write_u64: Label,
-    /// `rt_ctx_init(base = rdi, size = rsi, code = rdx, env = rcx) -> rax`: a context on that stack that
-    /// starts by calling `code(env)`; the result is what `rt_ctx_switch` takes.
+    /// `rtCtxInit(base = rdi, size = rsi, code = rdx, env = rcx) -> rax`: a context on that stack that
+    /// starts by calling `code(env)`; the result is what `rtCtxSwitch` takes.
     pub ctx_init: Label,
-    /// `rt_ctx_switch(save = rdi, to = rsi)`: saves the callee-saved registers on this stack, stores the
+    /// `rtCtxSwitch(save = rdi, to = rsi)`: saves the callee-saved registers on this stack, stores the
     /// stack pointer at `save`, and continues the context `to`.
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
@@ -558,7 +558,7 @@ pub fn emit_for(
         a.store(mem(RSP, 48), RAX, 8);
         a.store_imm(mem(RSP, 56), 0, 8);
         for sig in [11, 7] {
-            a.mov_ri(RAX, 13); // rt_sigaction(sig, &act, 0, 8)
+            a.mov_ri(RAX, 13); // rtSigaction(sig, &act, 0, 8)
             a.mov_ri(RDI, sig);
             a.lea(RSI, mem(RSP, 32));
             a.alu_rr(Alu::Xor, RDX, RDX, 4);
@@ -594,7 +594,7 @@ pub fn emit_for(
     a.alu_rr(Alu::Xor, RDI, RDI, 4);
     a.call(rt.exit);
 
-    // ---- rt_exit -----------------------------------------------------------------------------------
+    // ---- rtExit -----------------------------------------------------------------------------------
     a.bind(rt.exit);
     if uses.print {
         a.push(RDI);
@@ -611,8 +611,8 @@ pub fn emit_for(
     a.ud2();
 
     if uses.print {
-        // ---- rt_flush ----------------------------------------------------------------------------------
-        // Writes what the output buffer holds. Falls through nowhere: it ends in `rt_write` or a `ret`.
+        // ---- rtFlush ----------------------------------------------------------------------------------
+        // Writes what the output buffer holds. Falls through nowhere: it ends in `rtWrite` or a `ret`.
         a.bind(flush);
         {
             let none = a.new_label();
@@ -630,7 +630,7 @@ pub fn emit_for(
             a.ret();
         }
 
-        // ---- rt_print ----------------------------------------------------------------------------------
+        // ---- rtPrint ----------------------------------------------------------------------------------
         // Buffered standard output: copy into the buffer; when it does not fit, write the buffer out
         // first; text that is bigger than the whole buffer is written directly.
         a.bind(rt.print);
@@ -682,7 +682,7 @@ pub fn emit_for(
         }
     }
 
-    // ---- rt_write ----------------------------------------------------------------------------------
+    // ---- rtWrite ----------------------------------------------------------------------------------
     a.bind(rt.write_fd);
     if win {
         // GetStdHandle once, then WriteFile until everything is written. `rbx`, `r12`, `r13` hold the
@@ -747,7 +747,7 @@ pub fn emit_for(
     }
 
     if leak_check || uses.write_u64 {
-        // ---- rt_write_u64 ------------------------------------------------------------------------------
+        // ---- rtWriteU64 ------------------------------------------------------------------------------
         a.bind(rt.write_u64);
         a.push(RBX);
         a.alu_ri(Alu::Sub, RSP, 32, 8);
@@ -772,7 +772,7 @@ pub fn emit_for(
         a.ret();
     }
 
-    // ---- rt_stop -----------------------------------------------------------------------------------
+    // ---- rtStop -----------------------------------------------------------------------------------
     a.bind(rt.stop);
     a.mov_rr(R12, RDI, 8);
     a.mov_rr(R13, RSI, 8);
@@ -876,7 +876,7 @@ pub fn emit_for(
         a.mov_ri(RSI, 13);
         a.call(rt.stop);
 
-        // ---- rt_alloc ----------------------------------------------------------------------------------
+        // ---- rtAlloc ----------------------------------------------------------------------------------
         a.bind(rt.alloc);
         a.push(RBX);
         a.push(R12);
@@ -1041,7 +1041,7 @@ pub fn emit_for(
     }
 
     if uses.ctx {
-        // ---- rt_ctx_switch / rt_ctx_init --------------------------------------------------------------
+        // ---- rtCtxSwitch / rtCtxInit --------------------------------------------------------------
         // A saved context is a stack pointer with six registers above it, then the return address:
         // r15, r14, r13, r12, rbp, rbx, ret.
         a.bind(rt.ctx_switch);
@@ -1075,7 +1075,7 @@ pub fn emit_for(
     }
 
     if free_used {
-        // ---- rt_free -----------------------------------------------------------------------------------
+        // ---- rtFree -----------------------------------------------------------------------------------
         a.bind(rt.free);
         let (fdone, flarge) = (a.new_label(), a.new_label());
         a.test_rr(RDI, RDI, 8);
@@ -1147,7 +1147,7 @@ pub fn emit_for(
     }
 
     if uses.realloc {
-        // ---- rt_realloc --------------------------------------------------------------------------------
+        // ---- rtRealloc --------------------------------------------------------------------------------
         // A large block moves with `mremap` (Linux): the kernel moves the pages, nothing is copied and the
         // new tail is zero. Anything else gets a new block, the smaller of the two sizes copied, and the
         // old block freed. Windows has no remap: a large block reserves eight times its size and commits

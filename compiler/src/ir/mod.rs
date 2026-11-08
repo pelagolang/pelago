@@ -539,11 +539,11 @@ pub struct Module {
     pub funcs: Vec<Func>,
     /// Static data, such as string literals.
     pub data: Vec<Vec<u8>>,
-    /// The number of the zeroed data block that holds the words of `rt_data_word`, once a function asks.
+    /// The number of the zeroed data block that holds the words of `rtDataWord`, once a function asks.
     pub words: Option<u32>,
 }
 
-/// The words `rt_data_word` can name: the library keeps its own state there (the heap's chunk lists).
+/// The words `rtDataWord` can name: the library keeps its own state there (the heap's chunk lists).
 pub const DATA_WORDS: usize = 64;
 
 impl Module {

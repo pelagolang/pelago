@@ -718,10 +718,10 @@ fn program_sp1() {
     assert_eq!(output_of(src), "42\n");
 }
 
-/// Two contexts passing control back and forth (`rt_ctx_init`, `rt_ctx_switch`), the base of tasks and coroutines.
+/// Two contexts passing control back and forth (`rtCtxInit`, `rtCtxSwitch`), the base of tasks and coroutines.
 #[test]
 fn program_ctx1() {
-    let src = "var g_main: ptr = rt_null()\nvar g_co: ptr = rt_null()\nfn body() {\n for k of 0..3 {\n  print(\"co #k\")\n  rt_ctx_switch(g_co, rt_load_ptr(g_main))\n }\n print(\"co done\")\n rt_ctx_switch(g_co, rt_load_ptr(g_main))\n}\nfn main() {\n const stack = rt_alloc(65536)\n g_main = rt_alloc(8)\n g_co = rt_alloc(8)\n const blk = rt_alloc(16)\n const f: once fn() = () ~> body()\n rt_write<once fn()>(blk, sink f)\n var co = rt_ctx_init(stack, 65536, rt_load_ptr(blk), rt_load_ptr(rt_offset(blk, 8)))\n for k of 0..4 {\n  print(\"main #k\")\n  rt_ctx_switch(g_main, co)\n  co = rt_load_ptr(g_co)\n }\n const back = rt_read<once fn()>(blk)\n rt_free(stack)\n rt_free(g_main)\n rt_free(g_co)\n rt_free(blk)\n}\n";
+    let src = "var g_main: ptr = rtNull()\nvar g_co: ptr = rtNull()\nfn body() {\n for k of 0..3 {\n  print(\"co #k\")\n  rtCtxSwitch(g_co, rtLoadPtr(g_main))\n }\n print(\"co done\")\n rtCtxSwitch(g_co, rtLoadPtr(g_main))\n}\nfn main() {\n const stack = rtAlloc(65536)\n g_main = rtAlloc(8)\n g_co = rtAlloc(8)\n const blk = rtAlloc(16)\n const f: once fn() = () ~> body()\n rtWrite<once fn()>(blk, sink f)\n var co = rtCtxInit(stack, 65536, rtLoadPtr(blk), rtLoadPtr(rtOffset(blk, 8)))\n for k of 0..4 {\n  print(\"main #k\")\n  rtCtxSwitch(g_main, co)\n  co = rtLoadPtr(g_co)\n }\n const back = rtRead<once fn()>(blk)\n rtFree(stack)\n rtFree(g_main)\n rtFree(g_co)\n rtFree(blk)\n}\n";
     assert_eq!(
         output_of(src),
         "main 0\nco 0\nmain 1\nco 1\nmain 2\nco 2\nmain 3\nco done\n"
@@ -2079,7 +2079,7 @@ fn main() {
         const a = -x
         const b = a % y
         const c = (i to float) * 0.5 - b
-        acc += c + ((rt_to_int(c)) to float) + ((i to float32) to float)
+        acc += c + ((rtToInt(c)) to float) + ((i to float32) to float)
         x = x * 1.25 + 0.0
         y = -y * 0.5
     }
@@ -3338,7 +3338,7 @@ fn pool_native_agrees() {
 
 #[test]
 fn pool_links_are_narrow_and_a_full_pool_stops() {
-    let size = "struct n { a: link<n, uint16>, b: link<n, uint16>, k: int32 }\nfn main() {\n print(rt_size_of<n>()) }\n";
+    let size = "struct n { a: link<n, uint16>, b: link<n, uint16>, k: int32 }\nfn main() {\n print(rtSizeOf<n>()) }\n";
     assert_eq!(output_of(size), "8\n");
     let full = "fn main() {\n var p: pool<int, uint8> = pool()\n for i in 0..300 { p.add!(i) } }\n";
     let o = run_main(full);

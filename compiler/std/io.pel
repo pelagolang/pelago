@@ -20,13 +20,13 @@
 const chunk: int = 4096
 
 fn writeAll(fd: int, text: str) -> int {
-    const h = rt_addr_of(text)
-    var p = rt_load_ptr(h)
-    var n = rt_hdr_len(h)
+    const h = rtAddrOf(text)
+    var p = rtLoadPtr(h)
+    var n = rtHdrLen(h)
     while n > 0 {
-        const k = rt_os_write(fd, p, n)
+        const k = rtOsWrite(fd, p, n)
         if k <= 0 { return if k < 0 { k } else { -3 } }
-        p = rt_offset(p, k)
+        p = rtOffset(p, k)
         n -= k
     }
     0
@@ -89,31 +89,31 @@ pub struct file {
     }
 
     deinit {
-        if self.fd >= 3 { rt_os_close(self.fd) }
+        if self.fd >= 3 { rtOsClose(self.fd) }
     }
 }
 
 impl file {
     /// Reads another chunk into the buffer: the count read, 0 at the end, or a negative error.
     fn fill(inout self) -> int {
-        const h = rt_addr_of(self.buf)
-        var len = rt_hdr_len(h)
+        const h = rtAddrOf(self.buf)
+        var len = rtHdrLen(h)
         if self.pos > 0 {
             const rest = len - self.pos
             if rest == 0 {
                 len = 0
                 self.pos = 0
-                rt_hdr_set_len(h, 0)
+                rtHdrSetLen(h, 0)
             } else if rest <= self.pos {
-                rt_copy(rt_hdr_data(h), rt_offset(rt_hdr_data(h), self.pos), rest)
+                rtCopy(rtHdrData(h), rtOffset(rtHdrData(h), self.pos), rest)
                 len = rest
                 self.pos = 0
-                rt_hdr_set_len(h, rest)
+                rtHdrSetLen(h, rest)
             }
         }
-        rt_grow(h, 1, len + chunk)
-        const k = rt_os_read(self.fd, rt_offset(rt_hdr_data(h), len), chunk)
-        if k > 0 { rt_hdr_set_len(h, len + k) }
+        rtGrow(h, 1, len + chunk)
+        const k = rtOsRead(self.fd, rtOffset(rtHdrData(h), len), chunk)
+        if k > 0 { rtHdrSetLen(h, len + k) }
         k
     }
 
@@ -127,7 +127,7 @@ impl file {
     /// The buffered bytes from `from` up to `to`, as text.
     fn slice(self, from: int, to: int) -> string {
         var out = ""
-        if to > from { rt_str_push(rt_addr_of(out), rt_offset(rt_hdr_data(rt_addr_of(self.buf)), from), to - from) }
+        if to > from { rtStrPush(rtAddrOf(out), rtOffset(rtHdrData(rtAddrOf(self.buf)), from), to - from) }
         out
     }
 
@@ -136,14 +136,14 @@ impl file {
         self.code = 0
         var from = self.pos
         while true {
-            const h = rt_addr_of(self.buf)
-            const len = rt_hdr_len(h)
-            const data = rt_hdr_data(h)
+            const h = rtAddrOf(self.buf)
+            const len = rtHdrLen(h)
+            const data = rtHdrData(h)
             var i = from
-            while i < len && rt_load_byte(rt_offset(data, i)) != 10 { i += 1 }
+            while i < len && rtLoadByte(rtOffset(data, i)) != 10 { i += 1 }
             if i < len {
                 var end = i
-                if end > self.pos && rt_load_byte(rt_offset(data, end - 1)) == 13 { end -= 1 }
+                if end > self.pos && rtLoadByte(rtOffset(data, end - 1)) == 13 { end -= 1 }
                 const line = self.slice(self.pos, end)
                 self.pos = i + 1
                 if self.pos == len { self.release!() }
@@ -156,13 +156,13 @@ impl file {
                 return none
             }
             if k == 0 {
-                const end = rt_hdr_len(rt_addr_of(self.buf))
+                const end = rtHdrLen(rtAddrOf(self.buf))
                 if end == self.pos {
                     self.release!()
                     return none
                 }
                 var stop = end
-                if rt_load_byte(rt_offset(rt_hdr_data(rt_addr_of(self.buf)), stop - 1)) == 13 { stop -= 1 }
+                if rtLoadByte(rtOffset(rtHdrData(rtAddrOf(self.buf)), stop - 1)) == 13 { stop -= 1 }
                 const line = self.slice(self.pos, stop)
                 self.release!()
                 return line
@@ -175,20 +175,20 @@ impl file {
     /// Everything left; when a read fails, what was read before it (`code` tells).
     fn rest(inout self) -> string {
         self.code = 0
-        var out = self.slice(self.pos, rt_hdr_len(rt_addr_of(self.buf)))
+        var out = self.slice(self.pos, rtHdrLen(rtAddrOf(self.buf)))
         self.release!()
-        const o = rt_addr_of(out)
+        const o = rtAddrOf(out)
         while true {
-            const len = rt_hdr_len(o)
-            rt_grow(o, 1, len + chunk)
-            const room = rt_hdr_cap(o) - len
-            const k = rt_os_read(self.fd, rt_offset(rt_hdr_data(o), len), room)
+            const len = rtHdrLen(o)
+            rtGrow(o, 1, len + chunk)
+            const room = rtHdrCap(o) - len
+            const k = rtOsRead(self.fd, rtOffset(rtHdrData(o), len), room)
             if k < 0 {
                 self.code = k
                 break
             }
             if k == 0 { break }
-            rt_hdr_set_len(o, len + k)
+            rtHdrSetLen(o, len + k)
         }
         out
     }
@@ -197,10 +197,10 @@ impl file {
     fn toBytes(self, text: str) -> [byte] {
         var out: [byte] = []
         const n = text.len()
-        const o = rt_addr_of(out)
-        rt_grow(o, 1, n)
-        rt_copy(rt_hdr_data(o), rt_hdr_data(rt_addr_of(text)), n)
-        rt_hdr_set_len(o, n)
+        const o = rtAddrOf(out)
+        rtGrow(o, 1, n)
+        rtCopy(rtHdrData(o), rtHdrData(rtAddrOf(text)), n)
+        rtHdrSetLen(o, n)
         out
     }
 

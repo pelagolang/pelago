@@ -45,9 +45,9 @@ The library keeps one decoder per source, shared by the eager and fused paths so
 
 | Source | Helper (library) | Per-turn state |
 |---|---|---|
-| `s.chars()` | `rt_char_at(p, i, n)` (done) | byte offset; width in a slot |
+| `s.chars()` | `rtCharAt(p, i, n)` (done) | byte offset; width in a slot |
 | `s.bytes()` | a plain byte load | byte offset |
-| `s.split(sep)` | `rt_split_next(s, sep, pos)` gives the next piece's start and end, or "done" | position of the next search |
+| `s.split(sep)` | `rtSplitNext(s, sep, pos)` gives the next piece's start and end, or "done" | position of the next search |
 | `r.iter()` (range), `xs.iter()`, `m.keys()`, `m.values()` | already loop shapes in `for_each` / `for_range` | index |
 
 Adapters inside a fused loop: `map(f)` evaluates `f(x)` into the loop variable's slot; `filter(p)` branches to the step block when `p(x)` is false.

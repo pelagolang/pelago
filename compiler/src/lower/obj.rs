@@ -249,7 +249,7 @@ impl<'a> Lowerer<'a> {
     pub(crate) fn obj_is(&mut self, o: Value, target: Ty) -> Option<Value> {
         let id = self.obj_type_id(target);
         let want = self.i64c(id);
-        self.call_core("rt_obj_is", vec![o, want])
+        self.call_core("rtObjIs", vec![o, want])
     }
 
     /// `x to? dog`: the object moves into the option when it is a `dog`.

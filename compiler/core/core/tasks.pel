@@ -7,7 +7,7 @@ pub struct closed {}
 
 //~ A running task that will produce a `T`. `join!!()` waits and consumes it.
 //~
-//~ A task is a function on a stack of its own (`rt_ctx_init`). One worker runs the tasks in turn: a spawned task
+//~ A task is a function on a stack of its own (`rtCtxInit`). One worker runs the tasks in turn: a spawned task
 //~ starts when the running one waits (a `join`, a `recv` on an empty channel, a `select` with nothing ready, the
 //~ end of a `scope` or of `main`) or calls `yield_now()`. Waiting lets the others run, so tasks may talk back and
 //~ forth. Several workers come later (docs/design/concurrency-runtime.md).
@@ -16,215 +16,216 @@ pub struct task<T> {
 
     deinit {
         /// Dropping the handle detaches the task; a task that is already done is freed here.
-        if rt_load_int(self.state) == 1 {
-            rt_drop_at<T>(rt_offset(self.state, 64))
-            rt_free(self.state)
+        if rtLoadInt(self.state) == 1 {
+            rtDropAt<T>(rtOffset(self.state, 64))
+            rtFree(self.state)
         } else {
-            rt_store_int(rt_offset(self.state, 16), 1)
+            rtStoreInt(rtOffset(self.state, 16), 1)
         }
     }
 }
 
 /// The task block: [state: 0 live, 1 done][saved context][detached][stack][closure: 16 bytes][cancelled][pad][result].
-/// The running task is `rt_cur`; `rt_tasks` lists every live task, the one `main` runs in first.
+/// The running task is `rtCur`; `rtTasks` lists every live task, the one `main` runs in first.
 
 //~ Addresses of the live task blocks (0 is `main`'s, made on first use).
-pub var rt_tasks: [int] = []
+pub var rtTasks: [int] = []
 //~ The address of the running task's block.
-pub var rt_cur: int = 0
+pub var rtCur: int = 0
 //~ Switches since something last happened: enough of them with nothing happening is a deadlock.
-pub var rt_idle: int = 0
+pub var rtIdle: int = 0
 //~ A finished task whose stack is freed by the next task to run.
-pub var rt_zombie: int = 0
+pub var rtZombie: int = 0
 
 const RT_TASK_STACK = 262144
 
 //~ Stacks of finished tasks, kept for the next `spawn` (no mapping, no unmapping). At most `RT_STACK_POOL` of them.
-pub var rt_stack_pool: [int] = []
+pub var rtStackPool: [int] = []
 const RT_STACK_POOL = 16
 
-fn rt_stack_take() -> ptr {
-    const n = rt_stack_pool.len()
-    if n == 0 { return rt_alloc(RT_TASK_STACK) }
-    const p = rt_stack_pool[n - 1]
-    rt_stack_pool.pop!()
-    rt_cast<int, ptr>(p)
+fn rtStackTake() -> ptr {
+    const n = rtStackPool.len()
+    if n == 0 { return rtAlloc(RT_TASK_STACK) }
+    const p = rtStackPool[n - 1]
+    rtStackPool.pop!()
+    rtCast<int, ptr>(p)
 }
 
-fn rt_stack_give(p: ptr) {
-    if rt_stack_pool.len() < RT_STACK_POOL {
-        rt_stack_pool.push!(rt_addr_int(p))
+fn rtStackGive(p: ptr) {
+    if rtStackPool.len() < RT_STACK_POOL {
+        rtStackPool.push!(rtAddrInt(p))
     } else {
-        rt_free(p)
+        rtFree(p)
     }
 }
 
-fn rt_main_init() {
-    if rt_tasks.len() == 0 {
-        const s = rt_alloc(72)
-        rt_cur = rt_addr_int(s)
-        rt_tasks.push!(rt_cur)
+fn rtMainInit() {
+    if rtTasks.len() == 0 {
+        const s = rtAlloc(72)
+        rtCur = rtAddrInt(s)
+        rtTasks.push!(rtCur)
     }
 }
 
 //~ Frees the stack (and a detached task's block) of the task that just finished.
-fn rt_reap() {
-    if rt_zombie != 0 {
-        const z = rt_cast<int, ptr>(rt_zombie)
-        rt_zombie = 0
-        rt_stack_give(rt_load_ptr(rt_offset(z, 24)))
-        rt_store_ptr(rt_offset(z, 24), rt_null())
-        if rt_load_int(rt_offset(z, 16)) == 1 {
-            rt_free(z)
+fn rtReap() {
+    if rtZombie != 0 {
+        const z = rtCast<int, ptr>(rtZombie)
+        rtZombie = 0
+        rtStackGive(rtLoadPtr(rtOffset(z, 24)))
+        rtStorePtr(rtOffset(z, 24), rtNull())
+        if rtLoadInt(rtOffset(z, 16)) == 1 {
+            rtFree(z)
         }
     }
 }
 
-fn rt_switch_to(t: int) {
-    const me = rt_cast<int, ptr>(rt_cur)
-    const next = rt_cast<int, ptr>(t)
-    rt_cur = t
-    rt_ctx_switch(rt_offset(me, 8), rt_load_ptr(rt_offset(next, 8)))
-    rt_reap()
+fn rtSwitchTo(t: int) {
+    const me = rtCast<int, ptr>(rtCur)
+    const next = rtCast<int, ptr>(t)
+    rtCur = t
+    rtCtxSwitch(rtOffset(me, 8), rtLoadPtr(rtOffset(next, 8)))
+    rtReap()
 }
 
 //~ Lets the next task run; false when there is no other.
-fn rt_switch_next() -> bool {
-    rt_main_init()
+fn rtSwitchNext() -> bool {
+    rtMainInit()
     var i = 0
-    while rt_tasks[i] != rt_cur { i += 1 }
-    const next = rt_tasks[(i + 1) % rt_tasks.len()]
-    if next == rt_cur { return false }
-    rt_switch_to(next)
+    while rtTasks[i] != rtCur { i += 1 }
+    const next = rtTasks[(i + 1) % rtTasks.len()]
+    if next == rtCur { return false }
+    rtSwitchTo(next)
     true
 }
 
 //~ The running task cannot go on: lets the others run. Stops when nobody can make progress.
-fn rt_wait(what: string) {
-    rt_idle += 1
-    if rt_idle > 2 * rt_tasks.len() + 2 || !rt_switch_next() {
+fn rtWait(what: string) {
+    rtIdle += 1
+    if rtIdle > 2 * rtTasks.len() + 2 || !rtSwitchNext() {
         panic("deadlock: waiting for #what that nobody can provide")
     }
 }
 
 //~ Lets the other tasks run for a while.
 pub fn yield_now() {
-    rt_idle = 0
-    rt_switch_next()
+    rtIdle = 0
+    rtSwitchNext()
 }
 
 //~ The first code a task runs: the task block's closure, then the end of the task, which never returns.
-fn rt_task_entry() {
-    rt_reap()
-    rt_task_run_closure()
-    rt_task_exit()
+fn rtTaskEntry() {
+    rtReap()
+    rtTaskRunClosure()
+    rtTaskExit()
 }
 
-//~ Its own function so the closure is dropped before the task ends: `rt_task_exit` never returns.
-fn rt_task_run_closure() {
-    const cur = rt_cast<int, ptr>(rt_cur)
-    const g = rt_read<once fn()>(rt_offset(cur, 32))
+//~ Its own function so the closure is dropped before the task ends: `rtTaskExit` never returns.
+fn rtTaskRunClosure() {
+    const cur = rtCast<int, ptr>(rtCur)
+    const g = rtRead<once fn()>(rtOffset(cur, 32))
     g!!()
 }
 
-fn rt_task_exit() {
-    rt_idle = 0
-    const cur = rt_cast<int, ptr>(rt_cur)
-    rt_store_int(cur, 1)
+fn rtTaskExit() {
+    rtIdle = 0
+    const cur = rtCast<int, ptr>(rtCur)
+    rtStoreInt(cur, 1)
     var i = 0
-    while rt_tasks[i] != rt_cur { i += 1 }
-    rt_tasks.remove!(i)
-    rt_zombie = rt_cur
-    const next = rt_tasks[i % rt_tasks.len()]
-    rt_switch_to(next)
+    while rtTasks[i] != rtCur { i += 1 }
+    rtTasks.remove!(i)
+    rtZombie = rtCur
+    const next = rtTasks[i % rtTasks.len()]
+    rtSwitchTo(next)
     panic("a finished task ran again")
 }
 
 //~ Runs every task that has not finished: the end of a `scope` and of `main`.
-pub fn rt_run_pending() {
-    if rt_tasks.len() == 0 { return }
+pub fn rtRunPending() {
+    if rtTasks.len() == 0 { return }
     /// `main` is always the first; a task that ends a scope leaves itself and `main` waiting.
-    const others = if rt_cur == rt_tasks[0] { 1 } else { 2 }
-    while rt_tasks.len() > others {
-        rt_wait("a task")
+    const others = if rtCur == rtTasks[0] { 1 } else { 2 }
+    while rtTasks.len() > others {
+        rtWait("a task")
     }
-    if rt_tasks.len() == 1 {
-        rt_free(rt_cast<int, ptr>(rt_tasks[0]))
-        while rt_stack_pool.len() > 0 {
-            rt_free(rt_stack_take())
+    if rtTasks.len() == 1 {
+        rtFree(rtCast<int, ptr>(rtTasks[0]))
+        while rtStackPool.len() > 0 {
+            rtFree(rtStackTake())
         }
-        rt_stack_pool = []
-        rt_tasks = []
-        rt_cur = 0
+        rtStackPool = []
+        rtTasks = []
+        rtCur = 0
     }
 }
 
 //~ Lets another task run so something may change, for `select`; false when none can.
-pub fn rt_run_one_pending() -> bool {
-    if rt_tasks.len() <= 1 { return false }
-    rt_idle += 1
-    if rt_idle > 2 * rt_tasks.len() + 2 { return false }
-    rt_switch_next()
+pub fn rtRunOnePending() -> bool {
+    if rtTasks.len() <= 1 { return false }
+    rtIdle += 1
+    if rtIdle > 2 * rtTasks.len() + 2 { return false }
+    rtSwitchNext()
 }
 
 //~ Can a receive on this channel finish now: a value is queued, or no sender is left?
-pub fn rt_chan_ready(ch: ptr) -> bool = rt_load_int(rt_offset(ch, 24)) > 0 || rt_load_int(rt_offset(ch, 32)) == 0
+pub fn rtChanReady(ch: ptr) -> bool = rtLoadInt(rtOffset(ch, 24)) > 0 ||
+    rtLoadInt(rtOffset(ch, 32)) == 0
 //~ Whether a send into the channel would not wait: it has room, no bound, or nobody is receiving.
-pub fn rt_chan_room(ch: ptr) -> bool {
-    const bound = rt_load_int(rt_offset(ch, 48))
-    bound == 0 || rt_load_int(rt_offset(ch, 24)) < bound || rt_load_int(rt_offset(ch, 40)) == 0
+pub fn rtChanRoom(ch: ptr) -> bool {
+    const bound = rtLoadInt(rtOffset(ch, 48))
+    bound == 0 || rtLoadInt(rtOffset(ch, 24)) < bound || rtLoadInt(rtOffset(ch, 40)) == 0
 }
 
-pub fn rt_task_body<T>(s: ptr, sink f: once fn() -> T) {
-    rt_write<T>(rt_offset(s, 64), f!!())
-    if rt_load_int(rt_offset(s, 16)) == 1 {
-        rt_drop_at<T>(rt_offset(s, 64))
+pub fn rtTaskBody<T>(s: ptr, sink f: once fn() -> T) {
+    rtWrite<T>(rtOffset(s, 64), f!!())
+    if rtLoadInt(rtOffset(s, 16)) == 1 {
+        rtDropAt<T>(rtOffset(s, 64))
     }
 }
 
 //~ Whether the running task was asked to stop (`t.cancel()`). A task that wants to stop early looks at this between
 //~ steps; nothing is interrupted and nothing unwinds. Always false in `main`.
 pub fn cancelled() -> bool {
-    if rt_cur == 0 { return false }
-    rt_load_int(rt_offset(rt_cast<int, ptr>(rt_cur), 48)) != 0
+    if rtCur == 0 { return false }
+    rtLoadInt(rtOffset(rtCast<int, ptr>(rtCur), 48)) != 0
 }
 
 impl<T> task<T> {
     //~ Asks the task to stop: it sees `cancelled()` become true. It still has to be joined (or dropped) as usual.
     fn cancel(self) {
-        rt_store_int(rt_offset(self.state, 48), 1)
-        rt_idle = 0
+        rtStoreInt(rtOffset(self.state, 48), 1)
+        rtIdle = 0
     }
 
     fn join(sink self) -> T {
         const s = self.state
-        while rt_load_int(s) != 1 {
-            rt_wait("a task to finish")
+        while rtLoadInt(s) != 1 {
+            rtWait("a task to finish")
         }
-        rt_idle = 0
-        const r = rt_read<T>(rt_offset(s, 64))
-        rt_free(s)
-        rt_forget_task<T>(sink self)
+        rtIdle = 0
+        const r = rtRead<T>(rtOffset(s, 64))
+        rtFree(s)
+        rtForgetTask<T>(sink self)
         r
     }
 }
 
 //~ Gives up a task handle without running its `deinit`.
-pub fn rt_forget_task<T>(sink t: task<T>) {
-    rt_cast<task<T>, ptr>(sink t)
+pub fn rtForgetTask<T>(sink t: task<T>) {
+    rtCast<task<T>, ptr>(sink t)
 }
 
 //~ Starts `f` as a task. What the closure uses must be copied or moved in (`sink x ~> ...`).
 pub fn spawn<T>(sink f: once fn() -> T) -> task<T> {
-    rt_main_init()
-    rt_idle = 0
-    const s = rt_alloc(64 + rt_size_of<T>())
-    const stack = rt_stack_take()
-    rt_store_ptr(rt_offset(s, 24), stack)
-    const runner = [sink f, sink s] () ~> rt_task_body<T>(s, sink f)
-    rt_write<once fn()>(rt_offset(s, 32), sink runner)
-    rt_store_ptr(rt_offset(s, 8), rt_ctx_init(stack, RT_TASK_STACK, rt_fn_addr(rt_task_entry), rt_null()))
-    rt_tasks.push!(rt_addr_int(s))
+    rtMainInit()
+    rtIdle = 0
+    const s = rtAlloc(64 + rtSizeOf<T>())
+    const stack = rtStackTake()
+    rtStorePtr(rtOffset(s, 24), stack)
+    const runner = [sink f, sink s] () ~> rtTaskBody<T>(s, sink f)
+    rtWrite<once fn()>(rtOffset(s, 32), sink runner)
+    rtStorePtr(rtOffset(s, 8), rtCtxInit(stack, RT_TASK_STACK, rtFnAddr(rtTaskEntry), rtNull()))
+    rtTasks.push!(rtAddrInt(s))
     task<T> { state: s }
 }
 
@@ -245,10 +246,10 @@ pub struct sender<T> {
     ch: ptr
 
     deinit {
-        const n = rt_load_int(rt_offset(self.ch, 32)) - 1
-        rt_store_int(rt_offset(self.ch, 32), n)
-        rt_idle = 0
-        if n == 0 && rt_load_int(rt_offset(self.ch, 40)) == 0 { rt_chan_free<T>(self.ch) }
+        const n = rtLoadInt(rtOffset(self.ch, 32)) - 1
+        rtStoreInt(rtOffset(self.ch, 32), n)
+        rtIdle = 0
+        if n == 0 && rtLoadInt(rtOffset(self.ch, 40)) == 0 { rtChanFree<T>(self.ch) }
     }
 }
 
@@ -256,60 +257,60 @@ pub struct receiver<T> {
     ch: ptr
 
     deinit {
-        rt_store_int(rt_offset(self.ch, 40), 0)
-        rt_idle = 0
-        if rt_load_int(rt_offset(self.ch, 32)) == 0 { rt_chan_free<T>(self.ch) }
+        rtStoreInt(rtOffset(self.ch, 40), 0)
+        rtIdle = 0
+        if rtLoadInt(rtOffset(self.ch, 32)) == 0 { rtChanFree<T>(self.ch) }
     }
 }
 
 //~ The address of the n-th queued slot.
-fn rt_chan_slot(ch: ptr, n: int) -> ptr {
-    const cap = rt_load_int(rt_offset(ch, 8))
-    const at = (rt_load_int(rt_offset(ch, 16)) + n) % cap
-    rt_offset(rt_load_ptr(ch), at * rt_load_int(rt_offset(ch, 56)))
+fn rtChanSlot(ch: ptr, n: int) -> ptr {
+    const cap = rtLoadInt(rtOffset(ch, 8))
+    const at = (rtLoadInt(rtOffset(ch, 16)) + n) % cap
+    rtOffset(rtLoadPtr(ch), at * rtLoadInt(rtOffset(ch, 56)))
 }
 
-pub fn rt_chan_free<T>(ch: ptr) {
+pub fn rtChanFree<T>(ch: ptr) {
     var i = 0
-    const len = rt_load_int(rt_offset(ch, 24))
+    const len = rtLoadInt(rtOffset(ch, 24))
     while i < len {
-        rt_drop_at<T>(rt_chan_slot(ch, i))
+        rtDropAt<T>(rtChanSlot(ch, i))
         i += 1
     }
-    rt_free(rt_load_ptr(ch))
-    rt_free(ch)
+    rtFree(rtLoadPtr(ch))
+    rtFree(ch)
 }
 
 //~ A channel: a sender end and a receiver end. With a capacity, `send` waits while that many values are queued;
 //~ a capacity of 0 means unbounded.
 pub fn chan<T>(capacity: int = 0) -> (sender<T>, receiver<T>) {
-    const ch = rt_alloc(64)
-    const slot = if rt_size_of<T>() == 0 { 8 } else { rt_size_of<T>() }
+    const ch = rtAlloc(64)
+    const slot = if rtSizeOf<T>() == 0 { 8 } else { rtSizeOf<T>() }
     const cap = if capacity > 0 { capacity } else { 8 }
-    rt_store_ptr(ch, rt_alloc(cap * slot))
-    rt_store_int(rt_offset(ch, 8), cap)
-    rt_store_int(rt_offset(ch, 32), 1)
-    rt_store_int(rt_offset(ch, 40), 1)
-    rt_store_int(rt_offset(ch, 48), capacity)
-    rt_store_int(rt_offset(ch, 56), slot)
+    rtStorePtr(ch, rtAlloc(cap * slot))
+    rtStoreInt(rtOffset(ch, 8), cap)
+    rtStoreInt(rtOffset(ch, 32), 1)
+    rtStoreInt(rtOffset(ch, 40), 1)
+    rtStoreInt(rtOffset(ch, 48), capacity)
+    rtStoreInt(rtOffset(ch, 56), slot)
     (sender<T> { ch: ch }, receiver<T> { ch: ch })
 }
 
 //~ Doubles the ring of an unbounded channel that is full, keeping the queued values in order.
-fn rt_chan_grow(ch: ptr) {
-    const cap = rt_load_int(rt_offset(ch, 8))
-    const slot = rt_load_int(rt_offset(ch, 56))
-    const len = rt_load_int(rt_offset(ch, 24))
-    const fresh = rt_alloc(cap * 2 * slot)
+fn rtChanGrow(ch: ptr) {
+    const cap = rtLoadInt(rtOffset(ch, 8))
+    const slot = rtLoadInt(rtOffset(ch, 56))
+    const len = rtLoadInt(rtOffset(ch, 24))
+    const fresh = rtAlloc(cap * 2 * slot)
     var i = 0
     while i < len {
-        rt_copy(rt_offset(fresh, i * slot), rt_chan_slot(ch, i), slot)
+        rtCopy(rtOffset(fresh, i * slot), rtChanSlot(ch, i), slot)
         i += 1
     }
-    rt_free(rt_load_ptr(ch))
-    rt_store_ptr(ch, fresh)
-    rt_store_int(rt_offset(ch, 8), cap * 2)
-    rt_store_int(rt_offset(ch, 16), 0)
+    rtFree(rtLoadPtr(ch))
+    rtStorePtr(ch, fresh)
+    rtStoreInt(rtOffset(ch, 8), cap * 2)
+    rtStoreInt(rtOffset(ch, 16), 0)
 }
 
 impl<T> sender<T> {
@@ -317,17 +318,17 @@ impl<T> sender<T> {
     fn send(self, sink value: T) -> void ! closed {
         const ch = self.ch
         var sent = false
-        while !sent && rt_load_int(rt_offset(ch, 40)) != 0 {
-            const bound = rt_load_int(rt_offset(ch, 48))
-            if bound == 0 || rt_load_int(rt_offset(ch, 24)) < bound {
-                if rt_load_int(rt_offset(ch, 24)) == rt_load_int(rt_offset(ch, 8)) { rt_chan_grow(ch) }
-                const len = rt_load_int(rt_offset(ch, 24))
-                rt_write<T>(rt_chan_slot(ch, len), sink value)
-                rt_store_int(rt_offset(ch, 24), len + 1)
-                rt_idle = 0
+        while !sent && rtLoadInt(rtOffset(ch, 40)) != 0 {
+            const bound = rtLoadInt(rtOffset(ch, 48))
+            if bound == 0 || rtLoadInt(rtOffset(ch, 24)) < bound {
+                if rtLoadInt(rtOffset(ch, 24)) == rtLoadInt(rtOffset(ch, 8)) { rtChanGrow(ch) }
+                const len = rtLoadInt(rtOffset(ch, 24))
+                rtWrite<T>(rtChanSlot(ch, len), sink value)
+                rtStoreInt(rtOffset(ch, 24), len + 1)
+                rtIdle = 0
                 sent = true
             } else {
-                rt_wait("room in a channel")
+                rtWait("room in a channel")
             }
         }
         if !sent {
@@ -339,7 +340,7 @@ impl<T> sender<T> {
 //~ More senders: `copy tx`.
 impl<T> clone for sender<T> {
     fn clone(self) -> sender<T> {
-        rt_store_int(rt_offset(self.ch, 32), rt_load_int(rt_offset(self.ch, 32)) + 1)
+        rtStoreInt(rtOffset(self.ch, 32), rtLoadInt(rtOffset(self.ch, 32)) + 1)
         sender<T> { ch: self.ch }
     }
 }
@@ -347,20 +348,20 @@ impl<T> clone for sender<T> {
 impl<T> receiver<T> {
     fn tryRecv(self) -> T? {
         const ch = self.ch
-        const len = rt_load_int(rt_offset(ch, 24))
+        const len = rtLoadInt(rtOffset(ch, 24))
         if len == 0 { return none }
-        const v = rt_read<T>(rt_chan_slot(ch, 0))
-        rt_store_int(rt_offset(ch, 16), (rt_load_int(rt_offset(ch, 16)) + 1) % rt_load_int(rt_offset(ch, 8)))
-        rt_store_int(rt_offset(ch, 24), len - 1)
-        rt_idle = 0
+        const v = rtRead<T>(rtChanSlot(ch, 0))
+        rtStoreInt(rtOffset(ch, 16), (rtLoadInt(rtOffset(ch, 16)) + 1) % rtLoadInt(rtOffset(ch, 8)))
+        rtStoreInt(rtOffset(ch, 24), len - 1)
+        rtIdle = 0
         return v
     }
 
     //~ Waits for a value: other tasks run while the queue is empty. `none` when every sender is gone.
     fn recv(self) -> T? {
-        while rt_load_int(rt_offset(self.ch, 24)) == 0 {
-            if rt_load_int(rt_offset(self.ch, 32)) == 0 { return none }
-            rt_wait("a value")
+        while rtLoadInt(rtOffset(self.ch, 24)) == 0 {
+            if rtLoadInt(rtOffset(self.ch, 32)) == 0 { return none }
+            rtWait("a value")
         }
         return self.tryRecv()
     }
@@ -375,7 +376,7 @@ impl<T> receiver<T> {
                 case none: more = false
             }
         }
-        rt_cast<list<T>, iter<T>>(sink out)
+        rtCast<list<T>, iter<T>>(sink out)
     }
 }
 
@@ -384,29 +385,29 @@ pub struct shared<T> {
     p: ptr
 
     init(sink value: T) {
-        const p = rt_alloc(8 + rt_size_of<T>())
-        rt_store_int(p, 1)
-        rt_write<T>(rt_offset(p, 8), sink value)
+        const p = rtAlloc(8 + rtSizeOf<T>())
+        rtStoreInt(p, 1)
+        rtWrite<T>(rtOffset(p, 8), sink value)
         self.p = p
     }
 
     deinit {
-        const n = rt_load_int(self.p) - 1
-        rt_store_int(self.p, n)
+        const n = rtLoadInt(self.p) - 1
+        rtStoreInt(self.p, n)
         if n == 0 {
-            rt_drop_at<T>(rt_offset(self.p, 8))
-            rt_free(self.p)
+            rtDropAt<T>(rtOffset(self.p, 8))
+            rtFree(self.p)
         }
     }
 }
 
 impl<T> shared<T> {
-    fn get(self) -> T = rt_clone<T>(rt_offset(self.p, 8))
+    fn get(self) -> T = rtClone<T>(rtOffset(self.p, 8))
 }
 
 impl<T> clone for shared<T> {
     fn clone(self) -> shared<T> {
-        rt_store_int(self.p, rt_load_int(self.p) + 1)
+        rtStoreInt(self.p, rtLoadInt(self.p) + 1)
         shared<T> { p: self.p }
     }
 }
@@ -418,18 +419,18 @@ pub struct lock<T> {
 
     init(sink value: T) {
         /// The block: [held: 0 or 1][handles][value].
-        const p = rt_alloc(16 + rt_size_of<T>())
-        rt_store_int(rt_offset(p, 8), 1)
-        rt_write<T>(rt_offset(p, 16), sink value)
+        const p = rtAlloc(16 + rtSizeOf<T>())
+        rtStoreInt(rtOffset(p, 8), 1)
+        rtWrite<T>(rtOffset(p, 16), sink value)
         self.p = p
     }
 
     deinit {
-        const n = rt_load_int(rt_offset(self.p, 8)) - 1
-        rt_store_int(rt_offset(self.p, 8), n)
+        const n = rtLoadInt(rtOffset(self.p, 8)) - 1
+        rtStoreInt(rtOffset(self.p, 8), n)
         if n == 0 {
-            rt_drop_at<T>(rt_offset(self.p, 16))
-            rt_free(self.p)
+            rtDropAt<T>(rtOffset(self.p, 16))
+            rtFree(self.p)
         }
     }
 }
@@ -438,15 +439,15 @@ impl<T> lock<T> {
     //~ Runs `f` with the value, one task at a time: a task that finds the lock held waits, also when the holder
     //~ itself waits inside `f` (on a channel, say).
     fn with<R>(self, f: fn(inout T) -> R) -> R {
-        while rt_load_int(self.p) != 0 {
-            rt_wait("a lock")
+        while rtLoadInt(self.p) != 0 {
+            rtWait("a lock")
         }
-        rt_store_int(self.p, 1)
-        var v = rt_read<T>(rt_offset(self.p, 16))
+        rtStoreInt(self.p, 1)
+        var v = rtRead<T>(rtOffset(self.p, 16))
         const r = f(inout v)
-        rt_write<T>(rt_offset(self.p, 16), sink v)
-        rt_store_int(self.p, 0)
-        rt_idle = 0
+        rtWrite<T>(rtOffset(self.p, 16), sink v)
+        rtStoreInt(self.p, 0)
+        rtIdle = 0
         r
     }
 
@@ -454,21 +455,21 @@ impl<T> lock<T> {
     //~ variable without the separate type.
     fn withWhen<R>(self, ready: fn(T) -> bool, f: fn(inout T) -> R) -> R {
         while true {
-            while rt_load_int(self.p) != 0 {
-                rt_wait("a lock")
+            while rtLoadInt(self.p) != 0 {
+                rtWait("a lock")
             }
-            rt_store_int(self.p, 1)
-            var v = rt_read<T>(rt_offset(self.p, 16))
+            rtStoreInt(self.p, 1)
+            var v = rtRead<T>(rtOffset(self.p, 16))
             if ready(v) {
                 const r = f(inout v)
-                rt_write<T>(rt_offset(self.p, 16), sink v)
-                rt_store_int(self.p, 0)
-                rt_idle = 0
+                rtWrite<T>(rtOffset(self.p, 16), sink v)
+                rtStoreInt(self.p, 0)
+                rtIdle = 0
                 return r
             }
-            rt_write<T>(rt_offset(self.p, 16), sink v)
-            rt_store_int(self.p, 0)
-            rt_wait("a lock condition")
+            rtWrite<T>(rtOffset(self.p, 16), sink v)
+            rtStoreInt(self.p, 0)
+            rtWait("a lock condition")
         }
         panic("unreachable")
     }
@@ -476,7 +477,7 @@ impl<T> lock<T> {
 
 impl<T> clone for lock<T> {
     fn clone(self) -> lock<T> {
-        rt_store_int(rt_offset(self.p, 8), rt_load_int(rt_offset(self.p, 8)) + 1)
+        rtStoreInt(rtOffset(self.p, 8), rtLoadInt(rtOffset(self.p, 8)) + 1)
         lock<T> { p: self.p }
     }
 }
@@ -487,39 +488,39 @@ pub struct semaphore {
 
     init(permits: int) {
         /// The block: [permits][handles].
-        const p = rt_alloc(16)
-        rt_store_int(p, permits)
-        rt_store_int(rt_offset(p, 8), 1)
+        const p = rtAlloc(16)
+        rtStoreInt(p, permits)
+        rtStoreInt(rtOffset(p, 8), 1)
         self.p = p
     }
 
     deinit {
-        const n = rt_load_int(rt_offset(self.p, 8)) - 1
-        rt_store_int(rt_offset(self.p, 8), n)
+        const n = rtLoadInt(rtOffset(self.p, 8)) - 1
+        rtStoreInt(rtOffset(self.p, 8), n)
         if n == 0 {
-            rt_free(self.p)
+            rtFree(self.p)
         }
     }
 }
 
 impl semaphore {
     fn acquire(self) {
-        while rt_load_int(self.p) <= 0 {
-            rt_wait("a semaphore permit")
+        while rtLoadInt(self.p) <= 0 {
+            rtWait("a semaphore permit")
         }
-        rt_store_int(self.p, rt_load_int(self.p) - 1)
-        rt_idle = 0
+        rtStoreInt(self.p, rtLoadInt(self.p) - 1)
+        rtIdle = 0
     }
 
     fn release(self) {
-        rt_store_int(self.p, rt_load_int(self.p) + 1)
-        rt_idle = 0
+        rtStoreInt(self.p, rtLoadInt(self.p) + 1)
+        rtIdle = 0
     }
 }
 
 impl clone for semaphore {
     fn clone(self) -> semaphore {
-        rt_store_int(rt_offset(self.p, 8), rt_load_int(rt_offset(self.p, 8)) + 1)
+        rtStoreInt(rtOffset(self.p, 8), rtLoadInt(rtOffset(self.p, 8)) + 1)
         semaphore { p: self.p }
     }
 }
@@ -531,50 +532,50 @@ pub struct barrier {
 
     init(n: int) {
         /// The block: [n][arrived][generation][handles].
-        const p = rt_alloc(32)
-        rt_store_int(p, n)
-        rt_store_int(rt_offset(p, 8), 0)
-        rt_store_int(rt_offset(p, 16), 0)
-        rt_store_int(rt_offset(p, 24), 1)
+        const p = rtAlloc(32)
+        rtStoreInt(p, n)
+        rtStoreInt(rtOffset(p, 8), 0)
+        rtStoreInt(rtOffset(p, 16), 0)
+        rtStoreInt(rtOffset(p, 24), 1)
         self.p = p
     }
 
     deinit {
-        const n = rt_load_int(rt_offset(self.p, 24)) - 1
-        rt_store_int(rt_offset(self.p, 24), n)
+        const n = rtLoadInt(rtOffset(self.p, 24)) - 1
+        rtStoreInt(rtOffset(self.p, 24), n)
         if n == 0 {
-            rt_free(self.p)
+            rtFree(self.p)
         }
     }
 }
 
 impl barrier {
     fn wait(self) {
-        const gen = rt_load_int(rt_offset(self.p, 16))
-        const arrived = rt_load_int(rt_offset(self.p, 8)) + 1
-        if arrived >= rt_load_int(self.p) {
-            rt_store_int(rt_offset(self.p, 8), 0)
-            rt_store_int(rt_offset(self.p, 16), gen + 1)
-            rt_idle = 0
+        const gen = rtLoadInt(rtOffset(self.p, 16))
+        const arrived = rtLoadInt(rtOffset(self.p, 8)) + 1
+        if arrived >= rtLoadInt(self.p) {
+            rtStoreInt(rtOffset(self.p, 8), 0)
+            rtStoreInt(rtOffset(self.p, 16), gen + 1)
+            rtIdle = 0
             return
         }
-        rt_store_int(rt_offset(self.p, 8), arrived)
-        while rt_load_int(rt_offset(self.p, 16)) == gen {
-            rt_wait("a barrier")
+        rtStoreInt(rtOffset(self.p, 8), arrived)
+        while rtLoadInt(rtOffset(self.p, 16)) == gen {
+            rtWait("a barrier")
         }
     }
 }
 
 impl clone for barrier {
     fn clone(self) -> barrier {
-        rt_store_int(rt_offset(self.p, 24), rt_load_int(rt_offset(self.p, 24)) + 1)
+        rtStoreInt(rtOffset(self.p, 24), rtLoadInt(rtOffset(self.p, 24)) + 1)
         barrier { p: self.p }
     }
 }
 
 //~ The coroutine's block: [done][coroutine context][resumer context][stack][closure: 16 bytes][value ready][started]
 //~ [cancelled][value]. A coroutine runs on a stack of its own and only when its owner calls `next()`.
-pub var rt_co_cur: int = 0
+pub var rtCoCur: int = 0
 
 const RT_CO_STACK = 65536
 
@@ -585,26 +586,26 @@ pub struct coroutine<T> {
     p: ptr
 
     init(sink f: once fn(yielder<T>)) {
-        const p = rt_alloc(72 + rt_size_of<T>())
-        const stack = rt_alloc(RT_CO_STACK)
-        rt_store_ptr(rt_offset(p, 24), stack)
-        const runner = [sink f, sink p] () ~> rt_co_body<T>(p, sink f)
-        rt_write<once fn()>(rt_offset(p, 32), sink runner)
-        rt_store_ptr(rt_offset(p, 8), rt_ctx_init(stack, RT_CO_STACK, rt_fn_addr(rt_co_entry), rt_null()))
+        const p = rtAlloc(72 + rtSizeOf<T>())
+        const stack = rtAlloc(RT_CO_STACK)
+        rtStorePtr(rtOffset(p, 24), stack)
+        const runner = [sink f, sink p] () ~> rtCoBody<T>(p, sink f)
+        rtWrite<once fn()>(rtOffset(p, 32), sink runner)
+        rtStorePtr(rtOffset(p, 8), rtCtxInit(stack, RT_CO_STACK, rtFnAddr(rtCoEntry), rtNull()))
         self.p = p
     }
 
     deinit {
         const p = self.p
-        if rt_load_int(rt_offset(p, 56)) == 0 {
+        if rtLoadInt(rtOffset(p, 56)) == 0 {
             /// Never started: only the closure is left.
-            rt_drop_at<once fn()>(rt_offset(p, 32))
-        } else if rt_load_int(p) == 0 {
-            rt_store_int(rt_offset(p, 56 + 8), 1)
-            if rt_co_resume(p) { rt_drop_at<T>(rt_offset(p, 72)) }
+            rtDropAt<once fn()>(rtOffset(p, 32))
+        } else if rtLoadInt(p) == 0 {
+            rtStoreInt(rtOffset(p, 56 + 8), 1)
+            if rtCoResume(p) { rtDropAt<T>(rtOffset(p, 72)) }
         }
-        rt_free(rt_load_ptr(rt_offset(p, 24)))
-        rt_free(p)
+        rtFree(rtLoadPtr(rtOffset(p, 24)))
+        rtFree(p)
     }
 }
 
@@ -613,53 +614,53 @@ pub struct yielder<T> {
     p: ptr
 }
 
-pub fn rt_co_body<T>(p: ptr, sink f: once fn(yielder<T>)) {
+pub fn rtCoBody<T>(p: ptr, sink f: once fn(yielder<T>)) {
     f!!(yielder<T> { p: p })
 }
 
-fn rt_co_entry() {
-    const p = rt_cast<int, ptr>(rt_co_cur)
-    rt_co_run_closure(p)
-    rt_store_int(p, 1)
-    rt_ctx_switch(rt_offset(p, 8), rt_load_ptr(rt_offset(p, 16)))
+fn rtCoEntry() {
+    const p = rtCast<int, ptr>(rtCoCur)
+    rtCoRunClosure(p)
+    rtStoreInt(p, 1)
+    rtCtxSwitch(rtOffset(p, 8), rtLoadPtr(rtOffset(p, 16)))
     panic("a finished coroutine ran again")
 }
 
-//~ Its own function so the closure is dropped before the coroutine ends: `rt_co_entry` never returns.
-fn rt_co_run_closure(p: ptr) {
-    const g = rt_read<once fn()>(rt_offset(p, 32))
+//~ Its own function so the closure is dropped before the coroutine ends: `rtCoEntry` never returns.
+fn rtCoRunClosure(p: ptr) {
+    const g = rtRead<once fn()>(rtOffset(p, 32))
     g!!()
 }
 
 //~ Runs the coroutine until it emits or ends; whether a value is waiting in its block.
-fn rt_co_resume(p: ptr) -> bool {
-    const saved = rt_co_cur
-    rt_co_cur = rt_addr_int(p)
-    rt_store_int(rt_offset(p, 56), 1)
-    rt_ctx_switch(rt_offset(p, 16), rt_load_ptr(rt_offset(p, 8)))
-    rt_co_cur = saved
-    rt_load_int(rt_offset(p, 48)) != 0
+fn rtCoResume(p: ptr) -> bool {
+    const saved = rtCoCur
+    rtCoCur = rtAddrInt(p)
+    rtStoreInt(rtOffset(p, 56), 1)
+    rtCtxSwitch(rtOffset(p, 16), rtLoadPtr(rtOffset(p, 8)))
+    rtCoCur = saved
+    rtLoadInt(rtOffset(p, 48)) != 0
 }
 
 impl<T> yielder<T> {
     fn emit(self, sink v: T) {
-        rt_write<T>(rt_offset(self.p, 72), sink v)
-        rt_store_int(rt_offset(self.p, 48), 1)
-        rt_ctx_switch(rt_offset(self.p, 8), rt_load_ptr(rt_offset(self.p, 16)))
+        rtWrite<T>(rtOffset(self.p, 72), sink v)
+        rtStoreInt(rtOffset(self.p, 48), 1)
+        rtCtxSwitch(rtOffset(self.p, 8), rtLoadPtr(rtOffset(self.p, 16)))
     }
 
     //~ True once the coroutine's owner dropped it: finish up and return.
-    fn cancelled(self) -> bool = rt_load_int(rt_offset(self.p, 64)) != 0
+    fn cancelled(self) -> bool = rtLoadInt(rtOffset(self.p, 64)) != 0
 }
 
 impl<T> coroutine<T> {
     //~ Runs the coroutine to its next `emit`; `none` once it has ended.
     fn next(self) -> T? {
         const p = self.p
-        if rt_load_int(p) == 1 { return none }
-        if !rt_co_resume(p) { return none }
-        rt_store_int(rt_offset(p, 48), 0)
-        return rt_read<T>(rt_offset(p, 72))
+        if rtLoadInt(p) == 1 { return none }
+        if !rtCoResume(p) { return none }
+        rtStoreInt(rtOffset(p, 48), 0)
+        return rtRead<T>(rtOffset(p, 72))
     }
 
     //~ Runs it to the end and collects what it emits.
@@ -673,6 +674,6 @@ impl<T> coroutine<T> {
                 case none: more = false
             }
         }
-        rt_cast<list<T>, iter<T>>(sink out)
+        rtCast<list<T>, iter<T>>(sink out)
     }
 }

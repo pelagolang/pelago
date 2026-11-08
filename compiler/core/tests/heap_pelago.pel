@@ -1,6 +1,13 @@
 /// The allocator written in the language, driven directly: lanes, reuse, big blocks, realloc.
 fn main() {
-    print(heap_class(1), heap_class(16), heap_class(17), heap_class(32), heap_class(33), heap_class(8192))
+    print(
+        heap_class(1),
+        heap_class(16),
+        heap_class(17),
+        heap_class(32),
+        heap_class(33),
+        heap_class(8192),
+    )
     const a = heap_alloc(24)
     const b = heap_alloc(24)
     print(a != b, a % 16, heap_ld(a), heap_ld(a + 16))

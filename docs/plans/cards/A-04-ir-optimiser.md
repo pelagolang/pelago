@@ -9,7 +9,7 @@ Touches: `compiler/src/ir/` (new `opt/` folder), `pelago` (`--opt` flag), tests,
 # 1. Why now
 
 The lowering is deliberately simple: every variable lives in a **stack slot**, every owned value has a **drop flag** stored in a slot, and small library
-functions (`rt_hdr_len`, `rt_hdr_data`) are real calls. That made the lowering easy to get right, and the interpreter proves it is right.
+functions (`rtHdrLen`, `rtHdrData`) are real calls. That made the lowering easy to get right, and the interpreter proves it is right.
 For a machine-code backend it is far too slow: every `var i` is a memory load and store, every owner pays flag traffic, every list access is a call.
 The IR is an SSA form with block parameters, built for exactly the passes below, and we are working in the IR now, so this is the right time. The performance goal of the
 language ("no hidden cost") makes this the single biggest speed item on the roadmap.
@@ -28,7 +28,7 @@ Run per function, in this order, repeating the cheap clean-ups until nothing cha
 | 3 | **Split slots** (SROA) | A slot only touched through constant-offset `PtrAdd` + `Load`/`Store` is split into one slot per field, then promoted by pass 2. | Small structs, tuples, `option<int>`, `string` headers live in registers. |
 | 4 | **Constant folding and propagation** (SCCP) | Evaluate what is known at compile time across blocks; mark unreachable branches. | Turns `if flag` into a jump when the flag is a known constant. |
 | 5 | **Copy propagation, dead code elimination** | Remove values nobody reads and stores nobody reads (stores to slots that no longer exist). | Removes the leftover flag stores. |
-| 6 | **Inline small functions** | Replace a call with the callee body when the callee is small, has one call site, or is marked `@inline`. Run again after inlining. | `rt_hdr_len`, `rt_hdr_data`, `[int].len`, glue wrappers disappear. |
+| 6 | **Inline small functions** | Replace a call with the callee body when the callee is small, has one call site, or is marked `@inline`. Run again after inlining. | `rtHdrLen`, `rtHdrData`, `[int].len`, glue wrappers disappear. |
 | 7 | **Redundant check removal** (later) | Drop bounds and overflow checks the facts prove unnecessary (`for i of 0..n` indexes with `i < n`). | A later stage, not required for the milestone. |
 
 ## 2.1 Promote slots, concretely

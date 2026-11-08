@@ -141,7 +141,7 @@ Lowering tests (`lower/tests.rs`, each also checks no leaks via `output_of`):
 1. Owner answers the six questions below. Record answers in `types.md` (new section "box"), `checker.md` (rule list VS16+ if the value pass changes), `ROADMAP.md`.
 2. Checker: built-in `box` constructor, `impl<T> box<T>` declarations in `core.pel`, auto-deref, recursion size check, interface provision. Tests 1 to 7.
 3. Value pass: `get` place element, `take` consumption. Tests 5 to 7.
-4. Lowering and `core.pel` intrinsics (`rt_box_new<T>`, or expand inline). Tests 8 to 15.
+4. Lowering and `core.pel` intrinsics (`rtBoxNew<T>`, or expand inline). Tests 8 to 15.
 5. Docs: `types.md`, `checker.md`, `ir.md` (a new IR decision for the layout: "a box is a bare pointer to the value, no header"), `examples/tour.pel` (one line each for `box(...)`, `get`, `take`), `BLESS=1 cargo test` if the tour changes.
 6. Add a real program to `examples/programs/` (`tree.pel`: insert, search, in-order walk) and to the `example_programs_run` test.
 

@@ -144,7 +144,7 @@ impl<'a> Lowerer<'a> {
                 let r = self.block(body, None, void);
                 // Every task started in the scope is finished when it ends.
                 if !matches!(r, Res::Never) {
-                    self.call_core("rt_run_pending", Vec::new());
+                    self.call_core("rtRunPending", Vec::new());
                 }
                 r
             }
@@ -779,7 +779,7 @@ impl<'a> Lowerer<'a> {
                     return None;
                 }
                 self.own(ks, k, false);
-                self.call_core_g("rt_map_at", &[k, v], vec![hdr, ks])
+                self.call_core_g("rtMapAt", &[k, v], vec![hdr, ks])
             }
             _ => {
                 self.unsupported(e.span, "indexing this kind of value");

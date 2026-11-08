@@ -99,30 +99,30 @@ fn number(os: Os, call: Sys) -> i64 {
 
 /// The entry points of the runtime.
 pub struct Runtime {
-    /// `rt_write(fd = x0, ptr = x1, len = x2)`: writes everything or gives up on an error.
+    /// `rtWrite(fd = x0, ptr = x1, len = x2)`: writes everything or gives up on an error.
     pub write_fd: Label,
-    /// `rt_print(ptr = x0, len = x1)`: appends to the output buffer.
+    /// `rtPrint(ptr = x0, len = x1)`: appends to the output buffer.
     pub print: Label,
-    /// `rt_stop(ptr = x0, len = x1)`: prints `stopped: <message>` to standard error and exits with status 1.
+    /// `rtStop(ptr = x0, len = x1)`: prints `stopped: <message>` to standard error and exits with status 1.
     pub stop: Label,
-    /// `rt_alloc(size = x0) -> x0`: zeroed memory, 16-byte aligned; stops when out of memory.
+    /// `rtAlloc(size = x0) -> x0`: zeroed memory, 16-byte aligned; stops when out of memory.
     pub alloc: Label,
-    /// `rt_free(ptr = x0)`: accepts null.
+    /// `rtFree(ptr = x0)`: accepts null.
     pub free: Label,
-    /// `rt_realloc(ptr = x0, size = x1) -> x0`
+    /// `rtRealloc(ptr = x0, size = x1) -> x0`
     pub realloc: Label,
-    /// `rt_exit(status = x0)`
+    /// `rtExit(status = x0)`
     pub exit: Label,
-    /// `rt_write_u64(fd = x0, value = x1)`: decimal digits.
+    /// `rtWriteU64(fd = x0, value = x1)`: decimal digits.
     pub write_u64: Label,
-    /// `rt_memcpy(dst = x0, src = x1, len = x2)`: the areas do not overlap.
+    /// `rtMemcpy(dst = x0, src = x1, len = x2)`: the areas do not overlap.
     pub memcpy: Label,
-    /// `rt_fmod(x = d0, y = d1) -> d0`: C's `fmod`, exactly.
+    /// `rtFmod(x = d0, y = d1) -> d0`: C's `fmod`, exactly.
     pub fmod: Label,
-    /// `rt_ctx_init(base = x0, size = x1, code = x2, env = x3) -> x0`: a context on that stack that starts by
-    /// calling `code(env)`; the result is what `rt_ctx_switch` takes.
+    /// `rtCtxInit(base = x0, size = x1, code = x2, env = x3) -> x0`: a context on that stack that starts by
+    /// calling `code(env)`; the result is what `rtCtxSwitch` takes.
     pub ctx_init: Label,
-    /// `rt_ctx_switch(save = x0, to = x1)`: saves `x19` to `x30` on this stack, stores the stack pointer
+    /// `rtCtxSwitch(save = x0, to = x1)`: saves `x19` to `x30` on this stack, stores the stack pointer
     /// at `save`, and continues the context `to`.
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
@@ -228,7 +228,7 @@ fn leave(a: &mut Asm) {
     a.ldp_post(FP, LR, SP, 48);
 }
 
-/// The Linux small-block allocator for `rt_alloc` (payload size in `x0`, `x19` = size + 16, `x19` to
+/// The Linux small-block allocator for `rtAlloc` (payload size in `x0`, `x19` = size + 16, `x19` to
 /// `x22` saved by the caller), the same design as the x86-64 one in `rt.rs`: 16-byte classes up to 256
 /// bytes, then four per doubling up to `REGION_MAX`, 64 KiB spans carved from one reserved region, no
 /// header. Class entries (free list, bump pointer, bump limit, block size) sit at the start of the
@@ -639,7 +639,7 @@ pub fn emit_for(
     a.mov_ri(X0, 0);
     a.bl(rt.exit);
 
-    // ---- rt_exit -----------------------------------------------------------------------------------
+    // ---- rtExit -----------------------------------------------------------------------------------
     a.bind(rt.exit);
     a.mov_rr(X19, X0);
     if uses.print {
@@ -654,8 +654,8 @@ pub fn emit_for(
     a.brk();
 
     if uses.print {
-        // ---- rt_flush ----------------------------------------------------------------------------------
-        // Writes what the output buffer holds. Ends in `rt_write` or a `ret`.
+        // ---- rtFlush ----------------------------------------------------------------------------------
+        // Writes what the output buffer holds. Ends in `rtWrite` or a `ret`.
         a.bind(flush);
         {
             let none = a.new_label();
@@ -671,7 +671,7 @@ pub fn emit_for(
             a.ret();
         }
 
-        // ---- rt_print ----------------------------------------------------------------------------------
+        // ---- rtPrint ----------------------------------------------------------------------------------
         // Buffered standard output: copy into the buffer; when it does not fit, write the buffer out
         // first; text that is bigger than the whole buffer is written directly.
         a.bind(rt.print);
@@ -718,7 +718,7 @@ pub fn emit_for(
         }
     }
 
-    // ---- rt_write ----------------------------------------------------------------------------------
+    // ---- rtWrite ----------------------------------------------------------------------------------
     a.bind(rt.write_fd);
     if win {
         // GetStdHandle once, then WriteFile until everything is written. x19 the handle, x20 the
@@ -778,7 +778,7 @@ pub fn emit_for(
     }
 
     if leak_check || uses.write_u64 {
-        // ---- rt_write_u64 ------------------------------------------------------------------------------
+        // ---- rtWriteU64 ------------------------------------------------------------------------------
         a.bind(rt.write_u64);
         {
             a.sub_ri(SP, SP, 48);
@@ -806,7 +806,7 @@ pub fn emit_for(
     }
 
     if copy_used {
-        // ---- rt_memcpy ---------------------------------------------------------------------------------
+        // ---- rtMemcpy ---------------------------------------------------------------------------------
         a.bind(rt.memcpy);
         {
             let (blocks, pairs, bytes, done, tail) = (
@@ -849,7 +849,7 @@ pub fn emit_for(
         }
     }
 
-    // ---- rt_stop -----------------------------------------------------------------------------------
+    // ---- rtStop -----------------------------------------------------------------------------------
     a.bind(rt.stop);
     a.mov_rr(X19, X0);
     a.mov_rr(X20, X1);
@@ -966,7 +966,7 @@ pub fn emit_for(
         a.mov_ri(X1, 13);
         a.bl(rt.stop);
 
-        // ---- rt_alloc ----------------------------------------------------------------------------------
+        // ---- rtAlloc ----------------------------------------------------------------------------------
         // x19 header plus payload, x20 class, x21 block size, x22 the block.
         a.bind(rt.alloc);
         enter(a);
@@ -1116,7 +1116,7 @@ pub fn emit_for(
     }
 
     if uses.ctx {
-        // ---- rt_ctx_switch / rt_ctx_init --------------------------------------------------------------
+        // ---- rtCtxSwitch / rtCtxInit --------------------------------------------------------------
         // A saved context is a stack pointer with 96 bytes above it: x19 to x28, x29, x30 (the return address).
         a.bind(rt.ctx_switch);
         a.stp_pre(X19, X20, SP, -96);
@@ -1158,7 +1158,7 @@ pub fn emit_for(
     }
 
     if free_used {
-        // ---- rt_free -----------------------------------------------------------------------------------
+        // ---- rtFree -----------------------------------------------------------------------------------
         a.bind(rt.free);
         {
             let (fdone, flarge, unmap) = (a.new_label(), a.new_label(), a.new_label());
@@ -1241,7 +1241,7 @@ pub fn emit_for(
     }
 
     if uses.realloc {
-        // ---- rt_realloc --------------------------------------------------------------------------------
+        // ---- rtRealloc --------------------------------------------------------------------------------
         // A large block moves with `mremap`: the kernel moves the pages, nothing is copied and the new
         // tail is zero. Anything else gets a new block, the smaller of the two sizes copied, and the old
         // block freed. x19 old block, x20 new size, x21 new block or length, x22 the remapped block.
@@ -1377,7 +1377,7 @@ pub fn emit_for(
     }
 
     if uses.fmod {
-        // ---- rt_fmod -----------------------------------------------------------------------------------
+        // ---- rtFmod -----------------------------------------------------------------------------------
         // C's `fmod` for doubles, bit by bit (the algorithm of musl): the result is exact. x9 the bits
         // of x, x10 the bits of y, x11 and x12 their exponents, x13 the sign of x.
         a.bind(rt.fmod);
