@@ -166,7 +166,7 @@ def waves(colour, x0, ys):
     )
 
 
-def toml_icon(style, dark):
+def yaml_icon(style, dark):
     p = pal(dark)
     fg, ink = p["fg"], p["ink"]
     if style == "chart":
@@ -190,7 +190,7 @@ def toml_icon(style, dark):
 
 
 PEL_STYLES = ("outline", "glyph", "solid", "band")
-TOML_STYLES = ("chart", "solid", "anchor")
+YAML_STYLES = ("chart", "solid", "anchor")
 
 
 def file_icons():
@@ -198,8 +198,8 @@ def file_icons():
     for dark, suf in ((False, ""), (True, "-dark")):
         for s in PEL_STYLES:
             out[f"editor/file-icons/pel-{s}{suf}.svg"] = SVG_OPEN % "0 0 128 128" + pel_icon(s, dark) + "</svg>"
-        for s in TOML_STYLES:
-            out[f"editor/file-icons/pelago-toml-{s}{suf}.svg"] = SVG_OPEN % "0 0 128 128" + toml_icon(s, dark) + "</svg>"
+        for s in YAML_STYLES:
+            out[f"editor/file-icons/pelago-yaml-{s}{suf}.svg"] = SVG_OPEN % "0 0 128 128" + yaml_icon(s, dark) + "</svg>"
     return out
 
 
