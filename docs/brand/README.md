@@ -10,7 +10,7 @@ Status: decided with the owner, 2026-10-21. Assets live in `assets/brand/` (see 
 - **Text and UI font:** Outfit. Code stays in whatever monospace the reader uses.
 - **Palette:** Pelago Teal `#0E7C86`, Lagoon `#5FD0C8` (on dark), Deep Sea `#0B2239`, Foam `#F4F6F8`. Teal on white is 4.9:1: fine for the logo and large text, not for small body text.
 - **Icons:** a rounded badge (teal with a white mark, or Deep Sea with a Lagoon mark). Below 24px the badge replaces the loose mark.
-- **File icons:** `.pel` has four styles (outline, glyph, solid, band) and `pelago.toml` three (chart, solid, anchor), shipped side by side so editor and OS integrations can pick. The family pairing we recommend is `pel-solid` with `pelago-toml-solid`.
+- **File icons:** `.pel` has four styles (outline, glyph, solid, band) and `pelago.yaml` three (chart, solid, anchor), shipped side by side so editor and OS integrations can pick. The family pairing we recommend is `pel-solid` with `pelago-yaml-solid`.
 
 ## Rules
 
