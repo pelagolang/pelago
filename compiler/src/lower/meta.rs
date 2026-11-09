@@ -333,7 +333,7 @@ impl<'a> Lowerer<'a> {
                 }
                 Some(Cv::Fields(out))
             }
-            TyKind::Tuple(_) => self.read_fields(img, at, t),
+            TyKind::Tuple(_) | TyKind::AltTuple(..) => self.read_fields(img, at, t),
             TyKind::Box(e) => {
                 let p = Self::read_n(img, at, 8)? as usize;
                 Some(Cv::Boxed(Box::new(self.read_cv(img, p, e)?)))

@@ -44,13 +44,13 @@ const own = copy xs[1..3]           // an independent list you can keep
 A slice is a view that lasts for one statement or one call, like every reference in this language. It cannot be stored
 in a struct or returned. `copy` makes a list you own.
 
-## 3. Fixed arrays and tuples
+## 3. Fixed arrays, tuples and braids
 
 ```
 var grid: [int; 9] = [0; 9]         // nine zeros: [value; count]
 const pair = (3, "three")           // a tuple
 const (n, label) = pair
-const mixed: (int, string; 4) = ... // your alternating primitive
+const mixed: (int, string; 4) = (1, "a", 2, "b") // a braid: int, string, int, string (docs/design/alternating.md)
 ```
 
 `[T; N]` lives inline (on the stack or inside a struct) and `N` is part of the type, so `meta N: int` works for

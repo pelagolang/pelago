@@ -36,7 +36,7 @@ variant (AoSoA) that groups 8 elements per block for vector widths.
 
 A compiler that picks the layout by itself stays on the "later" list. It needs whole-program analysis.
 
-The fixed-size tuple `(A, B; N)` is an interleaved layout, the AoS flavour of mixed types. `soa<T>` is its
+The braid `(A, B; N)` ([alternating.md](alternating.md)) is an interleaved layout, the AoS flavour of mixed types. `soa<T>` is its
 opposite, so the two cover both ends.
 
 ## 3. Linear types

@@ -265,7 +265,7 @@ Decided: lowercase, and sized integers from 8 to 64 bits. `int` is always 64 bit
 | `[T]` | A growable list of `T` | 2 |
 | `[T; N]` | A fixed-size array of exactly `N` items of `T` | 2 |
 | `(A, B)` | A tuple | 2 |
-| `(A, B; N)` | Fixed-size tuple of exactly N slots whose types alternate: `(int, string; 3)` is an int, a string, an int | 3 |
+| `(A, B; N)` | A **braid**: exactly N slots whose types repeat in turn, `(int, string; 3)` is an int, a string, an int. Also spelled `braid<int, string; 3>` ([alternating.md](alternating.md)) | 3 |
 | `[(A, B); N]` | A fixed array of N pairs. Same memory layout as `(A, B; 2N)`, counted in pairs | 2 |
 | `map<K, V>` | Key to value lookup | 2 |
 | `set<T>` | A collection of unique items | 2 |

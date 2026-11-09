@@ -1461,3 +1461,60 @@ fn naming_styles_find_each_other() {
     clean("fn t(xs: [int]) -> bool = xs.is_empty() || xs.isEmpty()");
     flagged("fn t() -> int = nothing_here()", "cannot find");
 }
+
+// ---- braids (docs/design/alternating.md) -----------------------------------------------------------
+
+#[test]
+fn a_braid_literal_is_decided_by_its_annotation() {
+    clean("fn t() { const a: (int, string; 3) = (7, \"s\", 8)\n const b: braid<int, string; 2> = (1, \"x\")\n const c: (int, string; 6) = (0, \"\"; 6) }");
+    assert_eq!(probe("const probe = (7, \"s\", 8)"), "(int, string, int)");
+    flagged(
+        "fn t() { const a: (int, string; 3) = (7, \"s\") }",
+        "slot 2 has no value",
+    );
+    flagged(
+        "fn t() { const a: (int, string; 3) = (7, 8, 9) }",
+        "slot 1 of this braid is `string`",
+    );
+    flagged(
+        "fn t() { const a: (int, string; 3) = (0, \"\"; 4) }",
+        "is expected",
+    );
+}
+
+#[test]
+fn braid_slots_have_the_type_of_their_position() {
+    assert_eq!(
+        probe("const x: (int, string; 4) = (1, \"a\", 2, \"b\")\nconst probe = x[3]"),
+        "string"
+    );
+    flagged(
+        "fn t(x: (int, string; 4), i: int) { x[i] }",
+        "depends on the position",
+    );
+    flagged("fn t(x: (int, string; 4)) { x[4] }", "no slot 4");
+    clean("fn t(x: (int, int; 4), i: int) { x[i] }");
+}
+
+#[test]
+fn braid_methods_follow_the_length_and_the_cycle() {
+    clean("fn t(x: (int, string; 5)) { x.tail()\n x.first(1)\n x.second(-1)\n x.split()\n x.evens() }");
+    flagged("fn t(x: (int, string; 4)) { x.tail() }", "has no tail");
+    flagged(
+        "fn t(x: (int, string; 3)) { x.swap() }",
+        "needs an even length",
+    );
+    flagged(
+        "fn t(x: (int, string; 4)) { x.first(2) }",
+        "pair 2 is out of range",
+    );
+    flagged(
+        "fn t(x: (int, string, bool; 6)) { x.first(0) }",
+        "cycle of 3 types",
+    );
+    clean("fn t(a: [int; 2], b: [string; 2]) { braid.zip(a, b) }");
+    flagged(
+        "fn t(a: [int; 2], b: [string; 3]) { braid.zip(a, b) }",
+        "is expected",
+    );
+}

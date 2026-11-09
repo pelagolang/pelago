@@ -188,6 +188,7 @@ fn collection_literals() {
     assert_eq!(one("{:}"), "(map)");
     assert_eq!(one("set { 1, 2 }"), "(set 1 2)");
     assert_eq!(one("(1, 2)"), "(tuple 1 2)");
+    assert_eq!(one("(0, \"\"; 6)"), "(braid 0 (str) ; 6)");
     assert_eq!(one("(1,)"), "(tuple 1)");
     assert_eq!(one("()"), "(tuple)");
 }
@@ -506,6 +507,11 @@ fn types() {
     assert_eq!(t("[int; 9]"), "(array int 9)");
     assert_eq!(t("(int, string)"), "(tuple int string)");
     assert_eq!(t("(int, string; 4)"), "(tuple int string ; 4)");
+    assert_eq!(t("braid<int, string; 4>"), "(braid int string ; 4)");
+    assert_eq!(
+        t("braid<int, string, bool; 6>"),
+        "(braid int string bool ; 6)"
+    );
     assert_eq!(t("int?"), "(option int)");
     assert_eq!(t("int ! parse_error"), "(result int parse_error)");
     assert_eq!(t("[int]?"), "(option (list int))");

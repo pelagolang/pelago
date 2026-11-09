@@ -450,6 +450,21 @@ impl value {
     }
 }
 
+//~ A braid as one flat array with a JSON value per slot: `(int, string; 3)` is `[7, "seven", 8]`. `a` makes the value of
+//~ each slot of type A, `b` of each slot of type B. (An array of pairs, `[(A, B); N]`, is an array of two-element arrays: make
+//~ each pair with `value.items([a(x), b(y)])`.) There is no typed encoder for structs yet; this is the braid's part of it.
+pub fn braidItems<A, B, meta N: int>(x: (A, B; N), a: fn(A) -> value, b: fn(B) -> value) -> value {
+    var out: [value] = []
+    var p = 0
+    while p < N / 2 {
+        out.push!(a(x.first(p)))
+        out.push!(b(x.second(p)))
+        p += 1
+    }
+    if N % 2 == 1 { out.push!(a(x.tail())) }
+    value.items(out)
+}
+
 impl show for value {
     fn show(self) -> string = self.encode()
 }
@@ -600,6 +615,11 @@ impl value {
     //~ The error for a value of the wrong kind: `expected an object, found text`.
     fn mismatch(self, expected: str, at: [int]) -> json_error {
         problem("expected #expected, found #(describe(self))", at)
+    }
+
+    //~ The error for an array with the wrong number of elements: `expected 3 elements, found 4`.
+    fn wrongLength(self, expected: int, at: [int]) -> json_error {
+        problem("expected #expected elements, found #(self.size())", at)
     }
 
     //~ The error for a missing member of an object.

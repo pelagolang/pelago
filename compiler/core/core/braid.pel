@@ -1,0 +1,267 @@
+/// The braid: `(A, B; N)` or `braid<A, B; N>`, a fixed run of N slots whose types alternate (docs/design/alternating.md).
+///
+/// The slots lie one after the other like the fields of a struct (section 5 of the design), so pair `p` starts at
+/// `p * rtSizeOf<(A, B)>()` and slot B sits at the offset B has inside a pair. Every method here is written for a
+/// cycle of two types; a longer cycle has the type, the literal and constant slots, nothing more.
+/// The checker (`typecheck/call.rs`, `braid_rules`) adds what a signature cannot say: `tail` needs an odd `N`,
+/// `swap` an even one, `toArray` one type in the cycle.
+
+//~ What `braid.fromLists` returns when the lists do not make a braid of the length the type asks for.
+pub struct zip_error {
+    pub message: string
+    pub left: int
+    pub right: int
+}
+
+//~ The pair number for `p`, counting from the end when negative; stops when there is no such pair.
+pub fn rtPairAt(p: int, pairs: int) -> int {
+    var at = p
+    if at < 0 { at += pairs }
+    if at < 0 || at >= pairs { panic("pair #p out of range: #pairs pairs") }
+    return at
+}
+
+//~ The constructors of a braid, called on the type: `braid.zip(xs, ys)`.
+impl braid {
+    //~ Interleaves two arrays of the same length: `xs[0], ys[0], xs[1], ys[1], ...`. The inverse of `split`
+    //~ (`unbraid`) for an even braid. The lengths are part of the types, so a mismatch is a compile error.
+    fn zip<A, B, meta K: int>(xs: [A; K], ys: [B; K]) -> (A, B; K * 2) {
+        const stride = rtSizeOf<(A, B)>()
+        const buf = rtAlloc(rtSizeOf<(A, B; K * 2)>() + 8)
+        var i = 0
+        while i < K {
+            rtCloneTo<A>(rtOffset(rtAddrOf(xs), i * rtSizeOf<A>()), rtOffset(buf, i * stride))
+            rtCloneTo<B>(rtOffset(rtAddrOf(ys), i * rtSizeOf<B>()), rtOffset(buf, i * stride + rtSlotOff<(A, B)>(1)))
+            i += 1
+        }
+        const out = rtRead<(A, B; K * 2)>(buf)
+        rtFree(buf)
+        return out
+    }
+
+    //~ The same from two lists; `N` comes from the type the result lands in. Lists are data, so a length that is
+    //~ not `N / 2` (or, for an odd `N`, `N / 2 + 1` for the first list) is a `zip_error`, not a stop.
+    fn fromLists<A, B, meta N: int>(xs: [A], ys: [B]) -> (A, B; N) ! zip_error {
+        const pairs = N / 2
+        const want_xs = (N + 1) / 2
+        if xs.len() != want_xs || ys.len() != pairs {
+            return err(zip_error {
+                message: "a braid of #N slots needs #want_xs and #pairs items, found #(xs.len()) and #(ys.len())"
+                left: xs.len()
+                right: ys.len()
+            })
+        }
+        const stride = rtSizeOf<(A, B)>()
+        const buf = rtAlloc(rtSizeOf<(A, B; N)>() + 8)
+        const xdata = rtHdrData(rtAddrOf(xs))
+        const ydata = rtHdrData(rtAddrOf(ys))
+        var i = 0
+        while i < want_xs {
+            rtCloneTo<A>(rtOffset(xdata, i * rtSizeOf<A>()), rtOffset(buf, i * stride))
+            i += 1
+        }
+        i = 0
+        while i < pairs {
+            rtCloneTo<B>(rtOffset(ydata, i * rtSizeOf<B>()), rtOffset(buf, i * stride + rtSlotOff<(A, B)>(1)))
+            i += 1
+        }
+        const out = rtRead<(A, B; N)>(buf)
+        rtFree(buf)
+        return ok(out)
+    }
+}
+
+impl<A, B, meta N: int> (A, B; N) {
+    //~ Slots, `N`.
+    fn len(self) -> int = N
+
+    //~ Full pairs: `N / 2`, rounded down.
+    fn pairs(self) -> int = N / 2
+
+    //~ Slot `2p` (type A) of pair `p`. A negative `p` counts from the end; a `p` outside the pairs stops the program.
+    fn first(self, p: int) -> A {
+        const at = rtPairAt(p, N / 2)
+        return rtClone<A>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B)>()))
+    }
+
+    //~ Slot `2p + 1` (type B) of pair `p`.
+    fn second(self, p: int) -> B {
+        const at = rtPairAt(p, N / 2)
+        return rtClone<B>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B)>() + rtSlotOff<(A, B)>(1)))
+    }
+
+    //~ Changes slot `2p`; the old value is dropped.
+    fn setFirst(inout self, p: int, sink v: A) {
+        const at = rtPairAt(p, N / 2)
+        const dst = rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B)>())
+        rtDropAt<A>(dst)
+        rtWrite<A>(dst, sink v)
+    }
+
+    //~ Changes slot `2p + 1`.
+    fn setSecond(inout self, p: int, sink v: B) {
+        const at = rtPairAt(p, N / 2)
+        const dst = rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B)>() + rtSlotOff<(A, B)>(1))
+        rtDropAt<B>(dst)
+        rtWrite<B>(dst, sink v)
+    }
+
+    //~ The last slot of a braid with an odd `N`, type A (a compile error for an even `N`).
+    fn tail(self) -> A {
+        return rtClone<A>(rtOffset(rtAddrOf(self), (N / 2) * rtSizeOf<(A, B)>()))
+    }
+
+    //~ Every full pair, both slots typed: `for a, b of x.pairIter()`. The tail is not visited; read it with `tail()`.
+    fn pairIter(self) -> iter<(A, B)> {
+        var out: list<(A, B)> = []
+        const stride = rtSizeOf<(A, B)>()
+        var i = 0
+        while i < N / 2 {
+            out.push!(rtClone<(A, B)>(rtOffset(rtAddrOf(self), i * stride)))
+            i += 1
+        }
+        return rtCast<list<(A, B)>, iter<(A, B)>>(sink out)
+    }
+
+    //~ The slots of type A, in order (copies).
+    fn evens(self) -> iter<A> {
+        var out: list<A> = []
+        const stride = rtSizeOf<(A, B)>()
+        var i = 0
+        while i < (N + 1) / 2 {
+            out.push!(rtClone<A>(rtOffset(rtAddrOf(self), i * stride)))
+            i += 1
+        }
+        return rtCast<list<A>, iter<A>>(sink out)
+    }
+
+    //~ The slots of type B, in order (copies).
+    fn odds(self) -> iter<B> {
+        var out: list<B> = []
+        const stride = rtSizeOf<(A, B)>()
+        var i = 0
+        while i < N / 2 {
+            out.push!(rtClone<B>(rtOffset(rtAddrOf(self), i * stride + rtSlotOff<(A, B)>(1))))
+            i += 1
+        }
+        return rtCast<list<B>, iter<B>>(sink out)
+    }
+
+    //~ Both strands at once: `evens()` and `odds()`.
+    fn strands(self) -> (iter<A>, iter<B>) = (self.evens(), self.odds())
+
+    //~ Two owned arrays, one per strand. For an even braid the inverse of `braid.zip`.
+    fn split(self) -> ([A; (N + 1) / 2], [B; N / 2]) {
+        const stride = rtSizeOf<(A, B)>()
+        const sa = rtSizeOf<A>()
+        const sb = rtSizeOf<B>()
+        const abuf = rtAlloc(((N + 1) / 2) * sa + 8)
+        const bbuf = rtAlloc((N / 2) * sb + 8)
+        var i = 0
+        while i < (N + 1) / 2 {
+            rtCloneTo<A>(rtOffset(rtAddrOf(self), i * stride), rtOffset(abuf, i * sa))
+            i += 1
+        }
+        i = 0
+        while i < N / 2 {
+            rtCloneTo<B>(rtOffset(rtAddrOf(self), i * stride + rtSlotOff<(A, B)>(1)), rtOffset(bbuf, i * sb))
+            i += 1
+        }
+        const xs = rtRead<[A; (N + 1) / 2]>(abuf)
+        const ys = rtRead<[B; N / 2]>(bbuf)
+        rtFree(abuf)
+        rtFree(bbuf)
+        return (xs, ys)
+    }
+
+    //~ The long spelling of `split`.
+    fn unbraid(self) -> ([A; (N + 1) / 2], [B; N / 2]) = self.split()
+
+    //~ A new pair for every pair: `f` takes both slots and returns both. For an odd `N` the tail is kept as it is, so
+    //~ `C` must be `A` then (the checker says so).
+    fn mapPairs<C, D>(self, f: fn(A, B) -> (C, D)) -> (C, D; N) {
+        const stride = rtSizeOf<(A, B)>()
+        const nstride = rtSizeOf<(C, D)>()
+        const buf = rtAlloc(rtSizeOf<(C, D; N)>() + 8)
+        var i = 0
+        while i < N / 2 {
+            const a = rtClone<A>(rtOffset(rtAddrOf(self), i * stride))
+            const b = rtClone<B>(rtOffset(rtAddrOf(self), i * stride + rtSlotOff<(A, B)>(1)))
+            rtWrite<(C, D)>(rtOffset(buf, i * nstride), f(a, b))
+            i += 1
+        }
+        if N % 2 == 1 {
+            rtCloneTo<A>(rtOffset(rtAddrOf(self), (N / 2) * stride), rtOffset(buf, (N / 2) * nstride))
+        }
+        const out = rtRead<(C, D; N)>(buf)
+        rtFree(buf)
+        return out
+    }
+
+    //~ Changes the type of the slots of type A: `f` is applied to each; the B slots are copied.
+    fn mapEvens<C>(self, f: fn(A) -> C) -> (C, B; N) {
+        const stride = rtSizeOf<(A, B)>()
+        const nstride = rtSizeOf<(C, B)>()
+        const buf = rtAlloc(rtSizeOf<(C, B; N)>() + 8)
+        var i = 0
+        while i < (N + 1) / 2 {
+            rtWrite<C>(rtOffset(buf, i * nstride), f(rtClone<A>(rtOffset(rtAddrOf(self), i * stride))))
+            i += 1
+        }
+        i = 0
+        while i < N / 2 {
+            rtCloneTo<B>(
+                rtOffset(rtAddrOf(self), i * stride + rtSlotOff<(A, B)>(1)),
+                rtOffset(buf, i * nstride + rtSlotOff<(C, B)>(1)),
+            )
+            i += 1
+        }
+        const out = rtRead<(C, B; N)>(buf)
+        rtFree(buf)
+        return out
+    }
+
+    //~ Changes the type of the slots of type B.
+    fn mapOdds<D>(self, f: fn(B) -> D) -> (A, D; N) {
+        const stride = rtSizeOf<(A, B)>()
+        const nstride = rtSizeOf<(A, D)>()
+        const buf = rtAlloc(rtSizeOf<(A, D; N)>() + 8)
+        var i = 0
+        while i < (N + 1) / 2 {
+            rtCloneTo<A>(rtOffset(rtAddrOf(self), i * stride), rtOffset(buf, i * nstride))
+            i += 1
+        }
+        i = 0
+        while i < N / 2 {
+            rtWrite<D>(
+                rtOffset(buf, i * nstride + rtSlotOff<(A, D)>(1)),
+                f(rtClone<B>(rtOffset(rtAddrOf(self), i * stride + rtSlotOff<(A, B)>(1)))),
+            )
+            i += 1
+        }
+        const out = rtRead<(A, D; N)>(buf)
+        rtFree(buf)
+        return out
+    }
+
+    //~ Swaps the roles of the two strands, as a copy: `(A, B; N)` becomes `(B, A; N)`. Even `N` only.
+    fn swap(self) -> (B, A; N) {
+        const stride = rtSizeOf<(A, B)>()
+        const nstride = rtSizeOf<(B, A)>()
+        const buf = rtAlloc(rtSizeOf<(B, A; N)>() + 8)
+        var i = 0
+        while i < N / 2 {
+            rtCloneTo<B>(rtOffset(rtAddrOf(self), i * stride + rtSlotOff<(A, B)>(1)), rtOffset(buf, i * nstride))
+            rtCloneTo<A>(rtOffset(rtAddrOf(self), i * stride), rtOffset(buf, i * nstride + rtSlotOff<(B, A)>(1)))
+            i += 1
+        }
+        const out = rtRead<(B, A; N)>(buf)
+        rtFree(buf)
+        return out
+    }
+}
+
+impl<A, meta N: int> (A, A; N) {
+    //~ The slots as an array, when the whole cycle has one type. (The two have the same memory.)
+    fn toArray(self) -> [A; N] = rtClone<[A; N]>(rtAddrOf(self))
+}
