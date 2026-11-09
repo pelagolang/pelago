@@ -20,6 +20,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 
 | Column | Card | Title | Size |
 |---|---|---|---|
+| Ready (Harden) | [B-05](cards/B-05-islet-yaml-port.md) | Port the Islet YAML reader to Pelago: first step toward writing Islet in Pelago; bootstrap stays on the Rust Islet until stores and locks are byte-identical (BLAKE3 hasher later) | M |
 
 ## Shelf (parked on purpose)
 
