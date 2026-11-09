@@ -188,7 +188,7 @@ fn collection_literals() {
     assert_eq!(one("{:}"), "(map)");
     assert_eq!(one("set { 1, 2 }"), "(set 1 2)");
     assert_eq!(one("(1, 2)"), "(tuple 1 2)");
-    assert_eq!(one("(0, \"\"; 6)"), "(braid 0 \"\" ; 6)");
+    assert_eq!(one("(0, \"\"; 6)"), "(braid 0 (str) ; 6)");
     assert_eq!(one("(1,)"), "(tuple 1)");
     assert_eq!(one("()"), "(tuple)");
 }

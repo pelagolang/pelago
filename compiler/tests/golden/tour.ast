@@ -354,7 +354,7 @@
     dense
     ((points : (soa point 8)) (grid : (tuple int string ; 4)) (pair : (tuple int int)))
     (block))
-  (const table (: (braid int string ; 4)) (tuple 1 (str "one") 2 (str "two")))
+  (const names_by_id (: (braid int string ; 4)) (tuple 1 (str "one") 2 (str "two")))
   (const blank (: (tuple int string ; 6)) (braid 0 (str) ; 6))
   (fn
     braids
