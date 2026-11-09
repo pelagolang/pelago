@@ -334,7 +334,8 @@ impl<'a> Lowerer<'a> {
                     _ => None,
                 });
                 let Some(i) = slot else {
-                    return self.unsupported(sp, "`rtSlotOff` with a slot that is not a plain number");
+                    return self
+                        .unsupported(sp, "`rtSlotOff` with a slot that is not a plain number");
                 };
                 let fs = self.struct_fields(t);
                 let Some(f) = fs.get(i) else {

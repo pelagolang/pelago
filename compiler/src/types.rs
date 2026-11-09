@@ -451,6 +451,9 @@ impl TypeTable {
                 b'+' => x.checked_add(*y),
                 b'-' => x.checked_sub(*y),
                 b'*' => x.checked_mul(*y),
+                // Division and remainder of known numbers, for lengths such as `N / 2`.
+                b'/' if *y > 0 && *x >= 0 => Some(x / y),
+                b'%' if *y > 0 && *x >= 0 => Some(x % y),
                 _ => None,
             };
             if let Some(r) = r {

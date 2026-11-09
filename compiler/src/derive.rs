@@ -151,6 +151,98 @@ impl<'a> Gen<'a> {
                 );
                 Some(base.to_string())
             }
+            // `[T; N]`: exactly `N` elements.
+            TypeKind::Array(elem, n) => {
+                let inner = self.decoder(elem, &format!("{base}_item"))?;
+                let n = self.text(n.span).trim().to_string();
+                let _ = write!(
+                    self.out,
+                    "\nfn {base}(v: json.value, inout at: [int]) -> {ret} ! {ERR} {{
+    switch v {{
+        case .items(values):
+            if values.len() != {n} {{ return err(v.wrongLength({n}, at)) }}
+            var out: [{elem_text}] = []
+            for i in 0..values.len() {{
+                at.push!(i)
+                out.push!({inner}(values[i], inout at)?)
+                at.pop!()
+            }}
+            const r: {ret} = out.asArray()
+            ok(r)
+        case _: return err(v.mismatch(\"an array\", at))
+    }}
+}}\n",
+                    elem_text = self.text(elem.span)
+                );
+                Some(base.to_string())
+            }
+            // `(A, B; N)` and `braid<A, B; N>`: one flat array, slot `i` read as the type of slot `i mod k`.
+            TypeKind::FixedTuple(ts, n, _) => {
+                let n = self.text(n.span).trim().to_string();
+                let Ok(count) = n.replace('_', "").parse::<usize>() else {
+                    self.fail(
+                        ty.span,
+                        "`fromJson` needs the length of a braid to be a plain number",
+                    );
+                    return None;
+                };
+                let mut decs = Vec::new();
+                for (i, t) in ts.iter().enumerate() {
+                    decs.push(self.decoder(t, &format!("{base}_slot{i}"))?);
+                }
+                let mut body = String::new();
+                for i in 0..count {
+                    let _ = write!(
+                        body,
+                        "            at.push!({i})\n            const s{i} = {}(values[{i}], inout at)?\n            at.pop!()\n",
+                        decs[i % decs.len()]
+                    );
+                }
+                let slots: Vec<String> = (0..count).map(|i| format!("s{i}")).collect();
+                let _ = write!(
+                    self.out,
+                    "\nfn {base}(v: json.value, inout at: [int]) -> {ret} ! {ERR} {{
+    switch v {{
+        case .items(values):
+            if values.len() != {n} {{ return err(v.wrongLength({n}, at)) }}
+{body}            const r: {ret} = ({})
+            ok(r)
+        case _: return err(v.mismatch(\"an array\", at))
+    }}
+}}\n",
+                    slots.join(", ")
+                );
+                Some(base.to_string())
+            }
+            // `(A, B)`: a two-element array.
+            TypeKind::Tuple(ts) if !ts.is_empty() => {
+                let mut decs = Vec::new();
+                for (i, t) in ts.iter().enumerate() {
+                    decs.push(self.decoder(t, &format!("{base}_slot{i}"))?);
+                }
+                let count = ts.len();
+                let mut body = String::new();
+                for (i, d) in decs.iter().enumerate() {
+                    let _ = write!(
+                        body,
+                        "            at.push!({i})\n            const s{i} = {d}(values[{i}], inout at)?\n            at.pop!()\n"
+                    );
+                }
+                let slots: Vec<String> = (0..count).map(|i| format!("s{i}")).collect();
+                let _ = write!(
+                    self.out,
+                    "\nfn {base}(v: json.value, inout at: [int]) -> {ret} ! {ERR} {{
+    switch v {{
+        case .items(values):
+            if values.len() != {count} {{ return err(v.wrongLength({count}, at)) }}
+{body}            ok(({}))
+        case _: return err(v.mismatch(\"an array\", at))
+    }}
+}}\n",
+                    slots.join(", ")
+                );
+                Some(base.to_string())
+            }
             TypeKind::Option(inner_ty) => {
                 let inner = self.decoder(inner_ty, &format!("{base}_some"))?;
                 let _ = write!(

@@ -1,7 +1,8 @@
 # The alternating sequence (draft 1)
 
-Status: decided 2026-11-08 (owner answered all eight questions in section 9); not built yet. Written at the owner's request: "I want to name it something else, not tuple, and give it its own
-function and the works." **Docs only; no compiler change in this PR.** The owner chose the name **braid** (section 1).
+Status: decided 2026-11-08 (owner answered all eight questions in section 9) and **built** (card in this PR; section 10 says what shipped and
+where it differs from the draft). Written at the owner's request: "I want to name it something else, not tuple, and give it its own
+function and the works." The owner chose the name **braid** (section 1).
 
 The idea is the owner's own: a fixed-size run of N slots whose types **repeat in a cycle**. `(int, string; 3)` is an int, a
 string, an int. `[(A, B); N]` is N pairs, laid out exactly like `(A, B; 2N)`. No mainstream language has this as a built-in type
@@ -46,8 +47,9 @@ Where the name appears: the type's name in messages, the constructor namespace (
 spelled-out type **`braid<A, B; N>`** that means exactly the same as `(A, B; N)` (decided: both spellings are allowed; the
 formatter leaves each as written, `show` in messages prints the `braid<...>` form).
 
-Implementation note: today `T.f()` calls on a type are not implemented in the checker (see `json.md`), so `braid.zip` and
-`braid.fromLists` need that first, or ship as the free functions `braidZip` and `braidFromLists` until it exists.
+Implementation note: calls on a type, `T.f()`, already worked for a user `struct`/`obj`/`enum`; the open gap was a built-in type. `braid`
+is now a name of the prelude that carries the library's `impl braid { fn zip ... }` functions, so `braid.zip(...)` works without a
+`braidZip` (section 10).
 
 ## 2. Literal
 
@@ -106,7 +108,7 @@ Every operation is a method, so the name stays out of most code. Lengths are com
 |---|---|---|
 | `x.len()` | `int` | slots, `N` |
 | `x.pairs()` | `int` | full pairs, `N / 2` rounded down |
-| `x.pairIter()` | `iter<(A, B)>` | `for a, b of x.pairIter()` visits each full pair with both slots typed. The tail is not visited; read it with `tail()`. The lazy `iter<T>` is the one from `iter.md` |
+| `x.pairIter()` | `iter<(A, B)>` | `for (a, b) of x.pairIter()` visits each full pair with both slots typed. The tail is not visited; read it with `tail()`. The lazy `iter<T>` is the one from `iter.md` |
 | `x.evens()` / `x.odds()` | `iter<A>` / `iter<B>` | all slots of one type, in order, as read-only views for one statement (second-class, like every reference). `for inout a of x.evens()` changes them in place |
 | `x.split()` | `([A; ceil(N/2)], [B; N/2])` | two **owned copies**, typed. A copy, so no stride type is needed. Also written `x.unbraid()` once named |
 | `braid.zip(as, bs)` | `(A, B; 2K)` | from `as: [A; K]` and `bs: [B; K]`. Equal lengths are checked at compile time for arrays. The inverse of `split` for even `N` |
@@ -141,7 +143,7 @@ while pc < prog.pairs() {
     pc += 1
 }
 
-for op, arg of prog.pairIter() { print("#op #arg") }
+for (op, arg) of prog.pairIter() { print("#op #arg") }
 const (ops, args) = prog.split()          // [uint8; 32] and [uint16; 32]
 const back = braid.zip(ops, args)          // the same 64 slots
 ```
@@ -236,4 +238,32 @@ no cycle, which was the source of the confusion. No code or rule changed.
 9. **Long spellings stay** (owner, 2026-11-08): `unbraid` is an alias of `split`, `strands` of `evens`/`odds` taken together, alongside the short names.
 10. **One card** covers the whole feature, all steps in one go (parser literal and `braid<...>` spelling, checker, lowering, library functions, JSON, tests, docs); the owner asked the orchestrator to create it.
 
-Still open (small, for the build card): whether `braid.zip` waits for `T.f()` calls or ships first as `braidZip`.
+Answered while building: `braid.zip` and `braid.fromLists` ship as `braid.zip` (no `braidZip`).
+
+## 10. What was built (2026-11-09)
+
+Checker, lowering, library (`compiler/core/core/braid.pel`), derive and tests: `compiler/core/tests/braid_*.pel`, `compiler/std/tests/json_braid.pel`,
+`typecheck/tests.rs`, `parser/tests.rs`, `examples/tour.pel`.
+
+- **Type and literals.** `(A, B; N)` and `braid<A, B; N>` (the length after `;` is one operand there, so `braid<int, string; (2 * 3)>`
+  needs parentheses; `(A, B; 2 * 3)` does not). A list where the annotation says braid is a braid (L1, errors name the slot); `(a, b; 6)` is the repeat
+  form (L2); no annotation, a tuple (L3). Messages print `braid<...>`.
+- **Slots.** `x[3]`, `x.3` have the type of slot `3 mod k`; a position past `N` is a compile error; a run-time `x[i]` is an error unless the
+  whole cycle has one type (then it is checked like an array index and stops when out of range). Any cycle length works for the type, literals,
+  constant slots, `==`, `<`, hash, `show`, `copy`, drop.
+- **Layout.** N fields in order, natural alignment (`rtSlotOff<T>(i)` reads an offset). `[(A, B); N]` and `(A, B; 2N)` have the same size (tested).
+- **Methods (cycle of two).** `len`, `pairs`, `first(p)`, `second(p)` (negative `p` counts from the end; out of range stops with
+  `pair 2 out of range: 2 pairs`), `setFirst!`, `setSecond!`, `tail` (odd `N` only, a compile error otherwise), `pairIter`, `evens`, `odds`,
+  `strands`, `split`, `unbraid`, `mapPairs`, `mapEvens`, `mapOdds`, `swap` (even `N` only), `toArray` (one type in the cycle). `braid.zip(xs, ys)`
+  and `braid.fromLists(xs, ys)` (a wrong length is a `zip_error`). The rules a signature cannot say are `braid_rules` in `typecheck/call.rs`.
+- **Long spellings.** `unbraid` is `split`; `strands()` is `(evens(), odds())` as a pair of iterators.
+- **Where it differs from the draft.** `evens`/`odds`/`pairIter` return copies in an (eager) `iter`, as every `iter` does today, so
+  `for inout a of x.evens()` is not available; use `setFirst!`. `x.asPairs()` and `y.asSlots()` (free reinterpretation) are not built; the layout
+  proof is tested by size. `mapPairs` on an odd braid keeps the tail, so its first result type must stay `A` (checked).
+- **Lengths.** Type-level numbers gained `/` and `%` on known numbers (for `N / 2`, `(N + 1) / 2`).
+- **Library additions.** `list.toArray<N>()` (an option) and `list.asArray<N>()` (stops), used by the JSON decoder.
+- **JSON.** `@derive(fromJson)` reads a braid, a tuple and `[T; N]` from a flat array (`$: expected 3 elements, found 4`; errors keep paths and positions),
+  so `[(A, B); N]` is an array of two-element arrays. Writing: `json.braidItems(x, a, b)` makes the flat array from a braid with a function per
+  strand; there is still no typed encoder for structs, so this is the braid's share of it.
+- **Known hole found on the way (not fixed here).** A closure or `switch` that returns a borrowed value without `copy` (for example
+  `case some(x): return x` on an owning `const`) is not refused and reads freed memory; `copy` avoids it. It is independent of braids (reproduces on `main`).

@@ -366,7 +366,9 @@ impl<'a> Lowerer<'a> {
                 tys.into_iter().any(|x| self.needs_drop(x))
             }
             TyKind::Tuple(ts) => ts.into_iter().any(|x| self.needs_drop(x)),
-            TyKind::AltTuple(ts, n) => self.array_len(n) > 0 && ts.into_iter().any(|x| self.needs_drop(x)),
+            TyKind::AltTuple(ts, n) => {
+                self.array_len(n) > 0 && ts.into_iter().any(|x| self.needs_drop(x))
+            }
             TyKind::Array(e, _) => self.needs_drop(e),
             _ => false,
         };

@@ -95,7 +95,9 @@ impl<'a> Lowerer<'a> {
                 true
             }
             TyKind::Void | TyKind::Never => true,
-            TyKind::Tuple(_) | TyKind::AltTuple(..) | TyKind::Range(_) => self.eq_fields(a, b, ty, fail),
+            TyKind::Tuple(_) | TyKind::AltTuple(..) | TyKind::Range(_) => {
+                self.eq_fields(a, b, ty, fail)
+            }
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Enum => self.eq_enum(a, b, ty, fail),
                 DefKind::Obj => false,

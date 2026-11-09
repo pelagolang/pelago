@@ -39,7 +39,7 @@ nothing. A hand-written decoder is `std/tests/json_decode.pel`; `@derive(fromJso
 section 3 is still a promise), so the derive writes free functions named after the type: `serverFromJson(value, inout at)` and
 `serverDecode(text)`; a hand-written decoder for your own type follows the same naming and a derived struct can have it as a field. (b) File
 and standard input came from another thread first (card for `std.fs`, `docs/design/input.md`, PR 227: `fs.readText`, `io_error`, `os_open` and
-`os_close` on every target), so step 2 below was dropped. (c) Not built yet: `map<string, V>` fields, tuples, generic types, `@json(name: ...)`
+`os_close` on every target), so step 2 below was dropped. (c) Tuples, braids and `[T; N]` are read from a flat array (see [alternating.md](alternating.md) section 10). Not built yet: `map<string, V>` fields, generic types, `@json(name: ...)`
 renaming and a strict mode. The derive reports a field type it cannot read as an error at the field.
 
 ## 2. The decisions, with the trade-offs

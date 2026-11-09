@@ -57,4 +57,5 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 
 ## Review
 
+- [S-09](cards/S-09-braid.md): the braid, end to end (design in `docs/design/alternating.md`); the owner reviews.
 - [S-06](cards/S-06-language-server.md): `pelago lsp` built (L1 to L5); the owner reviews.

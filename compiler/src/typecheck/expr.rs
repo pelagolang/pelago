@@ -635,7 +635,10 @@ impl<'p> Checker<'p> {
         let len = self.len_of(count);
         self.check_expr(count, Exp::Is(self.tt.int));
         let ArrayLen::Known(n) = len else {
-            self.err(count.span, "the length of a braid must be a constant number");
+            self.err(
+                count.span,
+                "the length of a braid must be a constant number",
+            );
             for x in items {
                 self.check_expr(x, Exp::Any);
             }
@@ -658,7 +661,10 @@ impl<'p> Checker<'p> {
             })
             .collect();
         if items.len() < 2 {
-            self.err(e.span, "a braid cycle needs at least two types: `(a, b; 6)`");
+            self.err(
+                e.span,
+                "a braid cycle needs at least two types: `(a, b; 6)`",
+            );
         }
         self.tt.mk(TyKind::AltTuple(tys, ArrayLen::Known(n)))
     }
@@ -1317,6 +1323,7 @@ impl<'p> Checker<'p> {
                     | TyKind::List(_)
                     | TyKind::Array(..)
                     | TyKind::Tuple(_)
+                    | TyKind::AltTuple(..)
                     | TyKind::Option(_)
                     | TyKind::Result(..)
                     | TyKind::Map(..)
@@ -1365,6 +1372,7 @@ impl<'p> Checker<'p> {
                     | TyKind::Param(_)
                     | TyKind::List(_)
                     | TyKind::Tuple(_)
+                    | TyKind::AltTuple(..)
                     | TyKind::Box(_)
             )
         {

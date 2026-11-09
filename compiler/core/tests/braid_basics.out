@@ -1,0 +1,25 @@
+(7, "seven", 8) (7, "seven", 8) (1, "a", 2, "b") (0, "", 0, "", 0, "")
+7 seven 8 b
+(1, 2, 30, 4) 30 [1, 2, 30, 4]
+(1, "a", true, 2, "b", false) b false
+5 2 7 eight 8 seven 9
+7 seven
+8 eight
+[7, 8, 9] ["seven", "eight"]
+[7, 8, 9] ["seven", "eight"]
+[7, 8, 9] ["seven", "eight"]
+true true
+(70, "seven", 8, "EIGHT", 9) (7, "seven", 8, "eight", 9)
+("a", 1, "b", 2)
+(2, "aa", 4, "bb")
+("n1", "a", "n2", "b")
+(1, 1, 2, 1)
+(107, "seven", 108, "eight", 9)
+(1, 4.5, 2, 5.5, 3, 6.5) ([1, 2, 3], [4.5, 5.5, 6.5])
+true
+("a", "b", "C", "d") ("a", "b", "c", "d")
+false true true false
+2 true
+[(1, "x"), (2, "y")]
+[(1, "x"), (2, "y")] true
+true

@@ -1407,6 +1407,8 @@ impl<'p> Checker<'p> {
                     Punct::Plus => b'+',
                     Punct::Minus => b'-',
                     Punct::Star => b'*',
+                    Punct::Slash => b'/',
+                    Punct::Percent => b'%',
                     _ => return None,
                 };
                 let a = self.const_term(lhs)?;

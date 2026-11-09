@@ -84,7 +84,13 @@ impl<'a> Lowerer<'a> {
     }
 
     /// `(a, b; 6)`: the items written again and again, in order, up to the length of the braid.
-    pub(crate) fn braid_repeat_lit(&mut self, e: &'a Expr, es: &'a [Expr], dst: Value, t: Ty) -> Res {
+    pub(crate) fn braid_repeat_lit(
+        &mut self,
+        e: &'a Expr,
+        es: &'a [Expr],
+        dst: Value,
+        t: Ty,
+    ) -> Res {
         let fs = self.struct_fields(t);
         if es.is_empty() {
             return self.unsupported(e.span, "a braid without items");

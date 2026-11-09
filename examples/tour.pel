@@ -355,6 +355,10 @@ fn sized<meta N: int>() -> [int; N] { [0; N] }
 fn apply(f: fn(int) -> int, x: int) -> int = f(f(x))
 fn shapes_area(xs: [any shape_like]) -> float = 0.0
 fn dense(points: soa<point, 8>, grid: (int, string; 4), pair: (int, int)) { }
+/// A braid: N slots whose types alternate. The annotation makes a list a braid; `(a, b; 6)` repeats a cycle.
+const table: braid<int, string; 4> = (1, "one", 2, "two")
+const blank: (int, string; 6) = (0, ""; 6)
+fn braids(t: braid<uint8, uint16; 6>) -> uint16 = t.second(0) + t.second(-1)
 ext fn puts(s: ptr) -> int
 ext "C" fn abs(x: int) -> int
 
