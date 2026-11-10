@@ -815,6 +815,12 @@ impl found {
         n: int,
     ) -> bool = n >= 0 && 2 * n + 1 < self.groups.len() && self.groups[2 * n] >= 0
 
+    //~ The text of group `n`, empty for a group that did not take part.
+    fn text(self, text: str, n: int) -> string {
+        if !self.took(n) { return "" }
+        "#(text[self.groups[2 * n]..self.groups[2 * n + 1]])"
+    }
+
     //~ The digits of group `n` as a number (`0` for a group that did not take part or holds no digits).
     fn int(self, text: str, n: int) -> int {
         if !self.took(n) { return 0 }

@@ -2912,6 +2912,15 @@ fn maps_find_keys_that_collide_in_the_first_slot() {
 }
 
 #[test]
+fn printing_an_empty_string_made_by_interpolation() {
+    // An empty heap string has a null address; reading no bytes from it is not a fault.
+    assert_eq!(
+        output_of("fn f(s: str) -> string = \"#(s[2..2])\"\nfn main() { const e = f(\"c=\")\n print(\"c\", e)\n print(e.len()) }"),
+        "c \n0\n"
+    );
+}
+
+#[test]
 fn cloning_and_sorting_an_empty_list() {
     // Cloning copies zero bytes between two null addresses; the interpreter must accept that.
     assert_eq!(

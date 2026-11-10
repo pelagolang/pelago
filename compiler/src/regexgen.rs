@@ -796,7 +796,7 @@ fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
             ));
         }
         let read = if base == "string" {
-            format!("h.group(text, {group}) ?? \"\"")
+            format!("h.text(text, {group})")
         } else if let Some((_, max, wrap)) = WHOLE.iter().find(|w| w.0 == base) {
             if !facts.digits_only {
                 return Err(format!(
