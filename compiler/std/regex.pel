@@ -10,8 +10,9 @@
 /// The matcher is a Pike VM: time grows with `text length * pattern length`, never exponentially.
 /// It works on bytes, so `.` and classes see UTF-8 text one byte at a time. Syntax: literals, `.`,
 /// `[a-z]`, `[^...]`, `\d \D \w \W \s \S \b \B`, `^ $`, `( )`, `(?: )`, `|`, `* + ?`, `{n}`, `{n,}`,
-/// `{n,m}` and lazy forms such as `*?`, named groups `(?<name>...)` (also `(?P<name>...)`) and lookahead
-/// `(?=...)` and `(?!...)`. Flags such as `(?i)`, lookbehind and backreferences are not supported.
+/// `{n,m}` and lazy forms such as `*?`, named groups `(?<name>...)` (also `(?P<name>...)`), lookahead
+/// `(?=...)` and `(?!...)`, flags `i` (ignore case, ASCII), `s` (`.` also matches a newline) and `m` (`^` and `$` match at
+/// lines) as `(?i)`, `(?-i)`, `(?im:...)`, and `\A`, `\z` for the whole text. Lookbehind and backreferences are not supported yet.
 
 //~ A match: where it starts and ends, and the start and end of each group (`-1` for a group that
 //~ did not take part). Group 0 is the whole match.
@@ -74,6 +75,7 @@ struct parser {
     groups: int
     pos: int
     names: [string]
+    flags: int
 }
 
 fn fail(sink message: string) -> parse_error = parse_error { message: message }
@@ -120,6 +122,38 @@ fn escapedByte(e: int) -> int {
 
 fn peek(p: parser, s: str) -> int = p.pos < s.len() ? s.byteAt(p.pos) to int : -1
 
+/// A literal byte; with the `i` flag a letter becomes a class of both cases.
+fn byteNode(inout p: parser, b: int) -> int {
+    const lower = b >= 65 && b <= 90 ? b + 32 : b
+    if p.flags % 2 == 1 && lower >= 97 && lower <= 122 {
+        const start = p.ranges.len()
+        addRange(inout p, lower - 32, lower - 32)
+        addRange(inout p, lower, lower)
+        p.classes.push!(start)
+        p.classes.push!(2)
+        p.classes.push!(0)
+        return node(inout p, N_CLASS, p.classes.len() / 3 - 1, 0, 0, 0)
+    }
+    node(inout p, N_BYTE, b, 0, 0, 0)
+}
+
+/// With the `i` flag, a class also holds the other case of its letters.
+fn foldRanges(inout p: parser, start: int) {
+    const end = p.ranges.len()
+    var i = start
+    while i < end {
+        const lo = p.ranges[i]
+        const hi = p.ranges[i + 1]
+        if hi >= 97 && lo <= 122 {
+            addRange(inout p, (lo < 97 ? 97 : lo) - 32, (hi > 122 ? 122 : hi) - 32)
+        }
+        if hi >= 65 && lo <= 90 {
+            addRange(inout p, (lo < 65 ? 65 : lo) + 32, (hi > 90 ? 90 : hi) + 32)
+        }
+        i += 2
+    }
+}
+
 fn parseClass(inout p: parser, s: str) -> int ! parse_error {
     /// The `[` is already read.
     const start = p.ranges.len()
@@ -162,6 +196,7 @@ fn parseClass(inout p: parser, s: str) -> int ! parse_error {
         }
         addRange(inout p, lo, hi)
     }
+    if p.flags % 2 == 1 { foldRanges(inout p, start) }
     const count = (p.ranges.len() - start) / 2
     p.classes.push!(start)
     p.classes.push!(count)
@@ -182,7 +217,9 @@ fn escapeNode(inout p: parser, e: int) -> int {
     }
     if e == 98 { return node(inout p, N_ASSERT, 2, 0, 0, 0) }
     if e == 66 { return node(inout p, N_ASSERT, 3, 0, 0, 0) }
-    node(inout p, N_BYTE, escapedByte(e), 0, 0, 0)
+    if e == 65 { return node(inout p, N_ASSERT, 0, 0, 0, 0) }
+    if e == 122 { return node(inout p, N_ASSERT, 1, 0, 0, 0) }
+    byteNode(inout p, escapedByte(e))
 }
 
 fn parseNumber(inout p: parser, s: str) -> int {
@@ -202,9 +239,41 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
         var capture = true
         var look = 0
         var name = ""
+        const saved = p.flags
         if peek(p, s) == 63 {
             const k = p.pos + 1 < s.len() ? s.byteAt(p.pos + 1) to int : -1
-            if k == 58 {
+            if k == 105 || k == 115 || k == 109 || k == 45 {
+                /// Flags: `(?ims-ims)` for the rest of the group, `(?ims-ims:...)` for the body only.
+                var at = p.pos + 1
+                var on = true
+                var flags = p.flags
+                while at < s.len() && s.byteAt(at) != 41 && s.byteAt(at) != 58 {
+                    const f = s.byteAt(at) to int
+                    var bit = 0
+                    if f == 105 {
+                        bit = 1
+                    } else if f == 115 {
+                        bit = 2
+                    } else if f == 109 {
+                        bit = 4
+                    } else if f == 45 && on {
+                        on = false
+                    } else {
+                        return err(fail("this flag is not supported (use i, s or m)"))
+                    }
+                    if bit > 0 {
+                        const has = flags / bit % 2 == 1
+                        if on && !has { flags += bit }
+                        if !on && has { flags -= bit }
+                    }
+                    at += 1
+                }
+                if at >= s.len() { return err(fail("a group is not closed")) }
+                p.flags = flags
+                p.pos = at + 1
+                if s.byteAt(at) == 41 { return ok(node(inout p, N_EMPTY, 0, 0, 0, 0)) }
+                capture = false
+            } else if k == 58 {
                 capture = false
                 p.pos += 2
             } else if k == 61 || k == 33 {
@@ -246,6 +315,7 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
         const inner = parseAlt(inout p, s, depth + 1)?
         if peek(p, s) != 41 { return err(fail("a group is not closed")) }
         p.pos += 1
+        p.flags = saved
         if look > 0 { return ok(node(inout p, N_LOOK, inner, look == 2 ? 1 : 0, 0, 0)) }
         if !capture { return ok(inner) }
         return ok(node(inout p, N_GROUP, inner, index, 0, 0))
@@ -254,9 +324,9 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
         const index = parseClass(inout p, s)?
         return ok(node(inout p, N_CLASS, index, 0, 0, 0))
     }
-    if c == 46 { return ok(node(inout p, N_ANY, 0, 0, 0, 0)) }
-    if c == 94 { return ok(node(inout p, N_ASSERT, 0, 0, 0, 0)) }
-    if c == 36 { return ok(node(inout p, N_ASSERT, 1, 0, 0, 0)) }
+    if c == 46 { return ok(node(inout p, N_ANY, p.flags / 2 % 2, 0, 0, 0)) }
+    if c == 94 { return ok(node(inout p, N_ASSERT, p.flags / 4 % 2 == 1 ? 4 : 0, 0, 0, 0)) }
+    if c == 36 { return ok(node(inout p, N_ASSERT, p.flags / 4 % 2 == 1 ? 5 : 1, 0, 0, 0)) }
     if c == 92 {
         const e = peek(p, s)
         if e < 0 { return err(fail("a pattern cannot end with a backslash")) }
@@ -264,7 +334,7 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
         return ok(escapeNode(inout p, e))
     }
     if c == 42 || c == 43 || c == 63 { return err(fail("a repeat has nothing to repeat")) }
-    ok(node(inout p, N_BYTE, c, 0, 0, 0))
+    ok(byteNode(inout p, c))
 }
 
 fn parseRepeat(inout p: parser, s: str, depth: int) -> int ! parse_error {
@@ -372,7 +442,7 @@ fn compileNode(inout c: code, t: tree, n: int) {
     if kind == N_BYTE {
         emit(inout c, CHAR, t.a[n], 0)
     } else if kind == N_ANY {
-        emit(inout c, ANY, 0, 0)
+        emit(inout c, ANY, t.a[n], 0)
     } else if kind == N_CLASS {
         emit(inout c, CLASS, t.a[n], 0)
     } else if kind == N_CAT {
@@ -454,6 +524,7 @@ pub fn compile(pattern: str) -> regex ! parse_error {
         groups: 0,
         pos: 0,
         names: [""],
+        flags: 0,
     }
     const root = parseAlt(inout p, pattern, 0)?
     if p.pos < pattern.len() { return err(fail("an unmatched `)`")) }
@@ -524,6 +595,10 @@ fn addThread(re: regex, text: str, inout list: threads, pc: int, pos: int, caps:
             holds = pos == 0
         } else if kind == 1 {
             holds = pos == text.len()
+        } else if kind == 4 {
+            holds = pos == 0 || before == 10
+        } else if kind == 5 {
+            holds = pos == text.len() || after == 10
         } else {
             const edge = (before >= 0 && isWord(before)) != (after >= 0 && isWord(after))
             holds = kind == 2 ? edge : !edge
@@ -531,7 +606,7 @@ fn addThread(re: regex, text: str, inout list: threads, pc: int, pos: int, caps:
         if holds { addThread(re, text, inout list, pc + 1, pos, caps, gen) }
     } else if op == LOOK {
         /// A lookahead runs its body as a small anchored match at this position.
-        const inside = runFrom(re, text, pos, pc + 1, true).len() > 0
+        const inside = runFrom(re, text, pos, pc + 1, true, -1).len() > 0
         if inside != (re.y[pc] == 1) { addThread(re, text, inout list, re.x[pc], pos, caps, gen) }
     } else {
         list.pcs.push!(pc)
@@ -554,10 +629,18 @@ fn slice(from: [int], start: int, end: int) -> [int] {
 }
 
 /// The slots of the first match at or after `from`, or an empty list.
-fn run(re: regex, text: str, from: int) -> [int] = runFrom(re, text, from, 0, false)
+fn run(re: regex, text: str, from: int, noEmptyAt: int) -> [int] = runFrom(
+    re,
+    text,
+    from,
+    0,
+    false,
+    noEmptyAt,
+)
 
 /// Runs the program from `startPc`; `anchored` allows a match only at `from` (a lookahead body ends at `LOOKEND`).
-fn runFrom(re: regex, text: str, from: int, startPc: int, anchored: bool) -> [int] {
+/// A match that is empty and sits at `noEmptyAt` is skipped (the next match after an empty one must advance).
+fn runFrom(re: regex, text: str, from: int, startPc: int, anchored: bool, noEmptyAt: int) -> [int] {
     const slots = 2 * (re.groupCount + 1)
     var current = threads { pcs: [], caps: [], mark: [] }
     var following = threads { pcs: [], caps: [], mark: [] }
@@ -587,13 +670,17 @@ fn runFrom(re: regex, text: str, from: int, startPc: int, anchored: bool) -> [in
             const pc = current.pcs[t]
             const op = re.op[pc]
             var advance = false
-            if op == MATCH || op == LOOKEND {
+            if (op == MATCH || op == LOOKEND) &&
+                current.caps[t * slots] == pos &&
+                pos == noEmptyAt {
+                advance = false
+            } else if op == MATCH || op == LOOKEND {
                 matched = slice(current.caps, t * slots, (t + 1) * slots)
                 break
             } else if op == CHAR {
                 advance = byte == re.x[pc]
             } else if op == ANY {
-                advance = byte >= 0 && byte != 10
+                advance = byte >= 0 && (re.x[pc] == 1 || byte != 10)
             } else if op == CLASS {
                 advance = byte >= 0 && classHas(re, re.x[pc], byte)
             }
@@ -634,26 +721,28 @@ impl regex {
     }
 
     //~ Whether the pattern matches anywhere in `text`.
-    fn isMatch(self, text: str) -> bool = run(self, text, 0).len() > 0
+    fn isMatch(self, text: str) -> bool = run(self, text, 0, -1).len() > 0
 
     //~ The first match.
     fn find(self, text: str) -> found? {
-        const slots = run(self, text, 0)
+        const slots = run(self, text, 0, -1)
         if slots.len() == 0 { return none }
         found { start: slots[0], end: slots[1], groups: slots }
     }
 
-    //~ Every match, left to right, without overlaps. An empty match moves on by one byte.
+    //~ Every match, left to right, without overlaps. After an empty match the next one must not be empty at the same place (as in Python 3.7 and later).
     fn findAll(self, text: str) -> [found] {
         var out: [found] = []
         var from = 0
+        var noEmpty = -1
         while from <= text.len() {
-            const slots = run(self, text, from)
+            const slots = run(self, text, from, noEmpty)
             if slots.len() == 0 { break }
             const start = slots[0]
             const end = slots[1]
             out.push!(found { start: start, end: end, groups: slots })
-            from = end > start ? end : end + 1
+            from = end
+            noEmpty = end > start ? -1 : end
         }
         out
     }
