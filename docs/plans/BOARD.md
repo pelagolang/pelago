@@ -55,6 +55,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 ## Doing
 
 - [S-08](cards/S-08-json-decode.md): typed JSON decoding and file input (design in `docs/design/json.md`).
+- [S-10](cards/S-10-regex.md): Pelago's own regex engine; step 1 built (design in `docs/design/regex.md`).
 
 ## Review
 

@@ -56,6 +56,14 @@ fn main() {
     t("(a*)+", "aa").or(1)
     t("z", "aaa").or(1)
     t("a{0}b", "ab").or(1)
+    t("foo(?=bar)", "foobar foobaz").or(1)
+    t("foo(?!bar)", "foobar foobaz").or(1)
+    t("\\w+(?= )", "ab cd ef").or(1)
+    t("(?=a)a(?!b)", "ab ac").or(1)
+    t("(?!a)\\w+", "abc bcd").or(1)
+    t("(?<w>a+)(?P<z>b)", "aab").or(1)
+    t("(\\d+)(?=(\\d{3})+\\b)", "1234567 89").or(1)
+    named().or(1)
     print(
         regex.compile("(").isOk(),
         regex.compile("a)").isOk(),
@@ -97,5 +105,23 @@ fn slow() -> int ! parse_error {
         i += 1
     }
     print(re.isMatch(text), re.isMatch("#(text)c"))
+    ok(0)
+}
+
+fn named() -> int ! parse_error {
+    const re = regex.compile("(?<year>\\d{4})-(?<month>\\d\\d)(-(?P<day>\\d\\d))?")?
+    const text = "on 2026-11-10 and 1999-01"
+    const all = re.findAll(text)
+    var i = 0
+    while i < all.len() {
+        print(
+            all[i].named(re, text, "year"),
+            all[i].named(re, text, "month"),
+            all[i].named(re, text, "day"),
+            all[i].named(re, text, "x"),
+        )
+        i += 1
+    }
+    print(re.groupIndex("year"), re.groupIndex("day"), re.groupIndex("nope"), re.groups())
     ok(0)
 }

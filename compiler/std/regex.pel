@@ -10,7 +10,8 @@
 /// The matcher is a Pike VM: time grows with `text length * pattern length`, never exponentially.
 /// It works on bytes, so `.` and classes see UTF-8 text one byte at a time. Syntax: literals, `.`,
 /// `[a-z]`, `[^...]`, `\d \D \w \W \s \S \b \B`, `^ $`, `( )`, `(?: )`, `|`, `* + ?`, `{n}`, `{n,}`,
-/// `{n,m}` and lazy forms such as `*?`. Flags such as `(?i)` are not supported.
+/// `{n,m}` and lazy forms such as `*?`, named groups `(?<name>...)` (also `(?P<name>...)`) and lookahead
+/// `(?=...)` and `(?!...)`. Flags such as `(?i)`, lookbehind and backreferences are not supported.
 
 //~ A match: where it starts and ends, and the start and end of each group (`-1` for a group that
 //~ did not take part). Group 0 is the whole match.
@@ -28,6 +29,7 @@ pub struct regex {
     ranges: [int]
     classes: [int]
     groupCount: int
+    names: [string]
 }
 
 /// Instruction codes.
@@ -39,6 +41,8 @@ const JMP: int = 4
 const SAVE: int = 5
 const ASSERT: int = 6
 const MATCH: int = 7
+const LOOK: int = 8
+const LOOKEND: int = 9
 
 /// Syntax tree node kinds.
 const N_EMPTY: int = 0
@@ -53,6 +57,7 @@ const N_QUEST: int = 8
 const N_GROUP: int = 9
 const N_ASSERT: int = 10
 const N_REPEAT: int = 11
+const N_LOOK: int = 12
 
 struct tree {
     kind: [int]
@@ -68,6 +73,7 @@ struct parser {
     classes: [int]
     groups: int
     pos: int
+    names: [string]
 }
 
 fn fail(sink message: string) -> parse_error = parse_error { message: message }
@@ -194,10 +200,38 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
     p.pos += 1
     if c == 40 {
         var capture = true
+        var look = 0
+        var name = ""
         if peek(p, s) == 63 {
-            if p.pos + 1 < s.len() && s.byteAt(p.pos + 1) == 58 {
+            const k = p.pos + 1 < s.len() ? s.byteAt(p.pos + 1) to int : -1
+            if k == 58 {
                 capture = false
                 p.pos += 2
+            } else if k == 61 || k == 33 {
+                capture = false
+                look = k == 61 ? 1 : 2
+                p.pos += 2
+            } else if k == 60 || k == 80 {
+                var at = p.pos + 2
+                if k == 80 {
+                    if at >= s.len() ||
+                        s.byteAt(at) != 60 { return err(fail("this group syntax is not supported")) }
+                    at += 1
+                } else if at < s.len() && (s.byteAt(at) == 61 || s.byteAt(at) == 33) {
+                    return err(fail("lookbehind is not supported"))
+                }
+                const first = at
+                while at < s.len() && isWord(s.byteAt(at) to int) { at += 1 }
+                if at == first || at >= s.len() || s.byteAt(at) != 62 {
+                    return err(fail("a group name is a word followed by `>`"))
+                }
+                name = "#(s[first..at])"
+                var seen = 0
+                while seen < p.names.len() {
+                    if p.names[seen] == name { return err(fail("a group name is used twice")) }
+                    seen += 1
+                }
+                p.pos = at + 1
             } else {
                 return err(fail("this group syntax is not supported"))
             }
@@ -206,10 +240,13 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
         if capture {
             p.groups += 1
             index = p.groups
+            while p.names.len() <= index { p.names.push!("") }
+            p.names[index] = name
         }
         const inner = parseAlt(inout p, s, depth + 1)?
         if peek(p, s) != 41 { return err(fail("a group is not closed")) }
         p.pos += 1
+        if look > 0 { return ok(node(inout p, N_LOOK, inner, look == 2 ? 1 : 0, 0, 0)) }
         if !capture { return ok(inner) }
         return ok(node(inout p, N_GROUP, inner, index, 0, 0))
     }
@@ -371,6 +408,11 @@ fn compileNode(inout c: code, t: tree, n: int) {
         emit(inout c, SAVE, 2 * t.b[n] + 1, 0)
     } else if kind == N_ASSERT {
         emit(inout c, ASSERT, t.a[n], 0)
+    } else if kind == N_LOOK {
+        const look = emit(inout c, LOOK, 0, t.b[n])
+        compileNode(inout c, t, t.a[n])
+        emit(inout c, LOOKEND, 0, 0)
+        c.x[look] = c.op.len()
     } else if kind == N_REPEAT {
         const lo = t.b[n]
         const hi = t.c[n]
@@ -411,6 +453,7 @@ pub fn compile(pattern: str) -> regex ! parse_error {
         classes: [],
         groups: 0,
         pos: 0,
+        names: [""],
     }
     const root = parseAlt(inout p, pattern, 0)?
     if p.pos < pattern.len() { return err(fail("an unmatched `)`")) }
@@ -426,6 +469,7 @@ pub fn compile(pattern: str) -> regex ! parse_error {
         ranges: copy p.ranges,
         classes: copy p.classes,
         groupCount: p.groups,
+        names: copy p.names,
     })
 }
 
@@ -485,6 +529,10 @@ fn addThread(re: regex, text: str, inout list: threads, pc: int, pos: int, caps:
             holds = kind == 2 ? edge : !edge
         }
         if holds { addThread(re, text, inout list, pc + 1, pos, caps, gen) }
+    } else if op == LOOK {
+        /// A lookahead runs its body as a small anchored match at this position.
+        const inside = runFrom(re, text, pos, pc + 1, true).len() > 0
+        if inside != (re.y[pc] == 1) { addThread(re, text, inout list, re.x[pc], pos, caps, gen) }
     } else {
         list.pcs.push!(pc)
         var i = 0
@@ -506,7 +554,10 @@ fn slice(from: [int], start: int, end: int) -> [int] {
 }
 
 /// The slots of the first match at or after `from`, or an empty list.
-fn run(re: regex, text: str, from: int) -> [int] {
+fn run(re: regex, text: str, from: int) -> [int] = runFrom(re, text, from, 0, false)
+
+/// Runs the program from `startPc`; `anchored` allows a match only at `from` (a lookahead body ends at `LOOKEND`).
+fn runFrom(re: regex, text: str, from: int, startPc: int, anchored: bool) -> [int] {
     const slots = 2 * (re.groupCount + 1)
     var current = threads { pcs: [], caps: [], mark: [] }
     var following = threads { pcs: [], caps: [], mark: [] }
@@ -520,23 +571,23 @@ fn run(re: regex, text: str, from: int) -> [int] {
     var pos = from
     var gen = 0
     while pos <= text.len() {
-        if matched.len() == 0 {
+        if matched.len() == 0 && (!anchored || pos == from) {
             var start: [int] = []
             var k = 0
             while k < slots {
                 start.push!(-1)
                 k += 1
             }
-            addThread(re, text, inout current, 0, pos, start, gen)
+            addThread(re, text, inout current, startPc, pos, start, gen)
         }
-        if current.pcs.len() == 0 && matched.len() > 0 { break }
+        if current.pcs.len() == 0 && (matched.len() > 0 || anchored) { break }
         const byte = pos < text.len() ? text.byteAt(pos) to int : -1
         var t = 0
         while t < current.pcs.len() {
             const pc = current.pcs[t]
             const op = re.op[pc]
             var advance = false
-            if op == MATCH {
+            if op == MATCH || op == LOOKEND {
                 matched = slice(current.caps, t * slots, (t + 1) * slots)
                 break
             } else if op == CHAR {
@@ -571,6 +622,16 @@ fn run(re: regex, text: str, from: int) -> [int] {
 impl regex {
     //~ The number of capture groups, not counting the whole match.
     fn groups(self) -> int = self.groupCount
+
+    //~ The number of the group called `name`, or `-1`.
+    fn groupIndex(self, name: str) -> int {
+        var i = 1
+        while i < self.names.len() {
+            if self.names[i] == name { return i }
+            i += 1
+        }
+        -1
+    }
 
     //~ Whether the pattern matches anywhere in `text`.
     fn isMatch(self, text: str) -> bool = run(self, text, 0).len() > 0
@@ -640,6 +701,13 @@ impl regex {
 }
 
 impl found {
+    //~ The text of the group called `name` (see `regex.groupIndex`), or `none`.
+    fn named(self, re: regex, text: str, name: str) -> string? {
+        const g = re.groupIndex(name)
+        if g < 0 { return none }
+        self.group(text, g)
+    }
+
     //~ The text of group `n` (0 is the whole match), or `none` when the group did not take part.
     fn group(self, text: str, n: int) -> string? {
         if n < 0 || 2 * n + 1 >= self.groups.len() || self.groups[2 * n] < 0 { return none }
