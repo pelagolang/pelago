@@ -36,6 +36,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 | Card | What | Where |
 |---|---|---|
 | [S-09](cards/S-09-braid.md) | The braid, end to end: `braid<A, B; N>`, literals, slot rules, `braid.zip`, strands, JSON decoding; approved by the owner 2026-11-10 | `docs/design/alternating.md`, `core.braid` |
+| [S-10](cards/S-10-regex.md) | Pelago's own regex engine: Pike VM reference (named groups, lookahead, flags), `@regex("...")` on a struct compiled at compile time into a fixed-size matcher with typed captures; checked against Python | `compiler/std/regex.pel`, `compiler/src/regexgen.rs`, `docs/design/regex.md` |
 | [S-07](cards/S-07-formatter.md) | `pelago fmt` and LSP formatting: token layout, `fmt` in `pelago.yaml`, wrapping, import sorting, tree-based indentation | `compiler/src/fmt/` |
 | [S-05](cards/S-05-zed-and-tree-sitter.md) | Tree-sitter grammar (`pelagolang/tree-sitter-pelago`) and Zed extension (`pelagolang/zed-pelago`), the VS Code extension split out to `pelagolang/vscode-pelago`; done (owner) | the three repositories |
 | [A-01](cards/A-01-cleanup.md) | `stubs.rs` removed | `compiler/src/lower/` |
@@ -56,7 +57,6 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 ## Doing
 
 - [S-08](cards/S-08-json-decode.md): typed JSON decoding and file input (design in `docs/design/json.md`).
-- [S-10](cards/S-10-regex.md): Pelago's own regex engine; step 1 built (design in `docs/design/regex.md`).
 
 ## Review
 
