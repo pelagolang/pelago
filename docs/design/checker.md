@@ -139,6 +139,10 @@ Where it lives: `values/` (its own pass after the types, reading `Typed`). It fo
 - **VS3. Taking a part needs `copy`.** `return self.name` or `const n = p.name` for an owning field is an error; write `copy self.name`.
   Taking a read-only or `inout` parameter whole is the same error (`fn f(s: string) -> string = s` needs `copy s` or `sink s`). This is
   T1 applied strictly. `init` parameters are owned, so `self.name = name` is fine.
+  The same holds for names that only view another value: a name bound by a `switch` over a variable (or a part of one), such as
+  `case some(x)`, and a closure parameter, are read-only views, so returning, storing or passing an owning one needs `copy`
+  ("`x` is part of another value, so it cannot be moved out; write `copy x`"). Over a temporary, or with `switch sink`, the names own
+  what they are given and may move. `for x of place` bindings are still views that allow a move (not changed).
 - **VS4. Branches and loops.** After an `if` or `switch` a variable is moved when any side moved it. A loop body is walked twice, so moving
   a variable declared outside the loop shows up as a use after a move. Code after `return`, `break`, `continue` and calls that never
   return is not checked.
