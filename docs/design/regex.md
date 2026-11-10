@@ -1,6 +1,6 @@
 # Regular expressions: the reference matcher and Pelago's own engine (draft 1)
 
-Status: step 1 built (2026-11-10), steps 2 to 5 planned. The owner answered the four questions on 2026-11-10: all as recommended, except backreferences, which he wants (section 5). Card: [S-10](../plans/cards/S-10-regex.md).
+Status: steps 1 and 2 built (2026-11-10), steps 3 to 5 planned. The owner answered the four questions on 2026-11-10: all as recommended, except backreferences, which he wants (section 5). Card: [S-10](../plans/cards/S-10-regex.md).
 The owner asked for his own engine, not only a Pike VM (2026-11-08) and gave the go on 2026-11-10.
 
 ## 1. What the owner gets
@@ -49,7 +49,7 @@ A bad pattern, or a field the pattern cannot fill (`year` is not a group, a grou
 ## 3. Steps
 
 1. **Reference extended (built, 2026-11-10):** named groups `(?<n>...)` and `(?P<n>...)`, `groupIndex`, `found.named`, lookahead, tests.
-2. **Reference completed:** flags `i s m x`, `\A \z`, non-greedy checked against Python on a generated corpus (a script in `compiler/std/tests/` writes the corpus and the expected lines once; the corpus is committed, Python is not needed to run tests).
+2. **Reference completed (built, 2026-11-10):** flags `i s m` (no `x` yet), `\A \z`, and a generated corpus checked against Python (`compiler/std/tests/gen_regex_corpus.py` writes `regex_corpus.pel` and `.out`; the files are committed, Python is not needed to run tests; 500 cases agreed in a manual run, 120 are committed to keep the test fast). Two deliberate differences from Python found by the corpus: `\B` matches in an empty text (Perl and Rust do; Python before 3.14 does not), and `\a` is the letter `a` here, not the bell. The corpus also made `findAll` follow Python 3.7: after an empty match the next match must not be empty at the same place.
 3. **Pattern front end in Rust:** `compiler/src/regex/` parses and checks a literal pattern (the same grammar as the reference; the two parsers are tested against each other), reports errors at the attribute, binds groups to struct fields.
 4. **Generator:** writes the tables and the matching function as Pelago source (like `derive.rs`), `@regex` hooked in `package.rs parse_into`. The IR optimiser and the native backend see ordinary code.
 5. **Agree, then switch:** both engines run the corpus; differences are bugs; `regex.compile` of a *literal* is the only place that changes (the std `compile` stays the run-time path). Speed tuning, the DFA and the benchmark (`regex-redux` in `docs/perf/bench-suite-findings.md`) are Optimise work.
