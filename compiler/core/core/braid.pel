@@ -4,7 +4,7 @@
 /// `p * rtSizeOf<(A, B)>()` and slot B sits at the offset B has inside a pair. Every method here is written for a
 /// cycle of two types; a longer cycle has the type, the literal and constant slots, nothing more.
 /// The checker (`typecheck/call.rs`, `braid_rules`) adds what a signature cannot say: `tail` needs an odd `N`,
-/// `swap` an even one, `toArray` one type in the cycle.
+/// `swap` and `asPairs` an even one, `toArray` one type in the cycle.
 
 //~ What `braid.fromLists` returns when the lists do not make a braid of the length the type asks for.
 pub struct zip_error {
@@ -244,6 +244,9 @@ impl<A, B, meta N: int> (A, B; N) {
         return out
     }
 
+    //~ The braid as an array of pairs, as a copy: `(A, B; 4)` becomes `[(A, B); 2]`. The two have the same memory. Even `N` only.
+    fn asPairs(self) -> [(A, B); N / 2] = rtClone<[(A, B); N / 2]>(rtAddrOf(self))
+
     //~ Swaps the roles of the two strands, as a copy: `(A, B; N)` becomes `(B, A; N)`. Even `N` only.
     fn swap(self) -> (B, A; N) {
         const stride = rtSizeOf<(A, B)>()
@@ -264,4 +267,9 @@ impl<A, B, meta N: int> (A, B; N) {
 impl<A, meta N: int> (A, A; N) {
     //~ The slots as an array, when the whole cycle has one type. (The two have the same memory.)
     fn toArray(self) -> [A; N] = rtClone<[A; N]>(rtAddrOf(self))
+}
+
+impl<A, B, meta K: int> [(A, B); K] {
+    //~ An array of pairs as a braid, as a copy: `[(A, B); 2]` becomes `(A, B; 4)`. The two have the same memory.
+    fn asSlots(self) -> (A, B; K * 2) = rtClone<(A, B; K * 2)>(rtAddrOf(self))
 }

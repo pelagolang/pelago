@@ -258,11 +258,11 @@ Checker, lowering, library (`compiler/core/core/braid.pel`), derive and tests: `
   and `braid.fromLists(xs, ys)` (a wrong length is a `zip_error`). The rules a signature cannot say are `braid_rules` in `typecheck/call.rs`.
 - **Long spellings.** `unbraid` is `split`; `strands()` is `(evens(), odds())` as a pair of iterators.
 - **Where it differs from the draft.** `evens`/`odds`/`pairIter` return copies in an (eager) `iter`, as every `iter` does today, so
-  `for inout a of x.evens()` is not available; use `setFirst!`. `x.asPairs()` and `y.asSlots()` (free reinterpretation) are not built; the layout
-  proof is tested by size. `mapPairs` on an odd braid keeps the tail, so its first result type must stay `A` (checked).
+  `for inout a of x.evens()` is not available; use `setFirst!`. `x.asPairs()` (even length only) and `y.asSlots()` are built as copies with the same memory (the layout
+  proof is tested by size); a borrowed view without the copy waits for strand views. `mapPairs` on an odd braid keeps the tail, so its first result type must stay `A` (checked).
 - **Lengths.** Type-level numbers gained `/` and `%` on known numbers (for `N / 2`, `(N + 1) / 2`).
 - **Library additions.** `list.toArray<N>()` (an option) and `list.asArray<N>()` (stops), used by the JSON decoder.
 - **JSON.** `@derive(fromJson)` reads a braid, a tuple and `[T; N]` from a flat array (`$: expected 3 elements, found 4`; errors keep paths and positions),
   so `[(A, B); N]` is an array of two-element arrays. Writing: `json.braidItems(x, a, b)` makes the flat array from a braid with a function per
-  strand; there is still no typed encoder for structs, so this is the braid's share of it.
+  strand; the typed encoder `@derive(toJson)` now writes a braid the same way (one flat array).
 - **Known hole found on the way: fixed** (PR 236). Moving a borrowed `switch` or closure-parameter value out without `copy` is now an error; see VS3 in [checker.md](checker.md).

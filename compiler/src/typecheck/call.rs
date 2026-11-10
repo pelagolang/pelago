@@ -1150,6 +1150,10 @@ impl<'p> Checker<'p> {
                 e.span,
                 format!("`swap` needs an even length, but this braid has {n} slots; the last slot would have no partner"),
             ),
+            "asPairs" if n % 2 == 1 => self.err(
+                e.span,
+                format!("`asPairs` needs an even length, but this braid has {n} slots; the last slot would have no partner (use `split` or `tail`)"),
+            ),
             "mapPairs" if n % 2 == 1 => {
                 let r = self.tt.zonk(ret);
                 if let TyKind::AltTuple(rs, _) = self.kind_of(r) {
@@ -1236,6 +1240,7 @@ const BRAID_METHODS: &[&str] = &[
     "mapEvens",
     "mapOdds",
     "swap",
+    "asPairs",
 ];
 
 fn p_span(a: &Arg) -> Span {
