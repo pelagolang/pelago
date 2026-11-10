@@ -56,6 +56,10 @@ const mixed: (int, string; 4) = (1, "a", 2, "b") // a braid: int, string, int, s
 `[T; N]` lives inline (on the stack or inside a struct) and `N` is part of the type, so `meta N: int` works for
 generic code over sizes.
 
+A list becomes an array with `xs.toArray<N>()` (an option: `none` when the length differs) or `xs.asArray<N>()` (stops the program on a
+mismatch). In JSON a tuple, a braid and `[T; N]` are all a flat array (`docs/design/json.md`); a braid also has `x.toArray()` when every slot
+has one type.
+
 ## 4. Maps
 
 ```

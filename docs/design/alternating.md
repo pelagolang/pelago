@@ -265,5 +265,4 @@ Checker, lowering, library (`compiler/core/core/braid.pel`), derive and tests: `
 - **JSON.** `@derive(fromJson)` reads a braid, a tuple and `[T; N]` from a flat array (`$: expected 3 elements, found 4`; errors keep paths and positions),
   so `[(A, B); N]` is an array of two-element arrays. Writing: `json.braidItems(x, a, b)` makes the flat array from a braid with a function per
   strand; there is still no typed encoder for structs, so this is the braid's share of it.
-- **Known hole found on the way (not fixed here).** A closure or `switch` that returns a borrowed value without `copy` (for example
-  `case some(x): return x` on an owning `const`) is not refused and reads freed memory; `copy` avoids it. It is independent of braids (reproduces on `main`).
+- **Known hole found on the way: fixed** (PR 236). Moving a borrowed `switch` or closure-parameter value out without `copy` is now an error; see VS3 in [checker.md](checker.md).
