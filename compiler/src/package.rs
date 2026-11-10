@@ -91,6 +91,9 @@ pub struct Program {
     pub diagnostics: Vec<Diagnostic>,
     /// What `target` means in a `meta if`.
     pub target: crate::meta::Target,
+    /// `(parent, name, child)`: the child package is also reachable as the module `name` of the parent
+    /// (a second major, `json.v2`, below `json`).
+    pub mounts: Vec<(PackageId, String, PackageId)>,
 }
 
 impl Program {
@@ -306,7 +309,9 @@ impl Program {
             .iter()
             .map(|(p, s)| (p.as_str(), s.as_str()))
             .collect();
-        Ok(self.add_package(&name, &refs))
+        let pid = self.add_package(&name, &refs);
+        self.add_dependencies(root)?;
+        Ok(pid)
     }
 }
 
@@ -320,6 +325,10 @@ pub(crate) fn collect_files(
     for entry in entries {
         let path = entry.map_err(|e| e.to_string())?.path();
         if path.is_dir() {
+            // `deps/` is where Islet links installed packages; they are not part of this one.
+            if path.file_name().is_some_and(|n| n == "deps") && path.join("map.yaml").is_file() {
+                continue;
+            }
             collect_files(root, &path, out)?;
         } else if path.extension().and_then(|e| e.to_str()) == Some("pel") {
             let rel = path.strip_prefix(root).unwrap_or(&path).with_extension("");
