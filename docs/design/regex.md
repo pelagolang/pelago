@@ -1,6 +1,6 @@
 # Regular expressions: the reference matcher and Pelago's own engine (draft 1)
 
-Status: step 1 built (2026-11-10), steps 2 to 5 planned. Card: [S-10](../plans/cards/S-10-regex.md).
+Status: step 1 built (2026-11-10), steps 2 to 5 planned. The owner answered the four questions on 2026-11-10: all as recommended, except backreferences, which he wants (section 5). Card: [S-10](../plans/cards/S-10-regex.md).
 The owner asked for his own engine, not only a Pike VM (2026-11-08) and gave the go on 2026-11-10.
 
 ## 1. What the owner gets
@@ -40,7 +40,7 @@ A bad pattern, or a field the pattern cannot fill (`year` is not a group, a grou
 
 **R4. Lookahead `(?=...)` and `(?!...)` is supported** (built in the reference, step 1). A body is a small anchored match started at the current position. Without care that is `O(text * body)` per lookahead, so the compile-time engine caches the answer per (lookahead, position) in a bit array sized `text.len()`, which keeps the total linear. *Not supported:* lookbehind (`(?<=)`, `(?<!)` are refused with a clear error; fixed-width lookbehind can be added later by matching the body backwards).
 
-**R5. Backreferences are not in this card.** `\1` cannot be matched in linear time, and the owner decides whether they exist at all (question 2). If wanted: an explicit opt-in (`(?r)` or `@regex(..., backrefs: true)`) with a step limit, running on a separate backtracking matcher, never silently mixed with the linear one.
+**R5. Backreferences are wanted (owner, 2026-11-10); the job is to remove what makes them dangerous.** See section 5 for the research and the plan. In short: they never touch the linear engine; the compiler sorts each pattern into a tier and says which one it got; the expensive tier needs an explicit, deterministic step budget and its result type has a third case, so a program can never take exponential time and can never get a silently wrong answer.
 
 **R6. Bytes, not characters, for now.** Same as the reference: `.` and classes see UTF-8 one byte at a time. Question 3 asks about a `u` mode (code points, `\p{L}`), which fits the class-table design (a UTF-8 automaton) and needs the Unicode tables the library does not have yet.
 
@@ -54,9 +54,25 @@ A bad pattern, or a field the pattern cannot fill (`year` is not a group, a grou
 4. **Generator:** writes the tables and the matching function as Pelago source (like `derive.rs`), `@regex` hooked in `package.rs parse_into`. The IR optimiser and the native backend see ordinary code.
 5. **Agree, then switch:** both engines run the corpus; differences are bugs; `regex.compile` of a *literal* is the only place that changes (the std `compile` stays the run-time path). Speed tuning, the DFA and the benchmark (`regex-redux` in `docs/perf/bench-suite-findings.md`) are Optimise work.
 
-## 4. Questions for the owner
+## 4. Questions for the owner (answered 2026-11-10)
 
-1. A number group read into an integer field that does not fit (`\d+` into `uint8`): a compile error when the pattern can overflow it (strict), or the text just does not match (lenient)? Recommended: strict at compile time when the pattern's own digit count can exceed the type, otherwise a failed match.
-2. Backreferences: never, or an explicit opt-in on a separate backtracking matcher with a step limit? Recommended: later, only if a program needs one.
-3. A Unicode mode (`(?u)`, `\p{L}`, characters instead of bytes): in this card, or a follow-up card after the Unicode tables? Recommended: follow-up.
-4. Is `@regex` on a struct the right surface, or do you prefer the type written inside the pattern (R2)? Recommended: the struct.
+1. Number group into an integer field: strict at compile time when the pattern can overflow, otherwise a failed match. **Yes.**
+2. Backreferences: **wanted**; research how to remove their cons (section 5).
+3. Unicode mode: a follow-up card. **Yes.**
+4. `@regex` on a struct you write. **Yes.**
+
+## 5. Backreferences without their cons
+
+**What is wrong with them.** (a) Matching with `\1` is NP-complete in general (Aho 1990), so no engine can be fast on every pattern; a backtracking matcher takes exponential time on `(a*)*\1b`-like input, which is the ReDoS attack. (b) A step limit that is silent or based on a clock gives wrong or irreproducible answers. (c) Captures are no longer fixed-size per match step, which breaks "memory known at compile time". (d) Engines disagree on details: an unset group (`(a)?\1`) fails in Python and matches empty in JavaScript; `\1` before its group is closed. (e) A pattern that uses them quietly makes the whole engine slower, even for patterns that do not need them.
+
+**What can be removed, in order of how much it removes** (our proposal; the first two cost nothing at run time):
+
+1. **Tier A, the group can only match a finite set of strings** (`(a|bc)\1`, `(\d)\1`, `(['"])...\1`): the compiler rewrites the pattern into an alternation of plain patterns (`aa|bcbc`, one branch per string) and compiles it with the linear engine. Linear time, no budget, no opt-in. This covers the most common uses (matching quotes, doubled characters, HTML-like open and close). A cap on the number of strings (say 256) keeps the rewrite small; above it the pattern is Tier B.
+2. **Tier B, anything else**: a memoising matcher. A state is (program position, text position, the spans of the *referenced* groups only), and every state is visited at most once, so time is polynomial for a fixed number `k` of referenced groups, of the order `m * n^(2k+1)` for `m` states and text length `n` (the exponent is my reading of Schmid's memory-automata results and is checked when the generator is built; general `k` is where NP-hardness lives). The compiler knows `k`, prints it, and refuses a pattern with `k` above a limit (default 3) unless the attribute raises it. Groups that are not referenced stay out of the key, so a pattern with one backreference is not slowed down by its other captures.
+3. **A deterministic budget on Tier B, never a clock.** `@regex("...", budget: 1_000_000)` counts visited states; the default is derived from the text length (`64 * n`). Running out is not an error string and not a wrong answer: the generated function returns a three-case result `matched(T) | nomatch | gaveUp`, so the caller must decide (retry with a bigger budget, reject the input). The same input gives the same result on every machine, so a ReDoS report can be replayed as a test.
+4. **One semantics, written down:** an unset group makes `\k` **fail** (not match empty); a reference inside its own group fails; leftmost-first as for the rest of the engine; `\k<name>` and `\1` both work, names preferred in the docs. Differences from Python/Perl are listed in `docs/design/regex.md`, not found by users.
+5. **Isolation:** a pattern with a backreference never changes how a pattern without one is compiled, and the tier is in the generated code's comment and in `pelago check`'s output, so nobody gets Tier B by accident.
+
+**What stays a cost.** Tier B is polynomial, not linear: with `k = 2` and 10 000 bytes it can still be 10^12 states, which is why the budget is mandatory and finite. We say so in the docs instead of promising speed.
+
+**Plan.** The reference Pike VM gets a backtracking path with the same memo (step 2b, so the oracle can check Tier A and Tier B against Python on a corpus); the compiler's front end (step 3) classifies tiers; the generator (step 4) writes Tier A as an alternation and Tier B as a memoised function with the budget; the switch (step 5) covers both.

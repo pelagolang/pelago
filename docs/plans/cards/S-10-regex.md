@@ -12,4 +12,4 @@ The owner wants his own engine, not only a Pike VM (2026-11-08, go given 2026-11
 
 # Plan
 
-Design and open questions: [docs/design/regex.md](../../design/regex.md). Steps: (1) reference extended with named groups and lookahead (done), (2) reference completed (flags) and a corpus checked against Python, (3) pattern front end in Rust, (4) generator and `@regex`, (5) the two engines agree on the corpus, then switch for literals. Speed tuning and the DFA are Optimise work; backreferences and Unicode wait for the owner's answers.
+Design and open questions: [docs/design/regex.md](../../design/regex.md). Steps: (1) reference extended with named groups and lookahead (done), (2) reference completed (flags) and a corpus checked against Python, (3) pattern front end in Rust, (4) generator and `@regex`, (5) the two engines agree on the corpus, then switch for literals. Speed tuning and the DFA are Optimise work; Owner's answers (2026-11-10): strict integer captures, `@regex` on a struct, Unicode as a follow-up card, backreferences wanted with the tiers and budget of design section 5.
