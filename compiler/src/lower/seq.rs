@@ -942,7 +942,16 @@ impl<'a> Lowerer<'a> {
         let mut val_ty = None;
         let mut array_len = None;
         let mut soa_elem = None;
+        let mut strand = false;
         let elem = match self.kind(it) {
+            // A strand view (`core.braid`): the elements are `stride` bytes apart, starting at `addr`.
+            TyKind::Adt(d, args)
+                if args.len() == 1
+                    && matches!(self.res.def(d).name.as_str(), "strand" | "strand_mut") =>
+            {
+                strand = true;
+                args[0]
+            }
             TyKind::Soa(x, _) => {
                 soa_elem = Some(x);
                 x
@@ -964,8 +973,17 @@ impl<'a> Lowerer<'a> {
             return Res::Never;
         };
         let esize = self.layout(elem).size as i64;
+        let mut stride = None;
         let (len, data) = match array_len {
             Some(n) => (self.i64c(n), h),
+            None if strand => {
+                let fs = self.struct_fields(it);
+                stride = Some(self.load_at(h, fs[1].off, IrTy::I64));
+                (
+                    self.load_at(h, fs[2].off, IrTy::I64),
+                    self.load_at(h, fs[0].off, IrTy::Ptr),
+                )
+            }
             None => (self.load_at(h, 8, IrTy::I64), self.load_at(h, 0, IrTy::Ptr)),
         };
         let fns = self.eval_adapters(&adapters, iter.span);
@@ -981,7 +999,7 @@ impl<'a> Lowerer<'a> {
             self.branch(c, body_b, exit);
         }
         self.start(body_b);
-        let sz = self.i64c(esize);
+        let sz = stride.unwrap_or_else(|| self.i64c(esize));
         let off = self
             .emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), iter.span)
             .unwrap_or(i);

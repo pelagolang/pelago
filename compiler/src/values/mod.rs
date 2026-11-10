@@ -502,8 +502,7 @@ impl<'a> Walker<'a> {
                     .map(|t| self.typed.types.kind_of(*t));
                 let is_str = matches!(ty, Some(TyKind::Str));
                 // A `strand` (a view of every other slot of a braid) points into the braid's own memory.
-                let is_strand =
-                    matches!(ty, Some(TyKind::Adt(d, _)) if self.res.def(*d).name == "strand");
+                let is_strand = matches!(ty, Some(TyKind::Adt(d, _)) if matches!(self.res.def(*d).name.as_str(), "strand" | "strand_mut"));
                 if !is_str && !is_strand {
                     return;
                 }

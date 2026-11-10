@@ -1497,6 +1497,15 @@ fn braid_slots_have_the_type_of_their_position() {
 }
 
 #[test]
+fn a_strand_view_is_read_only_unless_made_with_inout() {
+    flagged(
+        "fn t(x: (int, string; 4)) { for inout a of x.firstStrand() { a += 1 } }",
+        "read-only view",
+    );
+    clean("fn t(inout x: (int, string; 4)) { for inout a of x.firstStrandMut!() { a += 1 }\n x.secondStrandMut!().set(0, \"s\") }");
+}
+
+#[test]
 fn braid_methods_follow_the_length_and_the_cycle() {
     clean("fn t(x: (int, string; 5)) { x.tail()\n x.first(1)\n x.second(-1)\n x.split()\n x.evens() }");
     clean("fn t(x: (int, string, bool; 6)) { x.first(0)\n x.third(1)\n x.rounds() }");

@@ -1,7 +1,7 @@
 /// `firstStrand` and `secondStrand` look at every other slot in place; nothing is copied until `at`, `iter` or `toList`.
 fn total(s: strand<int>) -> int {
     var t = 0
-    for x of s.iter() { t += x }
+    for x of s { t += x }
     return t
 }
 
