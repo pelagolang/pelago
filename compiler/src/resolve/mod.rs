@@ -464,13 +464,6 @@ impl<'p> Resolver<'p> {
             self.defs[def.0 as usize].scope = Some(idx);
             self.package_roots.push(idx);
         }
-        for (parent, name, child) in &program.mounts {
-            let (p, c) = (
-                self.package_roots[parent.0 as usize],
-                self.package_roots[child.0 as usize],
-            );
-            self.scopes[p].children.insert(name.clone(), c);
-        }
         for m in &program.modules {
             let idx = m.id.0 as usize;
             let parent = match m.parent {
@@ -1032,12 +1025,25 @@ impl<'p> Resolver<'p> {
         if imp.levels == 0 {
             let own = self.package_roots[self.scopes[scope].package.0 as usize];
             let want = self.text(file, &segs[0]);
-            if let Some(&c) = self.scopes[scope].children.get(want) {
+            let deps = self.program.package(self.scopes[scope].package);
+            let major = segs.get(1).and_then(|s| {
+                deps.majors
+                    .get(&(want.to_string(), self.text(file, s).to_string()))
+            });
+            if let Some(&p) = major {
+                // `json.v2.decode`: a second major of the dependency `json` (this package's own table).
+                cur = self.package_roots[p.0 as usize];
+                first = 2;
+            } else if let Some(&c) = self.scopes[scope].children.get(want) {
                 // A module declared inside this one (`mod inner { ... }`).
                 cur = c;
                 first = 1;
             } else if let Some(&c) = self.scopes[own].children.get(want) {
                 cur = c;
+                first = 1;
+            } else if let Some(&p) = deps.imports.get(want) {
+                // A dependency installed by Islet, as this package sees it.
+                cur = self.package_roots[p.0 as usize];
                 first = 1;
             } else if let Some(p) = self.program.find_package(want) {
                 cur = self.package_roots[p.0 as usize];

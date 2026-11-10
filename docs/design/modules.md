@@ -65,9 +65,10 @@ Re-exporting: `pub import { read } = std.io` makes the imported names part of th
 key: `import json.decode` reads the module `decode` of package `json`. A second major of a package is a module
 path segment: `import json.v2.decode` is package `json` (major 0 or 1) with the package for the key `json/v2`
 mounted below it as the module `v2`. No new syntax. The compiler finds installed packages in `deps/map.yaml`
-(written by Islet, see `islet/docs/resolved-map.md`), never by running Islet. Stage 0 keeps one flat scope per build:
-a key must mean one package across everything the project reaches, otherwise loading stops with an error that
-names both; per-package scopes in the resolver come later.
+(written by Islet, see `islet/docs/resolved-map.md`), never by running Islet. Each package has its own import table,
+so one package may use `units` 0.2 while another uses `units` 0.3 in the same build; a package for each distinct
+version is loaded once and named `name@version`. Inside the resolver the first segment of an import is looked up in
+this table after the package's own modules, and `(name, vN)` is looked up first when the path has two segments.
 
 Leading dots echo the leading-dot enum cases (`.circle`): "look from here". An absolute path inside your own package
 starts with the package name, so moving a file does not break the imports of others.

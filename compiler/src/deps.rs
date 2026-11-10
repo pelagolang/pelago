@@ -5,13 +5,13 @@
 //! `deps/` or to another member (`member:libs/core`). The compiler never runs Islet and never reads `islet.lock`;
 //! this file is all it needs.
 //!
-//! A second major is written as a module path inside the import: `import json.v2.decode` is package `json`,
-//! module `v2`. The package for the key `json/v2` is therefore mounted as the child `v2` of the package `json`
-//! (an empty `json` is made up when only `v2` is installed). The plain key `json` is major 0 or 1.
+//! Each package has its own import table (`Package::imports`), filled from the map, so two packages may use
+//! different versions of one dependency in the same build. A package for each distinct target is loaded once and
+//! named by the target (`json@1.5.0`).
 //!
-//! Stage 0 uses one flat scope for the whole build: a key must mean the same package everywhere in the closure of
-//! the project's imports. When two packages need different versions of one key, loading stops with an error that
-//! names both; per-package scopes in the resolver come later.
+//! A second major is written as a module path inside the import: `import json.v2.decode` is the dependency
+//! `json`, then its second major. The package for the key `json/v2` goes into `Package::majors` under
+//! `("json", "v2")`, so it needs no `json` of its own. The plain key `json` is major 0 or 1.
 
 use crate::package::{collect_files, PackageId, Program};
 use crate::yaml::{self, Diag, Val};
@@ -112,18 +112,10 @@ pub fn find_map(start: &Path) -> Option<PathBuf> {
     None
 }
 
-/// A key's package name inside the program, and the major it mounts under: `json/v2` is `("json.v2", Some(("json", "v2")))`.
-fn names_of(key: &str) -> (String, Option<(String, String)>) {
-    match key.split_once('/') {
-        Some((base, major)) => (format!("{base}.{major}"), Some((base.into(), major.into()))),
-        None => (key.to_string(), None),
-    }
-}
-
 impl Program {
-    /// Adds the packages the project at `project` imports, if a `deps/map.yaml` is found above it. Without
-    /// one nothing changes.
-    pub fn add_dependencies(&mut self, project: &Path) -> Result<(), String> {
+    /// Adds the packages the project at `project` (already added as `pid`) imports, if a `deps/map.yaml` is found
+    /// above it, and fills each package's import table. Without a map nothing changes.
+    pub fn add_dependencies(&mut self, project: &Path, pid: PackageId) -> Result<(), String> {
         let abs =
             std::fs::canonicalize(project).map_err(|e| format!("{}: {e}", project.display()))?;
         let start = if abs.is_dir() {
@@ -153,50 +145,26 @@ impl Program {
         let Some(first) = map.members.get(&member) else {
             return Ok(());
         };
-        // One flat scope: key to target, over everything the project reaches.
-        let mut chosen: BTreeMap<String, String> = BTreeMap::new();
-        let mut from: BTreeMap<String, String> = BTreeMap::new();
-        let mut queue: VecDeque<(String, String, String)> = first
-            .iter()
-            .map(|(k, t)| (k.clone(), t.clone(), "the project".to_string()))
-            .collect();
-        while let Some((key, target, by)) = queue.pop_front() {
-            match chosen.get(&key) {
-                Some(t) if *t == target => continue,
-                Some(t) => {
-                    return Err(format!(
-                        "`{key}` means {t} for {} but {target} for {by}; two versions of one package in a \
-                         build are not supported yet",
-                        from[&key]
-                    ))
-                }
-                None => {}
-            }
-            chosen.insert(key.clone(), target.clone());
-            from.insert(key.clone(), by);
-            let next = match target.strip_prefix("member:") {
-                Some(m) => map.members.get(m).cloned().unwrap_or_default(),
-                None => match map.packages.get(&target) {
-                    Some((_, imports)) => imports.clone(),
-                    None => {
-                        return Err(format!(
-                            "`{key}` needs {target}, which is not in deps/map.yaml"
-                        ))
-                    }
+        let imports_of = |target: &str| -> Result<Imports, String> {
+            match target.strip_prefix("member:") {
+                Some(m) => Ok(map.members.get(m).cloned().unwrap_or_default()),
+                None => match map.packages.get(target) {
+                    Some((_, i)) => Ok(i.clone()),
+                    None => Err(format!("{target} is not in deps/map.yaml")),
                 },
-            };
-            for (k, t) in next {
-                queue.push_back((k, t, target.clone()));
             }
-        }
-        // Plain keys first, so a second major finds its `json` to mount under.
-        let mut keys: Vec<&String> = chosen.keys().collect();
-        keys.sort_by_key(|k| (k.contains('/'), (*k).clone()));
-        for key in keys {
-            let target = &chosen[key];
+        };
+        // Load every distinct target once.
+        let mut loaded: BTreeMap<String, PackageId> = BTreeMap::new();
+        let mut queue: VecDeque<String> = first.values().cloned().collect();
+        while let Some(target) = queue.pop_front() {
+            if loaded.contains_key(&target) {
+                continue;
+            }
+            let next = imports_of(&target)?;
             let dir = match target.strip_prefix("member:") {
                 Some(m) => root.join(m),
-                None => deps_dir.join(&map.packages[target].0),
+                None => deps_dir.join(&map.packages[&target].0),
             };
             let mut files = Vec::new();
             collect_files(&dir, &dir, &mut files)?;
@@ -205,14 +173,27 @@ impl Program {
                 .iter()
                 .map(|(p, s)| (p.as_str(), s.as_str()))
                 .collect();
-            let (name, mount) = names_of(key);
-            let pid = self.add_package(&name, &refs);
-            if let Some((base, major)) = mount {
-                let parent: PackageId = match self.find_package(&base) {
-                    Some(p) => p,
-                    None => self.add_package(&base, &[]),
-                };
-                self.mounts.push((parent, major, pid));
+            let id = self.add_package(&target, &refs);
+            loaded.insert(target, id);
+            queue.extend(next.into_values());
+        }
+        // Each package's table: key to package, and a second major under (name, major).
+        let mut owners: Vec<(PackageId, Imports)> = vec![(pid, first.clone())];
+        for (target, id) in &loaded {
+            owners.push((*id, imports_of(target)?));
+        }
+        for (owner, imports) in owners {
+            for (key, target) in imports {
+                let dep = loaded[&target];
+                let p = &mut self.packages[owner.0 as usize];
+                match key.split_once('/') {
+                    Some((base, major)) => {
+                        p.majors.insert((base.to_string(), major.to_string()), dep);
+                    }
+                    None => {
+                        p.imports.insert(key, dep);
+                    }
+                }
             }
         }
         Ok(())
@@ -240,15 +221,6 @@ mod tests {
         assert!(DepMap::parse("packages: {}\n")
             .unwrap_err()
             .contains("format"));
-    }
-
-    #[test]
-    fn majors_mount_under_their_package() {
-        assert_eq!(names_of("json"), ("json".to_string(), None));
-        assert_eq!(
-            names_of("json/v2"),
-            ("json.v2".to_string(), Some(("json".into(), "v2".into())))
-        );
     }
 
     fn scratch(tag: &str) -> PathBuf {
@@ -284,8 +256,8 @@ mod tests {
         );
         let mut program = Program::with_core();
         program.add_package_from_path(&d.join("main.pel")).unwrap();
-        assert!(program.find_package("json").is_some());
-        assert!(program.find_package("json.v2").is_some());
+        assert!(program.find_package("json@1.5.0").is_some());
+        assert!(program.find_package("json/v2@2.0.1").is_some());
         // `deps/` is not part of the project itself.
         assert_eq!(
             program.packages.iter().filter(|p| p.name == "main").count(),
@@ -308,21 +280,45 @@ mod tests {
     }
 
     #[test]
-    fn one_key_with_two_meanings_is_refused() {
-        let d = scratch("conflict");
+    fn two_packages_may_use_different_versions_of_one_dependency() {
+        let d = scratch("scopes");
         write(
             &d.join("deps/map.yaml"),
             "format: 1\n\npackages:\n  a@1.0.0:\n    dir: a@1.0.0\n    imports:\n      units: units@0.3.0\n  units@0.2.0:\n    dir: units@0.2.0\n  units@0.3.0:\n    dir: units@0.3.0\n\nmembers:\n  .:\n    imports:\n      a: a@1.0.0\n      units: units@0.2.0\n",
         );
-        write(&d.join("main.pel"), "fn main() {\n}\n");
-        let mut program = Program::with_core();
-        let e = program
-            .add_package_from_path(&d.join("main.pel"))
-            .unwrap_err();
-        assert!(
-            e.contains("units") && e.contains("0.2.0") && e.contains("0.3.0"),
-            "{e}"
+        write(
+            &d.join("deps/a@1.0.0/api.pel"),
+            "import { which } = units.u\n\npub fn seen() -> int {\n    which()\n}\n",
         );
+        write(
+            &d.join("deps/units@0.2.0/u.pel"),
+            "pub fn which() -> int {\n    2\n}\n",
+        );
+        write(
+            &d.join("deps/units@0.3.0/u.pel"),
+            "pub fn which() -> int {\n    3\n}\n",
+        );
+        write(
+            &d.join("main.pel"),
+            "import { seen } = a.api\nimport { which } = units.u\n\nfn main() {\n    print(seen(), which())\n}\n",
+        );
+        let mut program = Program::with_core();
+        program.add_package_from_path(&d.join("main.pel")).unwrap();
+        let res = crate::resolve::resolve(&program);
+        let typed = crate::typecheck::check(&program, &res);
+        assert!(
+            typed.diagnostics.iter().all(|x| x.warning),
+            "{:?}",
+            typed.diagnostics
+        );
+        assert!(program.diagnostics.is_empty());
+        // `a` sees units 0.3.0, the project sees units 0.2.0, and the program prints both.
+        let l = crate::lower::lower(&program, &res, &typed);
+        assert!(l.diagnostics.is_empty(), "{:?}", l.diagnostics);
+        let o = crate::ir::run_full(&l.module, "main", &[]);
+        assert_eq!(o.output.trim(), "3 2");
+        assert!(program.find_package("units@0.2.0").is_some());
+        assert!(program.find_package("units@0.3.0").is_some());
     }
 
     #[test]
@@ -331,6 +327,6 @@ mod tests {
         write(&d.join("main.pel"), "fn main() {\n}\n");
         let mut program = Program::with_core();
         program.add_package_from_path(&d.join("main.pel")).unwrap();
-        assert!(program.find_package("json").is_none());
+        assert!(program.packages.iter().all(|p| p.imports.is_empty()));
     }
 }
