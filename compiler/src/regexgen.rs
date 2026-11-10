@@ -13,7 +13,7 @@
 //! the functions `dateFind`, `dateFindAll` and `dateIsMatch`. A pattern that cannot work is an error at
 //! the attribute; there is no pattern error at run time. Design: `docs/design/regex.md`.
 //!
-//! A module that uses `@regex` needs `import std.regex`.
+//! The generated code stands alone: it needs no import.
 
 use crate::ast::*;
 use crate::span::Span;
@@ -749,10 +749,203 @@ fn type_text<'a>(src: &'a str, t: &Type) -> &'a str {
     src[t.span.start as usize..t.span.end as usize].trim()
 }
 
-fn array(name: &str, ty: &str, values: &[i64]) -> String {
-    let list: Vec<String> = values.iter().map(|v| v.to_string()).collect();
-    format!("const {name}: [{ty}] = [{}]\n", list.join(", "))
+/// The matcher written for a pattern: the same steps as `std/regex.pel` (a Pike simulation), with every size known
+/// at compile time: `@M@` states, `@S@` capture slots, no growable lists.
+const TEMPLATE: &str = r##"
+struct @N@Prog {
+    op: [int; @M@]
+    x: [int; @M@]
+    y: [int; @M@]
+    ranges: [int; @R@]
+    classes: [int; @C@]
 }
+
+struct @N@Threads {
+    pcs: [int; @M@]
+    caps: [int; @MS@]
+    count: int
+}
+
+fn @N@Program() -> @N@Prog = @N@Prog {
+    op: @OP@,
+    x: @X@,
+    y: @Y@,
+    ranges: @RANGES@,
+    classes: @CLASSES@,
+}
+
+fn @N@IsWord(b: int) -> bool = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || b == 95 || (b >= 97 && b <= 122)
+
+fn @N@ClassHas(p: @N@Prog, index: int, b: int) -> bool {
+    const start = p.classes[index * 3]
+    const count = p.classes[index * 3 + 1]
+    var inside = false
+    var i = 0
+    while i < count {
+        if b >= p.ranges[start + 2 * i] && b <= p.ranges[start + 2 * i + 1] {
+            inside = true
+            break
+        }
+        i += 1
+    }
+    p.classes[index * 3 + 2] == 1 ? !inside : inside
+}
+
+fn @N@Add(p: @N@Prog, text: str, inout list: @N@Threads, inout mark: [int; @M@], pc: int, pos: int, caps: [int; @S@], gen: int) {
+    if mark[pc] == gen { return }
+    mark[pc] = gen
+    const op = p.op[pc]
+    if op == 4 {
+        @N@Add(p, text, inout list, inout mark, p.x[pc], pos, caps, gen)
+    } else if op == 3 {
+        @N@Add(p, text, inout list, inout mark, p.x[pc], pos, caps, gen)
+        @N@Add(p, text, inout list, inout mark, p.y[pc], pos, caps, gen)
+    } else if op == 5 {
+        var next = caps
+        next[p.x[pc]] = pos
+        @N@Add(p, text, inout list, inout mark, pc + 1, pos, next, gen)
+    } else if op == 6 {
+        const kind = p.x[pc]
+        const before = pos > 0 ? text.byteAt(pos - 1) to int : -1
+        const after = pos < text.len() ? text.byteAt(pos) to int : -1
+        var holds = false
+        if kind == 0 {
+            holds = pos == 0
+        } else if kind == 1 {
+            holds = pos == text.len()
+        } else if kind == 4 {
+            holds = pos == 0 || before == 10
+        } else if kind == 5 {
+            holds = pos == text.len() || after == 10
+        } else {
+            const edge = (before >= 0 && @N@IsWord(before)) != (after >= 0 && @N@IsWord(after))
+            holds = kind == 2 ? edge : !edge
+        }
+        if holds { @N@Add(p, text, inout list, inout mark, pc + 1, pos, caps, gen) }
+    } else if op == 8 {
+        const inside = @N@Run(p, text, pos, pc + 1, true, -1)[0] >= 0
+        if inside != (p.y[pc] == 1) { @N@Add(p, text, inout list, inout mark, p.x[pc], pos, caps, gen) }
+    } else {
+        list.pcs[list.count] = pc
+        var i = 0
+        while i < @S@ {
+            list.caps[list.count * @S@ + i] = caps[i]
+            i += 1
+        }
+        list.count += 1
+    }
+}
+
+/// The slots of the first match at or after `from` (`-2` in slot 0 when there is none).
+fn @N@Run(p: @N@Prog, text: str, from: int, startPc: int, anchored: bool, noEmptyAt: int) -> [int; @S@] {
+    var matched: [int; @S@] = [-2; @S@]
+    var current = @N@Threads { pcs: [0; @M@], caps: [0; @MS@], count: 0 }
+    var following = @N@Threads { pcs: [0; @M@], caps: [0; @MS@], count: 0 }
+    var mark: [int; @M@] = [-1; @M@]
+    var pos = from
+    var gen = 0
+    while pos <= text.len() {
+        if matched[0] == -2 && (!anchored || pos == from) {
+            @N@Add(p, text, inout current, inout mark, startPc, pos, [-1; @S@], gen)
+        }
+        if current.count == 0 && (matched[0] != -2 || anchored) { break }
+        const byte = pos < text.len() ? text.byteAt(pos) to int : -1
+        var t = 0
+        while t < current.count {
+            const pc = current.pcs[t]
+            const op = p.op[pc]
+            var advance = false
+            const startAt = current.caps[t * @S@]
+            if (op == 7 || op == 9) && startAt == pos && pos == noEmptyAt {
+                advance = false
+            } else if op == 7 || op == 9 {
+                var k = 0
+                while k < @S@ {
+                    matched[k] = current.caps[t * @S@ + k]
+                    k += 1
+                }
+                break
+            } else if op == 0 {
+                advance = byte == p.x[pc]
+            } else if op == 1 {
+                advance = byte >= 0 && (p.x[pc] == 1 || byte != 10)
+            } else if op == 2 {
+                advance = byte >= 0 && @N@ClassHas(p, p.x[pc], byte)
+            }
+            if advance {
+                var carried: [int; @S@] = [0; @S@]
+                var k = 0
+                while k < @S@ {
+                    carried[k] = current.caps[t * @S@ + k]
+                    k += 1
+                }
+                @N@Add(p, text, inout following, inout mark, pc + 1, pos + 1, carried, gen + 1)
+            }
+            t += 1
+        }
+        /// The next step's threads become the current ones.
+        var n = 0
+        while n < following.count {
+            current.pcs[n] = following.pcs[n]
+            var k = 0
+            while k < @S@ {
+                current.caps[n * @S@ + k] = following.caps[n * @S@ + k]
+                k += 1
+            }
+            n += 1
+        }
+        current.count = following.count
+        following.count = 0
+        gen += 1
+        pos += 1
+    }
+    matched
+}
+
+fn @N@Text(text: str, s: [int; @S@], g: int) -> string {
+    if s[2 * g] < 0 { return "" }
+    "#(text[s[2 * g]..s[2 * g + 1]])"
+}
+
+fn @N@Int(text: str, s: [int; @S@], g: int) -> int {
+    if s[2 * g] < 0 { return 0 }
+    var v = 0
+    var i = s[2 * g]
+    while i < s[2 * g + 1] {
+        v = v * 10 + (text.byteAt(i) to int) - 48
+        i += 1
+    }
+    v
+}
+
+fn @N@Of(text: str, s: [int; @S@]) -> @N@ {
+@BODY@    @N@ { @BUILD@}
+}
+
+pub fn @N@Find(text: str) -> @N@? {
+    const p = @N@Program()
+    const s = @N@Run(p, text, 0, 0, false, -1)
+    if s[0] < 0 { return none }
+    @N@Of(text, s)
+}
+
+pub fn @N@FindAll(text: str) -> [@N@] {
+    const p = @N@Program()
+    var out: [@N@] = []
+    var from = 0
+    var noEmpty = -1
+    while from <= text.len() {
+        const s = @N@Run(p, text, from, 0, false, noEmpty)
+        if s[0] < 0 { break }
+        out.push!(@N@Of(text, s))
+        from = s[1]
+        noEmpty = s[1] > s[0] ? -1 : s[1]
+    }
+    out
+}
+
+pub fn @N@IsMatch(text: str) -> bool = @N@Run(@N@Program(), text, 0, 0, false, -1)[0] >= 0
+"##;
 
 fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
     if attr.args.is_empty() {
@@ -796,7 +989,7 @@ fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
             ));
         }
         let read = if base == "string" {
-            format!("h.text(text, {group})")
+            format!("{tname}Text(text, s, {group})")
         } else if let Some((_, max, wrap)) = WHOLE.iter().find(|w| w.0 == base) {
             if !facts.digits_only {
                 return Err(format!(
@@ -815,8 +1008,8 @@ fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
                 ));
             }
             match wrap {
-                Some(w) => format!("h.int(text, {group}).{w}()"),
-                None => format!("h.int(text, {group})"),
+                Some(w) => format!("{tname}Int(text, s, {group}).{w}()"),
+                None => format!("{tname}Int(text, s, {group})"),
             }
         } else {
             return Err(format!(
@@ -826,7 +1019,8 @@ fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
         if optional {
             let _ = writeln!(
                 body,
-                "    var {fname}: {full} = none\n    if h.took({group}) {{ {fname} = {read} }}"
+                "    var {fname}: {full} = none\n    if s[{}] >= 0 {{ {fname} = {read} }}",
+                2 * group
             );
         } else {
             let _ = writeln!(body, "    const {fname}: {full} = {read}");
@@ -834,52 +1028,41 @@ fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
         let _ = write!(build, "{fname}: {fname}, ");
     }
     let n = &tname;
+    let list = |v: &[i64]| -> (String, usize) {
+        let mut v = v.to_vec();
+        // At least two entries: a one-element array trips the native backend (see docs/design/regex.md).
+        while v.len() < 2 {
+            v.push(0);
+        }
+        let items: Vec<String> = v.iter().map(|x| x.to_string()).collect();
+        (format!("[{}]", items.join(", ")), v.len())
+    };
+    let (op, m) = list(&program.op);
+    let (x, _) = list(&program.x);
+    let (y, _) = list(&program.y);
+    let (ranges, r) = list(&program.ranges);
+    let (classes, c) = list(&program.classes);
+    let slots = 2 * (program.groups + 1);
+    let text = TEMPLATE
+        .replace("@N@", n)
+        .replace("@M@", &m.to_string())
+        .replace("@S@", &slots.to_string())
+        .replace("@MS@", &(m * slots).to_string())
+        .replace("@R@", &r.to_string())
+        .replace("@C@", &c.to_string())
+        .replace("@OP@", &op)
+        .replace("@X@", &x)
+        .replace("@Y@", &y)
+        .replace("@RANGES@", &ranges)
+        .replace("@CLASSES@", &classes)
+        .replace("@BODY@", &body)
+        .replace("@BUILD@", &build);
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "\n/// `@regex` on `{n}`: the pattern, compiled by the compiler."
+        "\n/// `@regex` on `{n}`: the pattern, compiled by the compiler into fixed-size tables ({m} states, {slots} slots)."
     );
-    out.push_str(&array(&format!("{n}RegexOp"), "int", &program.op));
-    out.push_str(&array(&format!("{n}RegexX"), "int", &program.x));
-    out.push_str(&array(&format!("{n}RegexY"), "int", &program.y));
-    out.push_str(&array(&format!("{n}RegexRanges"), "int", &program.ranges));
-    out.push_str(&array(&format!("{n}RegexClasses"), "int", &program.classes));
-    let names: Vec<String> = program.names.iter().map(|s| format!("\"{s}\"")).collect();
-    let _ = writeln!(
-        out,
-        "\nfn {n}Regex() -> regex.regex = regex.fromTables(copy {n}RegexOp, copy {n}RegexX, copy {n}RegexY, copy {n}RegexRanges, copy {n}RegexClasses, {}, [{}])",
-        program.groups,
-        names.join(", ")
-    );
-    let _ = write!(
-        out,
-        "\nfn {n}Of(text: str, h: regex.found) -> {n} {{\n{body}    {n} {{ {build}}}\n}}\n"
-    );
-    let _ = write!(
-        out,
-        "\npub fn {n}Find(text: str) -> {n}? {{
-    const re = {n}Regex()
-    switch re.find(text) {{
-        case some(h): return {n}Of(text, h)
-        case none: return none
-    }}
-}}
-
-pub fn {n}FindAll(text: str) -> [{n}] {{
-    const re = {n}Regex()
-    var out: [{n}] = []
-    const hits = re.findAll(text)
-    var i = 0
-    while i < hits.len() {{
-        out.push!({n}Of(text, hits[i]))
-        i += 1
-    }}
-    out
-}}
-
-pub fn {n}IsMatch(text: str) -> bool = {n}Regex().isMatch(text)
-"
-    );
+    out.push_str(&text);
     Ok(out)
 }
 
@@ -899,8 +1082,8 @@ mod tests {
         );
         assert!(e.errors.is_empty(), "{:?}", e.errors);
         assert!(e.text.contains("pub fn dateFind("));
-        assert!(e.text.contains("const dateRegexOp: [int] = ["));
-        assert!(e.text.contains("h.took(4)"));
+        assert!(e.text.contains("struct dateProg"));
+        assert!(e.text.contains("s[8] >= 0"));
     }
 
     fn error_of(src: &str) -> String {

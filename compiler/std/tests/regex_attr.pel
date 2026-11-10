@@ -1,6 +1,4 @@
 /// `@regex("...")`: a pattern compiled by the compiler, its named groups read as typed fields.
-import std.regex
-
 @regex("(?<year>\\d{4})-(?<month>\\d\\d)(-(?<day>\\d\\d))?")
 struct date {
     year: uint16
