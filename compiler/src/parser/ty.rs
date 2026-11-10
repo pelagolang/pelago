@@ -65,8 +65,8 @@ impl Parser<'_> {
             }
         }
         let count = if self.eat(Punct::Semi) {
-            // A plain operand: `>` ends the type, so a longer length is written in parentheses.
-            self.with_struct(true, |p| p.parse_unary())
+            // Arithmetic (`2 * 3`, `N + 1`) but not comparisons or shifts: `>` ends the type.
+            self.with_struct(true, |p| p.parse_bin(12))
         } else {
             self.error_expected("`;` and a length: `braid<A, B; N>`");
             Expr {

@@ -509,6 +509,10 @@ fn types() {
     assert_eq!(t("(int, string; 4)"), "(tuple int string ; 4)");
     assert_eq!(t("braid<int, string; 4>"), "(braid int string ; 4)");
     assert_eq!(
+        t("braid<int, string; 2 * 3>"),
+        "(braid int string ; (* 2 3))"
+    );
+    assert_eq!(
         t("braid<int, string, bool; 6>"),
         "(braid int string bool ; 6)"
     );
