@@ -464,6 +464,13 @@ impl<'p> Resolver<'p> {
             self.defs[def.0 as usize].scope = Some(idx);
             self.package_roots.push(idx);
         }
+        for (parent, name, child) in &program.mounts {
+            let (p, c) = (
+                self.package_roots[parent.0 as usize],
+                self.package_roots[child.0 as usize],
+            );
+            self.scopes[p].children.insert(name.clone(), c);
+        }
         for m in &program.modules {
             let idx = m.id.0 as usize;
             let parent = match m.parent {
