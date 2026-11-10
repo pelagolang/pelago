@@ -8,6 +8,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 
 | Column | Card | Title | Size |
 |---|---|---|---|
+| [S-09](cards/S-09-braid.md) | The braid, end to end: `braid<A, B; N>`, literals, slot rules, `braid.zip`, strands, JSON decoding; approved by the owner 2026-11-10 | `docs/design/alternating.md`, `core.braid` |
 | Doing | [A-10](cards/A-10-aarch64.md) | AArch64 (64-bit ARM) backend: R1 (encoder) and R2 (Linux ELF, runtime, generator, tests under qemu and on ARM CI) built; R3 (registers) built; Windows on ARM and macOS built | L |
 | Doing | [A-11](cards/A-11-native-speed.md) | Native speed: S1 to S3 first rounds done (collatz 0.30 s to 0.09 s, C -O2 0.07 s); open work split in [a11-work-items.md](../perf/a11-work-items.md) | XL |
 | Doing | [A-12](cards/A-12-concurrency.md) | Concurrency built out: stackful tasks, scheduler, blocking channels, `select`, locks, coroutines, atomics, workers (plan in `docs/design/concurrency-runtime.md`) | XL |
@@ -58,5 +59,4 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 
 ## Review
 
-- [S-09](cards/S-09-braid.md): the braid, end to end (design in `docs/design/alternating.md`); the owner reviews.
 - [S-06](cards/S-06-language-server.md): `pelago lsp` built (L1 to L5); the owner reviews.

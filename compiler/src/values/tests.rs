@@ -435,3 +435,34 @@ fn scope_tasks_cannot_share_a_changed_variable() {
     );
     clean("fn t() { var a = 0\n var b = 0\n scope s { s.spawn([inout a] ~> { a += 1 })\n s.spawn([inout b] ~> { b += 2 }) } }");
 }
+
+// ---- Names bound by patterns and closure parameters are views (VS3) ---------------------------------
+
+#[test]
+fn a_name_bound_over_a_variable_cannot_be_moved_out_without_copy() {
+    flagged(
+        "fn t() -> string? { const r: string? = \"a\" + \"b\"\n switch r { case some(x): return x\n case _: return none } }",
+        "is part of another value",
+    );
+    flagged(
+        "fn t() -> string { const r: string? = \"a\" + \"b\"\n switch r { case some(x): x\n case _: \"\" } }",
+        "write `copy x`",
+    );
+    clean(
+        "fn t() -> string { const r: string? = \"a\" + \"b\"\n switch r { case some(x): copy x\n case _: \"\" } }",
+    );
+    // Over a temporary the names own what they are given, and a `sink` scrutinee hands its parts over.
+    clean("fn f() -> string? = \"a\" + \"b\"\nfn t() -> string { switch f() { case some(x): x\n case _: \"\" } }");
+    clean(
+        "fn t() -> string { const r: string? = \"a\" + \"b\"\n switch sink r { case some(x): x\n case _: \"\" } }",
+    );
+    // Numbers are not owning: nothing to copy.
+    clean("fn t(r: int?) -> int { switch r { case some(x): x\n case _: 0 } }");
+}
+
+#[test]
+fn a_closure_parameter_is_read_only_like_a_function_parameter() {
+    flagged("fn t() { const f = (s: string) ~> s }", "read-only here");
+    clean("fn t() { const f = (s: string) ~> copy s }");
+    clean("fn t() { const f = (n: int) ~> n + 1 }");
+}
