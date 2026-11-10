@@ -1499,6 +1499,7 @@ fn braid_slots_have_the_type_of_their_position() {
 #[test]
 fn braid_methods_follow_the_length_and_the_cycle() {
     clean("fn t(x: (int, string; 5)) { x.tail()\n x.first(1)\n x.second(-1)\n x.split()\n x.evens() }");
+    clean("fn t(x: (int, string, bool; 6)) { x.first(0)\n x.third(1)\n x.rounds() }");
     flagged("fn t(x: (int, string; 4)) { x.tail() }", "has no tail");
     flagged(
         "fn t(x: (int, string; 3)) { x.swap() }",
@@ -1509,7 +1510,7 @@ fn braid_methods_follow_the_length_and_the_cycle() {
         "pair 2 is out of range",
     );
     flagged(
-        "fn t(x: (int, string, bool; 6)) { x.first(0) }",
+        "fn t(x: (int, string, bool; 6)) { x.evens() }",
         "cycle of 3 types",
     );
     clean("fn t(a: [int; 2], b: [string; 2]) { braid.zip(a, b) }");

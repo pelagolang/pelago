@@ -21,6 +21,40 @@ pub fn rtPairAt(p: int, pairs: int) -> int {
     return at
 }
 
+//~ A read-only view of one strand of a braid: every other slot, seen in place, without copying the braid.
+//~ It is made by `firstStrand()` / `secondStrand()` and is a temporary like every view: it points into the braid it came
+//~ from, so use it in the same function and do not return it (the checker refuses to). Loop with `for x of s.iter()`.
+pub struct strand<T> {
+    addr: ptr
+    stride: int
+    count: int
+}
+
+impl<T> strand<T> {
+    //~ How many slots the strand has.
+    fn len(self) -> int = self.count
+
+    //~ The slot `i` (a copy). A negative `i` counts from the end; an `i` outside the strand stops the program.
+    fn at(self, i: int) -> T {
+        const k = rtPairAt(i, self.count)
+        return rtClone<T>(rtOffset(self.addr, k * self.stride))
+    }
+
+    //~ The slots in order, as copies.
+    fn iter(self) -> iter<T> {
+        var out: list<T> = []
+        var i = 0
+        while i < self.count {
+            out.push!(rtClone<T>(rtOffset(self.addr, i * self.stride)))
+            i += 1
+        }
+        return rtCast<list<T>, iter<T>>(sink out)
+    }
+
+    //~ The slots as a list you own.
+    fn toList(self) -> list<T> = self.iter().toList()
+}
+
 //~ The constructors of a braid, called on the type: `braid.zip(xs, ys)`.
 impl braid {
     //~ Interleaves two arrays of the same length: `xs[0], ys[0], xs[1], ys[1], ...`. The inverse of `split`
@@ -122,6 +156,12 @@ impl<A, B, meta N: int> (A, B; N) {
         }
         return rtCast<list<(A, B)>, iter<(A, B)>>(sink out)
     }
+
+    //~ A view of the slots of type A (positions 0, 2, 4, ...), without copying them. See `strand`.
+    fn firstStrand(self) -> strand<A> = strand { addr: rtAddrOf(self), stride: rtSizeOf<(A, B)>(), count: (N + 1) / 2 }
+
+    //~ A view of the slots of type B (positions 1, 3, 5, ...), without copying them.
+    fn secondStrand(self) -> strand<B> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B)>(1)), stride: rtSizeOf<(A, B)>(), count: N / 2 }
 
     //~ The slots of type A, in order (copies).
     fn evens(self) -> iter<A> {
@@ -272,4 +312,44 @@ impl<A, meta N: int> (A, A; N) {
 impl<A, B, meta K: int> [(A, B); K] {
     //~ An array of pairs as a braid, as a copy: `[(A, B); 2]` becomes `(A, B; 4)`. The two have the same memory.
     fn asSlots(self) -> (A, B; K * 2) = rtClone<(A, B; K * 2)>(rtAddrOf(self))
+}
+
+//~ A cycle of three types, `(A, B, C; N)`: what the cycle of two has for reading, with a round (A, B, C) in place of a pair.
+//~ (Longer cycles follow the same shape; they are added when a program needs them.)
+impl<A, B, C, meta N: int> (A, B, C; N) {
+    //~ Slots, `N`.
+    fn len(self) -> int = N
+
+    //~ Full rounds of A, B, C: `N / 3`, rounded down.
+    fn rounds(self) -> int = N / 3
+
+    //~ Slot `3r` (type A) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn first(self, r: int) -> A {
+        const at = rtPairAt(r, N / 3)
+        return rtClone<A>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C)>()))
+    }
+
+    //~ Slot `3r + 1` (type B) of round `r`.
+    fn second(self, r: int) -> B {
+        const at = rtPairAt(r, N / 3)
+        return rtClone<B>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C)>() + rtSlotOff<(A, B, C)>(1)))
+    }
+
+    //~ Slot `3r + 2` (type C) of round `r`.
+    fn third(self, r: int) -> C {
+        const at = rtPairAt(r, N / 3)
+        return rtClone<C>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C)>() + rtSlotOff<(A, B, C)>(2)))
+    }
+
+    //~ A view of the slots of type A, without copying them. See `strand`.
+    fn firstStrand(self) -> strand<A> = strand { addr: rtAddrOf(self), stride: rtSizeOf<(A, B, C)>(), count: (N + 2) / 3 }
+
+    //~ A view of the slots of type B.
+    fn secondStrand(self) -> strand<B> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C)>(1)), stride: rtSizeOf<(A, B, C)>(), count: (N + 1) / 3 }
+
+    //~ A view of the slots of type C.
+    fn thirdStrand(self) -> strand<C> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C)>(2)), stride: rtSizeOf<(A, B, C)>(), count: N / 3 }
+
+    //~ The braid as an array of rounds, as a copy. `N` must be a multiple of 3.
+    fn asRounds(self) -> [(A, B, C); N / 3] = rtClone<[(A, B, C); N / 3]>(rtAddrOf(self))
 }
