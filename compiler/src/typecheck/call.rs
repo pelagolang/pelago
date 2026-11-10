@@ -87,6 +87,14 @@ impl<'p> Checker<'p> {
                 let Some(mdef) = found else {
                     continue;
                 };
+                // A braid impl is written for one cycle length; skip the others before making fresh variables.
+                if let (TyKind::AltTuple(a, _), TyKind::AltTuple(b, _)) =
+                    (self.kind_of(r), self.kind_of(self.impls[idx].self_ty))
+                {
+                    if a.len() != b.len() {
+                        continue;
+                    }
+                }
                 let gens = self.impls[idx].generics.clone();
                 let map = self.fresh_map(&gens, span);
                 let inst = self.tt.subst(self.impls[idx].self_ty, &map);
@@ -1241,6 +1249,8 @@ const BRAID_METHODS: &[&str] = &[
     "mapOdds",
     "swap",
     "asPairs",
+    "firstStrand",
+    "secondStrand",
 ];
 
 fn p_span(a: &Arg) -> Span {

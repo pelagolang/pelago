@@ -245,6 +245,15 @@ fn become_cannot_lend_locals() {
 }
 
 #[test]
+fn a_strand_does_not_outlive_its_braid() {
+    flagged(
+        "fn t() -> strand<int> { const b: (int, int; 4) = (1, 2, 3, 4)\n b.firstStrand() }",
+        "points into `b`",
+    );
+    clean("fn t() -> int { const b: (int, int; 4) = (1, 2, 3, 4)\n b.firstStrand().len() }");
+}
+
+#[test]
 fn views_do_not_outlive_their_source() {
     flagged(
         "fn t() -> str { const s = \"a\" + \"b\"\n s.trim() }",
