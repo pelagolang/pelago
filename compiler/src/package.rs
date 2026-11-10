@@ -246,7 +246,11 @@ impl Program {
         let mut src = src;
         let mut file = out.file;
         // `@derive(fromJson)` appends the decoders it writes and the module is read again.
-        let derived = crate::derive::expand(&src, &file);
+        let mut derived = crate::derive::expand(&src, &file);
+        // `@regex("...")` appends the compiled pattern and its functions the same way.
+        let patterns = crate::regexgen::expand(&src, &file);
+        derived.errors.extend(patterns.errors);
+        derived.text.push_str(&patterns.text);
         for (span, message) in derived.errors {
             self.diagnostics.push(Diagnostic {
                 module: id,

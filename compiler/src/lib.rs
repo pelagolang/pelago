@@ -22,6 +22,7 @@ pub mod naming;
 pub mod native;
 pub mod package;
 pub mod parser;
+pub mod regexgen;
 pub mod resolve;
 pub mod span;
 pub mod token;

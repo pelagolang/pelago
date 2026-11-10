@@ -3460,3 +3460,73 @@ fn a_range_of_two_literal_compares_is_one_test() {
     assert_eq!(output_of(src), "122\n108\nfalse true true false\n");
     agree(src);
 }
+
+/// The Rust front end of `@regex` (`regexgen.rs`) and the reference compiler in `std/regex.pel` must agree: every
+/// pattern of the generated corpus (expected lines from Python's `re`) is compiled by the Rust side, and its tables run
+/// in the same matcher.
+#[test]
+fn regexgen_tables_agree_with_the_corpus() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("std/tests");
+    let corpus = std::fs::read_to_string(root.join("regex_corpus.pel")).unwrap();
+    let expected = std::fs::read_to_string(root.join("regex_corpus.out")).unwrap();
+    let list = |v: &[i64]| {
+        let items: Vec<String> = v.iter().map(|n| n.to_string()).collect();
+        format!("[{}]", items.join(", "))
+    };
+    // A string literal starting at `at`, with its escapes resolved; returns the text and the end.
+    fn literal(s: &str, at: usize) -> (String, usize) {
+        let b: Vec<char> = s[at..].chars().collect();
+        assert_eq!(b[0], '"');
+        let (mut out, mut i) = (String::new(), 1);
+        while b[i] != '"' {
+            if b[i] == '\\' {
+                i += 1;
+                out.push(match b[i] {
+                    'n' => '\n',
+                    c => c,
+                });
+            } else {
+                out.push(b[i]);
+            }
+            i += 1;
+        }
+        let used: usize = b[..=i].iter().map(|c| c.len_utf8()).sum();
+        (out, at + used)
+    }
+    let mut calls = String::new();
+    let body = &corpus[corpus.find("fn main() {").unwrap()..];
+    let skip = |s: &str, mut at: usize| {
+        while at < s.len()
+            && (s.as_bytes()[at] == b' ' || s.as_bytes()[at] == b',' || s.as_bytes()[at] == b'\n')
+        {
+            at += 1;
+        }
+        at
+    };
+    let mut from = 0;
+    while let Some(found) = body[from..].find("\n    t(") {
+        let start = skip(body, from + found + "\n    t(".len());
+        let (pattern, end) = literal(body, start);
+        let (text, end) = literal(body, skip(body, end));
+        from = end;
+        let p = crate::regexgen::compile(&pattern).unwrap_or_else(|e| panic!("{pattern}: {e}"));
+        let names: Vec<String> = p.names.iter().map(|n| format!("\"{n}\"")).collect();
+        calls.push_str(&format!(
+            "    u({}, {}, {}, {}, {}, {}, [{}], \"{}\")\n",
+            list(&p.op),
+            list(&p.x),
+            list(&p.y),
+            list(&p.ranges),
+            list(&p.classes),
+            p.groups,
+            names.join(", "),
+            text.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        ));
+    }
+    let src = format!(
+        "import std.regex\n\nfn u(sink op: [int], sink x: [int], sink y: [int], sink ranges: [int], sink classes: [int], groups: int, sink names: [string], text: str) {{\n    const re = regex.fromTables(sink op, sink x, sink y, sink ranges, sink classes, groups, sink names)\n    var spans = \"\"\n    const hits = re.findAll(text)\n    var i = 0\n    while i < hits.len() {{\n        spans.pushStr!(\"#(hits[i].start)-#(hits[i].end) \")\n        i += 1\n    }}\n    print(re.isMatch(text), hits.len(), spans.trim(), re.replaceAll(text, \"<$0>\"))\n}}\n\nfn main() {{\n{calls}}}\n"
+    );
+    assert_eq!(output_of(&src), expected);
+}

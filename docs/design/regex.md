@@ -1,6 +1,6 @@
 # Regular expressions: the reference matcher and Pelago's own engine (draft 1)
 
-Status: steps 1 and 2 built (2026-11-10), steps 3 to 5 planned. The owner answered the four questions on 2026-11-10: all as recommended, except backreferences, which he wants (section 5). Card: [S-10](../plans/cards/S-10-regex.md).
+Status: steps 1 to 4 built (2026-11-10), step 5 and the backreference tiers planned. The owner answered the four questions on 2026-11-10: all as recommended, except backreferences, which he wants (section 5). Card: [S-10](../plans/cards/S-10-regex.md).
 The owner asked for his own engine, not only a Pike VM (2026-11-08) and gave the go on 2026-11-10.
 
 ## 1. What the owner gets
@@ -50,9 +50,9 @@ A bad pattern, or a field the pattern cannot fill (`year` is not a group, a grou
 
 1. **Reference extended (built, 2026-11-10):** named groups `(?<n>...)` and `(?P<n>...)`, `groupIndex`, `found.named`, lookahead, tests.
 2. **Reference completed (built, 2026-11-10):** flags `i s m` (no `x` yet), `\A \z`, and a generated corpus checked against Python (`compiler/std/tests/gen_regex_corpus.py` writes `regex_corpus.pel` and `.out`; the files are committed, Python is not needed to run tests; 500 cases agreed in a manual run, 120 are committed to keep the test fast). Two deliberate differences from Python found by the corpus: `\B` matches in an empty text (Perl and Rust do; Python before 3.14 does not), and `\a` is the letter `a` here, not the bell. The corpus also made `findAll` follow Python 3.7: after an empty match the next match must not be empty at the same place.
-3. **Pattern front end in Rust:** `compiler/src/regex/` parses and checks a literal pattern (the same grammar as the reference; the two parsers are tested against each other), reports errors at the attribute, binds groups to struct fields.
-4. **Generator:** writes the tables and the matching function as Pelago source (like `derive.rs`), `@regex` hooked in `package.rs parse_into`. The IR optimiser and the native backend see ordinary code.
-5. **Agree, then switch:** both engines run the corpus; differences are bugs; `regex.compile` of a *literal* is the only place that changes (the std `compile` stays the run-time path). Speed tuning, the DFA and the benchmark (`regex-redux` in `docs/perf/bench-suite-findings.md`) are Optimise work.
+3. **Pattern front end in Rust (built, 2026-11-10):** `compiler/src/regexgen.rs` reads a literal pattern (the same grammar and rules as the reference, ported step by step), compiles it to the same tables, binds named groups to the fields of the struct, and reports errors at the attribute: a field without a group, a group that may not take part but whose field is not `T?`, a number field whose group can match more than digits or more digits than the type holds (`\d{3}` into `uint8`: "can match 3 digits, up to 999, but `uint8` holds at most 255"; `\d+` into any integer: "has no largest length"). The test `regexgen_tables_agree_with_the_corpus` compiles every pattern of the Python-checked corpus with the Rust side and runs the tables in the matcher: same answers as Python.
+4. **Generator (built, 2026-11-10, first form):** `@regex("...")` appends the tables as module constants and the functions `dateFind`, `dateFindAll`, `dateIsMatch` plus a typed builder (`package.rs parse_into`, next to `derive.rs`); a module needs `import std.regex`. Example: `compiler/std/tests/regex_attr.pel`. **What is not done yet:** the generated code still runs the shared table-driven matcher in `std.regex` (`regex.fromTables`), whose thread lists are growable lists; the pattern is parsed and checked at compile time and never fails at run time, but memory is not yet fixed-size and the matching loop is not specialised to the pattern. Step 4b: generate the loop itself with fixed-size arrays sized by the program, then (Optimise) the tagged DFA.
+5. **Switch and the rest:** step 4b above; lookahead memoisation (R4); backreference tiers (section 5); then `regex.compile` of a literal can point at the compile-time engine. Speed tuning and the benchmark (`regex-redux`) are Optimise work.
 
 ## 4. Questions for the owner (answered 2026-11-10)
 
