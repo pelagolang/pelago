@@ -544,6 +544,25 @@ pub fn compile(pattern: str) -> regex ! parse_error {
     })
 }
 
+//~ A matcher from tables written by the compiler for `@regex("...")`; not meant to be called by hand.
+pub fn fromTables(
+    sink op: [int],
+    sink x: [int],
+    sink y: [int],
+    sink ranges: [int],
+    sink classes: [int],
+    groupCount: int,
+    sink names: [string],
+) -> regex = regex {
+    op: op,
+    x: x,
+    y: y,
+    ranges: ranges,
+    classes: classes,
+    groupCount: groupCount,
+    names: names,
+}
+
 /// ---- Running ---------------------------------------------------------------------------------------
 
 /// The threads of one step: program counters and their capture slots, flattened.
@@ -790,6 +809,31 @@ impl regex {
 }
 
 impl found {
+    //~ Whether group `n` took part in the match.
+    fn took(
+        self,
+        n: int,
+    ) -> bool = n >= 0 && 2 * n + 1 < self.groups.len() && self.groups[2 * n] >= 0
+
+    //~ The text of group `n`, empty for a group that did not take part.
+    fn text(self, text: str, n: int) -> string {
+        if !self.took(n) { return "" }
+        "#(text[self.groups[2 * n]..self.groups[2 * n + 1]])"
+    }
+
+    //~ The digits of group `n` as a number (`0` for a group that did not take part or holds no digits).
+    fn int(self, text: str, n: int) -> int {
+        if !self.took(n) { return 0 }
+        var v = 0
+        var i = self.groups[2 * n]
+        while i < self.groups[2 * n + 1] {
+            const b = text.byteAt(i) to int
+            if b >= 48 && b <= 57 { v = v * 10 + (b - 48) }
+            i += 1
+        }
+        v
+    }
+
     //~ The text of the group called `name` (see `regex.groupIndex`), or `none`.
     fn named(self, re: regex, text: str, name: str) -> string? {
         const g = re.groupIndex(name)

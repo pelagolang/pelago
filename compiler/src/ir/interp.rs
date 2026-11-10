@@ -574,6 +574,10 @@ impl Machine<'_> {
 
     /// Checks that `len` bytes at `addr` may be touched.
     fn check(&self, addr: usize, len: usize) -> Result<(), String> {
+        // Touching no bytes cannot fault, even at a null address (an empty list or string has none).
+        if len == 0 {
+            return Ok(());
+        }
         if addr < 16 {
             return Err("used a null address".to_string());
         }
