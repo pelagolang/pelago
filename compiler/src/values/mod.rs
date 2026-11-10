@@ -57,6 +57,9 @@ enum Bind {
     Owned,
     /// A name bound by a pattern: a view into another value.
     View,
+    /// A name bound by a pattern over a variable or a part of one (`switch r { case some(x): ... }`): a view of
+    /// something that stays where it is, so an owning `x` cannot be taken out without `copy` (VS3).
+    Part,
     /// `inout x` in a pattern.
     ViewInout,
 }
@@ -691,6 +694,11 @@ impl<'a> Walker<'a> {
                 "take",
                 format!("`{n}` is `inout`, so it cannot be moved out; write `copy {n}`"),
             ),
+            Bind::Part => self.report(
+                span,
+                "take",
+                format!("`{n}` is part of another value, so it cannot be moved out; write `copy {n}`"),
+            ),
             Bind::View | Bind::ViewInout => {}
             Bind::Var | Bind::Const | Bind::Sink | Bind::Owned => {
                 let captured_by_sink = self.closures.last().is_some_and(|c| {
@@ -1135,6 +1143,8 @@ impl<'a> Walker<'a> {
             }
             _ => self.place_read(&s.scrutinee),
         }
+        // Over a variable the names view part of it; over a temporary they own what they are given.
+        let over_place = s.mode.is_none() && self.place_of(&s.scrutinee).is_some();
         let s0 = self.state.clone();
         let mut out: Option<State> = None;
         for arm in &s.arms {
@@ -1142,6 +1152,8 @@ impl<'a> Walker<'a> {
             for p in &arm.patterns {
                 let b = if s.mode == Some(Mode::Inout) {
                     Bind::ViewInout
+                } else if over_place {
+                    Bind::Part
                 } else {
                     Bind::View
                 };
@@ -1283,9 +1295,11 @@ impl<'a> Walker<'a> {
             })
             .unwrap_or_default();
         for (i, p) in c.params.iter().enumerate() {
+            // A closure's parameter is read-only unless its type says `inout` or `sink`, like a function's.
             let default = match modes.get(i).copied().flatten() {
                 Some(Mode::Inout) => Bind::ViewInout,
-                _ => Bind::View,
+                Some(Mode::Sink) => Bind::Sink,
+                _ => Bind::Let,
             };
             self.bind_pattern(&p.pattern, default);
         }

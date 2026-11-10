@@ -1,6 +1,6 @@
 Id: S-09
 Title: The braid, end to end
-Column: Review
+Column: Done
 Order: -
 Depends on: `docs/design/alternating.md` (decided 2026-11-08)
 Size: L, in one go (owner's choice)
