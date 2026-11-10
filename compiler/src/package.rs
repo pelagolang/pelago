@@ -8,7 +8,7 @@
 use crate::ast::{File, ItemKind, StmtKind};
 use crate::parser::{parse_and_check_with, ParseOptions};
 use crate::span::Span;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 /// The modules of the `core` package: `(module path, source)`. `core.pel` is the front file (the index) of
@@ -80,6 +80,13 @@ pub struct Package {
     pub name: String,
     /// The top-level modules.
     pub roots: Vec<ModuleId>,
+    /// What the first segment of an import means inside this package: an installed dependency
+    /// (`json` is the package `json@1.5.0`). Each package has its own table, so two packages may
+    /// use different versions of one dependency.
+    pub imports: BTreeMap<String, PackageId>,
+    /// A second major of a dependency, by the first two segments: `("json", "v2")` is what
+    /// `import json.v2.decode` reaches.
+    pub majors: BTreeMap<(String, String), PackageId>,
 }
 
 /// Everything being compiled: the packages and all their modules.
@@ -91,9 +98,6 @@ pub struct Program {
     pub diagnostics: Vec<Diagnostic>,
     /// What `target` means in a `meta if`.
     pub target: crate::meta::Target,
-    /// `(parent, name, child)`: the child package is also reachable as the module `name` of the parent
-    /// (a second major, `json.v2`, below `json`).
-    pub mounts: Vec<(PackageId, String, PackageId)>,
 }
 
 impl Program {
@@ -134,6 +138,8 @@ impl Program {
             id: pid,
             name: name.to_string(),
             roots: Vec::new(),
+            imports: BTreeMap::new(),
+            majors: BTreeMap::new(),
         });
         let mut by_path: HashMap<String, ModuleId> = HashMap::new();
         // Real files first, so a front file is never replaced by a made-up parent.
@@ -310,7 +316,7 @@ impl Program {
             .map(|(p, s)| (p.as_str(), s.as_str()))
             .collect();
         let pid = self.add_package(&name, &refs);
-        self.add_dependencies(root)?;
+        self.add_dependencies(root, pid)?;
         Ok(pid)
     }
 }

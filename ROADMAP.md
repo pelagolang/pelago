@@ -19,7 +19,7 @@ A serious, self-hosting systems language:
 | Execution | Ahead-of-time compiled, no GC, no runtime | decided |
 | Typing | Static, with local type inference | decided |
 | Syntax family | Braces, TS/Rust-like, no significant indentation | decided |
-| Installed packages | A package from Islet is named by its key (`import json.decode`); a second major is a path segment (`import json.v2.decode`). The compiler reads `deps/map.yaml` and never runs Islet | decided 2026-11-10 |
+| Installed packages | A package from Islet is named by its key (`import json.decode`); a second major is a path segment (`import json.v2.decode`). Every package has its own import table, so versions may differ between packages. The compiler reads `deps/map.yaml` and never runs Islet | decided 2026-11-10 |
 | Memory safety | Value semantics (read-only by default, plus `inout` / `sink` access modes; second-class references) | decided, pending the paper test below |
 | Backend | One backend, our own, from day one | decided |
 | Second native target | AArch64 Linux static ELF from a second generator beside the x86-64 one (`gen_a64.rs`, `rt_a64.rs`), same IR and same semantics, tested under `qemu-aarch64` and on ARM runners; Windows on ARM and macOS built (run in CI on ARM runners) (`docs/plans/cards/A-10-aarch64.md`) | decided |
