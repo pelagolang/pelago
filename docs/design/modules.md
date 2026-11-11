@@ -69,6 +69,9 @@ mounted below it as the module `v2`. No new syntax. The compiler finds installed
 so one package may use `units` 0.2 while another uses `units` 0.3 in the same build; a package for each distinct
 version is loaded once and named `name@version`. Inside the resolver the first segment of an import is looked up in
 this table after the package's own modules, and `(name, vN)` is looked up first when the path has two segments.
+If an `islet.lock` sits next to `deps/`, the compiler also checks that the map lists the same `name@version` packages as the
+lock (it reads no hashes or signers; `islet install` verifies those) and refuses a stale `deps/` with a message to run
+`islet install`.
 
 Leading dots echo the leading-dot enum cases (`.circle`): "look from here". An absolute path inside your own package
 starts with the package name, so moving a file does not break the imports of others.
