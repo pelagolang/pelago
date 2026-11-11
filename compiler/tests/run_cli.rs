@@ -126,6 +126,22 @@ fn main_gets_its_arguments() {
 }
 
 #[test]
+fn main_may_return_a_result() {
+    // Returning `ok` is a normal end (the interpreter used to free an address that was never allocated).
+    let ok = "fn main() -> void ! string {\n    print(\"x\")\n}\n";
+    // Returning `err` puts the text on standard error and ends with 1.
+    let bad = "fn main() -> void ! string {\n    print(\"x\")\n    return err(\"bad\")\n}\n";
+    for flags in args_modes() {
+        let (out, err, code) = run_with(flags, ok, &[], "");
+        assert_eq!((out.as_str(), code), ("x\n", 0), "{flags:?}: {err}");
+        let (out, err, code) = run_with(flags, bad, &[], "");
+        assert_eq!(out, "x\n", "{flags:?}");
+        assert_eq!(err, "error: bad\n", "{flags:?}");
+        assert_eq!(code, 1, "{flags:?}");
+    }
+}
+
+#[test]
 fn exit_ends_the_program_with_its_status() {
     let src = "import std.os\nfn main() {\n    print(\"before\")\n    os.exit(7)\n}\n";
     for flags in os_modes() {
