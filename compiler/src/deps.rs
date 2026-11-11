@@ -112,6 +112,39 @@ pub fn find_map(start: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Does `deps/map.yaml` still describe `islet.lock`? Only the package list is compared (name and version of every
+/// package): the compiler never reads hashes or signers, and `islet install` checks those. No lock next to the
+/// map means nothing to compare. Returns what differs, or `None`.
+fn stale(root: &Path, map: &DepMap) -> Option<String> {
+    let text = std::fs::read_to_string(root.join("islet.lock")).ok()?;
+    let doc = match yaml::parse(&text) {
+        Ok(d) => d,
+        Err(e) => return Some(format!("islet.lock does not read: {}", e.msg)),
+    };
+    let locked: std::collections::BTreeSet<&str> = match doc.get("packages").map(|n| &n.v) {
+        Some(Val::Table(t)) => t.entries.iter().map(|e| e.key.as_str()).collect(),
+        _ => Default::default(),
+    };
+    let mapped: std::collections::BTreeSet<&str> =
+        map.packages.keys().map(String::as_str).collect();
+    let missing: Vec<&str> = locked.difference(&mapped).copied().collect();
+    let extra: Vec<&str> = mapped.difference(&locked).copied().collect();
+    if missing.is_empty() && extra.is_empty() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    if !missing.is_empty() {
+        parts.push(format!("locked but not installed: {}", missing.join(", ")));
+    }
+    if !extra.is_empty() {
+        parts.push(format!(
+            "installed but no longer locked: {}",
+            extra.join(", ")
+        ));
+    }
+    Some(parts.join("; "))
+}
+
 impl Program {
     /// Adds the packages the project at `project` (already added as `pid`) imports, if a `deps/map.yaml` is found
     /// above it, and fills each package's import table. Without a map nothing changes.
@@ -131,6 +164,12 @@ impl Program {
         let map = DepMap::parse(&text).map_err(|e| format!("{}:{e}", map_path.display()))?;
         let deps_dir = map_path.parent().unwrap_or(Path::new(".")).to_path_buf();
         let root = deps_dir.parent().unwrap_or(Path::new(".")).to_path_buf();
+        if let Some(why) = stale(&root, &map) {
+            return Err(format!(
+                "{}: deps/ is out of date with islet.lock ({why}); run `islet install`",
+                map_path.display()
+            ));
+        }
         let rel = start
             .strip_prefix(&root)
             .map_err(|_| "the project is not below its deps folder".to_string())?;
@@ -328,5 +367,48 @@ mod tests {
         let mut program = Program::with_core();
         program.add_package_from_path(&d.join("main.pel")).unwrap();
         assert!(program.packages.iter().all(|p| p.imports.is_empty()));
+    }
+
+    #[test]
+    fn a_stale_deps_folder_is_refused_and_a_current_one_is_not() {
+        let d = scratch("stale");
+        let map = "format: 1\n\npackages:\n  json@1.5.0:\n    dir: json@1.5.0\n\nmembers:\n  .:\n    imports:\n      json: json@1.5.0\n";
+        write(&d.join("deps/map.yaml"), map);
+        write(
+            &d.join("deps/json@1.5.0/decode.pel"),
+            "pub fn one() -> int {\n    1\n}\n",
+        );
+        write(
+            &d.join("main.pel"),
+            "import { one } = json.decode\n\nfn main() {\n    print(one())\n}\n",
+        );
+        let lock = |pkgs: &str| format!("format: 1\n\npackages:\n{pkgs}");
+        let h = "a".repeat(64);
+        // The lock names what the map holds: fine.
+        write(
+            &d.join("islet.lock"),
+            &lock(&format!("  json@1.5.0:\n    hash: \"{h}\"\n")),
+        );
+        let mut program = Program::with_core();
+        program.add_package_from_path(&d.join("main.pel")).unwrap();
+        // A newer version locked since the last install.
+        write(
+            &d.join("islet.lock"),
+            &lock(&format!("  json@1.6.0:\n    hash: \"{h}\"\n")),
+        );
+        let mut program = Program::with_core();
+        let e = program
+            .add_package_from_path(&d.join("main.pel"))
+            .unwrap_err();
+        assert!(e.contains("out of date"), "{e}");
+        assert!(e.contains("locked but not installed: json@1.6.0"), "{e}");
+        assert!(
+            e.contains("installed but no longer locked: json@1.5.0"),
+            "{e}"
+        );
+        // No lock at all: nothing to compare.
+        std::fs::remove_file(d.join("islet.lock")).unwrap();
+        let mut program = Program::with_core();
+        program.add_package_from_path(&d.join("main.pel")).unwrap();
     }
 }
