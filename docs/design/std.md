@@ -29,3 +29,7 @@ Why a module is also a type name: the module is `big` and the type is `bigint`, 
 Naming follows decision B8 (`docs/design/basics.md`): camelCase functions and methods.
 
 Tests: each library has a `tests/` directory (`compiler/core/tests/`, `compiler/std/tests/`) of `.pel` programs with their expected output in `name.out`; `name.stops` marks a program that must stop. The test `library_test_suites` runs them all. The `bigint` expectations come from Python's integers.
+
+## `core` additions log
+
+- **iter adapters (2026-11):** `fold`, `any`, `all`, `find`, `position`, `nth`, `last`, `take`, `skip`, `takeWhile`, `skipWhile`, `chain`, `enumerate`, `zip`, `flatMap`, `filterMap`, `reversed`, and `min`/`max` (for `order` elements) on `iter<T>`. They build lists like `map` and `filter` do (`docs/design/iter.md`); one flat method set, no `Iterator` trait. Conventional names, Pelago's own surface: no `next()`, no `&mut`.
