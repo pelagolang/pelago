@@ -186,6 +186,17 @@ fn main_may_take_arguments_and_return_a_result() {
 }
 
 #[test]
+fn an_expression_body_keeps_the_error_of_a_void_result() {
+    // `g` hands back what `f` gave; it used to end with success whatever `f` said.
+    let src = "fn f(n: int) -> void ! string {\n    if n < 0 { return err(\"neg\") }\n}\nfn g(n: int) -> void ! string = f(n)\nfn main() {\n    print(f(-1).isOk(), f(1).isOk(), g(-1).isOk(), g(1).isOk())\n}\n";
+    for flags in args_modes() {
+        let (out, err, code) = run_with(flags, src, &[], "");
+        assert_eq!(out, "false true false true\n", "{flags:?}: {err}");
+        assert_eq!(code, 0, "{flags:?}");
+    }
+}
+
+#[test]
 fn exit_ends_the_program_with_its_status() {
     let src = "import std.os\nfn main() {\n    print(\"before\")\n    os.exit(7)\n}\n";
     for flags in os_modes() {

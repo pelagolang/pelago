@@ -149,6 +149,8 @@ pub(crate) struct Lowerer<'a> {
     pub main_takes_args: bool,
     /// The program's `main` returns a `T ! E`: the type, for the entry that checks it.
     pub main_result: Option<Ty>,
+    /// Set while the end of a function with an expression body is lowered: the body's value is in place.
+    pub body_placed: bool,
     pub fns: HashMap<DefId, FnEntry<'a>>,
     pub globals: HashMap<DefId, GlobalEntry<'a>>,
     pub core_fns: HashMap<String, DefId>,
@@ -198,6 +200,7 @@ pub fn lower_with(
         diags: Vec::new(),
         main_takes_args: false,
         main_result: None,
+        body_placed: false,
         fns: HashMap::new(),
         globals: HashMap::new(),
         core_fns: HashMap::new(),
@@ -947,7 +950,10 @@ impl<'a> Lowerer<'a> {
                 self.write_ok_value(sig.ret, tmp, st);
             }
         }
+        // An expression body writes its `void ! E` value straight into the place of the result.
+        self.body_placed = matches!(decl.body, FnBody::Expr(_)) && sig.ret_pass == RetPass::Sret;
         self.finish_return(body_res, sig, decl.name.span);
+        self.body_placed = false;
         if self.f.fail.is_some() {
             return Err(());
         }
@@ -971,8 +977,11 @@ impl<'a> Lowerer<'a> {
                 self.terminate(Term::Return(None));
             }
             (RetPass::Sret, Res::Unit) | (RetPass::Sret, Res::Val(_)) => {
-                // `void ! E` ends with success.
-                self.write_ok_void(sig.ret);
+                // `void ! E` ends with success, unless the body is itself a call that gave a `void ! E`
+                // (`fn g() -> void ! E = f()`): that value is already in place, error or not.
+                if !self.body_placed {
+                    self.write_ok_void(sig.ret);
+                }
                 self.pop_scope();
                 self.terminate(Term::Return(None));
             }
