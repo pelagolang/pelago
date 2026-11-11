@@ -81,6 +81,10 @@ pub(crate) struct FnState<'a> {
     pub ret_ty: Ty,
     pub sret: Option<Value>,
     pub fail: Option<Fail>,
+    /// The drop flag of a temporary a pattern is being tested against: names the pattern binds point into it, and moving one out moves the whole temporary.
+    pub bind_flag: Option<Value>,
+    /// What `scrutinee` found for the temporary it just built.
+    pub scrut_flag: Option<Value>,
 }
 
 impl<'a> FnState<'a> {
@@ -104,6 +108,8 @@ impl<'a> FnState<'a> {
             ret_ty: void,
             sret: None,
             fail: None,
+            bind_flag: None,
+            scrut_flag: None,
         }
     }
 }

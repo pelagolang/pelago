@@ -46,7 +46,10 @@ impl<'a> Lowerer<'a> {
                 let Some((p, t)) = self.scrutinee(value) else {
                     return;
                 };
-                if self.pat_test(pattern, p, t, no) {
+                self.f.bind_flag = self.f.scrut_flag;
+                let ok = self.pat_test(pattern, p, t, no);
+                self.f.bind_flag = None;
+                if ok {
                     self.jump(yes, vec![]);
                 }
             }
@@ -96,6 +99,7 @@ impl<'a> Lowerer<'a> {
 
     /// The address of the value a pattern is tested against, and its type.
     pub(crate) fn scrutinee(&mut self, e: &'a Expr) -> Option<(Value, Ty)> {
+        self.f.scrut_flag = None;
         let t = self.ty_of(e)?;
         if let Some(p) = self.place(e) {
             return Some((p, t));
@@ -105,7 +109,18 @@ impl<'a> Lowerer<'a> {
         }
         match self.repr(t) {
             Repr::Mem(_) => match self.expr(e) {
-                Res::Val(p) => Some((p, t)),
+                Res::Val(p) => {
+                    // A temporary that owns its value: remember its flag (see `bind_flag`).
+                    self.f.scrut_flag = self.f.scopes.last().and_then(|s| {
+                        s.iter().rev().find_map(|it| match it {
+                            ScopeItem::Drop {
+                                ptr, flag: Some(f), ..
+                            } if *ptr == p => Some(*f),
+                            _ => None,
+                        })
+                    });
+                    Some((p, t))
+                }
                 _ => None,
             },
             Repr::Scalar(_) => {
@@ -194,7 +209,7 @@ impl<'a> Lowerer<'a> {
                 Local::Slot {
                     ptr,
                     ty,
-                    flag: None,
+                    flag: self.f.bind_flag,
                 },
             );
         }
@@ -568,6 +583,7 @@ impl<'a> Lowerer<'a> {
             _ => vec![],
         };
         let join = self.new_block(&join_params);
+        let scrut_flag = self.f.scrut_flag;
         let mut reached = false;
         let mem_dst = if matches!(repr, Repr::Mem(_)) {
             dst
@@ -579,7 +595,9 @@ impl<'a> Lowerer<'a> {
                 break;
             }
             let next = self.new_block(&[]);
+            self.f.bind_flag = scrut_flag;
             let body_start = self.arm_entry(arm, ptr, sty, next);
+            self.f.bind_flag = None;
             let Some(()) = body_start else {
                 return Res::Never;
             };

@@ -95,6 +95,29 @@ fn an_index_scaled_twice_is_not_folded_into_one_address() {
 }
 
 #[test]
+fn returning_a_name_bound_from_a_temporary_scrutinee_moves_the_temporary() {
+    // `switch get(n) { case some(set): return set }` bound `set` as a view into the temporary, copied it
+    // to the result on `return`, and then dropped the temporary too: "freed memory twice".
+    let src = "fn get(n: int) -> [int]? { if n < 0 { return none }; [n, n + 1] }
+        fn pick(n: int) -> [int] {
+            switch get(n) {
+                case some(set): return set
+                case none: return []
+            }
+        }
+        fn main() {
+            print(pick(1).len())
+            print(pick(-1).len())
+            print(pick(5)[1])
+        }";
+    let l = lowered(src);
+    let o = run_full(&l.module, "main", &[]);
+    assert!(o.result.is_ok(), "{:?}: {src}", o.result);
+    assert_eq!(o.output, "2\n0\n6\n");
+    agree(src);
+}
+
+#[test]
 fn arithmetic_and_calls() {
     let src = "fn add(a: int, b: int) -> int = a + b\nfn twice(x: int) -> int = add(x, x)\nfn mix(a: int) -> int = (a * 3 - 4) / 2 + a % 5";
     assert_eq!(eval(src, "twice", &[21]), Ok(42));
