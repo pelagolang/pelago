@@ -14,6 +14,7 @@ fn lowered(src: &str) -> Lowered {
     let errs: Vec<&str> = typed
         .diagnostics
         .iter()
+        .filter(|d| !d.warning)
         .map(|d| d.message.as_str())
         .collect();
     assert!(errs.is_empty(), "the source does not check: {errs:?}");
@@ -1395,8 +1396,8 @@ fn meta_note_is_a_compile_time_message() {
 
 #[test]
 fn async_functions_and_await() {
-    let src = "async fn double(x: int) -> int { x * 2 }\nasync fn greet(name: string) -> string { \"hello #name\" }\nasync fn say(s: string) { print(s) }\nasync fn both() -> int {\n const a = double(4)\n const b = double(5)\n await say(\"working\")\n await a + await b }\nstruct counter { n: int\n async fn bump(inout self) -> int { self.n += 1\n self.n } }\nasync fn boxed(v: int) -> box<int> { box(v) }\nfn main() { print(blockOn(both()))\n print(blockOn(greet(\"pelago\")))\n var c = counter { n: 0 }\n print(blockOn(c.bump!()), blockOn(c.bump!()))\n const b = blockOn(boxed(7))\n print(b.get()) }\n";
-    assert_eq!(output_of(src), "working\n18\nhello pelago\n1 2\n7\n");
+    let src = "async fn double(x: int) -> int { x * 2 }\nasync fn greet(name: string) -> string { \"hello #name\" }\nasync fn say(s: string) { print(s) }\nasync fn both() -> int {\n const a = double(4)\n const b = double(5)\n await say(\"working\")\n await a + await b }\nasync fn boxed(v: int) -> box<int> { box(v) }\nfn main() { print(blockOn(both()))\n print(blockOn(greet(\"pelago\")))\n const b = blockOn(boxed(7))\n print(b.get()) }\n";
+    assert_eq!(output_of(src), "working\n18\nhello pelago\n7\n");
 }
 
 #[test]
@@ -1431,6 +1432,29 @@ fn main() {
 }
 "#;
     assert_eq!(output_of(src), "true ok(5)\n3\n");
+}
+
+#[test]
+fn async_calls_run_as_tasks_that_can_wait_for_each_other() {
+    // The consumer is called first and waits for values the producer, called after it, sends: a call that ran its body to
+    // the end would wait for ever.
+    let src = r#"async fn producer(sink tx: sender<int>) {
+    for i of 0..3 { tx.send(i + 1) }
+}
+async fn consumer(sink rx: receiver<int>) -> int {
+    var t = 0
+    for v of rx.iter() { t += v }
+    t
+}
+fn main() {
+    const (tx, rx) = chan<int>()
+    const c = consumer(sink rx)
+    const p = producer(sink tx)
+    blockOn(p)
+    print(blockOn(c))
+}
+"#;
+    assert_eq!(output_of(src), "6\n");
 }
 
 #[test]

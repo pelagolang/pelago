@@ -125,8 +125,12 @@ for x of g { print(x) }                                              // iterator
 - `coroutine<T>` implements the iterator interface, so `for x of g` works. Dropping an unfinished coroutine frees its stack
   and drops the live locals (needs the ledger to unwind a suspended stack: **open point, see Q3**).
 - A syntax form (`fn evens() -> gen<int> { yield 1 }`) can be a thin lowering to this type; decide after the library form is used.
-- `async` (S-04): with stackful tasks an `async fn` can be a task and `await` a `join`. That replaces the state-machine
-  plan (cheaper to build, one extra stack per concurrent call, no "no view across await" rule needed). **Q2.**
+- `async` (S-04), done (C7): an `async fn` call starts the body as a task and gives a `future<T>`; `await` (or
+  `blockOn`) waits for it. So two async calls can wait for each other. The body runs on a stack of its own, so what it
+  takes must move in: a `let` parameter that owns something is copied into the task, a `sink` one is moved, and `inout`
+  is an error ("take it with `sink` and return what changed"). No "no view across await" rule is needed.
+  Own voice, not a state machine copy: a future is a task handle, one extra stack per concurrent call, no coloured
+  function world and no executor to choose.
 
 ## 7. Determinism and testing
 

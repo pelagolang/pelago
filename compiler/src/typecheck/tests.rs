@@ -1438,6 +1438,16 @@ fn await_needs_a_future() {
 }
 
 #[test]
+fn an_async_fn_cannot_borrow_inout() {
+    let e = run("async fn f(inout n: int) -> int { n }").errors();
+    assert!(
+        e.iter().any(|m| m.contains("cannot borrow `inout`")),
+        "{e:?}"
+    );
+    clean("async fn f(sink n: int) -> int { n }\nasync fn g(n: int) -> int { n }");
+}
+
+#[test]
 fn length_arithmetic_is_checked() {
     let grow = "fn grow<meta N: int>(xs: [int; N]) -> [int; N + 1] { [0; N + 1] }\n";
     clean(&format!(

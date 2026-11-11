@@ -31,17 +31,17 @@ impl<T> box<T> {
 
 /// ---- async ---------------------------------------------------------------------------------------
 
-//~ What an `async fn` gives. At this stage a call runs the body to the end and the future holds the
-//~ result; `await f()` takes it out (`wait`). The layout of a `future<T>` is that of a `T`.
+//~ What an `async fn` gives: the body runs as a task of its own (`docs/design/concurrency-runtime.md`), started by the call;
+//~ `await f()` waits for it and takes the result out (`wait`). The parameters moved into the task (a `let` one was copied).
 pub struct future<T> {
-    value: T
+    t: task<T>
 }
 
 impl<T> future<T> {
-    fn wait(sink self) -> T = rtCast<future<T>, T>(sink self)
+    fn wait(sink self) -> T = rtCast<future<T>, task<T>>(sink self).join!!()
 }
 
-//~ Runs a future to the end from ordinary code.
+//~ Waits for a future from ordinary code.
 pub fn blockOn<T>(sink f: future<T>) -> T = f.wait!!()
 
 /// ---- Compile-time code -------------------------------------------------------------------------

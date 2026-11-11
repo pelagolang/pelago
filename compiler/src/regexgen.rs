@@ -23,6 +23,8 @@ use std::fmt::Write;
 pub struct Expansion {
     pub text: String,
     pub errors: Vec<(Span, String)>,
+    /// Things to tell the author that are not errors: a pattern that fell to the budgeted search.
+    pub warnings: Vec<(Span, String)>,
 }
 
 // Instruction codes (the same numbers as `std/regex.pel`).
@@ -1063,8 +1065,14 @@ pub fn expand(src: &str, file: &File) -> Expansion {
                     .push((item.span, "`@regex` goes on a struct".to_string()));
                 continue;
             };
-            match one(src, attr, decl) {
-                Ok(text) => out.text.push_str(&text),
+            let mut warning = None;
+            match one(src, attr, decl, &mut warning) {
+                Ok(text) => {
+                    out.text.push_str(&text);
+                    if let Some(w) = warning {
+                        out.warnings.push((attr.span, w));
+                    }
+                }
                 Err(message) => out.errors.push((attr.span, message)),
             }
         }
@@ -1511,6 +1519,9 @@ pub enum @N@Outcome {
     gaveUp
 }
 
+//~ A budget in proportion to the text: 64 states for each byte (the figure in `docs/design/regex.md`); a starting point, not a promise.
+pub fn @N@Budget(text: str) -> int = 64 * (text.len() + 1)
+
 //~ The first match; `budget` is the most states the search may visit (the same input always gives the same answer).
 pub fn @N@Find(text: str, budget: int) -> @N@Outcome {
     const p = @N@Program()
@@ -1553,13 +1564,48 @@ pub fn @N@IsMatch(text: str, budget: int) -> bool? {
 }
 "##;
 
-fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
+/// The most referenced groups a budgeted search may have unless the attribute says more: `@regex("...", 5)`.
+const DEFAULT_GROUP_LIMIT: usize = 3;
+
+fn one(
+    src: &str,
+    attr: &Attr,
+    decl: &TypeDecl,
+    warning: &mut Option<String>,
+) -> Result<String, String> {
     if attr.args.is_empty() {
         return Err("`@regex` needs the pattern as a string: `@regex(\"...\")`".into());
     }
     let pattern = literal(src, &attr.args[0])
         .ok_or("the pattern of `@regex` must be a plain string literal")?;
     let program = compile(&pattern).map_err(|m| format!("regex: {m}"))?;
+    let mut limit = DEFAULT_GROUP_LIMIT;
+    if let Some(e) = attr.args.get(1) {
+        let text = src[e.span.start as usize..e.span.end as usize].trim();
+        limit = match (&e.kind, text.replace('_', "").parse::<usize>()) {
+            (ExprKind::Int, Ok(n)) => n,
+            _ => return Err("the second argument of `@regex` is the most groups a backreference may read: a whole number".into()),
+        };
+    }
+    let mut referenced: Vec<i64> = Vec::new();
+    for (pc, op) in program.op.iter().enumerate() {
+        if *op == BACKREF && !referenced.contains(&program.x[pc]) {
+            referenced.push(program.x[pc]);
+        }
+    }
+    if referenced.len() > limit {
+        return Err(format!(
+            "regex: the backreferences read {} groups and the budgeted search is polynomial in that number; write `@regex(\"...\", {})` to allow it",
+            referenced.len(),
+            referenced.len()
+        ));
+    }
+    if program.tier_b {
+        *warning = Some(format!(
+            "regex: this pattern needs the budgeted search ({} referenced group(s)): the generated functions take a budget and can answer `gaveUp`",
+            referenced.len()
+        ));
+    }
     let tname = decl.name.text(src).to_string();
     let mut fields = Vec::new();
     for m in &decl.members {
@@ -1650,12 +1696,7 @@ fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
     let (classes, c) = list(&program.classes);
     let (looks, l) = list(&program.looks);
     let slots = 2 * (program.groups + 1);
-    let mut refs: Vec<i64> = Vec::new();
-    for (pc, op) in program.op.iter().enumerate() {
-        if *op == BACKREF && !refs.contains(&program.x[pc]) {
-            refs.push(program.x[pc]);
-        }
-    }
+    let refs = referenced;
     let (refs_text, rl) = list(&refs);
     let (run, api) = if program.tier_b {
         (RUN_BUDGET, API_BUDGET)
@@ -1684,10 +1725,17 @@ fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
         .replace("@LOOKS@", &looks)
         .replace("@BODY@", &body)
         .replace("@BUILD@", &build);
+    let tier = if program.tier_b {
+        "tier B: budgeted search"
+    } else if has_backref(program.tree.as_ref().unwrap_or(&Node::Empty)) {
+        "tier A: backreferences rewritten into alternatives, linear"
+    } else {
+        "linear"
+    };
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "\n/// `@regex` on `{n}`: the pattern, compiled by the compiler into fixed-size tables ({m} states, {slots} slots)."
+        "\n/// `@regex` on `{n}`: the pattern, compiled by the compiler into tables ({m} states, {slots} slots; {tier})."
     );
     out.push_str(&text);
     Ok(out)
@@ -1700,6 +1748,34 @@ mod tests {
     fn expansion(src: &str) -> Expansion {
         let (out, _) = crate::parser::parse_source(src);
         expand(src, &out.file)
+    }
+
+    #[test]
+    fn the_budgeted_search_is_announced_and_limited() {
+        let e = expansion("@regex(\"(?<w>\\\\w+) \\\\k<w>\")\nstruct twice { w: string }");
+        assert!(e.errors.is_empty(), "{:?}", e.errors);
+        assert_eq!(e.warnings.len(), 1);
+        assert!(e.text.contains("tier B"));
+        assert!(e.text.contains("pub fn twiceBudget("));
+        // A finite group is rewritten: no warning, and the comment says so.
+        let e = expansion("@regex(\"(?<q>['\\\"])x\\\\k<q>\")\nstruct quoted { q: string }");
+        assert!(e.errors.is_empty(), "{:?}", e.errors);
+        assert!(e.warnings.is_empty());
+        assert!(e.text.contains("tier A"));
+        // Four referenced groups are refused unless the attribute allows them.
+        let four = "(?<a>\\\\w+) (?<b>\\\\w+) (?<c>\\\\w+) (?<d>\\\\w+) \\\\1\\\\2\\\\3\\\\4";
+        let e = expansion(&format!(
+            "@regex(\"{four}\")\nstruct f {{ a: string, b: string, c: string, d: string }}"
+        ));
+        assert!(
+            e.errors.iter().any(|(_, m)| m.contains("read 4 groups")),
+            "{:?}",
+            e.errors
+        );
+        let e = expansion(&format!(
+            "@regex(\"{four}\", 4)\nstruct f {{ a: string, b: string, c: string, d: string }}"
+        ));
+        assert!(e.errors.is_empty(), "{:?}", e.errors);
     }
 
     #[test]

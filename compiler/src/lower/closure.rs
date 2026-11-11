@@ -155,7 +155,7 @@ impl<'a> Lowerer<'a> {
                     (CapKind::Val(s), ty, ty)
                 }
                 Some(Local::Slot { ty, .. }) => {
-                    if *mode == Some(Mode::Sink) {
+                    if *mode == Some(Mode::Sink) || self.f.async_wrap {
                         (CapKind::Sink, ty, ty)
                     } else {
                         (CapKind::Ref, ptr_ty, ty)
@@ -616,6 +616,73 @@ impl<'a> Lowerer<'a> {
                         self.own(slot, sig.ret, false);
                         return Res::Val(slot);
                     }
+                }
+                Res::Unit
+            }
+        }
+    }
+}
+
+impl<'a> Lowerer<'a> {
+    /// The body of an `async fn`: a closure over the parameters, started as a task. The call gives the future (the
+    /// task's address). A `let` parameter that owns something is copied first, so the task has its own.
+    pub(crate) fn async_fn_body(
+        &mut self,
+        decl: &'a FnDecl,
+        sig: &Sig,
+        inner: Ty,
+        params: &[Option<DefId>],
+    ) -> Res {
+        for (i, (pass, ty, mode)) in sig.params.iter().enumerate() {
+            let Some(def) = params.get(i).copied().flatten() else {
+                continue;
+            };
+            if *pass == Pass::Ptr && *mode != Some(Mode::Sink) && self.needs_drop(*ty) {
+                if let Some(Local::Slot { ptr, ty, .. }) = self.f.locals.get(&def).copied() {
+                    let slot = self.slot_for(ty);
+                    self.clone_into(ptr, slot, ty);
+                    let flag = self.own(slot, ty, true);
+                    self.f.locals.insert(
+                        def,
+                        Local::Slot {
+                            ptr: slot,
+                            ty,
+                            flag,
+                        },
+                    );
+                }
+            }
+        }
+        let body = match &decl.body {
+            FnBody::Block(b) => Expr {
+                kind: ExprKind::Block(b.clone()),
+                span: b.span,
+            },
+            FnBody::Expr(e) => e.clone(),
+            FnBody::None => return Res::Unit,
+        };
+        let c: &'a Closure = Box::leak(Box::new(Closure {
+            captures: Vec::new(),
+            params: Vec::new(),
+            ret: None,
+            body,
+        }));
+        let t = self.types.mk(TyKind::Fn(Vec::new(), inner, true));
+        let dst = self.slot_for(t);
+        self.f.async_wrap = true;
+        let r = self.closure_value(&c.body, c, dst, t);
+        self.f.async_wrap = false;
+        if matches!(r, Res::Never) {
+            return r;
+        }
+        let Some(fut) = self.call_core_g("rtAsyncSpawn", &[inner], vec![dst]) else {
+            return Res::Never;
+        };
+        match sig.ret_pass {
+            RetPass::Val(_) => Res::Val(fut),
+            _ => {
+                if let Some(sret) = self.f.sret {
+                    self.store_at(sret, 0, fut);
                 }
                 Res::Unit
             }
