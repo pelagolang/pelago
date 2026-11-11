@@ -3540,3 +3540,72 @@ fn regexgen_tables_agree_with_the_corpus() {
     );
     assert_eq!(output_of(&src), expected);
 }
+
+/// Tier A of backreferences (`regexgen.rs`): a pattern whose groups have a finite set of strings is rewritten into
+/// plain alternatives and run by the linear matcher. Every such pattern of `regex_backref.pel` (expected lines from
+/// Python's `re`) must give Python's answer; the others are tier B and are left to the budgeted search.
+#[test]
+fn regexgen_tier_a_agrees_with_python() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("std/tests");
+    let corpus = std::fs::read_to_string(root.join("regex_backref.pel")).unwrap();
+    let expected = std::fs::read_to_string(root.join("regex_backref.out")).unwrap();
+    let expected: Vec<&str> = expected.lines().collect();
+    let list = |v: &[i64]| {
+        let items: Vec<String> = v.iter().map(|n| n.to_string()).collect();
+        format!("[{}]", items.join(", "))
+    };
+    fn literal(s: &str, at: usize) -> (String, usize) {
+        let b: Vec<char> = s[at..].chars().collect();
+        assert_eq!(b[0], '"');
+        let (mut out, mut i) = (String::new(), 1);
+        while b[i] != '"' {
+            if b[i] == '\\' {
+                i += 1;
+                out.push(match b[i] {
+                    'n' => '\n',
+                    c => c,
+                });
+            } else {
+                out.push(b[i]);
+            }
+            i += 1;
+        }
+        let used: usize = b[..=i].iter().map(|c| c.len_utf8()).sum();
+        (out, at + used)
+    }
+    let body = &corpus[corpus.find("fn main() {").unwrap()..];
+    let (mut calls, mut want, mut tier_a, mut index) = (String::new(), String::new(), 0, 0);
+    for line in body.lines().filter(|l| l.starts_with("    t(\"")) {
+        let (pattern, end) = literal(line, 6);
+        let (text, _) = literal(line, end + 2);
+        let p = crate::regexgen::compile(&pattern).unwrap_or_else(|e| panic!("{pattern}: {e}"));
+        let line_expected = expected[index];
+        index += 1;
+        if p.tier_b {
+            continue;
+        }
+        tier_a += 1;
+        want.push_str(line_expected);
+        want.push('\n');
+        let names: Vec<String> = p.names.iter().map(|n| format!("\"{n}\"")).collect();
+        calls.push_str(&format!(
+            "    u({}, {}, {}, {}, {}, {}, [{}], {}, \"{}\")\n",
+            list(&p.op),
+            list(&p.x),
+            list(&p.y),
+            list(&p.ranges),
+            list(&p.classes),
+            p.groups,
+            names.join(", "),
+            list(&p.looks),
+            text.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        ));
+    }
+    assert!(tier_a >= 10, "only {tier_a} patterns were rewritten");
+    let src = format!(
+        "import std.regex\n\nfn u(sink op: [int], sink x: [int], sink y: [int], sink ranges: [int], sink classes: [int], groups: int, sink names: [string], sink looks: [int], text: str) {{\n    const re = regex.fromTables(sink op, sink x, sink y, sink ranges, sink classes, groups, sink names, sink looks)\n    var spans = \"\"\n    const hits = re.findAll(text)\n    var i = 0\n    while i < hits.len() {{\n        spans.pushStr!(\"#(hits[i].start)-#(hits[i].end) \")\n        i += 1\n    }}\n    print(true, hits.len(), \"#(spans.trim())\")\n}}\n\nfn main() {{\n{calls}}}\n"
+    );
+    assert_eq!(output_of(&src), want);
+}

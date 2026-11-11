@@ -12,7 +12,7 @@
 /// `[a-z]`, `[^...]`, `\d \D \w \W \s \S \b \B`, `^ $`, `( )`, `(?: )`, `|`, `* + ?`, `{n}`, `{n,}`,
 /// `{n,m}` and lazy forms such as `*?`, named groups `(?<name>...)` (also `(?P<name>...)`), lookahead
 /// `(?=...)` and `(?!...)`, flags `i` (ignore case, ASCII), `s` (`.` also matches a newline) and `m` (`^` and `$` match at
-/// lines) as `(?i)`, `(?-i)`, `(?im:...)`, and `\A`, `\z` for the whole text. Lookbehind and backreferences are not supported yet.
+/// lines) as `(?i)`, `(?-i)`, `(?im:...)`, and `\A`, `\z` for the whole text. Backreferences (`\1`, `\k<name>`, `(?P=name)`) need `compileWithBackrefs` and `search` with a step budget; lookbehind is not supported.
 
 //~ A match: where it starts and ends, and the start and end of each group (`-1` for a group that
 //~ did not take part). Group 0 is the whole match.
@@ -46,6 +46,8 @@ const ASSERT: int = 6
 const MATCH: int = 7
 /// A lookahead: `x` is the number of its bit table (see `lookBits`), `y` is 1 for `(?!...)`.
 const LOOK: int = 8
+/// A backreference: `x` is the group, `y` is 1 when case is ignored. Only the backtracking search runs it.
+const BACKREF: int = 10
 
 /// Syntax tree node kinds.
 const N_EMPTY: int = 0
@@ -61,6 +63,7 @@ const N_GROUP: int = 9
 const N_ASSERT: int = 10
 const N_REPEAT: int = 11
 const N_LOOK: int = 12
+const N_BACKREF: int = 13
 
 struct tree {
     kind: [int]
@@ -78,6 +81,11 @@ struct parser {
     pos: int
     names: [string]
     flags: int
+    /// The groups whose `)` has not been read yet, and how many lookaheads we are inside.
+    open: [int]
+    lookDepth: int
+    /// Groups written inside a lookahead: they keep no capture, so no backreference may read them.
+    lookGroups: [int]
 }
 
 fn fail(sink message: string) -> parse_error = parse_error { message: message }
@@ -234,6 +242,32 @@ fn parseNumber(inout p: parser, s: str) -> int {
     n
 }
 
+/// A backreference to group `n`: the group must be closed already, and the reference must not sit in a lookahead.
+fn backrefNumber(inout p: parser, n: int) -> int ! parse_error {
+    if n > p.groups { return err(fail("a backreference to a group that is not defined before it")) }
+    var i = 0
+    while i < p.open.len() {
+        if p.open[i] == n { return err(fail("a backreference inside the group it refers to")) }
+        i += 1
+    }
+    if p.lookDepth > 0 { return err(fail("a backreference inside a lookahead is not supported")) }
+    i = 0
+    while i < p.lookGroups.len() {
+        if p.lookGroups[i] == n { return err(fail("a backreference to a group inside a lookahead is not supported")) }
+        i += 1
+    }
+    ok(node(inout p, N_BACKREF, n, p.flags % 2, 0, 0))
+}
+
+fn backref(inout p: parser, sink name: string) -> int ! parse_error {
+    var i = 1
+    while i < p.names.len() {
+        if p.names[i] == name { return backrefNumber(inout p, i) }
+        i += 1
+    }
+    err(fail("a backreference to a group name that is not defined before it"))
+}
+
 fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
     const c = peek(p, s)
     p.pos += 1
@@ -284,6 +318,17 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
                 p.pos += 2
             } else if k == 60 || k == 80 {
                 var at = p.pos + 2
+                if k == 80 && at < s.len() && s.byteAt(at) == 61 {
+                    /// `(?P=name)`: a backreference.
+                    const first = at + 1
+                    var end = first
+                    while end < s.len() && isWord(s.byteAt(end) to int) { end += 1 }
+                    if end == first || end >= s.len() || s.byteAt(end) != 41 {
+                        return err(fail("a group name is a word followed by `)`"))
+                    }
+                    p.pos = end + 1
+                    return backref(inout p, "#(s[first..end])")
+                }
                 if k == 80 {
                     if at >= s.len() ||
                         s.byteAt(at) != 60 { return err(fail("this group syntax is not supported")) }
@@ -313,10 +358,15 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
             index = p.groups
             while p.names.len() <= index { p.names.push!("") }
             p.names[index] = name
+            p.open.push!(index)
+            if p.lookDepth > 0 { p.lookGroups.push!(index) }
         }
+        if look > 0 { p.lookDepth += 1 }
         const inner = parseAlt(inout p, s, depth + 1)?
         if peek(p, s) != 41 { return err(fail("a group is not closed")) }
         p.pos += 1
+        if look > 0 { p.lookDepth -= 1 }
+        if capture { p.open.pop!() }
         p.flags = saved
         if look > 0 { return ok(node(inout p, N_LOOK, inner, look == 2 ? 1 : 0, 0, 0)) }
         if !capture { return ok(inner) }
@@ -333,6 +383,27 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
         const e = peek(p, s)
         if e < 0 { return err(fail("a pattern cannot end with a backslash")) }
         p.pos += 1
+        if e >= 49 && e <= 57 {
+            /// `\1` to `\99`: a backreference to a group by number.
+            var n = e - 48
+            if peek(p, s) >= 48 && peek(p, s) <= 57 {
+                n = n * 10 + peek(p, s) - 48
+                p.pos += 1
+            }
+            return backrefNumber(inout p, n)
+        }
+        if e == 107 {
+            /// `\k<name>`: a backreference to a named group.
+            if peek(p, s) != 60 { return err(fail("`\\k` is followed by a group name in `<...>`")) }
+            const first = p.pos + 1
+            var end = first
+            while end < s.len() && isWord(s.byteAt(end) to int) { end += 1 }
+            if end == first || end >= s.len() || s.byteAt(end) != 62 {
+                return err(fail("a group name is a word followed by `>`"))
+            }
+            p.pos = end + 1
+            return backref(inout p, "#(s[first..end])")
+        }
         return ok(escapeNode(inout p, e))
     }
     if c == 42 || c == 43 || c == 63 { return err(fail("a repeat has nothing to repeat")) }
@@ -484,6 +555,8 @@ fn compileNode(inout c: code, t: tree, n: int, rev: bool) {
         if !rev { emit(inout c, SAVE, 2 * t.b[n] + 1, 0) }
     } else if kind == N_ASSERT {
         emit(inout c, ASSERT, t.a[n], 0)
+    } else if kind == N_BACKREF {
+        emit(inout c, BACKREF, t.a[n], t.b[n])
     } else if kind == N_LOOK {
         emit(inout c, LOOK, c.pending.len(), t.b[n])
         c.pending.push!(t.a[n])
@@ -519,8 +592,18 @@ fn compileNode(inout c: code, t: tree, n: int, rev: bool) {
     }
 }
 
-//~ Builds a matcher from the pattern text.
+//~ Builds a matcher from the pattern text. A pattern with a backreference (`\\1`, `\\k<name>`) is refused here: it can
+//~ take polynomial time or give up, so it needs `compileWithBackrefs` and `search` with a step budget.
 pub fn compile(pattern: str) -> regex ! parse_error {
+    const re = compileWithBackrefs(pattern)?
+    if re.hasBackrefs() {
+        return err(fail("a pattern with a backreference needs `regex.compileWithBackrefs` and `search` with a step budget"))
+    }
+    ok(re)
+}
+
+//~ Builds a matcher from a pattern that may have backreferences. Use `search` and `searchAll`, which take a step budget.
+pub fn compileWithBackrefs(pattern: str) -> regex ! parse_error {
     var p = parser {
         nodes: tree { kind: [], a: [], b: [], c: [], d: [] },
         ranges: [],
@@ -529,6 +612,9 @@ pub fn compile(pattern: str) -> regex ! parse_error {
         pos: 0,
         names: [""],
         flags: 0,
+        open: [],
+        lookDepth: 0,
+        lookGroups: [],
     }
     const root = parseAlt(inout p, pattern, 0)?
     if p.pos < pattern.len() { return err(fail("an unmatched `)`")) }
@@ -608,6 +694,18 @@ fn classHas(re: regex, index: int, b: int) -> bool {
     re.classes[index * 3 + 2] == 1 ? !inside : inside
 }
 
+/// Whether the assertion `kind` (0 start, 1 end, 2 word edge, 3 not a word edge, 4 line start, 5 line end) holds at `pos`.
+fn assertHolds(text: str, kind: int, pos: int) -> bool {
+    const before = pos > 0 ? text.byteAt(pos - 1) to int : -1
+    const after = pos < text.len() ? text.byteAt(pos) to int : -1
+    if kind == 0 { return pos == 0 }
+    if kind == 1 { return pos == text.len() }
+    if kind == 4 { return pos == 0 || before == 10 }
+    if kind == 5 { return pos == text.len() || after == 10 }
+    const edge = (before >= 0 && isWord(before)) != (after >= 0 && isWord(after))
+    kind == 2 ? edge : !edge
+}
+
 fn addThread(
     re: regex,
     text: str,
@@ -631,23 +729,11 @@ fn addThread(
         next[re.x[pc]] = pos
         addThread(re, text, inout list, pc + 1, pos, next, gen, bits)
     } else if op == ASSERT {
-        const kind = re.x[pc]
-        const before = pos > 0 ? text.byteAt(pos - 1) to int : -1
-        const after = pos < text.len() ? text.byteAt(pos) to int : -1
-        var holds = false
-        if kind == 0 {
-            holds = pos == 0
-        } else if kind == 1 {
-            holds = pos == text.len()
-        } else if kind == 4 {
-            holds = pos == 0 || before == 10
-        } else if kind == 5 {
-            holds = pos == text.len() || after == 10
-        } else {
-            const edge = (before >= 0 && isWord(before)) != (after >= 0 && isWord(after))
-            holds = kind == 2 ? edge : !edge
-        }
-        if holds { addThread(re, text, inout list, pc + 1, pos, caps, gen, bits) }
+        if assertHolds(
+            text,
+            re.x[pc],
+            pos,
+        ) { addThread(re, text, inout list, pc + 1, pos, caps, gen, bits) }
     } else if op == LOOK {
         /// The bit of this lookahead at this position was worked out before the match started.
         const inside = bits[re.x[pc] * (text.len() + 1) + pos] == 1
@@ -729,6 +815,164 @@ fn lookBits(re: regex, text: str) -> [int] {
     bits
 }
 
+/// What a budgeted search found.
+pub enum outcome {
+    matched(value: found)
+    nomatch
+    gaveUp
+}
+
+/// The groups that a backreference reads.
+fn referencedGroups(re: regex) -> [int] {
+    var out: [int] = []
+    var pc = 0
+    while pc < re.op.len() {
+        if re.op[pc] == BACKREF {
+            var known = false
+            var i = 0
+            while i < out.len() {
+                if out[i] == re.x[pc] { known = true }
+                i += 1
+            }
+            if !known { out.push!(re.x[pc]) }
+        }
+        pc += 1
+    }
+    out
+}
+
+/// Whether a match that ends here would be the empty match at `noEmptyAt` that the next search must skip.
+fn skipsEmpty(mine: [int], pos: int, noEmptyAt: int) -> bool {
+    if mine[0] == pos && pos == noEmptyAt { return true }
+    false
+}
+
+/// The key of a search state: program position, text position, whether a match here would be the empty one to skip, and
+/// the spans of the referenced groups.
+fn stateKey(pc: int, pos: int, empty: bool, mine: [int], refs: [int]) -> string {
+    var key = "#(pc),#(pos),#(empty ? 1 : 0)"
+    var r = 0
+    while r < refs.len() {
+        key.pushStr!(",#(mine[2 * refs[r]]),#(mine[2 * refs[r] + 1])")
+        r += 1
+    }
+    key
+}
+
+/// How many bytes the backreference at `pc` matches at `pos` (`-1` when it does not match).
+fn backrefLength(re: regex, text: str, pc: int, pos: int, mine: [int]) -> int {
+    const from0 = mine[2 * re.x[pc]]
+    const to0 = mine[2 * re.x[pc] + 1]
+    if from0 < 0 || to0 < 0 || pos + (to0 - from0) > text.len() { return -1 }
+    var q = 0
+    while q < to0 - from0 {
+        var a = text.byteAt(from0 + q) to int
+        var b = text.byteAt(pos + q) to int
+        if re.y[pc] == 1 {
+            if a >= 65 && a <= 90 { a += 32 }
+            if b >= 65 && b <= 90 { b += 32 }
+        }
+        if a != b { return -1 }
+        q += 1
+    }
+    to0 - from0
+}
+
+/// Whether the byte instruction at `pc` (CHAR, ANY or CLASS) accepts the byte at `pos`.
+fn accepts(re: regex, text: str, pc: int, pos: int) -> bool {
+    const byte = pos < text.len() ? text.byteAt(pos) to int : -1
+    const op = re.op[pc]
+    if op == CHAR { return byte == re.x[pc] }
+    if op == ANY { return byte >= 0 && (re.x[pc] == 1 || byte != 10) }
+    op == CLASS && byte >= 0 && classHas(re, re.x[pc], byte)
+}
+
+/// Memoised depth-first search, leftmost-first like the rest of the engine. A state is the program position, the text
+/// position and the spans of the referenced groups (and whether a match here would be the empty match to skip); a
+/// state is explored once, so the work is bounded by the number of states, and `budget` counts them. Returns 1 and
+/// the slots of the match in `result`, 0 for no match, 2 when the budget ran out.
+fn backtrack(
+    re: regex,
+    text: str,
+    from: int,
+    noEmptyAt: int,
+    bits: [int],
+    inout budget: int,
+    inout result: [int],
+) -> int {
+    const slots = 2 * (re.groupCount + 1)
+    const refs = referencedGroups(re)
+    var seen: set<string> = set {}
+    var start = from
+    while start <= text.len() {
+        var pcs: [int] = [0]
+        var poss: [int] = [start]
+        var caps: [int] = []
+        var k = 0
+        while k < slots {
+            caps.push!(-1)
+            k += 1
+        }
+        while pcs.len() > 0 {
+            var pc = pcs[pcs.len() - 1]
+            pcs.pop!()
+            var pos = poss[poss.len() - 1]
+            poss.pop!()
+            var mine = slice(caps, caps.len() - slots, caps.len())
+            var drop = 0
+            while drop < slots {
+                caps.pop!()
+                drop += 1
+            }
+            while true {
+                const empty = skipsEmpty(mine, pos, noEmptyAt)
+                var key = stateKey(pc, pos, empty, mine, refs)
+                if key in seen { break }
+                seen.insert!(sink key)
+                if budget <= 0 { return 2 }
+                budget -= 1
+                const op = re.op[pc]
+                if op == MATCH {
+                    if empty { break }
+                    result = mine
+                    return 1
+                } else if op == JMP {
+                    pc = re.x[pc]
+                } else if op == SPLIT {
+                    pcs.push!(re.y[pc])
+                    poss.push!(pos)
+                    var j = 0
+                    while j < slots {
+                        caps.push!(mine[j])
+                        j += 1
+                    }
+                    pc = re.x[pc]
+                } else if op == SAVE {
+                    mine[re.x[pc]] = pos
+                    pc += 1
+                } else if op == ASSERT {
+                    if !assertHolds(text, re.x[pc], pos) { break }
+                    pc += 1
+                } else if op == LOOK {
+                    if (bits[re.x[pc] * (text.len() + 1) + pos] == 1) == (re.y[pc] == 1) { break }
+                    pc += 1
+                } else if op == BACKREF {
+                    const len = backrefLength(re, text, pc, pos, mine)
+                    if len < 0 { break }
+                    pos += len
+                    pc += 1
+                } else {
+                    if !accepts(re, text, pc, pos) { break }
+                    pos += 1
+                    pc += 1
+                }
+            }
+        }
+        start += 1
+    }
+    0
+}
+
 /// The slots of the first match at or after `from`, or an empty list. `bits` comes from `lookBits`.
 /// A match that is empty and sits at `noEmptyAt` is skipped (the next match after an empty one must advance).
 fn run(re: regex, text: str, from: int, noEmptyAt: int, bits: [int]) -> [int] {
@@ -796,6 +1040,65 @@ fn run(re: regex, text: str, from: int, noEmptyAt: int, bits: [int]) -> [int] {
 }
 
 impl regex {
+    //~ Whether the pattern has a backreference (`search` and `searchAll` are the way to run it).
+    fn hasBackrefs(self) -> bool {
+        var pc = 0
+        while pc < self.op.len() {
+            if self.op[pc] == BACKREF { return true }
+            pc += 1
+        }
+        false
+    }
+
+    //~ The first match, or `nomatch`, or `gaveUp` when the search needed more than `budget` steps (only a pattern with a
+    //~ backreference can; the same input always gives the same answer, as the budget counts states, not time).
+    fn search(self, text: str, budget: int) -> outcome {
+        const bits = lookBits(self, text)
+        var slots: [int] = []
+        if self.hasBackrefs() {
+            var left = budget
+            const status = backtrack(self, text, 0, -1, bits, inout left, inout slots)
+            if status == 2 { return outcome.gaveUp }
+            if status == 0 { return outcome.nomatch }
+        } else {
+            slots = run(self, text, 0, -1, bits)
+            if slots.len() == 0 { return outcome.nomatch }
+        }
+        outcome.matched(value: found { start: slots[0], end: slots[1], groups: slots })
+    }
+
+    //~ Every match, left to right, or `none` when the search needed more than `budget` steps in all.
+    fn searchAll(self, text: str, budget: int) -> [found]? {
+        var out: [found] = []
+        const bits = lookBits(self, text)
+        var left = budget
+        var from = 0
+        var noEmpty = -1
+        while from <= text.len() {
+            var slots: [int] = []
+            if self.hasBackrefs() {
+                const status = backtrack(self, text, from, noEmpty, bits, inout left, inout slots)
+                if status == 2 { return none }
+                if status == 0 { break }
+            } else {
+                slots = run(self, text, from, noEmpty, bits)
+                if slots.len() == 0 { break }
+            }
+            const first = slots[0]
+            const last = slots[1]
+            out.push!(found { start: first, end: last, groups: slots })
+            from = last
+            noEmpty = last > first ? -1 : last
+        }
+        out
+    }
+
+    /// `find`, `findAll` and the others run the linear matcher: they stop the program on a pattern with a backreference.
+    fn noBackrefs(self) -> bool {
+        if self.hasBackrefs() { panic("this pattern has a backreference: use `search` or `searchAll` with a budget") }
+        true
+    }
+
     //~ The number of capture groups, not counting the whole match.
     fn groups(self) -> int = self.groupCount
 
@@ -810,10 +1113,17 @@ impl regex {
     }
 
     //~ Whether the pattern matches anywhere in `text`.
-    fn isMatch(self, text: str) -> bool = run(self, text, 0, -1, lookBits(self, text)).len() > 0
+    fn isMatch(self, text: str) -> bool = self.noBackrefs() && run(
+        self,
+        text,
+        0,
+        -1,
+        lookBits(self, text),
+    ).len() > 0
 
     //~ The first match.
     fn find(self, text: str) -> found? {
+        self.noBackrefs()
         const slots = run(self, text, 0, -1, lookBits(self, text))
         if slots.len() == 0 { return none }
         found { start: slots[0], end: slots[1], groups: slots }
@@ -821,6 +1131,7 @@ impl regex {
 
     //~ Every match, left to right, without overlaps. After an empty match the next one must not be empty at the same place (as in Python 3.7 and later).
     fn findAll(self, text: str) -> [found] {
+        self.noBackrefs()
         var out: [found] = []
         const bits = lookBits(self, text)
         var from = 0

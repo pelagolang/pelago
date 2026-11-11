@@ -1,0 +1,57 @@
+/// `@regex` with a backreference the compiler cannot rewrite (tier B): the budgeted search and its three results.
+@regex("(?<w>\\w+) \\k<w>")
+struct twice {
+    w: string
+}
+
+@regex("((?<a>a*)*)\\2b")
+struct nested {
+    a: string?
+}
+
+fn say(r: twiceOutcome) {
+    switch r {
+        case .matched(t): print("matched", t.w)
+        case .nomatch: print("nomatch")
+        case .gaveUp: print("gaveUp")
+    }
+}
+
+fn main() {
+    say(twiceFind("it is is a test", 100000))
+    say(twiceFind("it is is a test", 3))
+    say(twiceFind("no repeats here", 100000))
+    switch twiceFindAll("the the cat sat sat down", 100000) {
+        case some(all):
+            var i = 0
+            while i < all.len() {
+                print(all[i].w)
+                i += 1
+            }
+        case none: print("gaveUp")
+    }
+    print(twiceFindAll("the the cat sat sat down", 5).isSome())
+    print(twiceIsMatch("a b", 1000), twiceIsMatch("a a", 1000), twiceIsMatch("a a", 2))
+    var noise = ""
+    var k = 0
+    while k < 30 {
+        noise.pushStr!("a")
+        k += 1
+    }
+    const bad = "#(noise)c"
+    switch nestedFind(bad, 1000000) {
+        case .matched(m): print("matched")
+        case .nomatch: print("nomatch")
+        case .gaveUp: print("gaveUp")
+    }
+    switch nestedFind(bad, 100) {
+        case .matched(m): print("matched")
+        case .nomatch: print("nomatch")
+        case .gaveUp: print("gaveUp")
+    }
+    switch nestedFind("aaab", 100000) {
+        case .matched(m): print("matched", m.a)
+        case .nomatch: print("nomatch")
+        case .gaveUp: print("gaveUp")
+    }
+}
