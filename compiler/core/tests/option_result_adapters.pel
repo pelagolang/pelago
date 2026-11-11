@@ -1,0 +1,30 @@
+/// `option` and `result` combinators.
+fn half(n: int) -> int? = n % 2 == 0 ? n / 2 : none
+
+fn check(n: int) -> int ! string = n > 0 ? ok(n) : err("not positive")
+
+fn options() {
+    const a: int? = 8
+    const b: int? = none
+    print(a.unwrapOrElse(() ~> 0), b.unwrapOrElse(() ~> -1))
+    print(a.andThen((n) ~> half(n)), a.andThen((n) ~> half(n + 1)), b.andThen((n) ~> half(n)))
+    print(a.filter((n) ~> n > 5), a.filter((n) ~> n > 9), b.filter((n) ~> n > 0))
+    print(a.orElse(() ~> 1), b.orElse(() ~> 1), b.orElse(() ~> none))
+    print(a.isSomeAnd((n) ~> n == 8), a.isSomeAnd((n) ~> n == 7), b.isSomeAnd((n) ~> true))
+    print(a.zip("x"), a.zip(b), b.zip("x"))
+}
+
+fn results() {
+    const good = check(3)
+    const bad = check(-1)
+    print(good.err(), bad.err())
+    print(good.map((n) ~> n * 2), bad.map((n) ~> n * 2))
+    print(good.andThen((n) ~> check(n - 5)), bad.andThen((n) ~> check(n)))
+    print(good.unwrapOrElse((e) ~> 0), bad.unwrapOrElse((e) ~> e.len()))
+    print(good.isOkAnd((n) ~> n == 3), bad.isOkAnd((n) ~> true))
+}
+
+fn main() {
+    options()
+    results()
+}

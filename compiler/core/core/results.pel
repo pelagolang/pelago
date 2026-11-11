@@ -24,6 +24,61 @@ impl<T> option<T> {
         }
     }
 
+    //~ The value, or `f()` when there is none (the fallback is only computed when needed).
+    fn unwrapOrElse(self, f: fn() -> T) -> T {
+        switch self {
+            case some(v): rtClone<T>(rtAddrOf(v))
+            case none: f()
+        }
+    }
+
+    //~ Chains a step that may itself give `none`: `parse(a).andThen((n) ~> half(n))`.
+    fn andThen<U>(self, f: fn(T) -> U?) -> U? {
+        switch self {
+            case some(v): f(rtClone<T>(rtAddrOf(v)))
+            case none: none
+        }
+    }
+
+    //~ Keeps the value only when `f` holds for it.
+    fn filter(self, f: fn(T) -> bool) -> T? {
+        switch self {
+            case some(v): {
+                if f(rtClone<T>(rtAddrOf(v))) { rtClone<T>(rtAddrOf(v)) } else { none }
+            }
+            case none: none
+        }
+    }
+
+    //~ This option when it has a value, else `f()`.
+    fn orElse(self, f: fn() -> T?) -> T? {
+        switch self {
+            case some(v): rtClone<T>(rtAddrOf(v))
+            case none: f()
+        }
+    }
+
+    //~ True when there is a value and `f` holds for it.
+    fn isSomeAnd(self, f: fn(T) -> bool) -> bool {
+        switch self {
+            case some(v): f(rtClone<T>(rtAddrOf(v)))
+            case none: false
+        }
+    }
+
+    //~ Both values as a pair, or `none` when either is missing.
+    fn zip<U>(self, other: U?) -> (T, U)? {
+        switch self {
+            case some(a): {
+                switch other {
+                    case some(b): (rtClone<T>(rtAddrOf(a)), rtClone<U>(rtAddrOf(b)))
+                    case none: none
+                }
+            }
+            case none: none
+        }
+    }
+
     fn orErr<E>(self, e: E) -> T ! E {
         switch self {
             case some(v): ok(rtClone<T>(rtAddrOf(v)))
@@ -53,6 +108,52 @@ impl<T, E> result<T, E> {
         switch self {
             case ok(v): rtClone<T>(rtAddrOf(v))
             case err(_): rtClone<T>(rtAddrOf(fallback))
+        }
+    }
+
+    //~ The error as an option: `none` when the result is `ok`.
+    fn err(self) -> E? {
+        switch self {
+            case ok(_): return none
+            case err(e): return rtClone<E>(rtAddrOf(e))
+        }
+    }
+
+    fn map<U>(self, f: fn(T) -> U) -> U ! E {
+        switch self {
+            case ok(v): ok(f(rtClone<T>(rtAddrOf(v))))
+            case err(e): err(rtClone<E>(rtAddrOf(e)))
+        }
+    }
+
+    //~ Chains a step that can fail with the same error type.
+    fn andThen<U>(self, f: fn(T) -> U ! E) -> U ! E {
+        switch self {
+            case ok(v): f(rtClone<T>(rtAddrOf(v)))
+            case err(e): err(rtClone<E>(rtAddrOf(e)))
+        }
+    }
+
+    //~ The value, or `f(error)` when it failed.
+    fn unwrapOrElse(self, f: fn(E) -> T) -> T {
+        switch self {
+            case ok(v): rtClone<T>(rtAddrOf(v))
+            case err(e): f(rtClone<E>(rtAddrOf(e)))
+        }
+    }
+
+    //~ Recovers from an error with another result.
+    fn orElse<F>(self, f: fn(E) -> T ! F) -> T ! F {
+        switch self {
+            case ok(v): ok(rtClone<T>(rtAddrOf(v)))
+            case err(e): f(rtClone<E>(rtAddrOf(e)))
+        }
+    }
+
+    fn isOkAnd(self, f: fn(T) -> bool) -> bool {
+        switch self {
+            case ok(v): f(rtClone<T>(rtAddrOf(v)))
+            case err(_): false
         }
     }
 
