@@ -845,6 +845,24 @@ fn program_task_cancel_is_cooperative() {
 }
 
 #[test]
+fn program_scope_cancel_reaches_its_tasks_and_a_select_arm() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>()\n scope s {\n  s.spawn([sink rx] () ~> { select {\n   case v = rx.recv() { print(\"got\") }\n   case cancelled() { print(\"cancelled\") }\n  } })\n  s.spawn(() ~> { while !cancelled() { yield_now() }\n   print(\"second\") })\n  yield_now()\n  yield_now()\n  s.cancel()\n  s.spawn(() ~> print(cancelled()))\n }\n print(\"end\")\n}\n";
+    assert_eq!(output_of(src), "cancelled\nsecond\ntrue\nend\n");
+}
+
+#[test]
+fn program_scopes_nest_and_only_wait_for_their_own_tasks() {
+    let src = "fn main() {\n scope a {\n  a.spawn(() ~> print(\"a1\"))\n  scope b {\n   b.spawn(() ~> print(\"b1\"))\n  }\n  print(\"after b\")\n  a.spawn(() ~> print(\"a2\"))\n }\n print(\"end\")\n}\n";
+    assert_eq!(output_of(src), "a1\nb1\nafter b\na2\nend\n");
+}
+
+#[test]
+fn program_detached_tasks_are_abandoned_when_main_ends() {
+    let src = "fn main() {\n spawn(() ~> print(\"never\"))\n print(\"end\")\n}\n";
+    assert_eq!(output_of(src), "end\n");
+}
+
+#[test]
 fn program_sp2() {
     let src = "fn main() { const (tx, rx) = chan<int>()\n const p = spawn([sink tx] ~> { for i of 0..3 { tx.send(i * 10) } })\n for v of rx.iter() { print(v) }\n p.join!!() }\n";
     assert_eq!(output_of(src), "0\n10\n20\n");

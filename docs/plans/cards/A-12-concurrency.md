@@ -26,4 +26,5 @@ accepted, S-04 (async suspension).
 - C2 scheduler and blocking tasks in `tasks.pel`: done (#147).
 - C3a flat ring-buffer channels with enforced capacity, `lock` that waits: merged.
 - C3b (merged) clonable `lock` (`copy h` shares it across tasks), `lock.withWhen(ready, f)` instead of a `condvar` (no separate `once`), `semaphore`, `barrier`. `select` send arms now wait for room in a bounded channel. Left in C3: wait queues instead of polling and a `select` timeout (needs the clock).
-- C4 (in review): `coroutine<T>` with `emit`/`next`/`iter`/`cancelled`, `task.cancel()` and `cancelled()`; owner decisions on questions 1 to 5 recorded in the plan. Left: `scope.cancel()`, `select` `case cancelled()`, abandoning detached tasks at the end of `main`, guard pages, C7 `async`.
+- C4 (merged): `coroutine<T>` with `emit`/`next`/`iter`/`cancelled`, `task.cancel()` and `cancelled()`. Owner decisions on questions 1 to 5 recorded in the plan.
+- C4b (in review): `scope.cancel()`, `select` `case cancelled()`, scopes wait only for their own tasks, detached tasks abandoned at the end of `main`. Left: guard pages, C7 `async`.
