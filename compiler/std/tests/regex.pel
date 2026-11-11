@@ -63,6 +63,15 @@ fn main() {
     t("(?!a)\\w+", "abc bcd").or(1)
     t("(?<w>a+)(?P<z>b)", "aab").or(1)
     t("(\\d+)(?=(\\d{3})+\\b)", "1234567 89").or(1)
+    t("a(?=.*x)", "aab ax a").or(1)
+    t("(?=.*\\d)\\w+", "ab1 cd ef2x").or(1)
+    t("a(?=b(?=c))", "abc ab abd").or(1)
+    t("(?!.*x)\\w", "ab x cd").or(1)
+    t("^(?=.*\\d)(?=.*[a-z]).{6,}$", "abc123").or(1)
+    t("^(?=.*\\d)(?=.*[a-z]).{6,}$", "abcdef").or(1)
+    t("x(?=$)", "ax x").or(1)
+    t("(?=(a+)b)a", "aab ab ac").or(1)
+    t("(?!(?=a)b)\\w", "ab").or(1)
     named().or(1)
     print(
         regex.compile("(").isOk(),
