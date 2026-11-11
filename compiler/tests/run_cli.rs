@@ -142,6 +142,19 @@ fn environment_variables_are_read_from_the_start_block() {
 }
 
 #[test]
+fn clocks_and_durations() {
+    let src = "import std.time\n\nfn go() -> void ! io_error {\n    const a = time.now()?\n    const b = time.now()?\n    print(b.since(a) >= time.nanos(0))\n    print(time.seconds(90) + time.millis(500), time.millis(250), time.micros(42), time.nanos(7), -time.seconds(2))\n    print(time.seconds(3).asMillis(), time.millis(1500).asSeconds(), time.millis(1500).asSecondsFloat())\n    const w = time.sinceEpoch()?\n    print(w.asSeconds() > 1700000000)\n    print(a.plus(time.seconds(1)).since(a) == time.seconds(1), time.seconds(1) < time.seconds(2))\n    print((a.elapsed()?) >= time.nanos(0))\n}\n\nfn main() {\n    print(go().isOk())\n}\n";
+    for flags in args_modes() {
+        let (out, err, code) = run_with(flags, src, &[], "");
+        assert_eq!(
+            out, "true\n90.5s 250ms 42us 7ns -2s\n3000 1 1.5\ntrue\ntrue true\ntrue\ntrue\n",
+            "{flags:?}: {err}"
+        );
+        assert_eq!(code, 0, "{flags:?}");
+    }
+}
+
+#[test]
 fn exit_ends_the_program_with_its_status() {
     let src = "import std.os\nfn main() {\n    print(\"before\")\n    os.exit(7)\n}\n";
     for flags in os_modes() {

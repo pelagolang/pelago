@@ -63,6 +63,10 @@ pub ext fn rtOsArgv() -> int
 //~ denied, other values: some other failure). `rtOsClose(fd)` gives 0 or a negative error.
 pub ext fn rtOsOpen(path: ptr, mode: int) -> int
 pub ext fn rtOsClose(fd: int) -> int
+//~ `rtOsClock(which, p)` writes a clock as two `int`s at `p` (seconds, nanoseconds): `which` 0 is the wall clock
+//~ (since 1970-01-01 UTC), 1 the monotonic clock. 0 on success, a negative error otherwise (-3 where the
+//~ target has no clock call yet: Windows, macOS).
+pub ext fn rtOsClock(which: int, p: ptr) -> int
 pub ext fn rtToByte(n: int) -> uint8
 pub ext fn rtWrap<T>(n: int) -> T
 pub ext fn rtToInt(x: float) -> int

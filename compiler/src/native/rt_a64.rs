@@ -69,6 +69,7 @@ enum Sys {
     Read,
     Open,
     Close,
+    ClockGettime,
 }
 
 /// The call numbers: the generic Linux ones, and the BSD ones of macOS (`mremap` and `madvise`
@@ -89,6 +90,8 @@ fn number(os: Os, call: Sys) -> i64 {
         Sys::Read => (63, 3),
         Sys::Open => (56, 5),
         Sys::Close => (57, 6),
+        // macOS has no such call (its clocks are in the commpage); `OsKind::Clock` answers -3 there.
+        Sys::ClockGettime => (113, 0),
     };
     if os == Os::MacOs {
         mac
@@ -127,7 +130,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `x0` to `x2`, the result in `x0` (an address or 0, or a negative error).
-    pub os: [Label; 11],
+    pub os: [Label; 12],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -449,7 +452,7 @@ pub fn emit_for(
         fmod: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 11].map(|_| a.new_label()),
+        os: [(); 12].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -1906,6 +1909,18 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         finish(a);
     } else {
         sys(a, os, Sys::Close);
+        a.ret();
+    }
+    // clock(which, timespec): `clock_gettime` on Linux; -3 (no clock call yet) on Windows and macOS.
+    start(a, rt.os[11]);
+    if win {
+        a.mov_ri(X0, -3);
+        finish(a);
+    } else if os == Os::MacOs {
+        a.mov_ri(X0, -3);
+        a.ret();
+    } else {
+        sys(a, os, Sys::ClockGettime);
         a.ret();
     }
     // The exits.

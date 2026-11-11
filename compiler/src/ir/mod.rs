@@ -347,10 +347,14 @@ pub enum OsKind {
     Open,
     /// `(fd)`: close a descriptor from `Open`; 0, or a negative `OS_*` error.
     Close,
+    /// `(which, address)`: read a clock into 16 bytes at `address` (seconds, then nanoseconds, two `i64`s);
+    /// `which` 0 is the wall clock (since 1970-01-01 UTC), 1 the monotonic clock (from some fixed point,
+    /// never going back). 0, or a negative `OS_*` error (`OS_FAIL` where the target has no clock call yet).
+    Clock,
 }
 
 impl OsKind {
-    pub const ALL: [OsKind; 11] = [
+    pub const ALL: [OsKind; 12] = [
         OsKind::Reserve,
         OsKind::Commit,
         OsKind::Release,
@@ -362,6 +366,7 @@ impl OsKind {
         OsKind::Argv,
         OsKind::Open,
         OsKind::Close,
+        OsKind::Clock,
     ];
 
     /// Whether the call reaches the process (arguments, descriptors, exit) rather than memory.
@@ -374,6 +379,7 @@ impl OsKind {
                 | OsKind::Argv
                 | OsKind::Open
                 | OsKind::Close
+                | OsKind::Clock
         )
     }
 
@@ -390,6 +396,7 @@ impl OsKind {
             OsKind::Argv => "os_argv",
             OsKind::Open => "os_open",
             OsKind::Close => "os_close",
+            OsKind::Clock => "os_clock",
         }
     }
 
@@ -398,7 +405,11 @@ impl OsKind {
         match self {
             OsKind::Argv => 0,
             OsKind::Reserve | OsKind::Exit | OsKind::Close => 1,
-            OsKind::Commit | OsKind::Release | OsKind::AdviseNoHuge | OsKind::Open => 2,
+            OsKind::Commit
+            | OsKind::Release
+            | OsKind::AdviseNoHuge
+            | OsKind::Open
+            | OsKind::Clock => 2,
             OsKind::Remap | OsKind::Write | OsKind::Read => 3,
         }
     }
