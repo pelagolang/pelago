@@ -142,6 +142,21 @@ fn main_may_return_a_result() {
 }
 
 #[test]
+fn main_may_take_arguments_and_return_a_result() {
+    let src = "fn main(args: [string]) -> void ! string {\n    print(args.len())\n    if args.len() > 1 { return err(\"two\") }\n}\n";
+    for flags in args_modes() {
+        let (out, err, code) = run_with(flags, src, &[], "");
+        assert_eq!((out.as_str(), code), ("1\n", 0), "{flags:?}: {err}");
+        let (out, err, code) = run_with(flags, src, &["x"], "");
+        assert_eq!(
+            (out.as_str(), err.as_str(), code),
+            ("2\n", "error: two\n", 1),
+            "{flags:?}"
+        );
+    }
+}
+
+#[test]
 fn exit_ends_the_program_with_its_status() {
     let src = "import std.os\nfn main() {\n    print(\"before\")\n    os.exit(7)\n}\n";
     for flags in os_modes() {

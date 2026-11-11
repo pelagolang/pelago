@@ -266,11 +266,19 @@ impl Lowerer<'_> {
         if !self.main_takes_args && self.main_result.is_none() {
             return;
         }
+        // The user's `main`: the result place comes first when there is one, then the argument list.
+        let params: Vec<IrTy> = [
+            self.main_result.map(|_| IrTy::Ptr),
+            self.main_takes_args.then_some(IrTy::Ptr),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         let Some(idx) = self
             .module
             .funcs
             .iter()
-            .position(|f| f.name == "main" && f.params == [IrTy::Ptr] && f.ret == IrTy::Void)
+            .position(|f| f.name == "main" && f.params == params && f.ret == IrTy::Void)
         else {
             return;
         };
@@ -282,12 +290,14 @@ impl Lowerer<'_> {
         state.cur = Some(state.func.entry());
         self.f = state;
         let sp = Span::new(0, 0);
+        let mut call_args = Vec::new();
+        // `main` returns a `T ! E`: it writes the result into a place the entry provides.
+        let mut result = None;
         if let Some(rt) = self.main_result {
-            // `main` returns a `T ! E`: it writes the result into a place the entry provides. An error
-            // goes to standard error (its text, when it is a string) and the exit code is 1.
             let Some(info) = self.enum_info(rt) else {
                 return;
             };
+            let (size, align) = (info.layout.size, info.layout.align.max(8));
             let err_off = info.variants[1].first().map(|f| f.off);
             let err_is_string = match self.types.kind_of(rt) {
                 TyKind::Result(_, e) => self.types.shallow(*e) == self.types.string,
@@ -298,10 +308,29 @@ impl Lowerer<'_> {
             } else {
                 -1
             };
-            let (size, align) = (info.layout.size, info.layout.align.max(8));
-            let slot = self.emit(Op::Slot(size, align), Some(IrTy::Ptr), sp);
-            let Some(slot) = slot else { return };
-            self.emit(Op::Call(user, vec![slot]), None, sp);
+            let Some(slot) = self.emit(Op::Slot(size, align), Some(IrTy::Ptr), sp) else {
+                return;
+            };
+            call_args.push(slot);
+            result = Some((slot, off));
+        }
+        let mut args_slot = None;
+        if self.main_takes_args {
+            let Some(slot) = self.emit(Op::Slot(24, 8), Some(IrTy::Ptr), sp) else {
+                return;
+            };
+            self.call_core("rtArgsInto", vec![slot]);
+            call_args.push(slot);
+            args_slot = Some(slot);
+        }
+        self.emit(Op::Call(user, call_args), None, sp);
+        if let Some(slot) = args_slot {
+            if let Some(buf) = self.emit(Op::Load(IrTy::Ptr, slot), Some(IrTy::Ptr), sp) {
+                self.emit(Op::Free(buf), None, sp);
+            }
+        }
+        if let Some((slot, off)) = result {
+            // An error goes to standard error (its text, when it is a string) and the exit code is 1.
             let off = self.emit(
                 Op::Const(IrTy::Int(64), Const::Int(off)),
                 Some(IrTy::Int(64)),
@@ -309,24 +338,15 @@ impl Lowerer<'_> {
             );
             let Some(off) = off else { return };
             self.call_core("rtMainDone", vec![slot, off]);
-            self.terminate(Term::Return(None));
-        } else {
-            let slot = self.emit(Op::Slot(24, 8), Some(IrTy::Ptr), sp);
-            let Some(slot) = slot else { return };
-            self.call_core("rtArgsInto", vec![slot]);
-            self.emit(Op::Call(user, vec![slot]), None, sp);
-            if let Some(buf) = self.emit(Op::Load(IrTy::Ptr, slot), Some(IrTy::Ptr), sp) {
-                self.emit(Op::Free(buf), None, sp);
-            }
-            self.terminate(Term::Return(None));
         }
+        self.terminate(Term::Return(None));
         let st = std::mem::replace(&mut self.f, FnState::empty(void));
         if st.fail.is_none() {
             let mut func = st.func;
             func.compact();
             self.module.add(func);
         }
-        // `rtArgsInto` was asked for just now.
+        // `rtArgsInto` and `rtMainDone` were asked for just now.
         self.run_jobs();
     }
 }
@@ -812,7 +832,7 @@ impl<'a> Lowerer<'a> {
             if matches!(self.types.kind_of(self.f.ret_ty), TyKind::Result(..)) {
                 self.main_result = Some(self.f.ret_ty);
             }
-            if decl.params.len() == 1 && self.main_result.is_none() {
+            if decl.params.len() == 1 {
                 self.main_takes_args = true;
             }
         }
