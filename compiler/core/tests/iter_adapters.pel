@@ -1,0 +1,27 @@
+/// The `iter` adapters and consumers beyond `map` and `filter` (split into files so each native build stays small).
+
+fn part0() {
+    const xs = [3, 1, 4, 1, 5, 9, 2, 6]
+    print(xs.iter().fold(0, (a, x) ~> a + x))
+    print(xs.iter().any((x) ~> x > 8), xs.iter().any((x) ~> x > 9))
+    print(xs.iter().all((x) ~> x > 0), xs.iter().all((x) ~> x > 1))
+}
+
+fn part1() {
+    const xs = [3, 1, 4, 1, 5, 9, 2, 6]
+    print(xs.iter().find((x) ~> x > 4), xs.iter().find((x) ~> x > 99))
+    print(xs.iter().position((x) ~> x == 4), xs.iter().position((x) ~> x == 7))
+    print(xs.iter().nth(2), xs.iter().nth(8), xs.iter().last())
+}
+
+fn part2() {
+    const xs = [3, 1, 4, 1, 5, 9, 2, 6]
+    print(xs.iter().take(3).toList(), xs.iter().take(99).count(), xs.iter().skip(5).toList())
+    print(xs.iter().takeWhile((x) ~> x < 5).toList(), xs.iter().skipWhile((x) ~> x < 5).toList())
+}
+
+fn main() {
+    part0()
+    part1()
+    part2()
+}

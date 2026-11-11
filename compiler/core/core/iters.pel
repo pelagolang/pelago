@@ -62,6 +62,280 @@ impl<T> iter<T> {
     }
 }
 
+//~ The rest of the adapters and consumers. Like `map` and `filter` they build a list for now (docs/design/iter.md);
+//~ a `for` over a chain is still fused by the lowering.
+impl<T> iter<T> {
+    //~ Folds the elements left to right into one value: `xs.iter().fold(0, (a, x) ~> a + x)`.
+    fn fold<A>(self, init: A, f: fn(A, T) -> A) -> A {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var acc = init
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            acc = f(acc, rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+            i += 1
+        }
+        acc
+    }
+
+    //~ True when `f` holds for some element. Stops at the first one.
+    fn any(self, f: fn(T) -> bool) -> bool {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            if f(rtClone<T>(rtOffset(rtHdrData(h), i * size))) { return true }
+            i += 1
+        }
+        false
+    }
+
+    //~ True when `f` holds for every element (and for an empty iterator). Stops at the first failure.
+    fn all(self, f: fn(T) -> bool) -> bool {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            if !f(rtClone<T>(rtOffset(rtHdrData(h), i * size))) { return false }
+            i += 1
+        }
+        true
+    }
+
+    //~ The first element for which `f` holds, or `none`.
+    fn find(self, f: fn(T) -> bool) -> T? {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            if f(rtClone<T>(rtOffset(rtHdrData(h), i * size))) {
+                return rtClone<T>(rtOffset(rtHdrData(h), i * size))
+            }
+            i += 1
+        }
+        return none
+    }
+
+    //~ The index of the first element for which `f` holds, or `none`.
+    fn position(self, f: fn(T) -> bool) -> int? {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            if f(rtClone<T>(rtOffset(rtHdrData(h), i * size))) { return i }
+            i += 1
+        }
+        return none
+    }
+
+    //~ The element at `index` (from 0), or `none`.
+    fn nth(self, index: int) -> T? {
+        const h = rtAddrOf(self)
+        if index < 0 || index >= rtHdrLen(h) { return none }
+        return rtClone<T>(rtOffset(rtHdrData(h), index * rtSizeOf<T>()))
+    }
+
+    fn last(self) -> T? {
+        const n = rtHdrLen(rtAddrOf(self))
+        return self.nth(n - 1)
+    }
+
+    //~ The first `n` elements (fewer if there are fewer).
+    fn take(self, n: int) -> iter<T> {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var out: list<T> = []
+        var i = 0
+        const len = rtHdrLen(h)
+        while i < n && i < len {
+            out.push!(rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+            i += 1
+        }
+        rtCast<list<T>, iter<T>>(sink out)
+    }
+
+    //~ Everything after the first `n` elements.
+    fn skip(self, n: int) -> iter<T> {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var out: list<T> = []
+        var i = n < 0 ? 0 : n
+        const len = rtHdrLen(h)
+        while i < len {
+            out.push!(rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+            i += 1
+        }
+        rtCast<list<T>, iter<T>>(sink out)
+    }
+
+    //~ Elements while `f` holds; stops at the first failure.
+    fn takeWhile(self, f: fn(T) -> bool) -> iter<T> {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var out: list<T> = []
+        var i = 0
+        const len = rtHdrLen(h)
+        while i < len {
+            if !f(rtClone<T>(rtOffset(rtHdrData(h), i * size))) { break }
+            out.push!(rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+            i += 1
+        }
+        rtCast<list<T>, iter<T>>(sink out)
+    }
+
+    //~ Drops elements while `f` holds, keeps the rest.
+    fn skipWhile(self, f: fn(T) -> bool) -> iter<T> {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var out: list<T> = []
+        var i = 0
+        const len = rtHdrLen(h)
+        while i < len && f(rtClone<T>(rtOffset(rtHdrData(h), i * size))) { i += 1 }
+        while i < len {
+            out.push!(rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+            i += 1
+        }
+        rtCast<list<T>, iter<T>>(sink out)
+    }
+
+    //~ This iterator's elements, then `other`'s.
+    fn chain(self, other: iter<T>) -> iter<T> {
+        var out = rtClone<list<T>>(rtAddrOf(self))
+        const h = rtAddrOf(other)
+        const size = rtSizeOf<T>()
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            out.push!(rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+            i += 1
+        }
+        rtCast<list<T>, iter<T>>(sink out)
+    }
+
+    //~ Pairs each element with its index: `(0, a), (1, b), ...`.
+    fn enumerate(self) -> iter<(int, T)> {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var out: list<(int, T)> = []
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            out.push!((i, rtClone<T>(rtOffset(rtHdrData(h), i * size))))
+            i += 1
+        }
+        rtCast<list<(int, T)>, iter<(int, T)>>(sink out)
+    }
+
+    //~ Pairs elements with `other`'s, stopping at the shorter one.
+    fn zip<U>(self, other: iter<U>) -> iter<(T, U)> {
+        const h = rtAddrOf(self)
+        const g = rtAddrOf(other)
+        var out: list<(T, U)> = []
+        var i = 0
+        const n = rtHdrLen(h) < rtHdrLen(g) ? rtHdrLen(h) : rtHdrLen(g)
+        while i < n {
+            out.push!((rtClone<T>(rtOffset(rtHdrData(h), i * rtSizeOf<T>())), rtClone<U>(rtOffset(rtHdrData(g), i * rtSizeOf<U>()))))
+            i += 1
+        }
+        rtCast<list<(T, U)>, iter<(T, U)>>(sink out)
+    }
+
+    //~ Maps each element to an iterator and joins the results.
+    fn flatMap<U>(self, f: fn(T) -> iter<U>) -> iter<U> {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var out: list<U> = []
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            const part = f(rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+            const g = rtAddrOf(part)
+            var j = 0
+            const m = rtHdrLen(g)
+            while j < m {
+                out.push!(rtClone<U>(rtOffset(rtHdrData(g), j * rtSizeOf<U>())))
+                j += 1
+            }
+            i += 1
+        }
+        rtCast<list<U>, iter<U>>(sink out)
+    }
+
+    //~ Maps and drops the `none`s in one step.
+    fn filterMap<U>(self, f: fn(T) -> U?) -> iter<U> {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var out: list<U> = []
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            const r = f(rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+            if r is some(v) { out.push!(v) }
+            i += 1
+        }
+        rtCast<list<U>, iter<U>>(sink out)
+    }
+
+    fn reversed(self) -> iter<T> {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var out: list<T> = []
+        var i = rtHdrLen(h)
+        while i > 0 {
+            i -= 1
+            out.push!(rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+        }
+        rtCast<list<T>, iter<T>>(sink out)
+    }
+}
+
+impl<T: order> iter<T> {
+    //~ The smallest element, or `none` for an empty iterator. The first of equal elements wins.
+    fn min(self) -> T? {
+        const h = rtAddrOf(self)
+        const n = rtHdrLen(h)
+        if n == 0 { return none }
+        const size = rtSizeOf<T>()
+        const cmp = rtCmpFn<T>()
+        var best = 0
+        var i = 1
+        while i < n {
+            if rtCallInt2(
+                cmp,
+                rtOffset(rtHdrData(h), i * size),
+                rtOffset(rtHdrData(h), best * size),
+            ) < 0 { best = i }
+            i += 1
+        }
+        return rtClone<T>(rtOffset(rtHdrData(h), best * size))
+    }
+
+    //~ The largest element, or `none` for an empty iterator. The last of equal elements wins.
+    fn max(self) -> T? {
+        const h = rtAddrOf(self)
+        const n = rtHdrLen(h)
+        if n == 0 { return none }
+        const size = rtSizeOf<T>()
+        const cmp = rtCmpFn<T>()
+        var best = 0
+        var i = 1
+        while i < n {
+            if rtCallInt2(
+                cmp,
+                rtOffset(rtHdrData(h), i * size),
+                rtOffset(rtHdrData(h), best * size),
+            ) >= 0 { best = i }
+            i += 1
+        }
+        return rtClone<T>(rtOffset(rtHdrData(h), best * size))
+    }
+}
+
 impl iter<int> {
     fn sum(self) -> int {
         const h = rtAddrOf(self)

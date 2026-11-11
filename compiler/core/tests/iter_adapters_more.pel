@@ -1,0 +1,12 @@
+/// The `iter` adapters and consumers beyond `map` and `filter` (split into files so each native build stays small).
+
+fn part3() {
+    const xs = [3, 1, 4, 1, 5, 9, 2, 6]
+    print(xs.iter().chain([7, 8].iter()).toList())
+    print(xs.iter().take(2).enumerate().toList())
+    print(xs.iter().take(3).zip(["a", "b"].iter()).toList())
+}
+
+fn main() {
+    part3()
+}
