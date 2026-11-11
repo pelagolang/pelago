@@ -40,6 +40,7 @@ pub const STD_MODULES: &[(&str, &str)] = &[
     ("io", include_str!("../std/io.pel")),
     ("fs", include_str!("../std/fs.pel")),
     ("os", include_str!("../std/os.pel")),
+    ("path", include_str!("../std/path.pel")),
     ("json", include_str!("../std/json.pel")),
     ("regex", include_str!("../std/regex.pel")),
 ];

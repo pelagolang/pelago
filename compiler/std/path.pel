@@ -1,0 +1,144 @@
+/// Paths as text: pure string work, no file access. Both `/` and `\` separate components, so a Windows path
+/// and a POSIX path read the same; the functions that build a path (`join`, `normalise`) write `/`, which
+/// every operating system accepts.
+///
+/// ```
+/// import std.path
+///
+/// fn main() {
+///     print(path.join("src", "main.pel"))   /// src/main.pel
+///     print(path.extension("notes.tar.gz")) /// some("gz")
+///     print(path.parent("a/b/c.txt"))       /// some("a/b")
+/// }
+/// ```
+
+fn isSep(b: byte) -> bool = b == 47 || b == 92
+
+/// The path without trailing separators (a path made only of separators keeps its first one).
+fn trimEnd(p: str) -> str {
+    var n = p.len()
+    while n > 1 && isSep(p.byteAt(n - 1)) { n -= 1 }
+    p[0..n]
+}
+
+/// The byte offset of the last `.` in a file name, or -1.
+fn lastDot(name: str) -> int {
+    var i = name.len()
+    while i > 0 {
+        i -= 1
+        if name.byteAt(i) == 46 { return i }
+    }
+    -1
+}
+
+//~ Whether the path starts at a root: `/x`, `\x`, or a drive such as `C:\x` or `C:/x`.
+pub fn isAbsolute(p: str) -> bool {
+    if p.len() > 0 && isSep(p.byteAt(0)) { return true }
+    if p.len() > 2 && p.byteAt(1) == 58 && isSep(p.byteAt(2)) {
+        const c = p.byteAt(0) to int
+        return (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+    }
+    false
+}
+
+//~ Puts two parts together with one `/` between them. An absolute `tail` replaces `head`.
+pub fn join(head: str, tail: str) -> string {
+    if isAbsolute(tail) || head.isEmpty() { return "#tail" }
+    if tail.isEmpty() { return "#head" }
+    if isSep(head.byteAt(head.len() - 1)) { return "#head#tail" }
+    "#head/#tail"
+}
+
+//~ The last component: `"a/b.txt"` gives `"b.txt"`. A path that is only a root, or empty, gives `""`.
+pub fn fileName(p: str) -> str {
+    const q = trimEnd(p)
+    if q.len() == 1 && isSep(q.byteAt(0)) { return "" }
+    var i = q.len()
+    while i > 0 && !isSep(q.byteAt(i - 1)) { i -= 1 }
+    q[i..q.len()]
+}
+
+//~ The path without its last component: `"a/b/c"` gives `"a/b"`, `"a"` gives `""`, `"/a"` gives `"/"`.
+//~ `none` for the root itself and for the empty path.
+pub fn parent(p: str) -> str? {
+    const q = trimEnd(p)
+    if q.isEmpty() || (q.len() == 1 && isSep(q.byteAt(0))) { return none }
+    var i = q.len()
+    while i > 0 && !isSep(q.byteAt(i - 1)) { i -= 1 }
+    if i == 0 { return "" }
+    var end = i
+    while end > 1 && isSep(q.byteAt(end - 1)) { end -= 1 }
+    return q[0..end]
+}
+
+//~ The file name without its last extension: `"a/b.tar.gz"` gives `"b.tar"`, `".bashrc"` gives `".bashrc"`.
+pub fn stem(p: str) -> str {
+    const name = fileName(p)
+    const i = lastDot(name)
+    if i > 0 { return name[0..i] }
+    name
+}
+
+//~ The extension without its dot: `"a/b.tar.gz"` gives `some("gz")`. `none` when there is none (a leading dot is not one).
+pub fn extension(p: str) -> str? {
+    const name = fileName(p)
+    const i = lastDot(name)
+    if i > 0 && i + 1 < name.len() { return name[i + 1..name.len()] }
+    return none
+}
+
+//~ The path with its extension replaced (or added): `withExtension("a/b.txt", "md")` is `"a/b.md"`.
+pub fn withExtension(p: str, ext: str) -> string {
+    const q = trimEnd(p)
+    const name = fileName(q)
+    const base = q[0..q.len() - name.len()]
+    const s = stem(q)
+    if ext.isEmpty() { return "#base#s" }
+    "#base#s.#ext"
+}
+
+//~ The non-empty components in order; a drive such as `C:` and a leading root are not components.
+pub fn components(p: str) -> iter<str> {
+    var out: [str] = []
+    var start = 0
+    var i = 0
+    while i <= p.len() {
+        if i == p.len() || isSep(p.byteAt(i)) {
+            if i > start { out.push!(p[start..i]) }
+            start = i + 1
+        }
+        i += 1
+    }
+    out.iter()
+}
+
+//~ Cleans a path lexically: drops `.` and empty parts, resolves `..` where it can (without looking at the
+//~ disk, so it does not follow links), and writes `/` between parts. The empty result is `"."`.
+pub fn normalise(p: str) -> string {
+    const abs = isAbsolute(p)
+    var drive = ""
+    if p.len() > 1 && p.byteAt(1) == 58 && abs { drive = "#(p[0..2])" }
+    var parts: [string] = []
+    for c of components(p) {
+        if c == "." {
+        } else if c == ".." {
+            if parts.len() > 0 && parts[parts.len() - 1] != ".." {
+                parts.pop!()
+            } else if !abs {
+                parts.push!("..")
+            }
+        } else {
+            parts.push!("#c")
+        }
+    }
+    var body = ""
+    var k = 0
+    while k < parts.len() {
+        if k > 0 { body.pushChar!('/') }
+        body.pushStr!(parts[k])
+        k += 1
+    }
+    if abs { return "#drive/#body" }
+    if body.isEmpty() { return "." }
+    body
+}
