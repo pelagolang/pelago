@@ -17,7 +17,7 @@ pub struct task<T> {
     deinit {
         /// Dropping the handle detaches the task; a task that is already done is freed here.
         if rtLoadInt(self.state) == 1 {
-            rtDropAt<T>(rtOffset(self.state, 72))
+            rtDropAt<T>(rtOffset(self.state, 80))
             rtFree(self.state)
         } else {
             rtStoreInt(rtOffset(self.state, 16), 1)
@@ -25,7 +25,7 @@ pub struct task<T> {
     }
 }
 
-/// The task block: [state: 0 not started, 2 running, 1 done][saved context][detached][stack][closure: 16 bytes][cancelled][scope][parked][result].
+/// The task block: [state: 0 not started, 2 running, 1 done][saved context][detached][stack][closure: 16 bytes][cancelled][scope][parked][deadline][result].
 /// The running task is `rtCur`; `rtTasks` lists every live task, the one `main` runs in first.
 
 //~ Addresses of the live task blocks (0 is `main`'s, made on first use).
@@ -82,7 +82,7 @@ fn rtStackGive(p: ptr) {
 
 fn rtMainInit() {
     if rtTasks.len() == 0 {
-        const s = rtAlloc(80)
+        const s = rtAlloc(88)
         rtCur = rtAddrInt(s)
         rtTasks.push!(rtCur)
     }
@@ -109,54 +109,101 @@ fn rtSwitchTo(t: int) {
     rtReap()
 }
 
-//~ The word in a task block that says whether it is parked: 0 runs, else (count + 1) * 2 + kind, the count of events
-//~ (kind 0) or of events plus freed locks (kind 1) when it parked.
-fn rtToken(kind: int) -> int = if kind == 1 { rtEvents + rtFreed } else { rtEvents }
-
-//~ Whether the task can run: it is not parked, or something happened since it parked.
-fn rtRunnable(t: int) -> bool {
-    const w = rtLoadInt(rtOffset(rtCast<int, ptr>(t), 64))
-    w == 0 || rtToken(w % 2) != w / 2 - 1
+//~ The monotonic clock in nanoseconds (stops the program on a target with no clock call yet).
+pub fn rtNow() -> int {
+    const buf = rtAlloc(16)
+    if rtOsClock(1, buf) < 0 { panic("no clock on this target yet") }
+    const t = rtLoadInt(buf) * 1000000000 + rtLoadInt(rtOffset(buf, 8))
+    rtFree(buf)
+    t
 }
 
-//~ Lets the next task that can run go; false when there is none besides the running one.
+//~ Tasks parked with a deadline: while there are none, the scheduler never reads the clock.
+pub var rtTimers: int = 0
+
+//~ The word in a task block that says whether it is parked: 0 runs, else (count + 1) * 2 + kind, the count of events
+//~ (kind 0) or of events plus freed locks (kind 1) when it parked. A parked task may also carry a deadline (nanoseconds
+//~ on the monotonic clock) after which it can run again.
+fn rtToken(kind: int) -> int = if kind == 1 { rtEvents + rtFreed } else { rtEvents }
+
+//~ Whether the task can run: it is not parked, something happened since it parked, or its deadline passed (`now`).
+fn rtRunnable(t: int, now: int) -> bool {
+    const b = rtCast<int, ptr>(t)
+    const w = rtLoadInt(rtOffset(b, 64))
+    if w == 0 || rtToken(w % 2) != w / 2 - 1 { return true }
+    const d = rtLoadInt(rtOffset(b, 72))
+    d != 0 && now >= d
+}
+
+//~ Lets the next task that can run go; false when there is none besides the running one. When every task is parked
+//~ but some wait for a deadline, waits for the clock (a busy wait until the system has a sleep call) and goes on with
+//~ whichever deadline comes first, which may be the running task's own (nothing switches then, and this is true).
 fn rtSwitchNext() -> bool {
     rtMainInit()
     var i = 0
     while rtTasks[i] != rtCur { i += 1 }
-    var k = 1
-    while k < rtTasks.len() {
-        const t = rtTasks[(i + k) % rtTasks.len()]
-        if rtRunnable(t) {
-            rtSwitchTo(t)
-            return true
+    while true {
+        const now = if rtTimers > 0 { rtNow() } else { 0 }
+        var k = 1
+        while k < rtTasks.len() {
+            const t = rtTasks[(i + k) % rtTasks.len()]
+            if rtRunnable(t, now) {
+                rtSwitchTo(t)
+                return true
+            }
+            k += 1
         }
-        k += 1
+        if rtTimers == 0 { return false }
+        if rtRunnable(rtCur, now) { return true }
     }
     false
 }
 
-//~ The running task cannot go on until something happens (`kind` 1: until a lock is handed back, too): lets the
-//~ others run. False when every other task is parked as well, which is a deadlock.
-fn rtPark(kind: int) -> bool {
+//~ The running task cannot go on until something happens (`kind` 1: until a lock is handed back, too) or until the
+//~ clock reaches `deadline` (0: no deadline): lets the others run. False when every other task is parked as well and
+//~ none waits for a deadline, which is a deadlock.
+fn rtPark(kind: int, deadline: int) -> bool {
     rtMainInit()
-    rtStoreInt(rtOffset(rtCast<int, ptr>(rtCur), 64), (rtToken(kind) + 1) * 2 + kind)
+    const cur = rtCast<int, ptr>(rtCur)
+    rtStoreInt(rtOffset(cur, 64), (rtToken(kind) + 1) * 2 + kind)
+    rtStoreInt(rtOffset(cur, 72), deadline)
+    if deadline != 0 { rtTimers += 1 }
     const ok = rtSwitchNext()
-    rtStoreInt(rtOffset(rtCast<int, ptr>(rtCur), 64), 0)
+    const me = rtCast<int, ptr>(rtCur)
+    if deadline != 0 { rtTimers -= 1 }
+    rtStoreInt(rtOffset(me, 72), 0)
+    rtStoreInt(rtOffset(me, 64), 0)
     ok
 }
 
 fn rtWait(what: string) {
-    if !rtPark(0) {
+    if !rtPark(0, 0) {
         panic("deadlock: waiting for #what that nobody can provide")
     }
 }
 
 //~ Waiting for a lock: also woken when a lock is handed back unchanged.
 fn rtWaitLock(what: string) {
-    if !rtPark(1) {
+    if !rtPark(1, 0) {
         panic("deadlock: waiting for #what that nobody can provide")
     }
+}
+
+//~ Stops the running task for `n` nanoseconds; the others run meanwhile.
+pub fn rtSleepNanos(n: int) {
+    if n <= 0 { return }
+    const deadline = rtNow() + n
+    while rtNow() < deadline {
+        rtPark(0, deadline)
+    }
+}
+
+//~ `select` has nothing ready: waits for something to happen, or for `deadline` (0: none). True to look again, false
+//~ when the deadline has passed (take the `timeout` arm) or nobody can ever make an arm ready (a deadlock).
+pub fn rtSelectWait(deadline: int) -> bool {
+    if deadline != 0 && rtNow() >= deadline { return false }
+    if rtTasks.len() <= 1 && deadline == 0 { return false }
+    rtPark(0, deadline)
 }
 
 //~ Lets the other tasks run for a while.
@@ -266,11 +313,11 @@ pub fn rtRunPending() {
     if rtTasks.len() == 1 { rtReleaseAll() }
 }
 
-//~ Lets another task run so something may change, for `select`; false when none can.
-pub fn rtRunOnePending() -> bool {
-    if rtTasks.len() <= 1 { return false }
-    rtPark(0)
-}
+//~ Only for the `timeout(d)` arm of a `select`, which the compiler turns into a deadline; it is never called.
+pub fn timeout<D>(d: D) -> bool = false
+
+//~ The deadline of `timeout(d)` in a `select`: now plus `d`, a `duration` (whole nanoseconds in one word).
+pub fn rtTimeoutAt<D>(sink d: D) -> int = rtNow() + rtCast<D, int>(sink d)
 
 //~ Can a receive on this channel finish now: a value is queued, or no sender is left?
 pub fn rtChanReady(ch: ptr) -> bool = rtLoadInt(rtOffset(ch, 24)) > 0 ||
@@ -283,9 +330,9 @@ pub fn rtChanRoom(ch: ptr) -> bool {
 
 pub fn rtTaskBody<T>(s: ptr, sink f: once fn() -> T) {
     const v = f!!()
-    rtWrite<T>(rtOffset(s, 72), sink v)
+    rtWrite<T>(rtOffset(s, 80), sink v)
     if rtLoadInt(rtOffset(s, 16)) == 1 {
-        rtDropAt<T>(rtOffset(s, 72))
+        rtDropAt<T>(rtOffset(s, 80))
     }
 }
 
@@ -310,7 +357,7 @@ impl<T> task<T> {
         while rtLoadInt(s) != 1 {
             rtWait("a task to finish")
         }
-        const r = rtRead<T>(rtOffset(s, 72))
+        const r = rtRead<T>(rtOffset(s, 80))
         rtFree(s)
         rtForgetTask<T>(sink self)
         return r
@@ -326,7 +373,7 @@ pub fn rtForgetTask<T>(sink t: task<T>) {
 pub fn spawn<T>(sink f: once fn() -> T) -> task<T> {
     rtMainInit()
     rtEvents += 1
-    const s = rtAlloc(72 + rtSizeOf<T>())
+    const s = rtAlloc(80 + rtSizeOf<T>())
     const stack = rtStackTake()
     rtStorePtr(rtOffset(s, 24), stack)
     const runner = [sink f, sink s] () ~> rtTaskBody<T>(s, sink f)
