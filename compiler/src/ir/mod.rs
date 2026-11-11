@@ -351,10 +351,20 @@ pub enum OsKind {
     /// `which` 0 is the wall clock (since 1970-01-01 UTC), 1 the monotonic clock (from some fixed point,
     /// never going back). 0, or a negative `OS_*` error (`OS_FAIL` where the target has no clock call yet).
     Clock,
+    /// `(op, path, aux)`: one file-system call on the zero-terminated path. `op` 0 asks whether it exists,
+    /// 1 removes a file, 2 removes an empty directory, 3 creates a directory, 4 renames it to the zero-
+    /// terminated path whose address is `aux`, 5 writes its `stat` (size and kind: two `i64`s, kind 1 file,
+    /// 2 directory, 3 other) at the address `aux`. 0, or a negative `OS_*` error (`OS_FAIL` where the target
+    /// has no such call yet, and for any other failure).
+    Fs,
+    /// `(fd, address, count)`: read directory entries from a descriptor opened on a directory, as
+    /// `getdents64` does on Linux (records of inode, offset, length (`u16`), type (`u8`), zero-terminated
+    /// name); the bytes written, 0 at the end, or a negative `OS_*` error.
+    Dents,
 }
 
 impl OsKind {
-    pub const ALL: [OsKind; 12] = [
+    pub const ALL: [OsKind; 14] = [
         OsKind::Reserve,
         OsKind::Commit,
         OsKind::Release,
@@ -367,6 +377,8 @@ impl OsKind {
         OsKind::Open,
         OsKind::Close,
         OsKind::Clock,
+        OsKind::Fs,
+        OsKind::Dents,
     ];
 
     /// Whether the call reaches the process (arguments, descriptors, exit) rather than memory.
@@ -380,6 +392,8 @@ impl OsKind {
                 | OsKind::Open
                 | OsKind::Close
                 | OsKind::Clock
+                | OsKind::Fs
+                | OsKind::Dents
         )
     }
 
@@ -397,6 +411,8 @@ impl OsKind {
             OsKind::Open => "os_open",
             OsKind::Close => "os_close",
             OsKind::Clock => "os_clock",
+            OsKind::Fs => "os_fs",
+            OsKind::Dents => "os_dents",
         }
     }
 
@@ -410,7 +426,7 @@ impl OsKind {
             | OsKind::AdviseNoHuge
             | OsKind::Open
             | OsKind::Clock => 2,
-            OsKind::Remap | OsKind::Write | OsKind::Read => 3,
+            OsKind::Remap | OsKind::Write | OsKind::Read | OsKind::Fs | OsKind::Dents => 3,
         }
     }
 }

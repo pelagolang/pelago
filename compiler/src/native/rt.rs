@@ -326,7 +326,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `rdi`, `rsi`, `rdx`, the result in `rax` (an address or 0, or a negative error).
-    pub os: [Label; 12],
+    pub os: [Label; 14],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -375,7 +375,7 @@ pub fn emit_for(
         write_u64: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 12].map(|_| a.new_label()),
+        os: [(); 14].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -1586,6 +1586,111 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.mov_ri(RAX, 228);
         a.syscall();
         a.ret();
+        // fs(op = rdi, path = rsi, aux = rdx): the path calls of `OsKind::Fs`, by `op`. 0, a size and kind
+        // written at `aux` for `stat`, or -4 (no such file), -5 (denied), -3 (anything else).
+        let (acc, unl, rmd, mkd, ren, sta, res) = (
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+        );
+        let (go, noent, acces, done) = (
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+        );
+        a.bind(rt.os[12]);
+        a.mov_rr(R8, RDX, 8);
+        a.mov_rr(RCX, RDI, 8);
+        a.mov_rr(RDI, RSI, 8);
+        a.mov_rr(RSI, RDX, 8);
+        for (k, l) in [(0, acc), (1, unl), (2, rmd), (3, mkd), (4, ren), (5, sta)] {
+            a.alu_ri(Alu::Cmp, RCX, k, 8);
+            a.jcc(Cc::E, l);
+        }
+        a.mov_ri(RAX, -2);
+        a.ret();
+        a.bind(acc);
+        a.mov_ri(RSI, 0); // F_OK
+        a.mov_ri(RAX, 21); // access
+        a.jmp(go);
+        a.bind(unl);
+        a.mov_ri(RAX, 87); // unlink
+        a.jmp(go);
+        a.bind(rmd);
+        a.mov_ri(RAX, 84); // rmdir
+        a.jmp(go);
+        a.bind(mkd);
+        a.mov_ri(RSI, 0o777); // before the umask
+        a.mov_ri(RAX, 83); // mkdir
+        a.jmp(go);
+        a.bind(ren);
+        a.mov_ri(RAX, 82); // rename
+        a.bind(go);
+        a.syscall();
+        a.jmp(res);
+        // stat: the kernel's 144-byte record on the stack; `st_mode` is at 24 and `st_size` at 48.
+        a.bind(sta);
+        a.alu_ri(Alu::Sub, RSP, 144, 8);
+        a.mov_rr(RSI, RSP, 8);
+        a.mov_ri(RAX, 4);
+        a.syscall();
+        let (failed, is_file, is_dir, put) = (
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+        );
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::Ne, failed);
+        a.load_ext(RDX, mem(RSP, 24), 4, false, false);
+        a.alu_ri(Alu::And, RDX, 0xF000, 4);
+        a.mov_ri(RCX, 3);
+        a.alu_ri(Alu::Cmp, RDX, 0x8000, 4);
+        a.jcc(Cc::E, is_file);
+        a.alu_ri(Alu::Cmp, RDX, 0x4000, 4);
+        a.jcc(Cc::E, is_dir);
+        a.jmp(put);
+        a.bind(is_file);
+        a.mov_ri(RCX, 1);
+        a.jmp(put);
+        a.bind(is_dir);
+        a.mov_ri(RCX, 2);
+        a.bind(put);
+        a.load(RDX, mem(RSP, 48), 8);
+        a.store(mem(R8, 0), RDX, 8);
+        a.store(mem(R8, 8), RCX, 8);
+        a.alu_ri(Alu::Add, RSP, 144, 8);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.ret();
+        a.bind(failed);
+        a.alu_ri(Alu::Add, RSP, 144, 8);
+        a.bind(res);
+        a.alu_ri(Alu::Cmp, RAX, -4095, 8);
+        a.jcc(Cc::B, done);
+        a.alu_ri(Alu::Cmp, RAX, -2, 8);
+        a.jcc(Cc::E, noent);
+        a.alu_ri(Alu::Cmp, RAX, -13, 8);
+        a.jcc(Cc::E, acces);
+        a.mov_ri(RAX, -3);
+        a.ret();
+        a.bind(noent);
+        a.mov_ri(RAX, -4);
+        a.ret();
+        a.bind(acces);
+        a.mov_ri(RAX, -5);
+        a.bind(done);
+        a.ret();
+        // dents(fd = rdi, buffer = rsi, count = rdx): `getdents64`; the bytes written, 0 at the end, or the
+        // errors of `fs`.
+        a.bind(rt.os[13]);
+        a.mov_ri(RAX, 217);
+        a.syscall();
+        a.jmp(res);
     }
     if win {
         // The handle for descriptor `rdi` in `rax`: 0, 1 and 2 are the standard handles, anything else is a
@@ -1785,6 +1890,13 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.ret();
         // clock: no clock call on Windows yet.
         a.bind(rt.os[11]);
+        a.mov_ri(RAX, -3);
+        a.ret();
+        // fs and dents: no file-system calls on Windows yet.
+        a.bind(rt.os[12]);
+        a.mov_ri(RAX, -3);
+        a.ret();
+        a.bind(rt.os[13]);
         a.mov_ri(RAX, -3);
         a.ret();
     }
