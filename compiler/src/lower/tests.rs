@@ -3521,7 +3521,7 @@ fn regexgen_tables_agree_with_the_corpus() {
         let p = crate::regexgen::compile(&pattern).unwrap_or_else(|e| panic!("{pattern}: {e}"));
         let names: Vec<String> = p.names.iter().map(|n| format!("\"{n}\"")).collect();
         calls.push_str(&format!(
-            "    u({}, {}, {}, {}, {}, {}, [{}], \"{}\")\n",
+            "    u({}, {}, {}, {}, {}, {}, [{}], {}, \"{}\")\n",
             list(&p.op),
             list(&p.x),
             list(&p.y),
@@ -3529,13 +3529,14 @@ fn regexgen_tables_agree_with_the_corpus() {
             list(&p.classes),
             p.groups,
             names.join(", "),
+            list(&p.looks),
             text.replace('\\', "\\\\")
                 .replace('"', "\\\"")
                 .replace('\n', "\\n")
         ));
     }
     let src = format!(
-        "import std.regex\n\nfn u(sink op: [int], sink x: [int], sink y: [int], sink ranges: [int], sink classes: [int], groups: int, sink names: [string], text: str) {{\n    const re = regex.fromTables(sink op, sink x, sink y, sink ranges, sink classes, groups, sink names)\n    var spans = \"\"\n    const hits = re.findAll(text)\n    var i = 0\n    while i < hits.len() {{\n        spans.pushStr!(\"#(hits[i].start)-#(hits[i].end) \")\n        i += 1\n    }}\n    print(re.isMatch(text), hits.len(), spans.trim(), re.replaceAll(text, \"<$0>\"))\n}}\n\nfn main() {{\n{calls}}}\n"
+        "import std.regex\n\nfn u(sink op: [int], sink x: [int], sink y: [int], sink ranges: [int], sink classes: [int], groups: int, sink names: [string], sink looks: [int], text: str) {{\n    const re = regex.fromTables(sink op, sink x, sink y, sink ranges, sink classes, groups, sink names, sink looks)\n    var spans = \"\"\n    const hits = re.findAll(text)\n    var i = 0\n    while i < hits.len() {{\n        spans.pushStr!(\"#(hits[i].start)-#(hits[i].end) \")\n        i += 1\n    }}\n    print(re.isMatch(text), hits.len(), spans.trim(), re.replaceAll(text, \"<$0>\"))\n}}\n\nfn main() {{\n{calls}}}\n"
     );
     assert_eq!(output_of(&src), expected);
 }

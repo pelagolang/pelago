@@ -34,8 +34,8 @@ const JMP: i64 = 4;
 const SAVE: i64 = 5;
 const ASSERT: i64 = 6;
 const MATCH: i64 = 7;
+/// A lookahead in the program: `x` is the number of its bit table (see `looks`), `y` is 1 for `(?!...)`.
 const LOOK: i64 = 8;
-const LOOKEND: i64 = 9;
 
 /// A syntax tree node.
 #[derive(Clone, Debug)]
@@ -65,6 +65,8 @@ pub struct Program {
     pub classes: Vec<i64>,
     pub groups: usize,
     pub names: Vec<String>,
+    /// Where the reversed program of each lookahead body starts (it ends at its own `MATCH`).
+    pub looks: Vec<i64>,
     tree: Option<Node>,
 }
 
@@ -454,6 +456,8 @@ struct Emitter {
     op: Vec<i64>,
     x: Vec<i64>,
     y: Vec<i64>,
+    /// Lookahead bodies met so far; each is emitted reversed after the main program.
+    pending: Vec<Node>,
 }
 
 impl Emitter {
@@ -473,7 +477,9 @@ impl Emitter {
         self.y[split] = if greedy { after } else { body };
     }
 
-    fn node(&mut self, n: &Node) {
+    /// Emits a node. A `rev` (reversed) body is matched from its end to its start, for the scan that gives the
+    /// lookahead bit of every position; it has no capture slots.
+    fn node(&mut self, n: &Node, rev: bool) {
         match n {
             Node::Empty => {}
             Node::Byte(b) => {
@@ -486,29 +492,34 @@ impl Emitter {
                 self.emit(CLASS, *i as i64, 0);
             }
             Node::Cat(a, b) => {
-                self.node(a);
-                self.node(b);
+                if rev {
+                    self.node(b, rev);
+                    self.node(a, rev);
+                } else {
+                    self.node(a, rev);
+                    self.node(b, rev);
+                }
             }
             Node::Alt(a, b) => {
                 let split = self.emit(SPLIT, 0, 0);
                 self.x[split] = self.here();
-                self.node(a);
+                self.node(a, rev);
                 let jmp = self.emit(JMP, 0, 0);
                 self.y[split] = self.here();
-                self.node(b);
+                self.node(b, rev);
                 self.x[jmp] = self.here();
             }
             Node::Star(a, greedy) => {
                 let split = self.emit(SPLIT, 0, 0);
                 let body = self.here();
-                self.node(a);
+                self.node(a, rev);
                 self.emit(JMP, split as i64, 0);
                 let after = self.here();
                 self.split_to(split, body, after, *greedy);
             }
             Node::Plus(a, greedy) => {
                 let body = self.here();
-                self.node(a);
+                self.node(a, rev);
                 let split = self.emit(SPLIT, 0, 0);
                 let after = self.here();
                 self.split_to(split, body, after, *greedy);
@@ -516,32 +527,34 @@ impl Emitter {
             Node::Quest(a, greedy) => {
                 let split = self.emit(SPLIT, 0, 0);
                 let body = self.here();
-                self.node(a);
+                self.node(a, rev);
                 let after = self.here();
                 self.split_to(split, body, after, *greedy);
             }
             Node::Group(a, i) => {
-                self.emit(SAVE, 2 * *i as i64, 0);
-                self.node(a);
-                self.emit(SAVE, 2 * *i as i64 + 1, 0);
+                if rev {
+                    self.node(a, rev);
+                } else {
+                    self.emit(SAVE, 2 * *i as i64, 0);
+                    self.node(a, rev);
+                    self.emit(SAVE, 2 * *i as i64 + 1, 0);
+                }
             }
             Node::Assert(k) => {
                 self.emit(ASSERT, *k, 0);
             }
             Node::Look(a, neg) => {
-                let look = self.emit(LOOK, 0, *neg as i64);
-                self.node(a);
-                self.emit(LOOKEND, 0, 0);
-                self.x[look] = self.here();
+                self.emit(LOOK, self.pending.len() as i64, *neg as i64);
+                self.pending.push((**a).clone());
             }
             Node::Repeat(a, lo, hi, greedy) => {
                 for _ in 0..*lo {
-                    self.node(a);
+                    self.node(a, rev);
                 }
                 if *hi < 0 {
                     let split = self.emit(SPLIT, 0, 0);
                     let body = self.here();
-                    self.node(a);
+                    self.node(a, rev);
                     self.emit(JMP, split as i64, 0);
                     let after = self.here();
                     self.split_to(split, body, after, *greedy);
@@ -549,7 +562,7 @@ impl Emitter {
                     let mut pending = Vec::new();
                     for _ in *lo..*hi {
                         pending.push(self.emit(SPLIT, 0, 0));
-                        self.node(a);
+                        self.node(a, rev);
                     }
                     let after = self.here();
                     for p in pending {
@@ -580,11 +593,22 @@ pub fn compile(pattern: &str) -> Result<Program, String> {
         op: Vec::new(),
         x: Vec::new(),
         y: Vec::new(),
+        pending: Vec::new(),
     };
     e.emit(SAVE, 0, 0);
-    e.node(&root);
+    e.node(&root, false);
     e.emit(SAVE, 1, 0);
     e.emit(MATCH, 0, 0);
+    // The lookahead bodies, reversed, one after the other (a body may meet more lookaheads: they get later numbers).
+    let mut looks = Vec::new();
+    let mut i = 0;
+    while i < e.pending.len() {
+        looks.push(e.here());
+        let body = e.pending[i].clone();
+        e.node(&body, true);
+        e.emit(MATCH, 0, 0);
+        i += 1;
+    }
     Ok(Program {
         op: e.op,
         x: e.x,
@@ -593,6 +617,7 @@ pub fn compile(pattern: &str) -> Result<Program, String> {
         classes: p.classes,
         groups: p.groups,
         names: p.names,
+        looks,
         tree: Some(root),
     })
 }
@@ -758,6 +783,7 @@ struct @N@Prog {
     y: [int; @M@]
     ranges: [int; @R@]
     classes: [int; @C@]
+    looks: [int; @L@]
 }
 
 struct @N@Threads {
@@ -772,6 +798,7 @@ fn @N@Program() -> @N@Prog = @N@Prog {
     y: @Y@,
     ranges: @RANGES@,
     classes: @CLASSES@,
+    looks: @LOOKS@,
 }
 
 fn @N@IsWord(b: int) -> bool = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || b == 95 || (b >= 97 && b <= 122)
@@ -791,19 +818,19 @@ fn @N@ClassHas(p: @N@Prog, index: int, b: int) -> bool {
     p.classes[index * 3 + 2] == 1 ? !inside : inside
 }
 
-fn @N@Add(p: @N@Prog, text: str, inout list: @N@Threads, inout mark: [int; @M@], pc: int, pos: int, caps: [int; @S@], gen: int) {
+fn @N@Add(p: @N@Prog, text: str, inout list: @N@Threads, inout mark: [int; @M@], pc: int, pos: int, caps: [int; @S@], gen: int, bits: [int]) {
     if mark[pc] == gen { return }
     mark[pc] = gen
     const op = p.op[pc]
     if op == 4 {
-        @N@Add(p, text, inout list, inout mark, p.x[pc], pos, caps, gen)
+        @N@Add(p, text, inout list, inout mark, p.x[pc], pos, caps, gen, bits)
     } else if op == 3 {
-        @N@Add(p, text, inout list, inout mark, p.x[pc], pos, caps, gen)
-        @N@Add(p, text, inout list, inout mark, p.y[pc], pos, caps, gen)
+        @N@Add(p, text, inout list, inout mark, p.x[pc], pos, caps, gen, bits)
+        @N@Add(p, text, inout list, inout mark, p.y[pc], pos, caps, gen, bits)
     } else if op == 5 {
         var next = caps
         next[p.x[pc]] = pos
-        @N@Add(p, text, inout list, inout mark, pc + 1, pos, next, gen)
+        @N@Add(p, text, inout list, inout mark, pc + 1, pos, next, gen, bits)
     } else if op == 6 {
         const kind = p.x[pc]
         const before = pos > 0 ? text.byteAt(pos - 1) to int : -1
@@ -821,10 +848,10 @@ fn @N@Add(p: @N@Prog, text: str, inout list: @N@Threads, inout mark: [int; @M@],
             const edge = (before >= 0 && @N@IsWord(before)) != (after >= 0 && @N@IsWord(after))
             holds = kind == 2 ? edge : !edge
         }
-        if holds { @N@Add(p, text, inout list, inout mark, pc + 1, pos, caps, gen) }
+        if holds { @N@Add(p, text, inout list, inout mark, pc + 1, pos, caps, gen, bits) }
     } else if op == 8 {
-        const inside = @N@Run(p, text, pos, pc + 1, true, -1)[0] >= 0
-        if inside != (p.y[pc] == 1) { @N@Add(p, text, inout list, inout mark, p.x[pc], pos, caps, gen) }
+        const inside = bits[p.x[pc] * (text.len() + 1) + pos] == 1
+        if inside != (p.y[pc] == 1) { @N@Add(p, text, inout list, inout mark, pc + 1, pos, caps, gen, bits) }
     } else {
         list.pcs[list.count] = pc
         var i = 0
@@ -836,8 +863,62 @@ fn @N@Add(p: @N@Prog, text: str, inout list: @N@Threads, inout mark: [int; @M@],
     }
 }
 
+/// One bit for every lookahead and every position: does the body match starting there? Each body is run once,
+/// reversed, from the end of the text to the start, so the work is `O(text * states)` however far a body looks.
+fn @N@Bits(p: @N@Prog, text: str) -> [int] {
+    var bits: [int] = []
+    const n1 = text.len() + 1
+    var i = 0
+    while i < @NL@ * n1 {
+        bits.push!(0)
+        i += 1
+    }
+    var k = @NL@ - 1
+    while k >= 0 {
+        var current = @N@Threads { pcs: [0; @M@], caps: [0; @MS@], count: 0 }
+        var following = @N@Threads { pcs: [0; @M@], caps: [0; @MS@], count: 0 }
+        var mark: [int; @M@] = [-1; @M@]
+        var gen = 0
+        var pos = text.len()
+        while pos >= 0 {
+            @N@Add(p, text, inout current, inout mark, p.looks[k], pos, [-1; @S@], gen, bits)
+            const byte = pos > 0 ? text.byteAt(pos - 1) to int : -1
+            var t = 0
+            while t < current.count {
+                const pc = current.pcs[t]
+                const op = p.op[pc]
+                var advance = false
+                if op == 7 {
+                    bits[k * n1 + pos] = 1
+                } else if op == 0 {
+                    advance = byte == p.x[pc]
+                } else if op == 1 {
+                    advance = byte >= 0 && (p.x[pc] == 1 || byte != 10)
+                } else if op == 2 {
+                    advance = byte >= 0 && @N@ClassHas(p, p.x[pc], byte)
+                }
+                if advance {
+                    @N@Add(p, text, inout following, inout mark, pc + 1, pos - 1, [-1; @S@], gen + 1, bits)
+                }
+                t += 1
+            }
+            var n = 0
+            while n < following.count {
+                current.pcs[n] = following.pcs[n]
+                n += 1
+            }
+            current.count = following.count
+            following.count = 0
+            gen += 1
+            pos -= 1
+        }
+        k -= 1
+    }
+    bits
+}
+
 /// The slots of the first match at or after `from` (`-2` in slot 0 when there is none).
-fn @N@Run(p: @N@Prog, text: str, from: int, startPc: int, anchored: bool, noEmptyAt: int) -> [int; @S@] {
+fn @N@Run(p: @N@Prog, text: str, from: int, noEmptyAt: int, bits: [int]) -> [int; @S@] {
     var matched: [int; @S@] = [-2; @S@]
     var current = @N@Threads { pcs: [0; @M@], caps: [0; @MS@], count: 0 }
     var following = @N@Threads { pcs: [0; @M@], caps: [0; @MS@], count: 0 }
@@ -845,10 +926,10 @@ fn @N@Run(p: @N@Prog, text: str, from: int, startPc: int, anchored: bool, noEmpt
     var pos = from
     var gen = 0
     while pos <= text.len() {
-        if matched[0] == -2 && (!anchored || pos == from) {
-            @N@Add(p, text, inout current, inout mark, startPc, pos, [-1; @S@], gen)
+        if matched[0] == -2 {
+            @N@Add(p, text, inout current, inout mark, 0, pos, [-1; @S@], gen, bits)
         }
-        if current.count == 0 && (matched[0] != -2 || anchored) { break }
+        if current.count == 0 && matched[0] != -2 { break }
         const byte = pos < text.len() ? text.byteAt(pos) to int : -1
         var t = 0
         while t < current.count {
@@ -856,9 +937,9 @@ fn @N@Run(p: @N@Prog, text: str, from: int, startPc: int, anchored: bool, noEmpt
             const op = p.op[pc]
             var advance = false
             const startAt = current.caps[t * @S@]
-            if (op == 7 || op == 9) && startAt == pos && pos == noEmptyAt {
+            if op == 7 && startAt == pos && pos == noEmptyAt {
                 advance = false
-            } else if op == 7 || op == 9 {
+            } else if op == 7 {
                 var k = 0
                 while k < @S@ {
                     matched[k] = current.caps[t * @S@ + k]
@@ -879,7 +960,7 @@ fn @N@Run(p: @N@Prog, text: str, from: int, startPc: int, anchored: bool, noEmpt
                     carried[k] = current.caps[t * @S@ + k]
                     k += 1
                 }
-                @N@Add(p, text, inout following, inout mark, pc + 1, pos + 1, carried, gen + 1)
+                @N@Add(p, text, inout following, inout mark, pc + 1, pos + 1, carried, gen + 1, bits)
             }
             t += 1
         }
@@ -924,7 +1005,7 @@ fn @N@Of(text: str, s: [int; @S@]) -> @N@ {
 
 pub fn @N@Find(text: str) -> @N@? {
     const p = @N@Program()
-    const s = @N@Run(p, text, 0, 0, false, -1)
+    const s = @N@Run(p, text, 0, -1, @N@Bits(p, text))
     if s[0] < 0 { return none }
     @N@Of(text, s)
 }
@@ -932,10 +1013,11 @@ pub fn @N@Find(text: str) -> @N@? {
 pub fn @N@FindAll(text: str) -> [@N@] {
     const p = @N@Program()
     var out: [@N@] = []
+    const bits = @N@Bits(p, text)
     var from = 0
     var noEmpty = -1
     while from <= text.len() {
-        const s = @N@Run(p, text, from, 0, false, noEmpty)
+        const s = @N@Run(p, text, from, noEmpty, bits)
         if s[0] < 0 { break }
         out.push!(@N@Of(text, s))
         from = s[1]
@@ -944,7 +1026,10 @@ pub fn @N@FindAll(text: str) -> [@N@] {
     out
 }
 
-pub fn @N@IsMatch(text: str) -> bool = @N@Run(@N@Program(), text, 0, 0, false, -1)[0] >= 0
+pub fn @N@IsMatch(text: str) -> bool {
+    const p = @N@Program()
+    @N@Run(p, text, 0, -1, @N@Bits(p, text))[0] >= 0
+}
 "##;
 
 fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
@@ -1042,6 +1127,7 @@ fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
     let (y, _) = list(&program.y);
     let (ranges, r) = list(&program.ranges);
     let (classes, c) = list(&program.classes);
+    let (looks, l) = list(&program.looks);
     let slots = 2 * (program.groups + 1);
     let text = TEMPLATE
         .replace("@N@", n)
@@ -1050,11 +1136,14 @@ fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
         .replace("@MS@", &(m * slots).to_string())
         .replace("@R@", &r.to_string())
         .replace("@C@", &c.to_string())
+        .replace("@L@", &l.to_string())
+        .replace("@NL@", &program.looks.len().to_string())
         .replace("@OP@", &op)
         .replace("@X@", &x)
         .replace("@Y@", &y)
         .replace("@RANGES@", &ranges)
         .replace("@CLASSES@", &classes)
+        .replace("@LOOKS@", &looks)
         .replace("@BODY@", &body)
         .replace("@BUILD@", &build);
     let mut out = String::new();

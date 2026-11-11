@@ -31,6 +31,8 @@ pub struct regex {
     classes: [int]
     groupCount: int
     names: [string]
+    /// Where the reversed program of each lookahead body starts (it ends at its own `MATCH`).
+    looks: [int]
 }
 
 /// Instruction codes.
@@ -42,8 +44,8 @@ const JMP: int = 4
 const SAVE: int = 5
 const ASSERT: int = 6
 const MATCH: int = 7
+/// A lookahead: `x` is the number of its bit table (see `lookBits`), `y` is 1 for `(?!...)`.
 const LOOK: int = 8
-const LOOKEND: int = 9
 
 /// Syntax tree node kinds.
 const N_EMPTY: int = 0
@@ -422,6 +424,8 @@ struct code {
     op: [int]
     x: [int]
     y: [int]
+    /// Tree nodes of the lookahead bodies met so far; each is compiled reversed after the main program.
+    pending: [int]
 }
 
 fn emit(inout c: code, op: int, x: int, y: int) -> int {
@@ -437,7 +441,9 @@ fn splitTo(inout c: code, split: int, body: int, after: int, greedy: bool) {
     c.y[split] = greedy ? after : body
 }
 
-fn compileNode(inout c: code, t: tree, n: int) {
+/// Compiles a node. A reversed body (`rev`) is matched from its end to its start, for the scan that gives the lookahead
+/// bit of every position; it has no capture slots.
+fn compileNode(inout c: code, t: tree, n: int, rev: bool) {
     const kind = t.kind[n]
     if kind == N_BYTE {
         emit(inout c, CHAR, t.a[n], 0)
@@ -446,56 +452,54 @@ fn compileNode(inout c: code, t: tree, n: int) {
     } else if kind == N_CLASS {
         emit(inout c, CLASS, t.a[n], 0)
     } else if kind == N_CAT {
-        compileNode(inout c, t, t.a[n])
-        compileNode(inout c, t, t.b[n])
+        compileNode(inout c, t, rev ? t.b[n] : t.a[n], rev)
+        compileNode(inout c, t, rev ? t.a[n] : t.b[n], rev)
     } else if kind == N_ALT {
         const split = emit(inout c, SPLIT, 0, 0)
         c.x[split] = c.op.len()
-        compileNode(inout c, t, t.a[n])
+        compileNode(inout c, t, t.a[n], rev)
         const jmp = emit(inout c, JMP, 0, 0)
         c.y[split] = c.op.len()
-        compileNode(inout c, t, t.b[n])
+        compileNode(inout c, t, t.b[n], rev)
         c.x[jmp] = c.op.len()
     } else if kind == N_STAR {
         const split = emit(inout c, SPLIT, 0, 0)
         const body = c.op.len()
-        compileNode(inout c, t, t.a[n])
+        compileNode(inout c, t, t.a[n], rev)
         emit(inout c, JMP, split, 0)
         splitTo(inout c, split, body, c.op.len(), t.b[n] == 1)
     } else if kind == N_PLUS {
         const body = c.op.len()
-        compileNode(inout c, t, t.a[n])
+        compileNode(inout c, t, t.a[n], rev)
         const split = emit(inout c, SPLIT, 0, 0)
         splitTo(inout c, split, body, c.op.len(), t.b[n] == 1)
     } else if kind == N_QUEST {
         const split = emit(inout c, SPLIT, 0, 0)
         const body = c.op.len()
-        compileNode(inout c, t, t.a[n])
+        compileNode(inout c, t, t.a[n], rev)
         splitTo(inout c, split, body, c.op.len(), t.b[n] == 1)
     } else if kind == N_GROUP {
-        emit(inout c, SAVE, 2 * t.b[n], 0)
-        compileNode(inout c, t, t.a[n])
-        emit(inout c, SAVE, 2 * t.b[n] + 1, 0)
+        if !rev { emit(inout c, SAVE, 2 * t.b[n], 0) }
+        compileNode(inout c, t, t.a[n], rev)
+        if !rev { emit(inout c, SAVE, 2 * t.b[n] + 1, 0) }
     } else if kind == N_ASSERT {
         emit(inout c, ASSERT, t.a[n], 0)
     } else if kind == N_LOOK {
-        const look = emit(inout c, LOOK, 0, t.b[n])
-        compileNode(inout c, t, t.a[n])
-        emit(inout c, LOOKEND, 0, 0)
-        c.x[look] = c.op.len()
+        emit(inout c, LOOK, c.pending.len(), t.b[n])
+        c.pending.push!(t.a[n])
     } else if kind == N_REPEAT {
         const lo = t.b[n]
         const hi = t.c[n]
         const greedy = t.d[n] == 1
         var i = 0
         while i < lo {
-            compileNode(inout c, t, t.a[n])
+            compileNode(inout c, t, t.a[n], rev)
             i += 1
         }
         if hi < 0 {
             const split = emit(inout c, SPLIT, 0, 0)
             const body = c.op.len()
-            compileNode(inout c, t, t.a[n])
+            compileNode(inout c, t, t.a[n], rev)
             emit(inout c, JMP, split, 0)
             splitTo(inout c, split, body, c.op.len(), greedy)
         } else {
@@ -503,7 +507,7 @@ fn compileNode(inout c: code, t: tree, n: int) {
             var k = lo
             while k < hi {
                 pending.push!(emit(inout c, SPLIT, 0, 0))
-                compileNode(inout c, t, t.a[n])
+                compileNode(inout c, t, t.a[n], rev)
                 k += 1
             }
             var j = 0
@@ -528,11 +532,20 @@ pub fn compile(pattern: str) -> regex ! parse_error {
     }
     const root = parseAlt(inout p, pattern, 0)?
     if p.pos < pattern.len() { return err(fail("an unmatched `)`")) }
-    var c = code { op: [], x: [], y: [] }
+    var c = code { op: [], x: [], y: [], pending: [] }
     emit(inout c, SAVE, 0, 0)
-    compileNode(inout c, p.nodes, root)
+    compileNode(inout c, p.nodes, root, false)
     emit(inout c, SAVE, 1, 0)
     emit(inout c, MATCH, 0, 0)
+    /// The lookahead bodies, reversed, one after the other (a body may meet more lookaheads: they get later numbers).
+    var looks: [int] = []
+    var w = 0
+    while w < c.pending.len() {
+        looks.push!(c.op.len())
+        compileNode(inout c, p.nodes, c.pending[w], true)
+        emit(inout c, MATCH, 0, 0)
+        w += 1
+    }
     ok(regex {
         op: copy c.op,
         x: copy c.x,
@@ -541,6 +554,7 @@ pub fn compile(pattern: str) -> regex ! parse_error {
         classes: copy p.classes,
         groupCount: p.groups,
         names: copy p.names,
+        looks: looks,
     })
 }
 
@@ -553,6 +567,7 @@ pub fn fromTables(
     sink classes: [int],
     groupCount: int,
     sink names: [string],
+    sink looks: [int],
 ) -> regex = regex {
     op: op,
     x: x,
@@ -561,6 +576,7 @@ pub fn fromTables(
     classes: classes,
     groupCount: groupCount,
     names: names,
+    looks: looks,
 }
 
 /// ---- Running ---------------------------------------------------------------------------------------
@@ -592,19 +608,28 @@ fn classHas(re: regex, index: int, b: int) -> bool {
     re.classes[index * 3 + 2] == 1 ? !inside : inside
 }
 
-fn addThread(re: regex, text: str, inout list: threads, pc: int, pos: int, caps: [int], gen: int) {
+fn addThread(
+    re: regex,
+    text: str,
+    inout list: threads,
+    pc: int,
+    pos: int,
+    caps: [int],
+    gen: int,
+    bits: [int],
+) {
     if list.mark[pc] == gen { return }
     list.mark[pc] = gen
     const op = re.op[pc]
     if op == JMP {
-        addThread(re, text, inout list, re.x[pc], pos, caps, gen)
+        addThread(re, text, inout list, re.x[pc], pos, caps, gen, bits)
     } else if op == SPLIT {
-        addThread(re, text, inout list, re.x[pc], pos, caps, gen)
-        addThread(re, text, inout list, re.y[pc], pos, caps, gen)
+        addThread(re, text, inout list, re.x[pc], pos, caps, gen, bits)
+        addThread(re, text, inout list, re.y[pc], pos, caps, gen, bits)
     } else if op == SAVE {
         var next = copy caps
         next[re.x[pc]] = pos
-        addThread(re, text, inout list, pc + 1, pos, next, gen)
+        addThread(re, text, inout list, pc + 1, pos, next, gen, bits)
     } else if op == ASSERT {
         const kind = re.x[pc]
         const before = pos > 0 ? text.byteAt(pos - 1) to int : -1
@@ -622,11 +647,11 @@ fn addThread(re: regex, text: str, inout list: threads, pc: int, pos: int, caps:
             const edge = (before >= 0 && isWord(before)) != (after >= 0 && isWord(after))
             holds = kind == 2 ? edge : !edge
         }
-        if holds { addThread(re, text, inout list, pc + 1, pos, caps, gen) }
+        if holds { addThread(re, text, inout list, pc + 1, pos, caps, gen, bits) }
     } else if op == LOOK {
-        /// A lookahead runs its body as a small anchored match at this position.
-        const inside = runFrom(re, text, pos, pc + 1, true, -1).len() > 0
-        if inside != (re.y[pc] == 1) { addThread(re, text, inout list, re.x[pc], pos, caps, gen) }
+        /// The bit of this lookahead at this position was worked out before the match started.
+        const inside = bits[re.x[pc] * (text.len() + 1) + pos] == 1
+        if inside != (re.y[pc] == 1) { addThread(re, text, inout list, pc + 1, pos, caps, gen, bits) }
     } else {
         list.pcs.push!(pc)
         var i = 0
@@ -647,19 +672,66 @@ fn slice(from: [int], start: int, end: int) -> [int] {
     out
 }
 
-/// The slots of the first match at or after `from`, or an empty list.
-fn run(re: regex, text: str, from: int, noEmptyAt: int) -> [int] = runFrom(
-    re,
-    text,
-    from,
-    0,
-    false,
-    noEmptyAt,
-)
+/// One bit for every lookahead and every position: does the body match starting there? Each body is run once,
+/// reversed, from the end of the text to the start, so the work is `O(text * states)` however far a body looks.
+/// A body that holds another lookahead has a lower number than it, so the inner bits are ready first.
+fn lookBits(re: regex, text: str) -> [int] {
+    var bits: [int] = []
+    const n1 = text.len() + 1
+    var i = 0
+    while i < re.looks.len() * n1 {
+        bits.push!(0)
+        i += 1
+    }
+    var k = re.looks.len() - 1
+    while k >= 0 {
+        var current = threads { pcs: [], caps: [], mark: [] }
+        var following = threads { pcs: [], caps: [], mark: [] }
+        var m = 0
+        while m < re.op.len() {
+            current.mark.push!(-1)
+            following.mark.push!(-1)
+            m += 1
+        }
+        var gen = 0
+        var pos = text.len()
+        while pos >= 0 {
+            addThread(re, text, inout current, re.looks[k], pos, [], gen, bits)
+            const byte = pos > 0 ? text.byteAt(pos - 1) to int : -1
+            var t = 0
+            while t < current.pcs.len() {
+                const pc = current.pcs[t]
+                const op = re.op[pc]
+                var advance = false
+                if op == MATCH {
+                    bits[k * n1 + pos] = 1
+                } else if op == CHAR {
+                    advance = byte == re.x[pc]
+                } else if op == ANY {
+                    advance = byte >= 0 && (re.x[pc] == 1 || byte != 10)
+                } else if op == CLASS {
+                    advance = byte >= 0 && classHas(re, re.x[pc], byte)
+                }
+                if advance { addThread(re, text, inout following, pc + 1, pos - 1, [], gen + 1, bits) }
+                t += 1
+            }
+            const nextPcs = copy following.pcs
+            following.pcs = []
+            current.pcs = nextPcs
+            const marks = copy current.mark
+            current.mark = copy following.mark
+            following.mark = marks
+            gen += 1
+            pos -= 1
+        }
+        k -= 1
+    }
+    bits
+}
 
-/// Runs the program from `startPc`; `anchored` allows a match only at `from` (a lookahead body ends at `LOOKEND`).
+/// The slots of the first match at or after `from`, or an empty list. `bits` comes from `lookBits`.
 /// A match that is empty and sits at `noEmptyAt` is skipped (the next match after an empty one must advance).
-fn runFrom(re: regex, text: str, from: int, startPc: int, anchored: bool, noEmptyAt: int) -> [int] {
+fn run(re: regex, text: str, from: int, noEmptyAt: int, bits: [int]) -> [int] {
     const slots = 2 * (re.groupCount + 1)
     var current = threads { pcs: [], caps: [], mark: [] }
     var following = threads { pcs: [], caps: [], mark: [] }
@@ -673,27 +745,25 @@ fn runFrom(re: regex, text: str, from: int, startPc: int, anchored: bool, noEmpt
     var pos = from
     var gen = 0
     while pos <= text.len() {
-        if matched.len() == 0 && (!anchored || pos == from) {
+        if matched.len() == 0 {
             var start: [int] = []
             var k = 0
             while k < slots {
                 start.push!(-1)
                 k += 1
             }
-            addThread(re, text, inout current, startPc, pos, start, gen)
+            addThread(re, text, inout current, 0, pos, start, gen, bits)
         }
-        if current.pcs.len() == 0 && (matched.len() > 0 || anchored) { break }
+        if current.pcs.len() == 0 && matched.len() > 0 { break }
         const byte = pos < text.len() ? text.byteAt(pos) to int : -1
         var t = 0
         while t < current.pcs.len() {
             const pc = current.pcs[t]
             const op = re.op[pc]
             var advance = false
-            if (op == MATCH || op == LOOKEND) &&
-                current.caps[t * slots] == pos &&
-                pos == noEmptyAt {
+            if op == MATCH && current.caps[t * slots] == pos && pos == noEmptyAt {
                 advance = false
-            } else if op == MATCH || op == LOOKEND {
+            } else if op == MATCH {
                 matched = slice(current.caps, t * slots, (t + 1) * slots)
                 break
             } else if op == CHAR {
@@ -705,7 +775,7 @@ fn runFrom(re: regex, text: str, from: int, startPc: int, anchored: bool, noEmpt
             }
             if advance {
                 const carried = slice(current.caps, t * slots, (t + 1) * slots)
-                addThread(re, text, inout following, pc + 1, pos + 1, carried, gen + 1)
+                addThread(re, text, inout following, pc + 1, pos + 1, carried, gen + 1, bits)
             }
             t += 1
         }
@@ -740,11 +810,11 @@ impl regex {
     }
 
     //~ Whether the pattern matches anywhere in `text`.
-    fn isMatch(self, text: str) -> bool = run(self, text, 0, -1).len() > 0
+    fn isMatch(self, text: str) -> bool = run(self, text, 0, -1, lookBits(self, text)).len() > 0
 
     //~ The first match.
     fn find(self, text: str) -> found? {
-        const slots = run(self, text, 0, -1)
+        const slots = run(self, text, 0, -1, lookBits(self, text))
         if slots.len() == 0 { return none }
         found { start: slots[0], end: slots[1], groups: slots }
     }
@@ -752,10 +822,11 @@ impl regex {
     //~ Every match, left to right, without overlaps. After an empty match the next one must not be empty at the same place (as in Python 3.7 and later).
     fn findAll(self, text: str) -> [found] {
         var out: [found] = []
+        const bits = lookBits(self, text)
         var from = 0
         var noEmpty = -1
         while from <= text.len() {
-            const slots = run(self, text, from, noEmpty)
+            const slots = run(self, text, from, noEmpty, bits)
             if slots.len() == 0 { break }
             const start = slots[0]
             const end = slots[1]
