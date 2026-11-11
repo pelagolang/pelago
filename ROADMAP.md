@@ -19,6 +19,7 @@ A serious, self-hosting systems language:
 | Execution | Ahead-of-time compiled, no GC, no runtime | decided |
 | Typing | Static, with local type inference | decided |
 | Syntax family | Braces, TS/Rust-like, no significant indentation | decided |
+| Installed packages | A package from Islet is named by its key (`import json.decode`); a second major is a path segment (`import json.v2.decode`). Every package has its own import table, so versions may differ between packages. The compiler reads `deps/map.yaml` and never runs Islet | decided 2026-11-10 |
 | Memory safety | Value semantics (read-only by default, plus `inout` / `sink` access modes; second-class references) | decided, pending the paper test below |
 | Backend | One backend, our own, from day one | decided |
 | Second native target | AArch64 Linux static ELF from a second generator beside the x86-64 one (`gen_a64.rs`, `rt_a64.rs`), same IR and same semantics, tested under `qemu-aarch64` and on ARM runners; Windows on ARM and macOS built (run in CI on ARM runners) (`docs/plans/cards/A-10-aarch64.md`) | decided |
@@ -39,10 +40,12 @@ A serious, self-hosting systems language:
 | Linear types | Opt-in `linear` modifier, staged after the type checker; `linear` reserved as a soft keyword | decided |
 | Collections | `docs/design/collections.md` decisions C1 to C8 recorded (must-exist indexing, negative indexes, insertion-ordered maps, `string`/`str`, `+` and spread); builders (own comprehension shape: `[x of xs if x > 0 ~> x * 2]`) added | decided |
 | Errors | `docs/design/errors.md` decisions E1 to E8: expected failures are `result`/`option`, bugs stop the program (no unwinding), overflow stops in every build with `+% -% *%` for wrapping, `converts` for `?` and `to` | decided |
+| Braid | `docs/design/alternating.md`: the owner's alternating fixed-size type is called a **braid**, spelled `(A, B; N)` or `braid<A, B; N>`; literal by annotation, no runtime `x[i]` on a mixed cycle (`first(p)`/`second(p)`), odd `N` with `tail()`, flat JSON array, natural padding; long spellings `unbraid`/`strands` kept; built 2026-11-09 | built |
 | Concurrency | `docs/design/concurrency.md` decisions CC1 to CC9: threads with `sink`/copy capture, scopes, `chan<T>` pairs, `select`, `shared`/`lock`/`atomic`; async still deferred (decided 2026-11-07: async runs on stackful tasks, no unwinding on cancel, detached tasks abandoned at the end of `main`; see `docs/design/concurrency-runtime.md` section 9); `par_for` helper; global `var` forbidden | decided |
 | Narrow links | `docs/design/narrow-links.md` NL1 to NL4: pool-relative `link<T, W>` into `pool<T, W>`, width always written, pool on its own card (A-14, after the arenas of A-13) | decided |
 | Naming | `docs/design/basics.md` B8: function and method names are camelCase by default (library and examples); snake_case still accepted | decided |
 | Typed JSON decoding | `@derive(fromJson)` writes ordinary Pelago (a decoder `<type>FromJson` and `<type>Decode(text)`) over the helpers of `std.json`; whole numbers stay exact, range errors are errors (not wraps or stops), errors carry a path, line and column found by walking the text only on failure; enums are the case name or a one-member object (`docs/design/json.md`) | decided (defaults; questions open) |
+| Regular expressions | Two engines, one pattern language: a Pike VM reference in `std.regex` (run-time patterns) and `@regex("...")` on a struct, which the compiler reads and compiles (named groups are typed fields, errors at the attribute, no run-time pattern errors, time linear in the text); lookahead yes (linear, one reversed scan per body), lookbehind no; backreferences by tiers: a finite group is rewritten into alternatives (linear), anything else runs a budgeted search that answers `matched`, `nomatch` or `gaveUp` (`docs/design/regex.md`) | decided (owner, 2026-11-10); built (S-10, S-11) |
 | List patterns | `docs/design/list-patterns.md` LP1 to LP8: `[first, ...rest]` with `...`, rest is a view, `some(v)` for options, patterns over text, `sink` elements revisited later | decided |
 | Parser | `docs/design/parser.md` P1 to P10 decided: top-level statements, `loop` values, loop labels (`outer: for ...`, `break outer`), closure return types (`(x: int) -> int ~> ...`), doc comments kept, syntax checks pass | decided |
 | Checker | `docs/design/checker.md`: all five stages built (names, types, interfaces, exhaustiveness, value semantics); TC1 to TC13 decided, VS1 to VS6 chosen (literals, two implicit conversions, no same-scope redeclaration, `fn` types are views, empty literals need context, integer division, equality) | decided |
@@ -61,6 +64,7 @@ A serious, self-hosting systems language:
 | Loops | `for x of items` (values), `for k in map` (keys, ranges), `for i, x of items` | decided |
 | Operators | Symbols only (`&&` `\|\|` `!` `^` `%`), no word forms | decided |
 | Access modes | `let` / `inout` / `sink` apply everywhere a name is bound | decided |
+| Access mode short spellings | Postfix `x!` = `inout x`, `x!!` = `sink x`, next to the words (`functions.md` F3b); formatter keeps the author's spelling | decided 2026-11-10, built |
 | Visibility | `pub` and `priv`; private is the default | decided |
 | Functional | Closures, enums with pattern matching, higher-order functions | decided |
 | Functions | `fn` (chosen because `fnc` splits into two tokens in most tokenizers) | decided |

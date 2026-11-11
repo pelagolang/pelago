@@ -87,6 +87,14 @@ impl<'p> Checker<'p> {
                 let Some(mdef) = found else {
                     continue;
                 };
+                // A braid impl is written for one cycle length; skip the others before making fresh variables.
+                if let (TyKind::AltTuple(a, _), TyKind::AltTuple(b, _)) =
+                    (self.kind_of(r), self.kind_of(self.impls[idx].self_ty))
+                {
+                    if a.len() != b.len() {
+                        continue;
+                    }
+                }
                 let gens = self.impls[idx].generics.clone();
                 let map = self.fresh_map(&gens, span);
                 let inst = self.tt.subst(self.impls[idx].self_ty, &map);
@@ -1069,6 +1077,16 @@ impl<'p> Checker<'p> {
             }
             let s = self.show(recv);
             let mut msg = format!("`{s}` has no method `{n}`");
+            if let TyKind::AltTuple(ts, _) = &rk {
+                if ts.len() != 2 && BRAID_METHODS.contains(&n) {
+                    msg = format!(
+                        "`{s}` has a cycle of {} types; `{n}` is written for a cycle of two. Use a constant position like `x[3]`",
+                        ts.len()
+                    );
+                } else if ts.len() == 2 && n == "toArray" {
+                    msg = format!("`toArray` needs every slot to have one type, but `{s}` has two; use `split()` or `evens()`");
+                }
+            }
             let cands = self.candidate_methods(recv);
             if let Some(c) = self.closest(n, cands.iter().map(|s| s.as_str())) {
                 msg.push_str(&format!("; did you mean `{c}`?"));
@@ -1109,6 +1127,7 @@ impl<'p> Checker<'p> {
         self.note_call(e.span, m.def, &map);
         self.match_args(&m.sig.params, &map, args, e.span, n);
         let ret = self.tt.subst(m.sig.ret, &map);
+        self.braid_rules(e, recv, n, args, ret);
         if wrap {
             if matches!(self.kind_of(ret), TyKind::Option(_)) {
                 ret
@@ -1117,6 +1136,63 @@ impl<'p> Checker<'p> {
             }
         } else {
             ret
+        }
+    }
+
+    /// What a braid method's signature cannot say (docs/design/alternating.md, section 3 and 4): `tail` needs an
+    /// odd length, `swap` an even one, `mapPairs` keeps the tail so its type may not change, and a pair number
+    /// written as a constant must be inside the braid.
+    fn braid_rules(&mut self, e: &'p Expr, recv: Ty, name: &str, args: &'p [Arg], ret: Ty) {
+        let TyKind::AltTuple(ts, ArrayLen::Known(n)) = self.kind_of(recv) else {
+            return;
+        };
+        if ts.len() != 2 {
+            return;
+        }
+        match name {
+            "tail" if n % 2 == 0 => self.err(
+                e.span,
+                format!("a braid of {n} slots has no tail: every slot belongs to a pair; `tail()` needs an odd length"),
+            ),
+            "swap" if n % 2 == 1 => self.err(
+                e.span,
+                format!("`swap` needs an even length, but this braid has {n} slots; the last slot would have no partner"),
+            ),
+            "asPairs" if n % 2 == 1 => self.err(
+                e.span,
+                format!("`asPairs` needs an even length, but this braid has {n} slots; the last slot would have no partner (use `split` or `tail`)"),
+            ),
+            "mapPairs" if n % 2 == 1 => {
+                let r = self.tt.zonk(ret);
+                if let TyKind::AltTuple(rs, _) = self.kind_of(r) {
+                    let a = self.tt.zonk(ts[0]);
+                    if rs.first().map(|c| self.tt.zonk(*c)) != Some(a) {
+                        let s = self.show(a);
+                        self.err(
+                            e.span,
+                            format!("this braid has {n} slots, so its last slot is kept as it is and must stay `{s}`; `mapPairs` has to return a `{s}` first"),
+                        );
+                    }
+                }
+            }
+            "first" | "second" | "setFirst" | "setSecond" => {
+                if let Some(p) = args.first() {
+                    if matches!(p.value.kind, ExprKind::Int) {
+                        let text = self.program.module(self.file).src
+                            [p.value.span.start as usize..p.value.span.end as usize]
+                            .replace('_', "");
+                        if let Ok(p) = text.parse::<u64>() {
+                            if p >= n / 2 {
+                                self.err(
+                                    p_span(&args[0]),
+                                    format!("pair {p} is out of range: this braid has {} pairs", n / 2),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1152,4 +1228,31 @@ impl<'p> Checker<'p> {
         let ret = self.tt.subst(sig.ret, &map);
         self.tt.mk(TyKind::Fn(params, ret, false))
     }
+}
+
+/// The methods the library writes for a braid with a cycle of two types.
+const BRAID_METHODS: &[&str] = &[
+    "first",
+    "second",
+    "setFirst",
+    "setSecond",
+    "tail",
+    "pairs",
+    "pairIter",
+    "evens",
+    "odds",
+    "strands",
+    "split",
+    "unbraid",
+    "mapPairs",
+    "mapEvens",
+    "mapOdds",
+    "swap",
+    "asPairs",
+    "firstStrand",
+    "secondStrand",
+];
+
+fn p_span(a: &Arg) -> Span {
+    a.value.span
 }

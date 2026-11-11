@@ -164,10 +164,12 @@ runtime period, with the interpreter version making it testable in the meantime.
    sets its cancelled flag and resumes it once, so a body that checks `cancelled()` can finish; whatever it still
    holds after that is not dropped (its stack is freed). A cancelled task stops at its next check of `cancelled()`;
    its scope releases locks and arenas. Both are consistent with CC1 (a stop never unwinds).
-4. **Detached tasks are abandoned when `main` ends** (structured `scope`s still join). Not yet implemented: `main`
-   still waits for unfinished tasks.
+4. **Detached tasks are abandoned when `main` ends** (structured `scope`s still join their own tasks). Done: a task not
+   started through `s.spawn` that is unfinished when `main` ends never runs again; one that never started drops its
+   closure, one that did start leaks what its stack holds (nothing unwinds).
 5. **Default stack 256 KiB** (coroutines use 64 KiB), with a guard page and the task stack pool from the heap work.
 
 Library names: `yield` is a hard keyword kept for a later generator syntax, so a coroutine hands a value out with
 `co.emit(v)`; `coroutine<T>(co ~> ...)`, `g.next()`, `g.iter()`, `co.cancelled()`; `t.cancel()` and `cancelled()` for tasks.
-`s.cancel()` for a whole scope and `case cancelled()` in `select` are still to do.
+`s.cancel()` asks every task started with `s.spawn` (also later ones) to stop; `case cancelled()` works in `select`.
+A task carries its scope's id, so a scope waits only for its own tasks.

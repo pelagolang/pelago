@@ -283,7 +283,7 @@ impl<'a> Lowerer<'a> {
                 let nv = self.i64c(n);
                 self.each_elem(p, nv, esize, |s, ep, _| s.drop_at(ep, e));
             }
-            TyKind::Tuple(_) => self.drop_fields(p, ty),
+            TyKind::Tuple(_) | TyKind::AltTuple(..) => self.drop_fields(p, ty),
             TyKind::Adt(d, args) => match self.res.def(d).kind {
                 DefKind::Obj => self.drop_object(p, ty),
                 DefKind::Enum => {
@@ -475,7 +475,7 @@ impl<'a> Lowerer<'a> {
                     s.clone_into(sp, dp, e);
                 });
             }
-            TyKind::Tuple(_) => self.clone_fields(src, dst, ty),
+            TyKind::Tuple(_) | TyKind::AltTuple(..) => self.clone_fields(src, dst, ty),
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Obj => self.clone_object(src, dst, ty),
                 DefKind::Enum => self.clone_enum(src, dst, ty),

@@ -74,6 +74,8 @@ pub ext fn rtToChar(n: int) -> char
 pub ext fn rtShowTo<T>(src: ptr, out: ptr)
 pub ext fn rtShowItemTo<T>(src: ptr, out: ptr)
 pub ext fn rtSizeOf<T>() -> int
+//~ The byte offset of slot `i` (a number written in the source) in a tuple, braid or struct type `T`.
+pub ext fn rtSlotOff<T>(i: int) -> int
 pub ext fn rtIsInt<T>() -> bool
 //~ Whether `T` is `uint8`, `uint16` or `uint32`.
 pub ext fn rtIsSmallUint<T>() -> bool

@@ -83,6 +83,33 @@ impl<'a> Lowerer<'a> {
         Res::Unit
     }
 
+    /// `(a, b; 6)`: the items written again and again, in order, up to the length of the braid.
+    pub(crate) fn braid_repeat_lit(
+        &mut self,
+        e: &'a Expr,
+        es: &'a [Expr],
+        dst: Value,
+        t: Ty,
+    ) -> Res {
+        let fs = self.struct_fields(t);
+        if es.is_empty() {
+            return self.unsupported(e.span, "a braid without items");
+        }
+        // Each item is computed once; later rounds copy the finished slot.
+        for (i, f) in fs.iter().enumerate() {
+            let p = self.at(dst, f.off);
+            if i < es.len() {
+                if let Res::Never = self.into(&es[i], p, f.ty) {
+                    return Res::Never;
+                }
+            } else {
+                let src = self.at(dst, fs[i - es.len()].off);
+                self.clone_into(src, p, f.ty);
+            }
+        }
+        Res::Unit
+    }
+
     pub(crate) fn struct_lit(
         &mut self,
         e: &'a Expr,

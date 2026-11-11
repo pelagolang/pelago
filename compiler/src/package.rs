@@ -8,7 +8,7 @@
 use crate::ast::{File, ItemKind, StmtKind};
 use crate::parser::{parse_and_check_with, ParseOptions};
 use crate::span::Span;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 /// The modules of the `core` package: `(module path, source)`. `core.pel` is the front file (the index) of
@@ -30,6 +30,7 @@ pub const CORE_MODULES: &[(&str, &str)] = &[
     ("core.heap", include_str!("../core/core/heap.pel")),
     ("core.columns", include_str!("../core/core/columns.pel")),
     ("core.objects", include_str!("../core/core/objects.pel")),
+    ("core.braid", include_str!("../core/core/braid.pel")),
 ];
 
 /// The modules of the `std` package: `(module name, source)`. The files live in `compiler/std/`.
@@ -79,6 +80,13 @@ pub struct Package {
     pub name: String,
     /// The top-level modules.
     pub roots: Vec<ModuleId>,
+    /// What the first segment of an import means inside this package: an installed dependency
+    /// (`json` is the package `json@1.5.0`). Each package has its own table, so two packages may
+    /// use different versions of one dependency.
+    pub imports: BTreeMap<String, PackageId>,
+    /// A second major of a dependency, by the first two segments: `("json", "v2")` is what
+    /// `import json.v2.decode` reaches.
+    pub majors: BTreeMap<(String, String), PackageId>,
 }
 
 /// Everything being compiled: the packages and all their modules.
@@ -130,6 +138,8 @@ impl Program {
             id: pid,
             name: name.to_string(),
             roots: Vec::new(),
+            imports: BTreeMap::new(),
+            majors: BTreeMap::new(),
         });
         let mut by_path: HashMap<String, ModuleId> = HashMap::new();
         // Real files first, so a front file is never replaced by a made-up parent.
@@ -242,7 +252,11 @@ impl Program {
         let mut src = src;
         let mut file = out.file;
         // `@derive(fromJson)` appends the decoders it writes and the module is read again.
-        let derived = crate::derive::expand(&src, &file);
+        let mut derived = crate::derive::expand(&src, &file);
+        // `@regex("...")` appends the compiled pattern and its functions the same way.
+        let patterns = crate::regexgen::expand(&src, &file);
+        derived.errors.extend(patterns.errors);
+        derived.text.push_str(&patterns.text);
         for (span, message) in derived.errors {
             self.diagnostics.push(Diagnostic {
                 module: id,
@@ -305,7 +319,9 @@ impl Program {
             .iter()
             .map(|(p, s)| (p.as_str(), s.as_str()))
             .collect();
-        Ok(self.add_package(&name, &refs))
+        let pid = self.add_package(&name, &refs);
+        self.add_dependencies(root, pid)?;
+        Ok(pid)
     }
 }
 
@@ -319,6 +335,10 @@ pub(crate) fn collect_files(
     for entry in entries {
         let path = entry.map_err(|e| e.to_string())?.path();
         if path.is_dir() {
+            // `deps/` is where Islet links installed packages; they are not part of this one.
+            if path.file_name().is_some_and(|n| n == "deps") && path.join("map.yaml").is_file() {
+                continue;
+            }
             collect_files(root, &path, out)?;
         } else if path.extension().and_then(|e| e.to_str()) == Some("pel") {
             let rel = path.strip_prefix(root).unwrap_or(&path).with_extension("");

@@ -1,0 +1,18 @@
+/// `firstStrand` and `secondStrand` look at every other slot in place; nothing is copied until `at`, `iter` or `toList`.
+fn total(s: strand<int>) -> int {
+    var t = 0
+    for x of s { t += x }
+    return t
+}
+
+fn main() {
+    var b: (int, string; 5) = (1, "a", 2, "b", 3)
+    const f = b.firstStrand()
+    const g = b.secondStrand()
+    print(f.len(), g.len(), f.at(1), g.at(-1), total(f))
+    print(g.toList())
+    b.setFirst!(1, 20)
+    print(b.firstStrand().at(1))
+    const tiny: (int, int; 2) = (7, 8)
+    print(tiny.firstStrand().at(0), tiny.secondStrand().at(0))
+}

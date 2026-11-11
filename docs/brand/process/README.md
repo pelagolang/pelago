@@ -37,7 +37,7 @@ All on checkerboards where transparency matters. These live in `assets/brand/pre
 | [identity](../../../assets/brand/previews/1-identity.png) | Logos, colour variants, clear space, misuse, palette, typography. |
 | [icons](../../../assets/brand/previews/2-icons.png) | Size ladders on a checkerboard: web, desktop, editor, flat. |
 | [social and applications](../../../assets/brand/previews/3-social-and-applications.png) | Social images and applications. |
-| [file icons](../../../assets/brand/previews/4-file-icons.png) | `.pel` K1 to K4 and `pelago.toml` T1 to T4 (the gear, T4, was dropped), with explorer pairs. Chosen pair: solid and solid. |
+| [file icons](../../../assets/brand/previews/4-file-icons.png) | `.pel` K1 to K4 and `pelago.yaml` T1 to T4 (the gear, T4, was dropped), with explorer pairs. Chosen pair: solid and solid. |
 | [mark construction](../../../assets/brand/spec/mark-construction.png) | Grid, radii, stroke and measurements of the mark. |
 | [icon construction](../../../assets/brand/spec/icon-construction.png) | Corner roundness and safe zone of the app icon. |
 | [lockup clear space](../../../assets/brand/spec/lockup-clear-space.png) | Clear space x = 28 units, minimum lockup width 140 px, minimum mark 24 px. |

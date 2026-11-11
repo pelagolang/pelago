@@ -446,7 +446,7 @@ impl<'p> Resolver<'p> {
                 }
                 None
             }
-            TypeKind::FixedTuple(ts, n) => {
+            TypeKind::FixedTuple(ts, n, _) => {
                 for t in ts {
                     self.resolve_type(t);
                 }
@@ -857,6 +857,13 @@ impl<'p> Resolver<'p> {
                 for x in es {
                     self.resolve_expr(x);
                 }
+                None
+            }
+            ExprKind::BraidRepeat { items, count } => {
+                for x in items {
+                    self.resolve_expr(x);
+                }
+                self.resolve_expr(count);
                 None
             }
             ExprKind::List(items) | ExprKind::Set(items) | ExprKind::Soa(items) => {

@@ -2,7 +2,7 @@
 //!
 //! Tasks here run one after another, so `select` looks at its arms in order and takes the first that is
 //! ready: a `recv` whose channel has a value (or has no senders left), or a `send` whose channel has room
-//! (or has no receiver, so the send reports `closed`). When none is
+//! (or has no receiver, so the send reports `closed`), or `cancelled()` once the task was asked to stop. When none is
 //! ready it takes `default`; with no `default` it lets one waiting task run and looks again; when no task
 //! is left it takes the `timeout` arm, or stops (a deadlock).
 
@@ -11,6 +11,7 @@ use super::*;
 enum ArmKind<'a> {
     Recv(&'a Expr),
     Send(&'a Expr),
+    Cancelled,
     Timeout,
     Default,
 }
@@ -30,6 +31,7 @@ impl<'a> Lowerer<'a> {
                 _ => None,
             },
             ExprKind::Name(id) if self.src_text(id.span) == "timeout" => Some(ArmKind::Timeout),
+            ExprKind::Name(id) if self.src_text(id.span) == "cancelled" => Some(ArmKind::Cancelled),
             _ => None,
         }
     }
@@ -51,6 +53,16 @@ impl<'a> Lowerer<'a> {
             match kind {
                 ArmKind::Default => default_arm = Some(arm),
                 ArmKind::Timeout => timeout_arm = Some(arm),
+                ArmKind::Cancelled => {
+                    let Some(ready) = self.call_core("rtCancelled", vec![]) else {
+                        return Res::Never;
+                    };
+                    let go = self.new_block(&[]);
+                    let next = self.new_block(&[]);
+                    self.branch(ready, go, next);
+                    ready_arms.push((arm, go));
+                    self.start(next);
+                }
                 ArmKind::Recv(base) | ArmKind::Send(base) => {
                     let Some((p, _)) = self.scrutinee(base) else {
                         return Res::Never;

@@ -42,6 +42,25 @@ true 1 0-4 <aaab>
 true 2 0-2 2-2 <aa><>
 false 0  aaa
 true 1 1-2 a<b>
+true 1 0-3 <foo>bar foobaz
+true 1 7-10 foobar <foo>baz
+true 2 0-2 3-5 <ab> <cd> ef
+true 1 3-4 ab <a>c
+true 2 1-3 4-7 a<bc> <bcd>
+true 1 0-3 <aab>
+true 1 0-4 <1234>567 89
+true 3 0-1 1-2 4-5 <a><a>b <a>x a
+true 3 0-3 4-6 7-11 <ab1> <cd> <ef2x>
+true 1 0-1 <a>bc ab abd
+true 2 5-6 6-7 ab x <c><d>
+true 1 0-6 <abc123>
+false 0  abcdef
+true 1 3-4 ax <x>
+true 3 0-1 1-2 4-5 <a><a>b <a>b ac
+true 2 0-1 1-2 <a><b>
+some("2026") some("11") some("10") none
+some("1999") some("01") none none
+1 4 -1 4
 false false false false false false
 5 13 some("bob@home") some("bob") some("home") none none
 3 2 b.a $ | d.c $ |

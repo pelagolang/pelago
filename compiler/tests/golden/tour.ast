@@ -44,6 +44,10 @@
   (fn finish ((sink xs : (list int))) -> int = (call (. xs len)))
   (call clear (arg inout scores))
   (call finish (arg sink scores))
+  (fn clear2 ((inout xs : (list int))) (block (tail (call! (. xs clear)))))
+  (fn finish2 ((sink xs : (list int))) -> int = (call (. xs len)))
+  (call clear2 (arg inout scores))
+  (call finish2 (arg sink scores))
   (fn
     sum_to
     ((n : int) (acc : int = 0))
@@ -354,6 +358,15 @@
     dense
     ((points : (soa point 8)) (grid : (tuple int string ; 4)) (pair : (tuple int int)))
     (block))
+  (const names_by_id (: (braid int string ; 4)) (tuple 1 (str "one") 2 (str "two")))
+  (const blank (: (tuple int string ; 6)) (braid 0 (str) ; 6))
+  (fn
+    braids
+    ((t : (braid uint8 uint16 ; 6)))
+    ->
+    uint16
+    =
+    (+ (call (. t second) 0) (call (. t second) (neg 1))))
   (fn ext puts ((s : ptr)) -> int)
   (fn ext abs ((x : int)) -> int)
   (test (str "addition works") (block (tail (call assert (== (call add 1 2) 3)))))
