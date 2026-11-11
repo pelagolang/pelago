@@ -277,6 +277,20 @@ impl<T> list<T> {
     fn first(self) -> T? = self.get(0)
     fn last(self) -> T? = self.get(self.len() - 1)
 
+    //~ The items as an array of exactly `N` (the length comes from the type it lands in); `none` when the list has a different length.
+    fn toArray<meta N: int>(self) -> [T; N]? {
+        const h = rtAddrOf(self)
+        if rtHdrLen(h) != N { return none }
+        return rtClone<[T; N]>(rtHdrData(h))
+    }
+
+    //~ The same, for a list whose length is already known to be `N`; stops the program when it is not.
+    fn asArray<meta N: int>(self) -> [T; N] {
+        const h = rtAddrOf(self)
+        if rtHdrLen(h) != N { panic("asArray: the list has #(rtHdrLen(h)) items, not #N") }
+        return rtClone<[T; N]>(rtHdrData(h))
+    }
+
     fn push(inout self, sink item: T) {
         const h = rtAddrOf(self)
         const size = rtSizeOf<T>()

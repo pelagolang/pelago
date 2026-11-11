@@ -1,0 +1,10 @@
+matched is
+gaveUp
+nomatch
+the
+sat
+false
+some(false) some(true) none
+nomatch
+gaveUp
+matched some("")

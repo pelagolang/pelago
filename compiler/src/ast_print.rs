@@ -129,11 +129,11 @@ impl Printer<'_> {
             TypeKind::List(e) => list("list", vec![self.ty(e)]),
             TypeKind::Array(e, n) => list("array", vec![self.ty(e), self.expr(n)]),
             TypeKind::Tuple(ts) => list("tuple", ts.iter().map(|t| self.ty(t)).collect()),
-            TypeKind::FixedTuple(ts, n) => {
+            TypeKind::FixedTuple(ts, n, spelled) => {
                 let mut v: Vec<Sexp> = ts.iter().map(|t| self.ty(t)).collect();
                 v.push(atom(";"));
                 v.push(self.expr(n));
-                list("tuple", v)
+                list(if *spelled { "braid" } else { "tuple" }, v)
             }
             TypeKind::Option(e) => list("option", vec![self.ty(e)]),
             TypeKind::Result(a, b) => list("result", vec![self.ty(a), self.ty(b)]),
@@ -308,6 +308,12 @@ impl Printer<'_> {
             ExprKind::DotName(id) => atom(format!(".{}", id.text(self.src))),
             ExprKind::Paren(inner) => list("paren", vec![self.expr(inner)]),
             ExprKind::Tuple(es) => list("tuple", self.exprs(es)),
+            ExprKind::BraidRepeat { items, count } => {
+                let mut v = self.exprs(items);
+                v.push(atom(";"));
+                v.push(self.expr(count));
+                list("braid", v)
+            }
             ExprKind::List(items) => {
                 list("list", items.iter().map(|i| self.list_item(i)).collect())
             }

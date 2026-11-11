@@ -59,6 +59,13 @@ fn finish(sink xs: [int]) -> int = xs.len()
 clear(inout scores)
 finish(sink scores)
 
+/// Short spellings, same meaning: `x!` is `inout x`, `x!!` is `sink x`.
+fn clear2(xs!: [int]) { xs.clear!() }
+fn finish2(xs!!: [int]) -> int = xs.len()
+
+clear2(scores!)
+finish2(scores!!)
+
 fn sum_to(n: int, acc: int = 0) -> int {
     if n == 0 { return acc }
     become sum_to(n - 1, acc + n)
@@ -355,6 +362,10 @@ fn sized<meta N: int>() -> [int; N] { [0; N] }
 fn apply(f: fn(int) -> int, x: int) -> int = f(f(x))
 fn shapes_area(xs: [any shape_like]) -> float = 0.0
 fn dense(points: soa<point, 8>, grid: (int, string; 4), pair: (int, int)) { }
+/// A braid: N slots whose types alternate. The annotation makes a list a braid; `(a, b; 6)` repeats a cycle.
+const names_by_id: braid<int, string; 4> = (1, "one", 2, "two")
+const blank: (int, string; 6) = (0, ""; 6)
+fn braids(t: braid<uint8, uint16; 6>) -> uint16 = t.second(0) + t.second(-1)
 ext fn puts(s: ptr) -> int
 ext "C" fn abs(x: int) -> int
 

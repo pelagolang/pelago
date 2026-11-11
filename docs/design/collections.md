@@ -44,17 +44,21 @@ const own = copy xs[1..3]           // an independent list you can keep
 A slice is a view that lasts for one statement or one call, like every reference in this language. It cannot be stored
 in a struct or returned. `copy` makes a list you own.
 
-## 3. Fixed arrays and tuples
+## 3. Fixed arrays, tuples and braids
 
 ```
 var grid: [int; 9] = [0; 9]         // nine zeros: [value; count]
 const pair = (3, "three")           // a tuple
 const (n, label) = pair
-const mixed: (int, string; 4) = ... // your alternating primitive
+const mixed: (int, string; 4) = (1, "a", 2, "b") // a braid: int, string, int, string (docs/design/alternating.md)
 ```
 
 `[T; N]` lives inline (on the stack or inside a struct) and `N` is part of the type, so `meta N: int` works for
 generic code over sizes.
+
+A list becomes an array with `xs.toArray<N>()` (an option: `none` when the length differs) or `xs.asArray<N>()` (stops the program on a
+mismatch). In JSON a tuple, a braid and `[T; N]` are all a flat array (`docs/design/json.md`); a braid also has `x.toArray()` when every slot
+has one type.
 
 ## 4. Maps
 

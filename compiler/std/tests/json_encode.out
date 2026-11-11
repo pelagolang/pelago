@@ -1,0 +1,5 @@
+{"name":"a\"b","small":7,"ratio":1.5,"on":true,"tags":["x","y"],"pts":[{"x":1,"y":2}],"pair":[3,"c"],"ops":[1,"a",2,"b"],"rows":[[1,"p"],[2,"q"]],"note":null}
+true
+"dot"
+{"circle":4}
+{"rect":{"w":2,"h":3}}

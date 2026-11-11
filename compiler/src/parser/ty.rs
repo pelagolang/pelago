@@ -48,6 +48,43 @@ impl Parser<'_> {
         ty
     }
 
+    /// `braid<A, B; N>`: the same type as `(A, B; N)`, spelled out.
+    fn parse_braid_type(&mut self) -> Type {
+        let start = self.bump().span;
+        self.bump();
+        self.enter_brackets();
+        let mut items = Vec::new();
+        while !self.is_gt() && !self.at(Punct::Semi) && !self.at_eof() {
+            let before = self.pos;
+            items.push(self.parse_type());
+            if !self.eat(Punct::Comma) {
+                break;
+            }
+            if self.pos == before {
+                self.bump();
+            }
+        }
+        let count = if self.eat(Punct::Semi) {
+            // Arithmetic (`2 * 3`, `N + 1`) but not comparisons or shifts: `>` ends the type.
+            self.with_struct(true, |p| p.parse_bin(12))
+        } else {
+            self.error_expected("`;` and a length: `braid<A, B; N>`");
+            Expr {
+                kind: ExprKind::Underscore,
+                span: start,
+            }
+        };
+        self.leave_brackets();
+        let at = self.tok().span;
+        if !self.eat_gt() {
+            self.error_expected("`>`");
+        }
+        Type {
+            kind: TypeKind::FixedTuple(items, Box::new(count), true),
+            span: start.to(Span::new(at.start, self.prev_end.max(at.start))),
+        }
+    }
+
     fn parse_type_atom(&mut self) -> Type {
         let t = self.tok();
         match t.kind {
@@ -66,6 +103,12 @@ impl Parser<'_> {
                         kind: TypeKind::Any(Box::new(inner)),
                         span,
                     };
+                }
+                if self.text(t) == "braid"
+                    && self.peek_sig(1).kind == TokenKind::Punct(Punct::Lt)
+                    && self.peek_sig(1).span.start == t.span.end
+                {
+                    return self.parse_braid_type();
                 }
                 let path = self.path("a type name");
                 let mut span = path.span;
@@ -129,7 +172,7 @@ impl Parser<'_> {
                 let end = self.expect(Punct::RParen);
                 let span = t.span.to(end);
                 let kind = match fixed {
-                    Some(n) => TypeKind::FixedTuple(items, Box::new(n)),
+                    Some(n) => TypeKind::FixedTuple(items, Box::new(n), false),
                     None if items.len() == 1 && !trailing_comma => {
                         // `(T)` is just `T` in parentheses.
                         return items.pop().unwrap_or(Type {
@@ -254,6 +297,39 @@ impl Parser<'_> {
         };
         self.bump();
         Some(mode)
+    }
+
+    /// The short spelling of a mode, written right after a name: `x!` is `inout x`, `x!!` is
+    /// `sink x`. Only a `!` that touches the name counts, and one that starts a call mark
+    /// (`c.bump!()`) is left alone.
+    pub(super) fn mode_mark_ahead(&self) -> Option<Mode> {
+        if !self.adjacent() || self.peek_raw().kind == TokenKind::Punct(Punct::LParen) {
+            return None;
+        }
+        match self.kind() {
+            TokenKind::Punct(Punct::Bang) => Some(Mode::Inout),
+            TokenKind::Punct(Punct::BangBang) => Some(Mode::Sink),
+            _ => None,
+        }
+    }
+
+    /// Consumes a mode mark after a name, if there is one.
+    pub(super) fn parse_mode_mark(&mut self) -> Option<Mode> {
+        let mode = self.mode_mark_ahead()?;
+        self.bump();
+        Some(mode)
+    }
+
+    /// Joins a mode written before a name with one written after it. Writing both is an error.
+    pub(super) fn join_modes(&mut self, before: Option<Mode>, after: Option<Mode>) -> Option<Mode> {
+        if before.is_some() && after.is_some() {
+            let span = Span::new(self.prev_end.saturating_sub(1), self.prev_end);
+            self.error(
+                span,
+                "write the mode once: `inout x` or `x!`, `sink x` or `x!!`",
+            );
+        }
+        before.or(after)
     }
 
     /// Speculatively parses `<...>` generic arguments in an expression. On failure nothing is

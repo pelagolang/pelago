@@ -41,16 +41,20 @@ pub fn expand(src: &str, file: &File) -> Expansion {
         let StmtKind::Item(item) = &stmt.kind else {
             continue;
         };
-        if !derives_from_json(src, &item.attrs) {
-            continue;
-        }
-        match &item.kind {
-            ItemKind::Struct(d) => g.structure(d, item.span),
-            ItemKind::Enum(d) => g.enumeration(d, item.span),
-            _ => g.errors.push((
-                item.span,
-                "`fromJson` can be derived for a struct or an enum".to_string(),
-            )),
+        for (word, to) in [("fromJson", false), ("toJson", true)] {
+            if !derives(src, &item.attrs, word) {
+                continue;
+            }
+            match &item.kind {
+                ItemKind::Struct(d) if to => g.encode_structure(d, item.span),
+                ItemKind::Enum(d) if to => g.encode_enumeration(d, item.span),
+                ItemKind::Struct(d) => g.structure(d, item.span),
+                ItemKind::Enum(d) => g.enumeration(d, item.span),
+                _ => g.errors.push((
+                    item.span,
+                    format!("`{word}` can be derived for a struct or an enum"),
+                )),
+            }
         }
     }
     Expansion {
@@ -59,12 +63,12 @@ pub fn expand(src: &str, file: &File) -> Expansion {
     }
 }
 
-fn derives_from_json(src: &str, attrs: &[Attr]) -> bool {
+fn derives(src: &str, attrs: &[Attr], word: &str) -> bool {
     attrs.iter().any(|a| {
         a.name.text(src) == "derive"
             && a.args
                 .iter()
-                .any(|e| src[e.span.start as usize..e.span.end as usize].trim() == "fromJson")
+                .any(|e| src[e.span.start as usize..e.span.end as usize].trim() == word)
     })
 }
 
@@ -151,6 +155,98 @@ impl<'a> Gen<'a> {
                 );
                 Some(base.to_string())
             }
+            // `[T; N]`: exactly `N` elements.
+            TypeKind::Array(elem, n) => {
+                let inner = self.decoder(elem, &format!("{base}_item"))?;
+                let n = self.text(n.span).trim().to_string();
+                let _ = write!(
+                    self.out,
+                    "\nfn {base}(v: json.value, inout at: [int]) -> {ret} ! {ERR} {{
+    switch v {{
+        case .items(values):
+            if values.len() != {n} {{ return err(v.wrongLength({n}, at)) }}
+            var out: [{elem_text}] = []
+            for i in 0..values.len() {{
+                at.push!(i)
+                out.push!({inner}(values[i], inout at)?)
+                at.pop!()
+            }}
+            const r: {ret} = out.asArray()
+            ok(r)
+        case _: return err(v.mismatch(\"an array\", at))
+    }}
+}}\n",
+                    elem_text = self.text(elem.span)
+                );
+                Some(base.to_string())
+            }
+            // `(A, B; N)` and `braid<A, B; N>`: one flat array, slot `i` read as the type of slot `i mod k`.
+            TypeKind::FixedTuple(ts, n, _) => {
+                let n = self.text(n.span).trim().to_string();
+                let Ok(count) = n.replace('_', "").parse::<usize>() else {
+                    self.fail(
+                        ty.span,
+                        "`fromJson` needs the length of a braid to be a plain number",
+                    );
+                    return None;
+                };
+                let mut decs = Vec::new();
+                for (i, t) in ts.iter().enumerate() {
+                    decs.push(self.decoder(t, &format!("{base}_slot{i}"))?);
+                }
+                let mut body = String::new();
+                for i in 0..count {
+                    let _ = write!(
+                        body,
+                        "            at.push!({i})\n            const s{i} = {}(values[{i}], inout at)?\n            at.pop!()\n",
+                        decs[i % decs.len()]
+                    );
+                }
+                let slots: Vec<String> = (0..count).map(|i| format!("s{i}")).collect();
+                let _ = write!(
+                    self.out,
+                    "\nfn {base}(v: json.value, inout at: [int]) -> {ret} ! {ERR} {{
+    switch v {{
+        case .items(values):
+            if values.len() != {n} {{ return err(v.wrongLength({n}, at)) }}
+{body}            const r: {ret} = ({})
+            ok(r)
+        case _: return err(v.mismatch(\"an array\", at))
+    }}
+}}\n",
+                    slots.join(", ")
+                );
+                Some(base.to_string())
+            }
+            // `(A, B)`: a two-element array.
+            TypeKind::Tuple(ts) if !ts.is_empty() => {
+                let mut decs = Vec::new();
+                for (i, t) in ts.iter().enumerate() {
+                    decs.push(self.decoder(t, &format!("{base}_slot{i}"))?);
+                }
+                let count = ts.len();
+                let mut body = String::new();
+                for (i, d) in decs.iter().enumerate() {
+                    let _ = write!(
+                        body,
+                        "            at.push!({i})\n            const s{i} = {d}(values[{i}], inout at)?\n            at.pop!()\n"
+                    );
+                }
+                let slots: Vec<String> = (0..count).map(|i| format!("s{i}")).collect();
+                let _ = write!(
+                    self.out,
+                    "\nfn {base}(v: json.value, inout at: [int]) -> {ret} ! {ERR} {{
+    switch v {{
+        case .items(values):
+            if values.len() != {count} {{ return err(v.wrongLength({count}, at)) }}
+{body}            ok(({}))
+        case _: return err(v.mismatch(\"an array\", at))
+    }}
+}}\n",
+                    slots.join(", ")
+                );
+                Some(base.to_string())
+            }
             TypeKind::Option(inner_ty) => {
                 let inner = self.decoder(inner_ty, &format!("{base}_some"))?;
                 let _ = write!(
@@ -209,6 +305,240 @@ impl<'a> Gen<'a> {
         Some(format!(
             "    switch v {{\n        case .fields(_, values):\n{b}            ok({made})\n        case _: err(v.mismatch(\"an object\", at))\n    }}\n"
         ))
+    }
+
+    // ---- Writing: `@derive(toJson)` -------------------------------------------------------------------
+
+    /// The encoder for a type: the name of a function taking the value (read-only) and returning a `json.value`.
+    /// It mirrors `decoder`: numbers, `bool`, `string`, lists, `[T; N]`, tuples, braids (one flat array), options
+    /// (`none` is `null`), and types of the program that derive `toJson`.
+    fn encoder(&mut self, ty: &Type, base: &str) -> Option<String> {
+        let ret = self.text(ty.span).to_string();
+        let head = format!("\nfn {base}(x: {ret}) -> json.value");
+        match &ty.kind {
+            TypeKind::Path { path, args } if args.is_empty() && path.segments.len() == 1 => {
+                let name = path.segments[0].text(self.src);
+                let body = match name {
+                    "int" => "json.value.integer(x)".to_string(),
+                    "float" => "json.value.number(x)".to_string(),
+                    "bool" => "json.value.flag(x)".to_string(),
+                    "string" => "json.value.text(copy x)".to_string(),
+                    _ if WHOLE.iter().any(|w| w.0 == name) => {
+                        "json.value.integer(x to int)".to_string()
+                    }
+                    _ => return Some(format!("{name}ToJson")),
+                };
+                let _ = writeln!(self.out, "{head} = {body}");
+                Some(base.to_string())
+            }
+            TypeKind::Path { path, .. } if path.segments.len() > 1 => {
+                let last = path.segments.len() - 1;
+                let module =
+                    &self.src[path.span.start as usize..path.segments[last].span.start as usize];
+                Some(format!(
+                    "{module}{}ToJson",
+                    path.segments[last].text(self.src)
+                ))
+            }
+            TypeKind::List(elem) | TypeKind::Array(elem, _) => {
+                let inner = self.encoder(elem, &format!("{base}_item"))?;
+                let _ = write!(
+                    self.out,
+                    "{head} {{\n    var out: [json.value] = []\n    for i in 0..x.len() {{ out.push!({inner}(x[i])) }}\n    json.value.items(out)\n}}\n"
+                );
+                Some(base.to_string())
+            }
+            TypeKind::Tuple(ts) if !ts.is_empty() => {
+                let slots: Vec<&Type> = ts.iter().collect();
+                self.encode_slots(&head, base, &slots, ts.len(), true)
+            }
+            TypeKind::FixedTuple(ts, n, _) => {
+                let n = self.text(n.span).trim().replace('_', "");
+                let Ok(count) = n.parse::<usize>() else {
+                    self.fail(
+                        ty.span,
+                        "`toJson` needs the length of a braid to be a plain number",
+                    );
+                    return None;
+                };
+                let slots: Vec<&Type> = ts.iter().collect();
+                self.encode_slots(&head, base, &slots, count, false)
+            }
+            TypeKind::Option(inner_ty) => {
+                let inner = self.encoder(inner_ty, &format!("{base}_some"))?;
+                let _ = write!(
+                    self.out,
+                    "{head} {{\n    switch x {{\n        case some(v): {inner}(v)\n        case _: json.value.nothing\n    }}\n}}\n"
+                );
+                Some(base.to_string())
+            }
+            _ => {
+                self.fail(
+                    ty.span,
+                    &format!(
+                        "`toJson` cannot write a field of type `{ret}` (numbers, `bool`, `string`, lists, arrays, tuples, braids, options and types that derive `toJson` are supported)"
+                    ),
+                );
+                None
+            }
+        }
+    }
+
+    /// A tuple or a braid as one flat array: slot `i` is written by the encoder of the type at `i mod k`.
+    fn encode_slots(
+        &mut self,
+        head: &str,
+        base: &str,
+        types: &[&Type],
+        count: usize,
+        dotted: bool,
+    ) -> Option<String> {
+        let mut encs = Vec::new();
+        for (i, t) in types.iter().enumerate() {
+            encs.push(self.encoder(t, &format!("{base}_slot{i}"))?);
+        }
+        let mut body = String::new();
+        for i in 0..count {
+            let slot = if dotted {
+                format!("x.{i}")
+            } else {
+                format!("x[{i}]")
+            };
+            let _ = writeln!(
+                body,
+                "    out.push!({}({slot}))",
+                encs[i % encs.len().max(1)]
+            );
+        }
+        let _ = write!(
+            self.out,
+            "{head} {{\n    var out: [json.value] = []\n{body}    json.value.items(out)\n}}\n"
+        );
+        Some(base.to_string())
+    }
+
+    /// The fields of an object, in order: `json.value.fields(keys, values)`.
+    fn object_writer(&mut self, owner: &str, slots: &[Slot], access: &str) -> Option<String> {
+        let mut keys = Vec::new();
+        let mut values = Vec::new();
+        for s in slots {
+            let enc = self.encoder(&s.ty, &format!("jsonEncode_{owner}_{}", s.name))?;
+            keys.push(format!("\"{}\"", s.name));
+            values.push(format!("{enc}({access}{})", s.name));
+        }
+        Some(format!(
+            "json.value.fields([{}], [{}])",
+            keys.join(", "),
+            values.join(", ")
+        ))
+    }
+
+    fn encode_entry(&mut self, name: &str) {
+        let _ = write!(
+            self.out,
+            "
+//~ Writes a `{name}` as JSON text.
+pub fn {name}Encode(x: {name}) -> string = {name}ToJson(x).encode()
+"
+        );
+    }
+
+    fn encode_structure(&mut self, d: &TypeDecl, span: Span) {
+        if !d.generics.params.is_empty() {
+            self.fail(span, "`toJson` cannot be derived for a generic type yet");
+            return;
+        }
+        let name = d.name.text(self.src).to_string();
+        let slots: Vec<Slot> = d
+            .members
+            .iter()
+            .filter_map(|m| match m {
+                Member::Field(f) => Some(Slot {
+                    name: f.name.text(self.src).to_string(),
+                    ty: f.ty.clone(),
+                    default: None,
+                }),
+                Member::Item(_) => None,
+            })
+            .collect();
+        let mark = self.out.len();
+        let Some(body) = self.object_writer(&name, &slots, "x.") else {
+            self.out.truncate(mark);
+            return;
+        };
+        let _ = write!(
+            self.out,
+            "\n//~ Makes the JSON value of a `{name}`: an object with a member per field.\npub fn {name}ToJson(x: {name}) -> json.value = {body}\n"
+        );
+        self.encode_entry(&name);
+    }
+
+    fn encode_enumeration(&mut self, d: &EnumDecl, span: Span) {
+        if !d.generics.params.is_empty() {
+            self.fail(span, "`toJson` cannot be derived for a generic type yet");
+            return;
+        }
+        let name = d.name.text(self.src).to_string();
+        let mut arms = String::new();
+        for v in &d.variants {
+            let vname = v.name.text(self.src).to_string();
+            if v.fields.is_empty() {
+                let _ = writeln!(arms, "        case .{vname}: json.value.text(\"{vname}\")");
+                continue;
+            }
+            let named = v.fields.iter().all(|f| f.label.is_some());
+            if named {
+                let labels: Vec<String> = v
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        f.label
+                            .as_ref()
+                            .map(|l| l.text(self.src))
+                            .unwrap_or("")
+                            .to_string()
+                    })
+                    .collect();
+                let slots: Vec<Slot> = v
+                    .fields
+                    .iter()
+                    .zip(labels.iter())
+                    .map(|(f, l)| Slot {
+                        name: l.clone(),
+                        ty: f.ty.clone(),
+                        default: None,
+                    })
+                    .collect();
+                let Some(obj) = self.object_writer(&format!("{name}_{vname}"), &slots, "") else {
+                    continue;
+                };
+                let _ = writeln!(
+                    arms,
+                    "        case .{vname}({}): json.value.fields([\"{vname}\"], [{obj}])",
+                    labels.join(", ")
+                );
+            } else if v.fields.len() == 1 {
+                let Some(enc) =
+                    self.encoder(&v.fields[0].ty, &format!("jsonEncode_{name}_{vname}_value"))
+                else {
+                    continue;
+                };
+                let _ = writeln!(
+                    arms,
+                    "        case .{vname}(x): json.value.fields([\"{vname}\"], [{enc}(x)])"
+                );
+            } else {
+                self.fail(
+                    v.span,
+                    "`toJson` writes a case with several unnamed values only when they are named; give them labels",
+                );
+            }
+        }
+        let _ = write!(
+            self.out,
+            "\n//~ Makes the JSON value of a `{name}`: the case name as text, or an object with one member.\npub fn {name}ToJson(x: {name}) -> json.value {{\n    switch x {{\n{arms}    }}\n}}\n"
+        );
+        self.encode_entry(&name);
     }
 
     fn decode_entry(&mut self, name: &str) {

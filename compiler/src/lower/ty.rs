@@ -207,7 +207,12 @@ impl<'a> Lowerer<'a> {
         let int = self.mk_int();
         let tys: Vec<Ty> = match self.kind(t) {
             TyKind::Tuple(ts) => ts,
-            TyKind::AltTuple(ts, _) => ts,
+            // A braid: one field per slot, the cycle repeated up to its length.
+            TyKind::AltTuple(ts, n) => {
+                let n = self.array_len(n).max(0) as usize;
+                let k = ts.len().max(1);
+                (0..n).map(|i| ts[i % k]).collect()
+            }
             TyKind::Adt(d, args) => {
                 let map = self.adt_subst(d, &args);
                 let fields = self
@@ -361,6 +366,9 @@ impl<'a> Lowerer<'a> {
                 tys.into_iter().any(|x| self.needs_drop(x))
             }
             TyKind::Tuple(ts) => ts.into_iter().any(|x| self.needs_drop(x)),
+            TyKind::AltTuple(ts, n) => {
+                self.array_len(n) > 0 && ts.into_iter().any(|x| self.needs_drop(x))
+            }
             TyKind::Array(e, _) => self.needs_drop(e),
             _ => false,
         };
