@@ -89,3 +89,19 @@ A bad pattern, or a field the pattern cannot fill (`year` is not a group, a grou
 **Tier B (`@regex`).** Anything else keeps its `BACKREF` instructions and gets the budgeted search, written into the module like the rest. The generated functions take the budget as a parameter (a change from the first sketch, which had it in the attribute: a parameter lets the caller decide per call, and there is no hidden default): `nameFind(text, budget) -> nameOutcome` with the enum `nameOutcome { matched(value: name), nomatch, gaveUp }`, `nameFindAll(text, budget) -> [name]?`, `nameIsMatch(text, budget) -> bool?`. The budget is a count of states, never a clock, so a ReDoS report replays on any machine. Memory of tier B is bounded by the budget (the stack and the set of explored states grow), not by the pattern: the one place where "memory known at compile time" does not hold, and only for patterns that need a backreference the rewrite cannot remove. Test: `regex_budget.pel` (interpreter, optimiser, native).
 
 **Guards (S-12):** a pattern whose backreferences read more than 3 groups is an error at the attribute unless it says `@regex("...", 5)` (a second whole number); a tier B pattern is a warning in `pelago check` and in the editor ("needs the budgeted search"), and the comment above the generated code names the tier; `nameBudget(text)` gives `64 * (text.length + 1)` as a starting budget, never a default.
+
+## 6. Unicode mode (S-13, built 2026-11-11)
+
+**Surface (my recommendation, taken because the owner asked for the work; he can change it).** An opt-in flag `u`: `(?u)` at the start of the pattern, or `(?u:...)` for a part, like `i`, `s` and `m`. Without it nothing changes: patterns stay byte patterns, so every existing pattern keeps its meaning and its speed. Only `@regex` has it (the compiler writes the tables); `regex.compile` at run time refuses `(?u)` ("this flag is not supported"), because the Unicode tables belong in the compiler, not in every program.
+
+**What it does.** The matcher stays a byte machine, so time stays linear and no decoding step exists: a set of code points is turned at compile time into an alternation of UTF-8 byte-range sequences (the standard range split, `compiler/src/regexunicode.rs`), with sequences that share a tail sharing one node so `\w` is about 1400 states, not 5000. Under `(?u)`:
+- `.` is one code point (not a newline, unless `s`);
+- `[...]` and `[^...]` take code points and ranges (`[à-ÿ]`, `[😀-😂]`); `[^...]` is the complement over all code points;
+- a non-ASCII literal followed by a quantifier repeats the whole character (`é+`);
+- `\d`, `\w`, `\s` and their capitals are the sets Python's `re` uses on text (generated into `compiler/src/regexunicode_tables.rs` by `gen_regex_unicode.py`, so the Unicode version is Python 3.13's, 15.1); they work inside classes too (`[^\W\d]`);
+- `(?i)` adds the simple upper and lower case of every member (`é`/`É`, `я`/`Я`, `σ`/`Σ`).
+
+**Not in it, on purpose.** `\b` and `\B` are an error under `(?u)` (the byte assertions look at ASCII word bytes; a Unicode word edge needs the code point before the position, which is lookbehind, not built); case folding with several-character results (`ß` and `SS`) and the extra equivalences Python adds (`ς`/`σ`, `K` and the Kelvin sign); general categories `\p{L}`; `.` on text that is not valid UTF-8 (bytes that are not a code point match nothing).
+
+**Cost.** A pattern with `\w`, `\d` or `\s` in Unicode mode has a bigger program (`\w` 1400 states, `\d` 150, `\s` 30), and the Pike simulation touches the alternatives at each position; speed work (a byte-class table, a DFA) is Optimise. Test: `regexgen_unicode_agrees_with_python` runs the 22 cases of `regex_unicode.corpus` (expected spans from Python, in byte offsets) and `regex_unicode.pel` runs an `@regex` struct natively.
+
