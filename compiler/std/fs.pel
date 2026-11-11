@@ -1,4 +1,5 @@
-/// Files by path: whole-file helpers, and `open`, `create` and `append` for reading or writing in pieces.
+/// Files by path: whole-file helpers, `open`, `create` and `append` for reading or writing in pieces, and the
+/// path calls (`exists`, `metadata`, `createDirs`, `rename`, `removeFile`, `readDir`, ...).
 ///
 /// ```
 /// import std.fs
