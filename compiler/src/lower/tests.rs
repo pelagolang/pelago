@@ -3651,3 +3651,12 @@ fn regexgen_tier_a_agrees_with_python() {
     );
     assert_eq!(output_of(&src), want);
 }
+
+#[test]
+fn program_tail_local_owning_scalar_moves_out_of_a_generic_function() {
+    // `join` reads the task's result into a local and ends with it: the tail must move the box out,
+    // not free it with the local's scope.
+    let src =
+        "fn main() {\n const t = spawn(~> box(7))\n const b = t.join!!()\n print(b.get())\n}\n";
+    assert_eq!(output_of(src), "7\n");
+}
