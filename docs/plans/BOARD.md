@@ -22,7 +22,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 |---|---|---|---|
 | Ready (Harden) | [B-05](cards/B-05-islet-yaml-port.md) | Port the Islet YAML reader to Pelago: first step toward writing Islet in Pelago; bootstrap stays on the Rust Islet until stores and locks are byte-identical (BLAKE3 hasher later) | M |
 | Done | [S-12](cards/S-12-regex-leftovers.md) | Regex leftovers: limit on referenced groups, the tier in `pelago check`, a budget helper | S |
-| Ready (Build) | [S-13](cards/S-13-regex-unicode.md) | Regex Unicode mode: code points as byte automata, Unicode classes and folding | M |
+| Done | [S-13](cards/S-13-regex-unicode.md) | Regex Unicode mode: code points as byte automata, Unicode classes and folding | M |
 
 ## Shelf (parked on purpose)
 
