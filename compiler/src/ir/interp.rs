@@ -122,6 +122,9 @@ struct OsState {
     block: usize,
     /// Files opened by `os_open`: descriptor `3 + i` is `files[i]` (a closed one is `None`).
     files: Vec<Option<std::fs::File>>,
+    /// The entries of a directory opened for reading, by descriptor: (name, type) and how many were handed
+    /// out by `Dents`.
+    dirs: std::collections::HashMap<i64, (Vec<(String, u8)>, usize)>,
 }
 
 /// The process the interpreter pretends to be in: its arguments (the first is the program's name), its
@@ -274,6 +277,7 @@ fn run_inner(
             exit: None,
             block: 0,
             files: Vec::new(),
+            dirs: std::collections::HashMap::new(),
         },
         steps: 0,
         max_steps,
@@ -693,7 +697,9 @@ impl Machine<'_> {
             | OsKind::Argv
             | OsKind::Open
             | OsKind::Close
-            | OsKind::Clock => return self.os_layer(k, a, b, c),
+            | OsKind::Clock
+            | OsKind::Fs
+            | OsKind::Dents => return self.os_layer(k, a, b, c),
             OsKind::Reserve => {
                 if !sized(a) {
                     OS_BAD
@@ -847,7 +853,26 @@ impl Machine<'_> {
                 match o.open(&path) {
                     Ok(f) => {
                         self.os.files.push(Some(f));
-                        self.os.files.len() as i64 + 2
+                        let fd = self.os.files.len() as i64 + 2;
+                        if b == 0 && std::fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
+                            let mut entries = Vec::new();
+                            if let Ok(rd) = std::fs::read_dir(&path) {
+                                for e in rd.flatten() {
+                                    let t = match e.file_type() {
+                                        Ok(t) if t.is_dir() => 4,
+                                        Ok(t) if t.is_file() => 8,
+                                        Ok(t) if t.is_symlink() => 10,
+                                        _ => 0,
+                                    };
+                                    entries.push((e.file_name().to_string_lossy().into_owned(), t));
+                                }
+                            }
+                            // The system's two extra entries.
+                            entries.push((".".to_string(), 4));
+                            entries.push(("..".to_string(), 4));
+                            self.os.dirs.insert(fd, (entries, 0));
+                        }
+                        fd
                     }
                     Err(e) => match e.kind() {
                         std::io::ErrorKind::NotFound => OS_NOENT,
@@ -858,6 +883,7 @@ impl Machine<'_> {
             }
             OsKind::Close => match a - 3 {
                 i if i >= 0 && (i as usize) < self.os.files.len() => {
+                    self.os.dirs.remove(&a);
                     if self.os.files[i as usize].take().is_some() {
                         0
                     } else {
@@ -888,6 +914,84 @@ impl Machine<'_> {
                 self.mem[p..p + 8].copy_from_slice(&(now.as_secs() as i64).to_le_bytes());
                 self.mem[p + 8..p + 16].copy_from_slice(&(now.subsec_nanos() as i64).to_le_bytes());
                 0
+            }
+            OsKind::Fs => {
+                let mut end = b as usize;
+                while self.mem.get(end).is_some_and(|&x| x != 0) {
+                    end += 1;
+                }
+                self.check(b as usize, end - b as usize + 1)?;
+                let path = String::from_utf8_lossy(&self.mem[b as usize..end]).into_owned();
+                let fail = |e: std::io::Error| match e.kind() {
+                    std::io::ErrorKind::NotFound => OS_NOENT,
+                    std::io::ErrorKind::PermissionDenied => OS_ACCES,
+                    _ => OS_FAIL,
+                };
+                let r = match a {
+                    0 => std::fs::symlink_metadata(&path).map(|_| ()),
+                    1 => std::fs::remove_file(&path),
+                    2 => std::fs::remove_dir(&path),
+                    3 => std::fs::create_dir(&path),
+                    4 => {
+                        let mut e2 = c as usize;
+                        while self.mem.get(e2).is_some_and(|&x| x != 0) {
+                            e2 += 1;
+                        }
+                        self.check(c as usize, e2 - c as usize + 1)?;
+                        let to = String::from_utf8_lossy(&self.mem[c as usize..e2]).into_owned();
+                        std::fs::rename(&path, to)
+                    }
+                    5 => match std::fs::metadata(&path) {
+                        Ok(m) => {
+                            self.check(c as usize, 16)?;
+                            let kind: i64 = if m.is_file() {
+                                1
+                            } else if m.is_dir() {
+                                2
+                            } else {
+                                3
+                            };
+                            let p = c as usize;
+                            self.mem[p..p + 8].copy_from_slice(&(m.len() as i64).to_le_bytes());
+                            self.mem[p + 8..p + 16].copy_from_slice(&kind.to_le_bytes());
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    },
+                    _ => return Ok(OS_BAD),
+                };
+                match r {
+                    Ok(()) => 0,
+                    Err(e) => fail(e),
+                }
+            }
+            OsKind::Dents => {
+                let (p, n) = (b as usize, c as usize);
+                self.check(p, n)?;
+                let Some((entries, at)) = self.os.dirs.get_mut(&a) else {
+                    return Ok(OS_BAD);
+                };
+                let mut used = 0;
+                while *at < entries.len() {
+                    let (name, t) = &entries[*at];
+                    let reclen = (19 + name.len() + 1).div_ceil(8) * 8;
+                    if used + reclen > n {
+                        if used == 0 {
+                            return Ok(OS_BAD);
+                        }
+                        break;
+                    }
+                    let q = p + used;
+                    self.mem[q..q + reclen].fill(0);
+                    self.mem[q..q + 8].copy_from_slice(&(*at as u64 + 1).to_le_bytes());
+                    self.mem[q + 8..q + 16].copy_from_slice(&((*at as u64) + 1).to_le_bytes());
+                    self.mem[q + 16..q + 18].copy_from_slice(&(reclen as u16).to_le_bytes());
+                    self.mem[q + 18] = *t;
+                    self.mem[q + 19..q + 19 + name.len()].copy_from_slice(name.as_bytes());
+                    used += reclen;
+                    *at += 1;
+                }
+                used as i64
             }
             OsKind::Argv => {
                 if self.os.block == 0 {

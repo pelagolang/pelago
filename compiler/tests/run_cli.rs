@@ -196,6 +196,78 @@ fn an_expression_body_keeps_the_error_of_a_void_result() {
     }
 }
 
+/// A fresh empty folder for a test to work in.
+fn scratch_dir(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("pelago-fs-{}-{name}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn files_are_made_moved_looked_at_and_removed() {
+    let src = r##"import std.fs
+
+fn main(args: [string]) -> void ! io_error {
+    const d = copy args[1]
+    fs.createDirs("#d/a/b")?
+    print(fs.exists("#d/a"), fs.exists("#d/zz"))
+    fs.createDirs("#d/a/b")?
+    fs.writeText("#d/a/x.txt", "hello")?
+    const m = fs.metadata("#d/a/x.txt")?
+    print(m.size, m.kind == fs.file_kind.file)
+    const dm = fs.metadata("#d/a")?
+    print(dm.kind == fs.file_kind.dir)
+    fs.rename("#d/a/x.txt", "#d/a/y.txt")?
+    print(fs.exists("#d/a/x.txt"), fs.readText("#d/a/y.txt")?)
+    fs.removeFile("#d/a/y.txt")?
+    fs.removeDir("#d/a/b")?
+    fs.removeDir("#d/a")?
+    print(fs.exists("#d/a"))
+    print(fs.removeFile("#d/gone").isOk(), fs.createDir("#d/q/r").isOk(), fs.metadata("#d/gone").isOk())
+    switch fs.removeFile("#d/gone") {
+        case err(e): print(e.kind == io_kind.notFound)
+        case ok(_): print("??")
+    }
+}
+"##;
+    for (i, flags) in args_modes().into_iter().enumerate() {
+        let dir = scratch_dir(&format!("ops{i}"));
+        let (out, err, code) = run_with(flags, src, &[dir.to_str().unwrap()], "");
+        assert_eq!(
+            out, "true false\n5 true\ntrue\nfalse hello\nfalse\nfalse false false\ntrue\n",
+            "{flags:?}: {err}"
+        );
+        assert_eq!(code, 0, "{flags:?}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_is_read_by_name() {
+    let src = r##"import std.fs
+
+fn main(args: [string]) -> void ! io_error {
+    const d = copy args[1]
+    print(fs.readDir(d)?)
+    fs.writeText("#d/b.txt", "1")?
+    fs.writeText("#d/a.txt", "2")?
+    fs.createDir("#d/c")?
+    print(fs.readDir(d)?)
+    print(fs.readDir("#d/none").isOk(), fs.readDir("#d/a.txt").isOk())
+}
+"##;
+    for (i, flags) in args_modes().into_iter().enumerate() {
+        let dir = scratch_dir(&format!("dir{i}"));
+        let (out, err, code) = run_with(flags, src, &[dir.to_str().unwrap()], "");
+        assert_eq!(
+            out, "[]\n[\"a.txt\", \"b.txt\", \"c\"]\nfalse false\n",
+            "{flags:?}: {err}"
+        );
+        assert_eq!(code, 0, "{flags:?}");
+    }
+}
+
 #[test]
 fn sleep_and_select_timeouts_use_the_clock() {
     let src = "import std.time\n\nfn go() -> void ! io_error {\n    const t0 = time.now()?\n    time.sleep(time.millis(30))\n    const waited = (t0.elapsed()?).asMillis()\n    print(waited >= 30)\n    const (tx, rx) = chan<int>()\n    select {\n        case v = rx.recv() { print(\"got\") }\n        case timeout(time.millis(20)) { print(\"timed out\") }\n    }\n    scope s {\n        const t = copy tx\n        s.spawn(() ~> { time.sleep(time.millis(10)); t.send(7) })\n        select {\n            case v = rx.recv() { print(\"got #(v ?? 0)\") }\n            case timeout(time.millis(500)) { print(\"timed out\") }\n        }\n    }\n}\n\nfn main() {\n    print(go().isOk())\n}\n";
