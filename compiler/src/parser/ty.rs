@@ -299,6 +299,39 @@ impl Parser<'_> {
         Some(mode)
     }
 
+    /// The short spelling of a mode, written right after a name: `x!` is `inout x`, `x!!` is
+    /// `sink x`. Only a `!` that touches the name counts, and one that starts a call mark
+    /// (`c.bump!()`) is left alone.
+    pub(super) fn mode_mark_ahead(&self) -> Option<Mode> {
+        if !self.adjacent() || self.peek_raw().kind == TokenKind::Punct(Punct::LParen) {
+            return None;
+        }
+        match self.kind() {
+            TokenKind::Punct(Punct::Bang) => Some(Mode::Inout),
+            TokenKind::Punct(Punct::BangBang) => Some(Mode::Sink),
+            _ => None,
+        }
+    }
+
+    /// Consumes a mode mark after a name, if there is one.
+    pub(super) fn parse_mode_mark(&mut self) -> Option<Mode> {
+        let mode = self.mode_mark_ahead()?;
+        self.bump();
+        Some(mode)
+    }
+
+    /// Joins a mode written before a name with one written after it. Writing both is an error.
+    pub(super) fn join_modes(&mut self, before: Option<Mode>, after: Option<Mode>) -> Option<Mode> {
+        if before.is_some() && after.is_some() {
+            let span = Span::new(self.prev_end.saturating_sub(1), self.prev_end);
+            self.error(
+                span,
+                "write the mode once: `inout x` or `x!`, `sink x` or `x!!`",
+            );
+        }
+        before.or(after)
+    }
+
     /// Speculatively parses `<...>` generic arguments in an expression. On failure nothing is
     /// consumed and no error is recorded.
     pub(super) fn try_generic_args(&mut self) -> Option<(Vec<GenericArg>, Span)> {

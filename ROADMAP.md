@@ -63,6 +63,7 @@ A serious, self-hosting systems language:
 | Loops | `for x of items` (values), `for k in map` (keys, ranges), `for i, x of items` | decided |
 | Operators | Symbols only (`&&` `\|\|` `!` `^` `%`), no word forms | decided |
 | Access modes | `let` / `inout` / `sink` apply everywhere a name is bound | decided |
+| Access mode short spellings | Postfix `x!` = `inout x`, `x!!` = `sink x`, next to the words (`functions.md` F3b); formatter keeps the author's spelling | decided 2026-11-10, built |
 | Visibility | `pub` and `priv`; private is the default | decided |
 | Functional | Closures, enums with pattern matching, higher-order functions | decided |
 | Functions | `fn` (chosen because `fnc` splits into two tokens in most tokenizers) | decided |

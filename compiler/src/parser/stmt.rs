@@ -374,6 +374,15 @@ impl Parser<'_> {
         let start = self.bump().span; // `switch`
         let mode = self.parse_mode();
         let scrutinee = self.parse_cond();
+        // `switch xs! { ... }`: the short spelling of `switch inout xs`.
+        let after = match self.mode_mark_ahead() {
+            Some(m) if self.peek_raw().kind != TokenKind::Punct(Punct::LParen) => {
+                self.bump();
+                Some(m)
+            }
+            _ => None,
+        };
+        let mode = self.join_modes(mode, after);
         let mut arms = Vec::new();
         if !self.at(Punct::LBrace) {
             self.error_expected("`{`");

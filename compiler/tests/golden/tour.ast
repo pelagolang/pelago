@@ -44,6 +44,10 @@
   (fn finish ((sink xs : (list int))) -> int = (call (. xs len)))
   (call clear (arg inout scores))
   (call finish (arg sink scores))
+  (fn clear2 ((inout xs : (list int))) (block (tail (call! (. xs clear)))))
+  (fn finish2 ((sink xs : (list int))) -> int = (call (. xs len)))
+  (call clear2 (arg inout scores))
+  (call finish2 (arg sink scores))
   (fn
     sum_to
     ((n : int) (acc : int = 0))
