@@ -858,6 +858,13 @@ impl<'p> Checker<'p> {
                 _ => vec![e; pats],
             }
         };
+        // A strand view (`core.braid`) is walked in place by the lowering, so it needs no `iter` call (which would
+        // also be recorded at the span of the expression being looped over and hide the call that makes the view).
+        if let TyKind::Adt(d, args) = &k {
+            if args.len() == 1 && matches!(self.def(*d).name.as_str(), "strand" | "strand_mut") {
+                return one(self, args[0]);
+            }
+        }
         if matches!(k, TyKind::Adt(..)) {
             if let Some(m) = self.lookup_method(source, "iter", span) {
                 let r = self.tt.subst(m.sig.ret, &m.map);

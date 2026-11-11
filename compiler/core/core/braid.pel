@@ -55,6 +55,43 @@ impl<T> strand<T> {
     fn toList(self) -> list<T> = self.iter().toList()
 }
 
+//~ A view of one strand that can change the slots: `set`, and `for inout x of s`. It is made only from a braid that is
+//~ borrowed `inout` (`b.firstStrandMut!()`), so a `const` braid cannot be changed through it. Like `strand` it is a
+//~ temporary: use it in the same function, do not return it, and do not use the braid itself while it is alive.
+pub struct strand_mut<T> {
+    addr: ptr
+    stride: int
+    count: int
+}
+
+impl<T> strand_mut<T> {
+    //~ How many slots the strand has.
+    fn len(self) -> int = self.count
+
+    //~ The slot `i` (a copy). A negative `i` counts from the end; an `i` outside the strand stops the program.
+    fn at(self, i: int) -> T {
+        const k = rtPairAt(i, self.count)
+        return rtClone<T>(rtOffset(self.addr, k * self.stride))
+    }
+
+    //~ Replaces the slot `i`; the old value is dropped.
+    fn set(self, i: int, sink v: T) {
+        const k = rtPairAt(i, self.count)
+        const dst = rtOffset(self.addr, k * self.stride)
+        rtDropAt<T>(dst)
+        rtWrite<T>(dst, sink v)
+    }
+
+    //~ The same slots, read-only.
+    fn view(self) -> strand<T> = strand { addr: self.addr, stride: self.stride, count: self.count }
+
+    //~ The slots in order, as copies.
+    fn iter(self) -> iter<T> = self.view().iter()
+
+    //~ The slots as a list you own.
+    fn toList(self) -> list<T> = self.view().toList()
+}
+
 //~ The constructors of a braid, called on the type: `braid.zip(xs, ys)`.
 impl braid {
     //~ Interleaves two arrays of the same length: `xs[0], ys[0], xs[1], ys[1], ...`. The inverse of `split`
@@ -162,6 +199,12 @@ impl<A, B, meta N: int> (A, B; N) {
 
     //~ A view of the slots of type B (positions 1, 3, 5, ...), without copying them.
     fn secondStrand(self) -> strand<B> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B)>(1)), stride: rtSizeOf<(A, B)>(), count: N / 2 }
+
+    //~ Like `firstStrand`, but the slots can be changed through it. Needs the braid `inout`: `b.firstStrandMut!()`.
+    fn firstStrandMut(inout self) -> strand_mut<A> = strand_mut { addr: rtAddrOf(self), stride: rtSizeOf<(A, B)>(), count: (N + 1) / 2 }
+
+    //~ Like `secondStrand`, but the slots can be changed through it.
+    fn secondStrandMut(inout self) -> strand_mut<B> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B)>(1)), stride: rtSizeOf<(A, B)>(), count: N / 2 }
 
     //~ The slots of type A, in order (copies).
     fn evens(self) -> iter<A> {
@@ -349,6 +392,15 @@ impl<A, B, C, meta N: int> (A, B, C; N) {
 
     //~ A view of the slots of type C.
     fn thirdStrand(self) -> strand<C> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C)>(2)), stride: rtSizeOf<(A, B, C)>(), count: N / 3 }
+
+    //~ Like `firstStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn firstStrandMut(inout self) -> strand_mut<A> = strand_mut { addr: rtAddrOf(self), stride: rtSizeOf<(A, B, C)>(), count: (N + 2) / 3 }
+
+    //~ Like `secondStrand`, but the slots can be changed through it.
+    fn secondStrandMut(inout self) -> strand_mut<B> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C)>(1)), stride: rtSizeOf<(A, B, C)>(), count: (N + 1) / 3 }
+
+    //~ Like `thirdStrand`, but the slots can be changed through it.
+    fn thirdStrandMut(inout self) -> strand_mut<C> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C)>(2)), stride: rtSizeOf<(A, B, C)>(), count: N / 3 }
 
     //~ The braid as an array of rounds, as a copy. `N` must be a multiple of 3.
     fn asRounds(self) -> [(A, B, C); N / 3] = rtClone<[(A, B, C); N / 3]>(rtAddrOf(self))

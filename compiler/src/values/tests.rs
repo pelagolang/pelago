@@ -251,6 +251,10 @@ fn a_strand_does_not_outlive_its_braid() {
         "points into `b`",
     );
     clean("fn t() -> int { const b: (int, int; 4) = (1, 2, 3, 4)\n b.firstStrand().len() }");
+    flagged(
+        "fn t() -> strand_mut<int> { var b: (int, int; 4) = (1, 2, 3, 4)\n b.firstStrandMut!() }",
+        "points into `b`",
+    );
 }
 
 #[test]
