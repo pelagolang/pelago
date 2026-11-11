@@ -144,6 +144,11 @@ pub(crate) struct Lowerer<'a> {
     pub types: TypeTable,
     pub module: Module,
     pub diags: Vec<Diagnostic>,
+    /// The program's `main` was written `fn main(args: [string])`. (Its IR shape alone does not say: a
+    /// `main` that returns a `T ! E` also has one pointer parameter, the place for the result.)
+    pub main_takes_args: bool,
+    /// The program's `main` returns a `T ! E`: the type, for the entry that checks it.
+    pub main_result: Option<Ty>,
     pub fns: HashMap<DefId, FnEntry<'a>>,
     pub globals: HashMap<DefId, GlobalEntry<'a>>,
     pub core_fns: HashMap<String, DefId>,
@@ -191,6 +196,8 @@ pub fn lower_with(
         types,
         module: Module::default(),
         diags: Vec::new(),
+        main_takes_args: false,
+        main_result: None,
         fns: HashMap::new(),
         globals: HashMap::new(),
         core_fns: HashMap::new(),
@@ -256,6 +263,9 @@ impl Lowerer<'_> {
     /// function gets another name and a new `main` builds the list from the start-up block
     /// (`core`'s `rtArgsInto`), calls it and frees the list's buffer (the texts are borrowed).
     fn add_entry(&mut self) {
+        if !self.main_takes_args && self.main_result.is_none() {
+            return;
+        }
         let Some(idx) = self
             .module
             .funcs
@@ -264,7 +274,7 @@ impl Lowerer<'_> {
         else {
             return;
         };
-        self.module.funcs[idx].name = "main$args".to_string();
+        self.module.funcs[idx].name = "main$user".to_string();
         let user = FuncId(idx as u32);
         let void = self.types.void;
         let mut state = FnState::empty(void);
@@ -272,14 +282,44 @@ impl Lowerer<'_> {
         state.cur = Some(state.func.entry());
         self.f = state;
         let sp = Span::new(0, 0);
-        let slot = self.emit(Op::Slot(24, 8), Some(IrTy::Ptr), sp);
-        let Some(slot) = slot else { return };
-        self.call_core("rtArgsInto", vec![slot]);
-        self.emit(Op::Call(user, vec![slot]), None, sp);
-        if let Some(buf) = self.emit(Op::Load(IrTy::Ptr, slot), Some(IrTy::Ptr), sp) {
-            self.emit(Op::Free(buf), None, sp);
+        if let Some(rt) = self.main_result {
+            // `main` returns a `T ! E`: it writes the result into a place the entry provides. An error
+            // goes to standard error (its text, when it is a string) and the exit code is 1.
+            let Some(info) = self.enum_info(rt) else {
+                return;
+            };
+            let err_off = info.variants[1].first().map(|f| f.off);
+            let err_is_string = match self.types.kind_of(rt) {
+                TyKind::Result(_, e) => self.types.shallow(*e) == self.types.string,
+                _ => false,
+            };
+            let off = if err_is_string {
+                err_off.unwrap_or(0) as i128
+            } else {
+                -1
+            };
+            let (size, align) = (info.layout.size, info.layout.align.max(8));
+            let slot = self.emit(Op::Slot(size, align), Some(IrTy::Ptr), sp);
+            let Some(slot) = slot else { return };
+            self.emit(Op::Call(user, vec![slot]), None, sp);
+            let off = self.emit(
+                Op::Const(IrTy::Int(64), Const::Int(off)),
+                Some(IrTy::Int(64)),
+                sp,
+            );
+            let Some(off) = off else { return };
+            self.call_core("rtMainDone", vec![slot, off]);
+            self.terminate(Term::Return(None));
+        } else {
+            let slot = self.emit(Op::Slot(24, 8), Some(IrTy::Ptr), sp);
+            let Some(slot) = slot else { return };
+            self.call_core("rtArgsInto", vec![slot]);
+            self.emit(Op::Call(user, vec![slot]), None, sp);
+            if let Some(buf) = self.emit(Op::Load(IrTy::Ptr, slot), Some(IrTy::Ptr), sp) {
+                self.emit(Op::Free(buf), None, sp);
+            }
+            self.terminate(Term::Return(None));
         }
-        self.terminate(Term::Return(None));
         let st = std::mem::replace(&mut self.f, FnState::empty(void));
         if st.fail.is_none() {
             let mut func = st.func;
@@ -768,6 +808,12 @@ impl<'a> Lowerer<'a> {
         {
             if let Some(s) = self.f.scopes.last_mut() {
                 s.push(ScopeItem::CoreCall("rtRunPending"));
+            }
+            if matches!(self.types.kind_of(self.f.ret_ty), TyKind::Result(..)) {
+                self.main_result = Some(self.f.ret_ty);
+            }
+            if decl.params.len() == 1 && self.main_result.is_none() {
+                self.main_takes_args = true;
             }
         }
         // The parameters: the receiver, then the declared ones.
