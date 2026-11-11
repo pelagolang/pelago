@@ -12,6 +12,8 @@ The engine works on bytes: `.` and classes see UTF-8 text one byte at a time, `\
 
 # Plan (built; what was built and what was left out is in `docs/design/regex.md` section 6)
 
+Follow-up (same day, owner: "do it"): Unicode `\b`/`\B`, Python's extra case folds, `\p{..}` general categories, `(?u)` in the reference engine.
+
 1. **Decide the surface** (propose, owner decides): a flag `(?u)` or the default for text patterns; what `.` means (one code point); which classes get Unicode tables (`\w`, `\d`, `\s`, general categories `\p{L}`).
 2. **UTF-8 automata.** Compile a code point range into byte sequences (the standard UTF-8 range split), so the engine stays a byte machine and stays linear; no decoding step in the matcher.
 3. **Case folding** for `(?iu)`: simple folding tables, generated at compile time into the class tables.

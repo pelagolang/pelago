@@ -11,6 +11,16 @@ struct accent {
     word: string
 }
 
+@regex("(?u)\\b(?<word>\\p{Lu}\\p{Ll}+)\\b")
+struct proper {
+    word: string
+}
+
+@regex("(?ui)(?<ks>k+)")
+struct kelvin {
+    ks: string
+}
+
 fn main() {
     switch mixedFind("x été-αβγ😀 y") {
         case some(m): print(m.first, m.second, m.mark)
@@ -23,4 +33,15 @@ fn main() {
         print(all[i].word)
         i += 1
     }
+    const names = properFindAll("Ébène et Ångström, ça va ÀB")
+    i = 0
+    while i < names.len() {
+        print(names[i].word)
+        i += 1
+    }
+    switch kelvinFind("x kK\u{212a} y") {
+        case some(k): print(k.ks, k.ks.len())
+        case none: print("none")
+    }
 }
+

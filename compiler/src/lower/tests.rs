@@ -59,6 +59,42 @@ fn a_folded_address_defined_after_its_use_in_block_order_is_still_folded() {
 }
 
 #[test]
+fn an_index_scaled_twice_is_not_folded_into_one_address() {
+    // `current.caps[t * 2]` is `(t * 2) * 8` bytes into the array: both products looked foldable into an
+    // address, but an index is a register and a folded product is never one, so the selector panicked
+    // ("a folded address read as a value") once the optimiser had put the loop in this shape.
+    agree(
+        "struct threads {
+            pcs: [int; 6]
+            caps: [int; 12]
+            count: int
+        }
+        fn run(ops: [int; 6], n: int, noEmptyAt: int) -> int {
+            var current = threads { pcs: [0; 6], caps: [0; 12], count: 3 }
+            var seen = 0
+            var pos = 0
+            while pos <= n {
+                var t = 0
+                while t < current.count {
+                    const pc = current.pcs[t]
+                    if ops[pc] == 7 && current.caps[t * 2] == pos && pos == noEmptyAt {
+                        break
+                    }
+                    seen += 1
+                    t += 1
+                }
+                pos += 1
+            }
+            seen
+        }
+        fn main() {
+            print(run([0, 0, 7, 0, 0, 0], 3, -1))
+            print(run([7, 7, 7, 0, 0, 0], 3, 0))
+        }",
+    );
+}
+
+#[test]
 fn arithmetic_and_calls() {
     let src = "fn add(a: int, b: int) -> int = a + b\nfn twice(x: int) -> int = add(x, x)\nfn mix(a: int) -> int = (a * 3 - 4) / 2 + a % 5";
     assert_eq!(eval(src, "twice", &[21]), Ok(42));
