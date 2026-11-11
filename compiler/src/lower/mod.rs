@@ -858,10 +858,20 @@ impl<'a> Lowerer<'a> {
         }
         // The body.
         let ret = sig.ret;
-        let body_res = match &decl.body {
-            FnBody::Block(b) => self.block_value(b, sig.ret_pass, ret),
-            FnBody::Expr(e) => self.body_expr(e, sig.ret_pass, ret),
-            FnBody::None => Res::Unit,
+        let async_inner = self
+            .res
+            .decls
+            .get(&(file, decl.name.span.start))
+            .and_then(|d| self.typed.async_fns.get(d))
+            .copied();
+        let body_res = if let Some(inner) = async_inner {
+            self.async_fn_body(decl, sig, inner, &decl_params)
+        } else {
+            match &decl.body {
+                FnBody::Block(b) => self.block_value(b, sig.ret_pass, ret),
+                FnBody::Expr(e) => self.body_expr(e, sig.ret_pass, ret),
+                FnBody::None => Res::Unit,
+            }
         };
         if self.f.fail.is_some() {
             return Err(());

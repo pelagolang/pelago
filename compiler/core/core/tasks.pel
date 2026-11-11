@@ -233,7 +233,8 @@ pub fn rtChanRoom(ch: ptr) -> bool {
 }
 
 pub fn rtTaskBody<T>(s: ptr, sink f: once fn() -> T) {
-    rtWrite<T>(rtOffset(s, 64), f!!())
+    const v = f!!()
+    rtWrite<T>(rtOffset(s, 64), sink v)
     if rtLoadInt(rtOffset(s, 16)) == 1 {
         rtDropAt<T>(rtOffset(s, 64))
     }
@@ -264,7 +265,7 @@ impl<T> task<T> {
         const r = rtRead<T>(rtOffset(s, 64))
         rtFree(s)
         rtForgetTask<T>(sink self)
-        r
+        return r
     }
 }
 
@@ -285,6 +286,12 @@ pub fn spawn<T>(sink f: once fn() -> T) -> task<T> {
     rtStorePtr(rtOffset(s, 8), rtCtxInit(stack, RT_TASK_STACK, rtFnAddr(rtTaskEntry), rtNull()))
     rtTasks.push!(rtAddrInt(s))
     task<T> { state: s }
+}
+
+//~ What an `async fn` call does: starts the body, given as a closure, as a task. The task's address is the future's.
+pub fn rtAsyncSpawn<T>(sink f: once fn() -> T) -> ptr {
+    const t = spawn(sink f)
+    rtCast<task<T>, ptr>(sink t)
 }
 
 //~ The handle of `scope s { ... }`. `s.spawn(task)` starts a task that is finished when the scope ends.

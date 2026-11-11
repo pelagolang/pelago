@@ -58,6 +58,8 @@ pub(crate) struct FnState<'a> {
     /// Names of the `scope s { ... }` blocks being lowered.
     /// A closure written right at a call that only reads its function parameter: it cannot outlive the call, so its environment may live on the stack.
     pub stack_env: Option<(u32, u32)>,
+    /// Lowering the closure of an `async fn` body: everything it captures moves in.
+    pub async_wrap: bool,
     /// Fresh owning scalars (an object, a box) nobody has taken yet, with the flag that says whether this scope still owes their drop.
     pub owed: HashMap<Value, (Vec<Value>, Ty)>,
     /// Owed values that a jump passes to a block parameter: the parameter owns their flags once the block starts.
@@ -85,6 +87,7 @@ impl<'a> FnState<'a> {
     pub fn empty(void: Ty) -> FnState<'a> {
         FnState {
             stack_env: None,
+            async_wrap: false,
             owed: HashMap::new(),
             joins: HashMap::new(),
             cur_def: None,

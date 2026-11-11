@@ -103,8 +103,8 @@ pub struct Typed {
     pub owning: std::collections::HashSet<DefId>,
     /// The types declared `linear`: they must be consumed exactly once.
     pub linear: std::collections::HashSet<DefId>,
-    /// The `async fn` functions: they are lowered returning their value, and a call wraps it in a `future`.
-    pub async_fns: std::collections::HashSet<DefId>,
+    /// The `async fn` functions and what their bodies give: a call returns a `future` of it, started as a task.
+    pub async_fns: HashMap<DefId, Ty>,
     /// The return type of each function with a body.
     pub fn_rets: HashMap<DefId, Ty>,
     pub fn_infos: HashMap<DefId, FnInfo>,
@@ -492,9 +492,7 @@ impl<'p> Checker<'p> {
         for (d, owner) in fn_defs {
             let Some(sig) = self.fn_sig(d) else { continue };
             let self_ty = self.owner_self_ty(owner);
-            let ret = self
-                .tt
-                .zonk(self.async_inner.get(&d).copied().unwrap_or(sig.ret));
+            let ret = self.tt.zonk(sig.ret);
             let params = sig
                 .params
                 .iter()
@@ -600,7 +598,14 @@ impl<'p> Checker<'p> {
         Typed {
             owning,
             linear,
-            async_fns: self.async_inner.keys().copied().collect(),
+            async_fns: {
+                let inner: Vec<(DefId, Ty)> =
+                    self.async_inner.iter().map(|(d, t)| (*d, *t)).collect();
+                inner
+                    .into_iter()
+                    .map(|(d, t)| (d, self.tt.zonk(t)))
+                    .collect()
+            },
             fn_rets,
             fn_infos,
             adts,
@@ -1733,9 +1738,18 @@ impl<'p> Checker<'p> {
         let Some(mut sig) = self.fn_sig(def) else {
             return;
         };
-        // The body of an `async fn` gives the value itself; the call wraps it.
+        // The body of an `async fn` gives the value itself; the call starts it as a task and gives a `future`.
         if let Some(inner) = self.async_inner.get(&def) {
             sig.ret = *inner;
+            // The body runs on a stack of its own, so what it takes must move in: a borrow cannot cross.
+            for p in &f.params {
+                if p.mode == Some(Mode::Inout) {
+                    self.err(
+                        p.name.span,
+                        "an `async fn` runs as a task, so it cannot borrow `inout`: take it with `sink` and return what changed",
+                    );
+                }
+            }
         }
         let self_ty = self.owner_self_ty(owner);
         let saved_meta = self.meta_depth;
@@ -1791,7 +1805,12 @@ impl<'p> Checker<'p> {
         let found = match &f.body {
             FnBody::Block(b) => {
                 span = b.span;
-                self.check_block(b, exp)
+                let t = self.check_block(b, exp);
+                // The body of an `async fn` becomes the body of a closure, which is lowered as an expression.
+                if self.async_inner.contains_key(&def) {
+                    self.expr_tys.push((file, b.span.start, b.span.end, t));
+                }
+                t
             }
             FnBody::Expr(e) => {
                 span = e.span;
