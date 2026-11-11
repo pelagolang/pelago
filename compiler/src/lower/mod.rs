@@ -144,6 +144,13 @@ pub(crate) struct Lowerer<'a> {
     pub types: TypeTable,
     pub module: Module,
     pub diags: Vec<Diagnostic>,
+    /// The program's `main` was written `fn main(args: [string])`. (Its IR shape alone does not say: a
+    /// `main` that returns a `T ! E` also has one pointer parameter, the place for the result.)
+    pub main_takes_args: bool,
+    /// The program's `main` returns a `T ! E`: the type, for the entry that checks it.
+    pub main_result: Option<Ty>,
+    /// Set while the end of a function with an expression body is lowered: the body's value is in place.
+    pub body_placed: bool,
     pub fns: HashMap<DefId, FnEntry<'a>>,
     pub globals: HashMap<DefId, GlobalEntry<'a>>,
     pub core_fns: HashMap<String, DefId>,
@@ -191,6 +198,9 @@ pub fn lower_with(
         types,
         module: Module::default(),
         diags: Vec::new(),
+        main_takes_args: false,
+        main_result: None,
+        body_placed: false,
         fns: HashMap::new(),
         globals: HashMap::new(),
         core_fns: HashMap::new(),
@@ -256,15 +266,26 @@ impl Lowerer<'_> {
     /// function gets another name and a new `main` builds the list from the start-up block
     /// (`core`'s `rtArgsInto`), calls it and frees the list's buffer (the texts are borrowed).
     fn add_entry(&mut self) {
+        if !self.main_takes_args && self.main_result.is_none() {
+            return;
+        }
+        // The user's `main`: the result place comes first when there is one, then the argument list.
+        let params: Vec<IrTy> = [
+            self.main_result.map(|_| IrTy::Ptr),
+            self.main_takes_args.then_some(IrTy::Ptr),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         let Some(idx) = self
             .module
             .funcs
             .iter()
-            .position(|f| f.name == "main" && f.params == [IrTy::Ptr] && f.ret == IrTy::Void)
+            .position(|f| f.name == "main" && f.params == params && f.ret == IrTy::Void)
         else {
             return;
         };
-        self.module.funcs[idx].name = "main$args".to_string();
+        self.module.funcs[idx].name = "main$user".to_string();
         let user = FuncId(idx as u32);
         let void = self.types.void;
         let mut state = FnState::empty(void);
@@ -272,12 +293,54 @@ impl Lowerer<'_> {
         state.cur = Some(state.func.entry());
         self.f = state;
         let sp = Span::new(0, 0);
-        let slot = self.emit(Op::Slot(24, 8), Some(IrTy::Ptr), sp);
-        let Some(slot) = slot else { return };
-        self.call_core("rtArgsInto", vec![slot]);
-        self.emit(Op::Call(user, vec![slot]), None, sp);
-        if let Some(buf) = self.emit(Op::Load(IrTy::Ptr, slot), Some(IrTy::Ptr), sp) {
-            self.emit(Op::Free(buf), None, sp);
+        let mut call_args = Vec::new();
+        // `main` returns a `T ! E`: it writes the result into a place the entry provides.
+        let mut result = None;
+        if let Some(rt) = self.main_result {
+            let Some(info) = self.enum_info(rt) else {
+                return;
+            };
+            let (size, align) = (info.layout.size, info.layout.align.max(8));
+            let err_off = info.variants[1].first().map(|f| f.off);
+            let err_is_string = match self.types.kind_of(rt) {
+                TyKind::Result(_, e) => self.types.shallow(*e) == self.types.string,
+                _ => false,
+            };
+            let off = if err_is_string {
+                err_off.unwrap_or(0) as i128
+            } else {
+                -1
+            };
+            let Some(slot) = self.emit(Op::Slot(size, align), Some(IrTy::Ptr), sp) else {
+                return;
+            };
+            call_args.push(slot);
+            result = Some((slot, off));
+        }
+        let mut args_slot = None;
+        if self.main_takes_args {
+            let Some(slot) = self.emit(Op::Slot(24, 8), Some(IrTy::Ptr), sp) else {
+                return;
+            };
+            self.call_core("rtArgsInto", vec![slot]);
+            call_args.push(slot);
+            args_slot = Some(slot);
+        }
+        self.emit(Op::Call(user, call_args), None, sp);
+        if let Some(slot) = args_slot {
+            if let Some(buf) = self.emit(Op::Load(IrTy::Ptr, slot), Some(IrTy::Ptr), sp) {
+                self.emit(Op::Free(buf), None, sp);
+            }
+        }
+        if let Some((slot, off)) = result {
+            // An error goes to standard error (its text, when it is a string) and the exit code is 1.
+            let off = self.emit(
+                Op::Const(IrTy::Int(64), Const::Int(off)),
+                Some(IrTy::Int(64)),
+                sp,
+            );
+            let Some(off) = off else { return };
+            self.call_core("rtMainDone", vec![slot, off]);
         }
         self.terminate(Term::Return(None));
         let st = std::mem::replace(&mut self.f, FnState::empty(void));
@@ -286,7 +349,7 @@ impl Lowerer<'_> {
             func.compact();
             self.module.add(func);
         }
-        // `rtArgsInto` was asked for just now.
+        // `rtArgsInto` and `rtMainDone` were asked for just now.
         self.run_jobs();
     }
 }
@@ -769,6 +832,12 @@ impl<'a> Lowerer<'a> {
             if let Some(s) = self.f.scopes.last_mut() {
                 s.push(ScopeItem::CoreCall("rtRunPending"));
             }
+            if matches!(self.types.kind_of(self.f.ret_ty), TyKind::Result(..)) {
+                self.main_result = Some(self.f.ret_ty);
+            }
+            if decl.params.len() == 1 {
+                self.main_takes_args = true;
+            }
         }
         // The parameters: the receiver, then the declared ones.
         let file = self.f.file;
@@ -881,7 +950,10 @@ impl<'a> Lowerer<'a> {
                 self.write_ok_value(sig.ret, tmp, st);
             }
         }
+        // An expression body writes its `void ! E` value straight into the place of the result.
+        self.body_placed = matches!(decl.body, FnBody::Expr(_)) && sig.ret_pass == RetPass::Sret;
         self.finish_return(body_res, sig, decl.name.span);
+        self.body_placed = false;
         if self.f.fail.is_some() {
             return Err(());
         }
@@ -905,8 +977,11 @@ impl<'a> Lowerer<'a> {
                 self.terminate(Term::Return(None));
             }
             (RetPass::Sret, Res::Unit) | (RetPass::Sret, Res::Val(_)) => {
-                // `void ! E` ends with success.
-                self.write_ok_void(sig.ret);
+                // `void ! E` ends with success, unless the body is itself a call that gave a `void ! E`
+                // (`fn g() -> void ! E = f()`): that value is already in place, error or not.
+                if !self.body_placed {
+                    self.write_ok_void(sig.ret);
+                }
                 self.pop_scope();
                 self.terminate(Term::Return(None));
             }

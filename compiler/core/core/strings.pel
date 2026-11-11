@@ -177,6 +177,127 @@ impl str {
         out
     }
 
+    //~ The byte offset of the first `part`, or `none`.
+    fn find(self, part: str) -> int? {
+        const i = rtFind(self, part)
+        if i < 0 { return none }
+        return i
+    }
+
+    //~ The byte offset of the last `part`, or `none`.
+    fn findLast(self, part: str) -> int? {
+        const n = self.len()
+        const pn = part.len()
+        var i = n - pn
+        const p = rtHdrData(rtAddrOf(self))
+        while i >= 0 {
+            if rtBytesEq(rtOffset(p, i), rtHdrData(rtAddrOf(part)), pn) { return i }
+            i -= 1
+        }
+        return none
+    }
+
+    //~ How many characters (not bytes) the text has.
+    fn charCount(self) -> int {
+        const p = rtHdrData(rtAddrOf(self))
+        const n = self.len()
+        var count = 0
+        var i = 0
+        while i < n {
+            if (rtLoadByte(rtOffset(p, i)) to int) & 192 != 128 { count += 1 }
+            i += 1
+        }
+        count
+    }
+
+    fn trimStart(self) -> str {
+        const p = rtHdrData(rtAddrOf(self))
+        var a = 0
+        const b = self.len()
+        while a < b && rtIsSpace(rtLoadByte(rtOffset(p, a)) to int) { a += 1 }
+        self[a..b]
+    }
+
+    fn trimEnd(self) -> str {
+        const p = rtHdrData(rtAddrOf(self))
+        var b = self.len()
+        while b > 0 && rtIsSpace(rtLoadByte(rtOffset(p, b - 1)) to int) { b -= 1 }
+        self[0..b]
+    }
+
+    //~ The text after `prefix`, or `none` when it does not start with it.
+    fn stripPrefix(self, prefix: str) -> str? {
+        if !self.startsWith(prefix) { return none }
+        return self[prefix.len()..self.len()]
+    }
+
+    //~ The text before `suffix`, or `none` when it does not end with it.
+    fn stripSuffix(self, suffix: str) -> str? {
+        if !self.endsWith(suffix) { return none }
+        return self[0..self.len() - suffix.len()]
+    }
+
+    //~ Splits at the first `separator`: `"a=b=c".splitOnce("=")` is `("a", "b=c")`.
+    fn splitOnce(self, separator: str) -> (str, str)? {
+        const i = rtFind(self, separator)
+        if i < 0 { return none }
+        return (self[0..i], self[i + separator.len()..self.len()])
+    }
+
+    //~ The lines, split at `\n` (a `\r` before it is dropped); a final newline does not add an empty line.
+    fn lines(self) -> iter<str> {
+        var out: [str] = []
+        const n = self.len()
+        const p = rtHdrData(rtAddrOf(self))
+        var start = 0
+        var i = 0
+        while i < n {
+            if rtLoadByte(rtOffset(p, i)) == 10 {
+                const end = i > start && rtLoadByte(rtOffset(p, i - 1)) == 13 ? i - 1 : i
+                out.push!(self[start..end])
+                start = i + 1
+            }
+            i += 1
+        }
+        if start < n { out.push!(self[start..n]) }
+        rtCast<list<str>, iter<str>>(sink out)
+    }
+
+    //~ The text `count` times in a row (`count` of 0 or less gives an empty string).
+    fn repeat(self, count: int) -> string {
+        var out = ""
+        var i = 0
+        while i < count {
+            rtStrPush(rtAddrOf(out), rtHdrData(rtAddrOf(self)), self.len())
+            i += 1
+        }
+        out
+    }
+
+    //~ Pads on the left with `fill` up to `width` characters.
+    fn padLeft(self, width: int, fill: char) -> string {
+        var out = ""
+        var k = self.charCount()
+        while k < width {
+            rtPushChar(rtAddrOf(out), fill)
+            k += 1
+        }
+        rtStrPush(rtAddrOf(out), rtHdrData(rtAddrOf(self)), self.len())
+        out
+    }
+
+    //~ Pads on the right with `fill` up to `width` characters.
+    fn padRight(self, width: int, fill: char) -> string {
+        var out = ""
+        rtStrPush(rtAddrOf(out), rtHdrData(rtAddrOf(self)), self.len())
+        var k = self.charCount()
+        while k < width {
+            rtPushChar(rtAddrOf(out), fill)
+            k += 1
+        }
+        out
+    }
+
     fn parseInt(self) -> int ! parse_error {
         const p = rtHdrData(rtAddrOf(self))
         const n = self.len()
@@ -323,4 +444,41 @@ impl list<byte> {
         rtStrPush(rtAddrOf(out), rtHdrData(h), rtHdrLen(h))
         out
     }
+}
+
+//~ Joins text pieces with a separator: `["a", "b"].join(", ")` is `"a, b"`.
+impl list<string> {
+    fn join(self, separator: str) -> string {
+        var out = ""
+        var i = 0
+        const n = self.len()
+        while i < n {
+            if i > 0 { out.pushStr!(separator) }
+            out.pushStr!(self[i])
+            i += 1
+        }
+        out
+    }
+}
+
+impl list<str> {
+    fn join(self, separator: str) -> string {
+        var out = ""
+        var i = 0
+        const n = self.len()
+        while i < n {
+            if i > 0 { out.pushStr!(separator) }
+            out.pushStr!(self[i])
+            i += 1
+        }
+        out
+    }
+}
+
+impl iter<str> {
+    fn join(self, separator: str) -> string = self.toList().join(separator)
+}
+
+impl iter<string> {
+    fn join(self, separator: str) -> string = self.toList().join(separator)
 }

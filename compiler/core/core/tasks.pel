@@ -17,7 +17,7 @@ pub struct task<T> {
     deinit {
         /// Dropping the handle detaches the task; a task that is already done is freed here.
         if rtLoadInt(self.state) == 1 {
-            rtDropAt<T>(rtOffset(self.state, 64))
+            rtDropAt<T>(rtOffset(self.state, 72))
             rtFree(self.state)
         } else {
             rtStoreInt(rtOffset(self.state, 16), 1)
@@ -25,15 +25,20 @@ pub struct task<T> {
     }
 }
 
-/// The task block: [state: 0 not started, 2 running, 1 done][saved context][detached][stack][closure: 16 bytes][cancelled][scope][result].
+/// The task block: [state: 0 not started, 2 running, 1 done][saved context][detached][stack][closure: 16 bytes][cancelled][scope][parked][result].
 /// The running task is `rtCur`; `rtTasks` lists every live task, the one `main` runs in first.
 
 //~ Addresses of the live task blocks (0 is `main`'s, made on first use).
 pub var rtTasks: [int] = []
 //~ The address of the running task's block.
 pub var rtCur: int = 0
-//~ Switches since something last happened: enough of them with nothing happening is a deadlock.
-pub var rtIdle: int = 0
+//~ Counts what could let a waiting task go on: a value sent or taken, a lock or permit released, a task finished, a
+//~ cancel. A task that cannot go on parks at the current count and is skipped until the count changes, so a wait costs
+//~ nothing while nothing happens and a program in which every task is parked is a deadlock, exactly.
+pub var rtEvents: int = 0
+//~ A lock handed back with its value unchanged (`withWhen` found its condition false): wakes tasks waiting for the
+//~ lock, not those waiting for a condition.
+pub var rtFreed: int = 0
 //~ A finished task whose stack is freed by the next task to run.
 pub var rtZombie: int = 0
 
@@ -77,7 +82,7 @@ fn rtStackGive(p: ptr) {
 
 fn rtMainInit() {
     if rtTasks.len() == 0 {
-        const s = rtAlloc(72)
+        const s = rtAlloc(80)
         rtCur = rtAddrInt(s)
         rtTasks.push!(rtCur)
     }
@@ -104,28 +109,58 @@ fn rtSwitchTo(t: int) {
     rtReap()
 }
 
-//~ Lets the next task run; false when there is no other.
+//~ The word in a task block that says whether it is parked: 0 runs, else (count + 1) * 2 + kind, the count of events
+//~ (kind 0) or of events plus freed locks (kind 1) when it parked.
+fn rtToken(kind: int) -> int = if kind == 1 { rtEvents + rtFreed } else { rtEvents }
+
+//~ Whether the task can run: it is not parked, or something happened since it parked.
+fn rtRunnable(t: int) -> bool {
+    const w = rtLoadInt(rtOffset(rtCast<int, ptr>(t), 64))
+    w == 0 || rtToken(w % 2) != w / 2 - 1
+}
+
+//~ Lets the next task that can run go; false when there is none besides the running one.
 fn rtSwitchNext() -> bool {
     rtMainInit()
     var i = 0
     while rtTasks[i] != rtCur { i += 1 }
-    const next = rtTasks[(i + 1) % rtTasks.len()]
-    if next == rtCur { return false }
-    rtSwitchTo(next)
-    true
+    var k = 1
+    while k < rtTasks.len() {
+        const t = rtTasks[(i + k) % rtTasks.len()]
+        if rtRunnable(t) {
+            rtSwitchTo(t)
+            return true
+        }
+        k += 1
+    }
+    false
 }
 
-//~ The running task cannot go on: lets the others run. Stops when nobody can make progress.
+//~ The running task cannot go on until something happens (`kind` 1: until a lock is handed back, too): lets the
+//~ others run. False when every other task is parked as well, which is a deadlock.
+fn rtPark(kind: int) -> bool {
+    rtMainInit()
+    rtStoreInt(rtOffset(rtCast<int, ptr>(rtCur), 64), (rtToken(kind) + 1) * 2 + kind)
+    const ok = rtSwitchNext()
+    rtStoreInt(rtOffset(rtCast<int, ptr>(rtCur), 64), 0)
+    ok
+}
+
 fn rtWait(what: string) {
-    rtIdle += 1
-    if rtIdle > 2 * rtTasks.len() + 2 || !rtSwitchNext() {
+    if !rtPark(0) {
+        panic("deadlock: waiting for #what that nobody can provide")
+    }
+}
+
+//~ Waiting for a lock: also woken when a lock is handed back unchanged.
+fn rtWaitLock(what: string) {
+    if !rtPark(1) {
         panic("deadlock: waiting for #what that nobody can provide")
     }
 }
 
 //~ Lets the other tasks run for a while.
 pub fn yield_now() {
-    rtIdle = 0
     rtSwitchNext()
 }
 
@@ -145,7 +180,7 @@ fn rtTaskRunClosure() {
 }
 
 fn rtTaskExit() {
-    rtIdle = 0
+    rtEvents += 1
     const cur = rtCast<int, ptr>(rtCur)
     rtStoreInt(cur, 1)
     var i = 0
@@ -234,9 +269,7 @@ pub fn rtRunPending() {
 //~ Lets another task run so something may change, for `select`; false when none can.
 pub fn rtRunOnePending() -> bool {
     if rtTasks.len() <= 1 { return false }
-    rtIdle += 1
-    if rtIdle > 2 * rtTasks.len() + 2 { return false }
-    rtSwitchNext()
+    rtPark(0)
 }
 
 //~ Can a receive on this channel finish now: a value is queued, or no sender is left?
@@ -250,9 +283,9 @@ pub fn rtChanRoom(ch: ptr) -> bool {
 
 pub fn rtTaskBody<T>(s: ptr, sink f: once fn() -> T) {
     const v = f!!()
-    rtWrite<T>(rtOffset(s, 64), sink v)
+    rtWrite<T>(rtOffset(s, 72), sink v)
     if rtLoadInt(rtOffset(s, 16)) == 1 {
-        rtDropAt<T>(rtOffset(s, 64))
+        rtDropAt<T>(rtOffset(s, 72))
     }
 }
 
@@ -269,7 +302,7 @@ impl<T> task<T> {
     //~ Asks the task to stop: it sees `cancelled()` become true. It still has to be joined (or dropped) as usual.
     fn cancel(self) {
         rtStoreInt(rtOffset(self.state, 48), 1)
-        rtIdle = 0
+        rtEvents += 1
     }
 
     fn join(sink self) -> T {
@@ -277,11 +310,10 @@ impl<T> task<T> {
         while rtLoadInt(s) != 1 {
             rtWait("a task to finish")
         }
-        rtIdle = 0
-        const r = rtRead<T>(rtOffset(s, 64))
+        const r = rtRead<T>(rtOffset(s, 72))
         rtFree(s)
         rtForgetTask<T>(sink self)
-        return r
+        r
     }
 }
 
@@ -293,8 +325,8 @@ pub fn rtForgetTask<T>(sink t: task<T>) {
 //~ Starts `f` as a task. What the closure uses must be copied or moved in (`sink x ~> ...`).
 pub fn spawn<T>(sink f: once fn() -> T) -> task<T> {
     rtMainInit()
-    rtIdle = 0
-    const s = rtAlloc(64 + rtSizeOf<T>())
+    rtEvents += 1
+    const s = rtAlloc(72 + rtSizeOf<T>())
     const stack = rtStackTake()
     rtStorePtr(rtOffset(s, 24), stack)
     const runner = [sink f, sink s] () ~> rtTaskBody<T>(s, sink f)
@@ -331,7 +363,7 @@ impl scope_handle {
             const b = rtCast<int, ptr>(t)
             if rtLoadInt(rtOffset(b, 56)) == self.id { rtStoreInt(rtOffset(b, 48), 1) }
         }
-        rtIdle = 0
+        rtEvents += 1
     }
 }
 
@@ -352,7 +384,7 @@ pub struct sender<T> {
     deinit {
         const n = rtLoadInt(rtOffset(self.ch, 32)) - 1
         rtStoreInt(rtOffset(self.ch, 32), n)
-        rtIdle = 0
+        rtEvents += 1
         if n == 0 && rtLoadInt(rtOffset(self.ch, 40)) == 0 { rtChanFree<T>(self.ch) }
     }
 }
@@ -362,7 +394,7 @@ pub struct receiver<T> {
 
     deinit {
         rtStoreInt(rtOffset(self.ch, 40), 0)
-        rtIdle = 0
+        rtEvents += 1
         if rtLoadInt(rtOffset(self.ch, 32)) == 0 { rtChanFree<T>(self.ch) }
     }
 }
@@ -429,7 +461,7 @@ impl<T> sender<T> {
                 const len = rtLoadInt(rtOffset(ch, 24))
                 rtWrite<T>(rtChanSlot(ch, len), sink value)
                 rtStoreInt(rtOffset(ch, 24), len + 1)
-                rtIdle = 0
+                rtEvents += 1
                 sent = true
             } else {
                 rtWait("room in a channel")
@@ -457,7 +489,7 @@ impl<T> receiver<T> {
         const v = rtRead<T>(rtChanSlot(ch, 0))
         rtStoreInt(rtOffset(ch, 16), (rtLoadInt(rtOffset(ch, 16)) + 1) % rtLoadInt(rtOffset(ch, 8)))
         rtStoreInt(rtOffset(ch, 24), len - 1)
-        rtIdle = 0
+        rtEvents += 1
         return v
     }
 
@@ -544,14 +576,14 @@ impl<T> lock<T> {
     //~ itself waits inside `f` (on a channel, say).
     fn with<R>(self, f: fn(inout T) -> R) -> R {
         while rtLoadInt(self.p) != 0 {
-            rtWait("a lock")
+            rtWaitLock("a lock")
         }
         rtStoreInt(self.p, 1)
         var v = rtRead<T>(rtOffset(self.p, 16))
         const r = f(inout v)
         rtWrite<T>(rtOffset(self.p, 16), sink v)
         rtStoreInt(self.p, 0)
-        rtIdle = 0
+        rtEvents += 1
         r
     }
 
@@ -560,7 +592,7 @@ impl<T> lock<T> {
     fn withWhen<R>(self, ready: fn(T) -> bool, f: fn(inout T) -> R) -> R {
         while true {
             while rtLoadInt(self.p) != 0 {
-                rtWait("a lock")
+                rtWaitLock("a lock")
             }
             rtStoreInt(self.p, 1)
             var v = rtRead<T>(rtOffset(self.p, 16))
@@ -568,11 +600,12 @@ impl<T> lock<T> {
                 const r = f(inout v)
                 rtWrite<T>(rtOffset(self.p, 16), sink v)
                 rtStoreInt(self.p, 0)
-                rtIdle = 0
+                rtEvents += 1
                 return r
             }
             rtWrite<T>(rtOffset(self.p, 16), sink v)
             rtStoreInt(self.p, 0)
+            rtFreed += 1
             rtWait("a lock condition")
         }
         panic("unreachable")
@@ -613,12 +646,11 @@ impl semaphore {
             rtWait("a semaphore permit")
         }
         rtStoreInt(self.p, rtLoadInt(self.p) - 1)
-        rtIdle = 0
     }
 
     fn release(self) {
         rtStoreInt(self.p, rtLoadInt(self.p) + 1)
-        rtIdle = 0
+        rtEvents += 1
     }
 }
 
@@ -660,7 +692,7 @@ impl barrier {
         if arrived >= rtLoadInt(self.p) {
             rtStoreInt(rtOffset(self.p, 8), 0)
             rtStoreInt(rtOffset(self.p, 16), gen + 1)
-            rtIdle = 0
+            rtEvents += 1
             return
         }
         rtStoreInt(rtOffset(self.p, 8), arrived)

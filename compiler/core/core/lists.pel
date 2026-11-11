@@ -179,6 +179,42 @@ pub fn rtStrContains(h: ptr, p: ptr) -> bool {
 }
 
 impl<T: eq> list<T> {
+    //~ The index of the first element equal to `item`, or `none`.
+    fn indexOf(self, item: T) -> int? {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        const eq = rtEqFn<T>()
+        const probe = rtAddrOf(item)
+        var i = 0
+        const len = rtHdrLen(h)
+        while i < len {
+            if rtCallBool2(eq, rtOffset(rtHdrData(h), i * size), probe) { return i }
+            i += 1
+        }
+        return none
+    }
+
+    //~ Drops runs of equal neighbours: `[1, 1, 2, 1].dedup!()` leaves `[1, 2, 1]`.
+    fn dedup(inout self) {
+        const eq = rtEqFn<T>()
+        var out: list<T> = []
+        var i = 0
+        const n = self.len()
+        while i < n {
+            const h = rtAddrOf(self)
+            const size = rtSizeOf<T>()
+            if i == 0 || !rtCallBool2(
+                eq,
+                rtOffset(rtHdrData(h), (i - 1) * size),
+                rtOffset(rtHdrData(h), i * size),
+            ) {
+                out.push!(rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+            }
+            i += 1
+        }
+        self = out
+    }
+
     fn contains(self, item: T) -> bool {
         const h = rtAddrOf(self)
         const size = rtSizeOf<T>()
@@ -195,6 +231,23 @@ impl<T: eq> list<T> {
 }
 
 impl<T: order> list<T> {
+    //~ Searches a sorted list: the index of `item`, or `none`. With equal elements any of them may be found.
+    fn binarySearch(self, item: T) -> int? {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        const cmp = rtCmpFn<T>()
+        const probe = rtAddrOf(item)
+        var lo = 0
+        var hi = rtHdrLen(h)
+        while lo < hi {
+            const mid = lo + (hi - lo) / 2
+            const c = rtCallInt2(cmp, rtOffset(rtHdrData(h), mid * size), probe)
+            if c == 0 { return mid }
+            if c < 0 { lo = mid + 1 } else { hi = mid }
+        }
+        return none
+    }
+
     fn sort(inout self) {
         const h = rtAddrOf(self)
         if rtIsInt<T>() {
@@ -357,6 +410,65 @@ impl<T> list<T> {
         var out = rtClone<list<T>>(rtAddrOf(self))
         out.reverse!()
         out
+    }
+
+    //~ Keeps only the elements for which `f` holds, in order.
+    fn retain(inout self, f: fn(T) -> bool) {
+        var out: list<T> = []
+        var i = 0
+        const n = self.len()
+        while i < n {
+            const h = rtAddrOf(self)
+            const x = rtClone<T>(rtOffset(rtHdrData(h), i * rtSizeOf<T>()))
+            if f(rtClone<T>(rtAddrOf(x))) { out.push!(sink x) }
+            i += 1
+        }
+        self = out
+    }
+
+    //~ Cuts the list to at most `n` elements.
+    fn truncate(inout self, n: int) {
+        while self.len() > n && self.len() > 0 { self.pop!() }
+    }
+
+    //~ Sorts with a comparison that returns a negative number, zero or a positive number (stable).
+    fn sortBy(inout self, cmp: fn(T, T) -> int) {
+        const n = self.len()
+        var out: list<T> = []
+        var i = 0
+        while i < n {
+            const h = rtAddrOf(self)
+            const x = rtClone<T>(rtOffset(rtHdrData(h), i * rtSizeOf<T>()))
+            var lo = 0
+            var hi = out.len()
+            while lo < hi {
+                const mid = lo + (hi - lo) / 2
+                const m = rtClone<T>(rtOffset(rtHdrData(rtAddrOf(out)), mid * rtSizeOf<T>()))
+                if cmp(m, rtClone<T>(rtAddrOf(x))) <= 0 { lo = mid + 1 } else { hi = mid }
+            }
+            out.insert!(lo, sink x)
+            i += 1
+        }
+        self = out
+    }
+
+    //~ The list cut into pieces of `size` (the last may be shorter).
+    fn chunks(self, size: int) -> iter<list<T>> {
+        if size <= 0 { panic("chunks: size must be positive") }
+        var out: list<list<T>> = []
+        const n = self.len()
+        var i = 0
+        while i < n {
+            var piece: list<T> = []
+            var j = i
+            while j < i + size && j < n {
+                piece.push!(rtClone<T>(rtOffset(rtHdrData(rtAddrOf(self)), j * rtSizeOf<T>())))
+                j += 1
+            }
+            out.push!(sink piece)
+            i += size
+        }
+        rtCast<list<list<T>>, iter<list<T>>>(sink out)
     }
 
     fn iter(self) -> iter<T> = rtCast<list<T>, iter<T>>(rtClone<list<T>>(rtAddrOf(self)))

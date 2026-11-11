@@ -125,3 +125,19 @@ pub fn rtArgsInto(dst: ptr) {
     rtStoreInt(rtOffset(dst, 8), n)
     rtStoreInt(rtOffset(dst, 16), n)
 }
+
+//~ The end of a program whose `main` returns a `T ! E`: `res` is the result it wrote. An error (tag 1) puts
+//~ "error: " and its text on standard error and the process exits with 1. `off` is where the error's text
+//~ starts when the error is a `string`, and -1 when it is another type (then the line says only "error").
+pub fn rtMainDone(res: ptr, off: int) {
+    if rtLoadByte(res) == 0 { return }
+    rtOsWrite(2, rtLoadPtr(rtAddrOf("error: ")), 7)
+    if off >= 0 {
+        const h = rtOffset(res, off)
+        rtOsWrite(2, rtLoadPtr(h), rtHdrLen(h))
+    } else {
+        rtOsWrite(2, rtLoadPtr(rtAddrOf("main returned an error")), 22)
+    }
+    rtOsWrite(2, rtLoadPtr(rtAddrOf("\n")), 1)
+    rtOsExit(1)
+}

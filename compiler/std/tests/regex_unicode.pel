@@ -1,0 +1,26 @@
+/// `@regex` in Unicode mode: `(?u)` makes `.` and classes work on code points, not bytes.
+@regex("(?u)(?<first>[à-ÿ]+)-(?<second>[α-ω]+)(?<mark>.)")
+struct mixed {
+    first: string
+    second: string
+    mark: string
+}
+
+@regex("(?ui)(?<word>é+)")
+struct accent {
+    word: string
+}
+
+fn main() {
+    switch mixedFind("x été-αβγ😀 y") {
+        case some(m): print(m.first, m.second, m.mark)
+        case none: print("none")
+    }
+    print(mixedIsMatch("ete-abc!"), mixedIsMatch("été-αβγ"))
+    const all = accentFindAll("éÉé x É")
+    var i = 0
+    while i < all.len() {
+        print(all[i].word)
+        i += 1
+    }
+}

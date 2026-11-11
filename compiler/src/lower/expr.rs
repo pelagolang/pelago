@@ -1422,7 +1422,7 @@ impl<'a> Lowerer<'a> {
         let r = match &b.tail {
             Some(t) if self.f.cur.is_some() => match dst {
                 Some(d) => self.into(t, d, want),
-                None => self.expr(t),
+                None => self.tail_value(t),
             },
             Some(_) => Res::Never,
             None if self.f.cur.is_none() => Res::Never,
@@ -1432,6 +1432,28 @@ impl<'a> Lowerer<'a> {
         self.pop_scope_carrying(&r);
         if self.f.cur.is_none() {
             return Res::Never;
+        }
+        r
+    }
+
+    /// The value of a block's tail with no destination. A tail that names a local owning scalar (a
+    /// `box`, say) moves it out, so the local's drop flag is cleared; a plain load would leave the
+    /// flag set and the block's scope would free what the caller now holds.
+    fn tail_value(&mut self, t: &'a Expr) -> Res {
+        let r = self.expr(t);
+        if let (Res::Val(v), ExprKind::Name(id)) = (&r, &strip_parens(t).kind) {
+            let moved = matches!(
+                self.res
+                    .use_at(self.f.file, id.span.start)
+                    .and_then(|d| self.f.locals.get(&d).copied()),
+                Some(Local::Slot { flag: Some(_), .. })
+            );
+            if let (true, Some(ty)) = (moved, self.ty_of(t)) {
+                if self.needs_drop(ty) {
+                    self.mark_moved(t);
+                    self.fresh_scalar(*v, ty);
+                }
+            }
         }
         r
     }
