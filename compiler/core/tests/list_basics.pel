@@ -1,0 +1,36 @@
+/// `list` helpers: `indexOf`, `dedup`, `binarySearch`, `retain`, `truncate`, `sortBy`, `chunks`.
+fn searching() {
+    const xs = [4, 8, 15, 16, 23, 42]
+    print(
+        xs.indexOf(15),
+        xs.indexOf(5),
+        xs.binarySearch(23),
+        xs.binarySearch(24),
+        xs.binarySearch(4),
+        xs.binarySearch(42),
+    )
+    var d = [1, 1, 2, 2, 2, 1, 3, 3]
+    d.dedup!()
+    print(d)
+    const names = ["a", "b"]
+    print(names.indexOf("b"))
+}
+
+fn editing() {
+    var r = [1, 2, 3, 4, 5, 6]
+    r.retain!((x) ~> x % 2 == 0)
+    print(r)
+    var t = [1, 2, 3, 4, 5]
+    t.truncate!(2)
+    t.truncate!(9)
+    print(t)
+    var w = ["pear", "fig", "apple", "kiwi"]
+    w.sortBy!((a, b) ~> a.len() - b.len())
+    print(w)
+    print([1, 2, 3, 4, 5].chunks(2).toList())
+}
+
+fn main() {
+    searching()
+    editing()
+}

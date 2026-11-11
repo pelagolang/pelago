@@ -1,0 +1,31 @@
+/// `str` search, strip, split, pad, repeat and join helpers.
+fn search() {
+    const s = "hello, wörld, hello"
+    print(s.find("hello"), s.find("xyz"), s.findLast("hello"), s.findLast("q"))
+    print(s.len(), s.charCount(), "".charCount())
+    print("[#("  ab ".trimStart())]", "[#("  ab ".trimEnd())]")
+    print("key=value=x".stripPrefix("key="), "key".stripPrefix("no"))
+    print("file.pel".stripSuffix(".pel"), "file.pel".stripSuffix(".rs"))
+    print("a=b=c".splitOnce("="), "abc".splitOnce("="))
+}
+
+fn building() {
+    print("a\nb\r\nc\n".lines().toList(), "".lines().count(), "x\n\ny".lines().toList())
+    print(
+        "ab".repeat(3),
+        "ab".repeat(0),
+        "7".padLeft(3, '0'),
+        "ö".padLeft(3, '.'),
+        "7".padRight(3, '-'),
+        "long".padLeft(2, ' '),
+    )
+    const words = ["a", "b", "c"]
+    print(words.join(", "), words.iter().join("-"), "x y z".split(" ").join("+"))
+    const empty: [string] = []
+    print("[#(empty.join(","))]")
+}
+
+fn main() {
+    search()
+    building()
+}
