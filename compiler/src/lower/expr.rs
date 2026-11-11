@@ -124,12 +124,16 @@ impl<'a> Lowerer<'a> {
             ExprKind::Select(arms) => self.select_expr(e, arms),
             ExprKind::Become(call) => self.become_expr(e, call),
             ExprKind::Scope { name, body } => {
+                let mut handle = None;
                 if let Some(d) = self.res.decls.get(&(self.f.file, name.span.start)).copied() {
                     if let Some(ht) = self.typed.local_tys.get(&d).copied() {
                         let ht = self.conc(ht);
                         let ptr = self.slot_for(ht);
-                        let zero = self.i64c(0);
-                        self.store_scalar_ty(ptr, zero);
+                        let Some(id) = self.call_core("rtScopeEnter", Vec::new()) else {
+                            return Res::Never;
+                        };
+                        self.store_scalar_ty(ptr, id);
+                        handle = Some(ptr);
                         self.f.locals.insert(
                             d,
                             Local::Slot {
@@ -144,7 +148,10 @@ impl<'a> Lowerer<'a> {
                 let r = self.block(body, None, void);
                 // Every task started in the scope is finished when it ends.
                 if !matches!(r, Res::Never) {
-                    self.call_core("rtRunPending", Vec::new());
+                    if let Some(ptr) = handle {
+                        let id = self.load_at(ptr, 0, IrTy::Int(64));
+                        self.call_core("rtScopeLeave", vec![id]);
+                    }
                 }
                 r
             }

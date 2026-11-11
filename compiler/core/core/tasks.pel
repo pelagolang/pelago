@@ -25,7 +25,7 @@ pub struct task<T> {
     }
 }
 
-/// The task block: [state: 0 live, 1 done][saved context][detached][stack][closure: 16 bytes][cancelled][pad][result].
+/// The task block: [state: 0 not started, 2 running, 1 done][saved context][detached][stack][closure: 16 bytes][cancelled][scope][result].
 /// The running task is `rtCur`; `rtTasks` lists every live task, the one `main` runs in first.
 
 //~ Addresses of the live task blocks (0 is `main`'s, made on first use).
@@ -123,6 +123,7 @@ fn rtTaskEntry() {
 //~ Its own function so the closure is dropped before the task ends: `rtTaskExit` never returns.
 fn rtTaskRunClosure() {
     const cur = rtCast<int, ptr>(rtCur)
+    rtStoreInt(cur, 2)
     const g = rtRead<once fn()>(rtOffset(cur, 32))
     g!!()
 }
@@ -140,23 +141,78 @@ fn rtTaskExit() {
     panic("a finished task ran again")
 }
 
-//~ Runs every task that has not finished: the end of a `scope` and of `main`.
+//~ Scopes opened and not yet closed (in every task), and the id the next one gets. A task started with `s.spawn`
+//~ carries the id of `s` in its block, so a scope knows which tasks are its own.
+pub var rtScopeNext: int = 0
+pub var rtScopeDepth: int = 0
+//~ Scopes that were cancelled and are still open.
+pub var rtCancelledScopes: [int] = []
+
+//~ The start of `scope s { ... }`: the id of the new scope.
+pub fn rtScopeEnter() -> int {
+    rtScopeNext += 1
+    rtScopeDepth += 1
+    rtScopeNext
+}
+
+//~ The end of a scope: waits for every task started with its `s.spawn`.
+pub fn rtScopeLeave(id: int) {
+    if rtTasks.len() > 0 {
+        while rtScopeLive(id) > 0 {
+            rtWait("a task")
+        }
+    }
+    var i = 0
+    while i < rtCancelledScopes.len() {
+        if rtCancelledScopes[i] == id {
+            rtCancelledScopes.remove!(i)
+        } else {
+            i += 1
+        }
+    }
+    rtScopeDepth -= 1
+    if rtScopeDepth == 0 { rtCancelledScopes = [] }
+    if rtScopeDepth == 0 && rtTasks.len() == 1 { rtReleaseAll() }
+}
+
+//~ How many unfinished tasks belong to the scope.
+fn rtScopeLive(id: int) -> int {
+    var n = 0
+    for t of rtTasks {
+        if rtLoadInt(rtOffset(rtCast<int, ptr>(t), 56)) == id { n += 1 }
+    }
+    n
+}
+
+//~ Frees what the task machinery holds once only `main` is left.
+fn rtReleaseAll() {
+    rtFree(rtCast<int, ptr>(rtTasks[0]))
+    while rtStackPool.len() > 0 {
+        rtFree(rtStackTake())
+    }
+    rtStackPool = []
+    rtTasks = []
+    rtCur = 0
+}
+
+//~ The end of `main`. Tasks that were not started in a scope and are not done are abandoned (owner decision, 2026-11-07):
+//~ they never run again; a task that never started drops its closure, one that did start leaks what its stack holds, since nothing unwinds. Scopes have joined their own.
 pub fn rtRunPending() {
     if rtTasks.len() == 0 { return }
-    /// `main` is always the first; a task that ends a scope leaves itself and `main` waiting.
-    const others = if rtCur == rtTasks[0] { 1 } else { 2 }
-    while rtTasks.len() > others {
-        rtWait("a task")
-    }
-    if rtTasks.len() == 1 {
-        rtFree(rtCast<int, ptr>(rtTasks[0]))
-        while rtStackPool.len() > 0 {
-            rtFree(rtStackTake())
+    var i = 0
+    while i < rtTasks.len() {
+        const t = rtCast<int, ptr>(rtTasks[i])
+        if rtTasks[i] == rtCur {
+            i += 1
+        } else {
+            /// A task that never started still owns its closure; one that did start leaks what its stack holds.
+            if rtLoadInt(t) == 0 { rtDropAt<once fn()>(rtOffset(t, 32)) }
+            rtFree(rtLoadPtr(rtOffset(t, 24)))
+            rtFree(t)
+            rtTasks.remove!(i)
         }
-        rtStackPool = []
-        rtTasks = []
-        rtCur = 0
     }
+    if rtTasks.len() == 1 { rtReleaseAll() }
 }
 
 //~ Lets another task run so something may change, for `select`; false when none can.
@@ -185,7 +241,9 @@ pub fn rtTaskBody<T>(s: ptr, sink f: once fn() -> T) {
 
 //~ Whether the running task was asked to stop (`t.cancel()`). A task that wants to stop early looks at this between
 //~ steps; nothing is interrupted and nothing unwinds. Always false in `main`.
-pub fn cancelled() -> bool {
+pub fn cancelled() -> bool = rtCancelled()
+
+pub fn rtCancelled() -> bool {
     if rtCur == 0 { return false }
     rtLoadInt(rtOffset(rtCast<int, ptr>(rtCur), 48)) != 0
 }
@@ -235,7 +293,30 @@ pub struct scope_handle {
 }
 
 impl scope_handle {
-    fn spawn<T>(self, sink f: once fn() -> T) -> task<T> = spawn(sink f)
+    //~ Starts a task that belongs to the scope: the scope's end waits for it and `cancel()` reaches it.
+    fn spawn<T>(self, sink f: once fn() -> T) -> task<T> {
+        const t = spawn(sink f)
+        rtStoreInt(rtOffset(t.state, 56), self.id)
+        if rtScopeCancelled(self.id) { rtStoreInt(rtOffset(t.state, 48), 1) }
+        t
+    }
+
+    //~ Asks every task of the scope, also ones started later, to stop: they see `cancelled()` become true.
+    fn cancel(self) {
+        rtCancelledScopes.push!(self.id)
+        for t of rtTasks {
+            const b = rtCast<int, ptr>(t)
+            if rtLoadInt(rtOffset(b, 56)) == self.id { rtStoreInt(rtOffset(b, 48), 1) }
+        }
+        rtIdle = 0
+    }
+}
+
+fn rtScopeCancelled(id: int) -> bool {
+    for c of rtCancelledScopes {
+        if c == id { return true }
+    }
+    false
 }
 
 /// A channel block: [buffer][capacity in slots][head][length][senders][receiver alive][bound][slot size].
