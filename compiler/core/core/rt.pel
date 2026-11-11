@@ -67,6 +67,8 @@ pub ext fn rtOsClose(fd: int) -> int
 //~ (since 1970-01-01 UTC), 1 the monotonic clock. 0 on success, a negative error otherwise (-3 where the
 //~ target has no clock call yet: Windows, macOS).
 pub ext fn rtOsClock(which: int, p: ptr) -> int
+pub ext fn rtOsFs(op: int, path: ptr, aux: int) -> int
+pub ext fn rtOsDents(fd: int, buf: ptr, n: int) -> int
 pub ext fn rtToByte(n: int) -> uint8
 pub ext fn rtWrap<T>(n: int) -> T
 pub ext fn rtToInt(x: float) -> int

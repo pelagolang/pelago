@@ -1,4 +1,5 @@
-/// Files by path: whole-file helpers, and `open`, `create` and `append` for reading or writing in pieces.
+/// Files by path: whole-file helpers, `open`, `create` and `append` for reading or writing in pieces, and the
+/// path calls (`exists`, `metadata`, `createDirs`, `rename`, `removeFile`, `readDir`, ...).
 ///
 /// ```
 /// import std.fs
@@ -16,6 +17,7 @@
 /// a value; none stops the program (docs/design/input.md).
 
 import std.io
+import std.path
 
 /// Whether the path holds a zero byte, which no operating system accepts in a name.
 fn hasZero(path: str) -> bool {
@@ -75,4 +77,131 @@ pub fn writeText(path: str, text: str) -> void ! io_error {
 pub fn appendText(path: str, text: str) -> void ! io_error {
     var f = append(path)?
     f.write!(text)
+}
+
+fn zeroError(verb: str, path: str) -> io_error {
+    io_error { kind: io_kind.invalid, message: "#verb #path: the path contains a zero byte" }
+}
+
+/// The path as a zero-terminated block for the system call; the caller frees it.
+fn cstr(path: str) -> ptr {
+    const n = path.len()
+    const p = rtAlloc(n + 1)
+    if n > 0 { rtCopy(p, rtHdrData(rtAddrOf(path)), n) }
+    rtStoreByte(rtOffset(p, n), 0)
+    p
+}
+
+/// A call on one path (`rtOsFs`) that gives nothing back; `verb` says what was being done for the message.
+fn onPath(op: int, verb: str, path: str) -> void ! io_error {
+    if hasZero(path) { return err(zeroError(verb, path)) }
+    const p = cstr(path)
+    const rc = rtOsFs(op, p, 0)
+    rtFree(p)
+    if rc < 0 { return err(io.failure(rc, verb, path)) }
+}
+
+//~ Whether something (a file, a directory, a link) is at the path. A path that cannot be looked at (no
+//~ permission to enter the folder, or a zero byte in it) counts as absent.
+pub fn exists(path: str) -> bool {
+    if hasZero(path) { return false }
+    const p = cstr(path)
+    const rc = rtOsFs(0, p, 0)
+    rtFree(p)
+    rc == 0
+}
+
+//~ Deletes a file (or a link). A directory is removed with `removeDir`.
+pub fn removeFile(path: str) -> void ! io_error = onPath(1, "removing", path)
+
+//~ Deletes a directory that has nothing in it.
+pub fn removeDir(path: str) -> void ! io_error = onPath(2, "removing", path)
+
+//~ Makes one directory; the folder above it must exist, and the path must not (`createDirs` is the lenient one).
+pub fn createDir(path: str) -> void ! io_error = onPath(3, "creating", path)
+
+//~ Makes the directory and the ones above it that are missing; one that is already there is not an error.
+pub fn createDirs(dir: str) -> void ! io_error {
+    if dir.len() > 0 && !exists(dir) {
+        if path.parent(dir) is some(up) {
+            if up.len() > 0 { createDirs(up)? }
+        }
+        createDir(dir)?
+    }
+}
+
+//~ Moves or renames `from` to `to`, replacing `to` when it is a file.
+pub fn rename(from: str, to: str) -> void ! io_error {
+    if hasZero(from) { return err(zeroError("renaming", from)) }
+    if hasZero(to) { return err(zeroError("renaming", to)) }
+    const a = cstr(from)
+    const b = cstr(to)
+    const rc = rtOsFs(4, a, rtAddrInt(b))
+    rtFree(a)
+    rtFree(b)
+    if rc < 0 { return err(io.failure(rc, "renaming", from)) }
+}
+
+//~ What a path names.
+pub enum file_kind {
+    file
+    dir
+    other
+}
+
+//~ The facts `metadata` reports: the size in bytes and what the path names (a link is followed).
+pub struct file_info {
+    pub size: int
+    pub kind: file_kind
+}
+
+pub fn metadata(path: str) -> file_info ! io_error {
+    if hasZero(path) { return err(zeroError("reading", path)) }
+    const p = cstr(path)
+    const buf = [0, 0]
+    const rc = rtOsFs(5, p, rtAddrInt(rtHdrData(rtAddrOf(buf))))
+    rtFree(p)
+    if rc < 0 { return err(io.failure(rc, "reading", path)) }
+    var kind = file_kind.other
+    if buf[1] == 1 { kind = file_kind.file }
+    if buf[1] == 2 { kind = file_kind.dir }
+    ok(file_info { size: buf[0], kind: kind })
+}
+
+//~ The names in a directory, sorted, without `.` and `..`.
+pub fn readDir(dir: str) -> [string] ! io_error {
+    if hasZero(dir) { return err(zeroError("reading", dir)) }
+    const p = cstr(dir)
+    const fd = rtOsOpen(p, 0)
+    rtFree(p)
+    if fd < 0 { return err(io.failure(fd, "reading", dir)) }
+    const buf = rtAlloc(8192)
+    var names: [string] = []
+    var code = 0
+    while true {
+        const n = rtOsDents(fd, buf, 8192)
+        if n < 0 {
+            code = n
+            break
+        }
+        if n == 0 { break }
+        var at = 0
+        while at < n {
+            const rec = rtOffset(buf, at)
+            const len = (rtLoadByte(rtOffset(rec, 16)) to int) + (rtLoadByte(rtOffset(rec, 17)) to int) * 256
+            var name = ""
+            var i = 19
+            while rtLoadByte(rtOffset(rec, i)) != 0 {
+                name.pushByte!(rtLoadByte(rtOffset(rec, i)))
+                i += 1
+            }
+            if name != "." && name != ".." { names.push!(sink name) }
+            at += len
+        }
+    }
+    rtFree(buf)
+    rtOsClose(fd)
+    if code < 0 { return err(io.failure(code, "reading", dir)) }
+    names.sort!()
+    ok(names)
 }
