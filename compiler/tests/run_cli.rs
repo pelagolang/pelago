@@ -270,10 +270,10 @@ fn main(args: [string]) -> void ! io_error {
 
 #[test]
 fn sleep_and_select_timeouts_use_the_clock() {
-    let src = "import std.time\n\nfn go() -> void ! io_error {\n    const t0 = time.now()?\n    time.sleep(time.millis(30))\n    const waited = (t0.elapsed()?).asMillis()\n    print(waited >= 30)\n    const (tx, rx) = chan<int>()\n    select {\n        case v = rx.recv() { print(\"got\") }\n        case timeout(time.millis(20)) { print(\"timed out\") }\n    }\n    scope s {\n        const t = copy tx\n        s.spawn(() ~> { time.sleep(time.millis(10)); t.send(7) })\n        select {\n            case v = rx.recv() { print(\"got #(v ?? 0)\") }\n            case timeout(time.millis(500)) { print(\"timed out\") }\n        }\n    }\n}\n\nfn main() {\n    print(go().isOk())\n}\n";
+    let src = "import std.time\n\nfn main() -> void ! io_error {\n    const t0 = time.now()?\n    time.sleep(time.millis(30))\n    const waited = (t0.elapsed()?).asMillis()\n    print(waited >= 30)\n    const (tx, rx) = chan<int>()\n    select {\n        case v = rx.recv() { print(\"got\") }\n        case timeout(time.millis(20)) { print(\"timed out\") }\n    }\n    scope s {\n        const t = copy tx\n        s.spawn(() ~> { time.sleep(time.millis(10)); t.send(7) })\n        select {\n            case v = rx.recv() { print(\"got #(v ?? 0)\") }\n            case timeout(time.millis(500)) { print(\"timed out\") }\n        }\n    }\n}\n";
     for flags in args_modes() {
         let (out, err, code) = run_with(flags, src, &[], "");
-        assert_eq!(out, "true\ntimed out\ngot 7\ntrue\n", "{flags:?}: {err}");
+        assert_eq!(out, "true\ntimed out\ngot 7\n", "{flags:?}: {err}");
         assert_eq!(code, 0, "{flags:?}");
     }
 }
