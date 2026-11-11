@@ -126,6 +126,22 @@ fn main_gets_its_arguments() {
 }
 
 #[test]
+fn environment_variables_are_read_from_the_start_block() {
+    // The child process inherits these (a name no other test uses).
+    std::env::set_var("PELAGO_ENV_TEST_A", "x=y z");
+    std::env::set_var("PELAGO_ENV_TEST_B", "");
+    let src = "import std.env\nfn main() {\n    print(env.get(\"PELAGO_ENV_TEST_A\"), env.get(\"PELAGO_ENV_TEST_B\"), env.get(\"PELAGO_ENV_TEST_NONE\"))\n    print(env.has(\"PELAGO_ENV_TEST_A\"), env.has(\"PELAGO_ENV_TEST_NONE\"))\n    var found = 0\n    for p of env.vars() { if p.0 == \"PELAGO_ENV_TEST_A\" { found += 1 } }\n    print(found)\n}\n";
+    for flags in args_modes() {
+        let (out, err, code) = run_with(flags, src, &[], "");
+        assert_eq!(
+            out, "some(\"x=y z\") some(\"\") none\ntrue false\n1\n",
+            "{flags:?}: {err}"
+        );
+        assert_eq!(code, 0, "{flags:?}");
+    }
+}
+
+#[test]
 fn main_may_return_a_result() {
     // Returning `ok` is a normal end (the interpreter used to free an address that was never allocated).
     let ok = "fn main() -> void ! string {\n    print(\"x\")\n}\n";
