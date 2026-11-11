@@ -33,3 +33,4 @@ Tests: each library has a `tests/` directory (`compiler/core/tests/`, `compiler/
 ## `core` additions log
 
 - **iter adapters (2026-11):** `fold`, `any`, `all`, `find`, `position`, `nth`, `last`, `take`, `skip`, `takeWhile`, `skipWhile`, `chain`, `enumerate`, `zip`, `flatMap`, `filterMap`, `reversed`, and `min`/`max` (for `order` elements) on `iter<T>`. They build lists like `map` and `filter` do (`docs/design/iter.md`); one flat method set, no `Iterator` trait. Conventional names, Pelago's own surface: no `next()`, no `&mut`.
+- **option and result combinators (2026-11):** `option`: `unwrapOrElse`, `andThen`, `filter`, `orElse`, `isSomeAnd`, `zip`. `result`: `err` (the error as an option), `map`, `andThen`, `unwrapOrElse`, `orElse`, `isOkAnd`. Values are written plainly (`x`, `none`, `ok(x)`, `err(e)`), there is no `some(...)` constructor.
