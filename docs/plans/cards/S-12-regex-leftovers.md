@@ -16,4 +16,4 @@ Three small things from [docs/design/regex.md](../../design/regex.md) section 5 
 2. **The tier in `pelago check`.** `pelago check` prints, for each `@regex`, the tier (linear, tier A with the number of alternatives, tier B with the number of referenced groups), so a pattern that fell to tier B is visible.
 3. **A budget default.** An optional helper `nameBudget(text)` (`64 * (text.len() + 1)`, the figure in the design) so callers do not invent numbers; the budget stays an explicit parameter.
 
-Also open, from S-10: the native-backend panic ("a folded address read as a value") on `if (a || b) && state.caps[i * S] == pos` over an array in a struct has no small repro yet; try again when someone is in the backend.
+Closed with the S-13 follow-up: the native-backend panic ("a folded address read as a value") came from a nested scaled index (`(t * 2) * 8`) in `native/regs.rs folds()`; fixed there with a regression test (`an_index_scaled_twice_is_not_folded_into_one_address`).

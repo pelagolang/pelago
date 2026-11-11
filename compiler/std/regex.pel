@@ -13,6 +13,10 @@
 /// `{n,m}` and lazy forms such as `*?`, named groups `(?<name>...)` (also `(?P<name>...)`), lookahead
 /// `(?=...)` and `(?!...)`, flags `i` (ignore case, ASCII), `s` (`.` also matches a newline) and `m` (`^` and `$` match at
 /// lines) as `(?i)`, `(?-i)`, `(?im:...)`, and `\A`, `\z` for the whole text. Backreferences (`\1`, `\k<name>`, `(?P=name)`) need `compileWithBackrefs` and `search` with a step budget; lookbehind is not supported.
+///
+/// Unicode mode: a pattern that starts with `(?u)` (or `(?iu)`, ...) works on code points, not bytes: `.`, classes and literals take whole characters, `\d \w \s \b` are Python's Unicode versions, `\p{L}`, `\P{Lu}` name general categories (not scripts), and `(?i)` uses Python's case equivalences. Not in the reference: lookahead and backreferences in Unicode mode. `@regex("(?u)...")` has the same syntax (and also lookahead).
+
+import std.regexunicode
 
 //~ A match: where it starts and ends, and the start and end of each group (`-1` for a group that
 //~ did not take part). Group 0 is the whole match.
@@ -33,6 +37,8 @@ pub struct regex {
     names: [string]
     /// Where the reversed program of each lookahead body starts (it ends at its own `MATCH`).
     looks: [int]
+    /// Unicode mode: `CHAR`, `ANY` and `CLASS` see code points (decoded from the text), not bytes.
+    unicode: bool
 }
 
 /// Instruction codes.
@@ -104,6 +110,71 @@ fn addRange(inout p: parser, lo: int, hi: int) {
     p.ranges.push!(hi)
 }
 
+fn addSet(inout p: parser, set: [int]) {
+    var i = 0
+    while i < set.len() {
+        addRange(inout p, set[i], set[i + 1])
+        i += 2
+    }
+}
+
+/// Unicode mode: the ranges of `\d \w \s` (capitals: everything else) as code points.
+fn addUniEscape(inout p: parser, e: int) -> bool {
+    const lower = e >= 97 ? e : e + 32
+    var set: [int] = []
+    if lower == 100 {
+        set = regexunicode.digitSet()
+    } else if lower == 119 {
+        set = regexunicode.wordSet()
+    } else if lower == 115 {
+        set = regexunicode.spaceSet()
+    } else {
+        return false
+    }
+    addSet(inout p, e >= 97 ? set : regexunicode.complement(set))
+    true
+}
+
+/// Unicode mode, after `\p` or `\P`: reads the name (`L` or `{Lu}`, `{^L}`) and gives the code points.
+fn parseProperty(inout p: parser, s: str, negated: bool) -> [int] ! parse_error {
+    var name = ""
+    var not = negated
+    if peek(p, s) == 123 {
+        var end = p.pos + 1
+        while end < s.len() && s.byteAt(end) != 125 { end += 1 }
+        if end >= s.len() { return err(fail("a property name is closed by `}`")) }
+        name = "#(s[p.pos + 1..end])"
+        p.pos = end + 1
+    } else if peek(p, s) >= 0 {
+        name = "#(s[p.pos..p.pos + 1])"
+        p.pos += 1
+    } else {
+        return err(fail("`\\p` needs a property name"))
+    }
+    if name.startsWith("^") {
+        name = "#(name[1..name.len()])"
+        not = !not
+    }
+    switch regexunicode.property(name) {
+        case some(set):
+            if not { return ok(regexunicode.complement(set)) }
+            return ok(copy set)
+        case none: return err(fail("`#(name)` is not a Unicode general category (scripts are not supported)"))
+    }
+}
+
+/// With the `u` flag: replaces the ranges from `start` on by their sorted, merged form (class lookup uses a binary search).
+fn normTail(inout p: parser, start: int) {
+    var tail: [int] = []
+    var i = start
+    while i < p.ranges.len() {
+        tail.push!(p.ranges[i])
+        i += 1
+    }
+    while p.ranges.len() > start { p.ranges.pop!() }
+    addSet(inout p, regexunicode.norm(tail))
+}
+
 fn addEscapeRanges(inout p: parser, e: int) -> bool {
     if e == 100 {
         addRange(inout p, 48, 57)
@@ -147,6 +218,26 @@ fn byteNode(inout p: parser, b: int) -> int {
     node(inout p, N_BYTE, b, 0, 0, 0)
 }
 
+/// A literal character in Unicode mode (the `p.pos` is just past its first byte): the whole code point; with `i`, a class of its case equivalents.
+fn uniLiteral(inout p: parser, s: str) -> int {
+    p.pos -= 1
+    const d = regexunicode.decodeAt(s, p.pos)
+    const cp = d / 8 - 1
+    p.pos += d % 8
+    if p.flags % 2 == 1 {
+        const set = regexunicode.fold([cp, cp])
+        if set.len() > 2 || set[0] != cp || set[1] != cp {
+            const start = p.ranges.len()
+            addSet(inout p, set)
+            p.classes.push!(start)
+            p.classes.push!(set.len() / 2)
+            p.classes.push!(0)
+            return node(inout p, N_CLASS, p.classes.len() / 3 - 1, 0, 0, 0)
+        }
+    }
+    node(inout p, N_BYTE, cp, 0, 0, 0)
+}
+
 /// With the `i` flag, a class also holds the other case of its letters.
 fn foldRanges(inout p: parser, start: int) {
     const end = p.ranges.len()
@@ -167,6 +258,7 @@ fn foldRanges(inout p: parser, start: int) {
 fn parseClass(inout p: parser, s: str) -> int ! parse_error {
     /// The `[` is already read.
     const start = p.ranges.len()
+    const uni = p.flags / 8 % 2 == 1
     var neg = 0
     if peek(p, s) == 94 {
         neg = 1
@@ -183,10 +275,25 @@ fn parseClass(inout p: parser, s: str) -> int ! parse_error {
         first = false
         p.pos += 1
         var lo = c
+        if uni && c >= 128 {
+            p.pos -= 1
+            const d = regexunicode.decodeAt(s, p.pos)
+            lo = d / 8 - 1
+            p.pos += d % 8
+        }
         if c == 92 {
             const e = peek(p, s)
             if e < 0 { return err(fail("a pattern cannot end with a backslash")) }
             p.pos += 1
+            if uni && (e == 112 || e == 80) {
+                addSet(inout p, parseProperty(inout p, s, e == 80)?)
+                continue
+            }
+            if uni && addUniEscape(inout p, e) { continue }
+            if uni && (e == 68 || e == 87 || e == 83) {
+                addUniEscape(inout p, e)
+                continue
+            }
             if addEscapeRanges(inout p, e) { continue }
             lo = escapedByte(e)
         }
@@ -195,6 +302,12 @@ fn parseClass(inout p: parser, s: str) -> int ! parse_error {
             p.pos += 1
             var h = peek(p, s)
             p.pos += 1
+            if uni && h >= 128 {
+                p.pos -= 1
+                const d = regexunicode.decodeAt(s, p.pos)
+                h = d / 8 - 1
+                p.pos += d % 8
+            }
             if h == 92 {
                 const e = peek(p, s)
                 if e < 0 { return err(fail("a pattern cannot end with a backslash")) }
@@ -206,7 +319,21 @@ fn parseClass(inout p: parser, s: str) -> int ! parse_error {
         }
         addRange(inout p, lo, hi)
     }
-    if p.flags % 2 == 1 { foldRanges(inout p, start) }
+    if uni {
+        normTail(inout p, start)
+        if p.flags % 2 == 1 {
+            var tail: [int] = []
+            var t = start
+            while t < p.ranges.len() {
+                tail.push!(p.ranges[t])
+                t += 1
+            }
+            while p.ranges.len() > start { p.ranges.pop!() }
+            addSet(inout p, regexunicode.fold(tail))
+        }
+    } else if p.flags % 2 == 1 {
+        foldRanges(inout p, start)
+    }
     const count = (p.ranges.len() - start) / 2
     p.classes.push!(start)
     p.classes.push!(count)
@@ -216,6 +343,15 @@ fn parseClass(inout p: parser, s: str) -> int ! parse_error {
 
 /// \d \w \s and their capitals, \b \B, or a plain escaped byte.
 fn escapeNode(inout p: parser, e: int) -> int {
+    if p.flags / 8 % 2 == 1 && (e == 100 || e == 119 || e == 115 || e == 68 || e == 87 || e == 83) {
+        const start = p.ranges.len()
+        const lower = e >= 97 ? e : e + 32
+        addUniEscape(inout p, lower)
+        p.classes.push!(start)
+        p.classes.push!((p.ranges.len() - start) / 2)
+        p.classes.push!(e >= 97 ? 0 : 1)
+        return node(inout p, N_CLASS, p.classes.len() / 3 - 1, 0, 0, 0)
+    }
     if e == 100 || e == 119 || e == 115 || e == 68 || e == 87 || e == 83 {
         const start = p.ranges.len()
         const lower = e >= 97 ? e : e + 32
@@ -244,6 +380,7 @@ fn parseNumber(inout p: parser, s: str) -> int {
 
 /// A backreference to group `n`: the group must be closed already, and the reference must not sit in a lookahead.
 fn backrefNumber(inout p: parser, n: int) -> int ! parse_error {
+    if p.flags / 8 % 2 == 1 { return err(fail("a backreference is not supported in Unicode mode of this matcher")) }
     if n > p.groups { return err(fail("a backreference to a group that is not defined before it")) }
     var i = 0
     while i < p.open.len() {
@@ -278,11 +415,12 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
         const saved = p.flags
         if peek(p, s) == 63 {
             const k = p.pos + 1 < s.len() ? s.byteAt(p.pos + 1) to int : -1
-            if k == 105 || k == 115 || k == 109 || k == 45 {
+            if k == 105 || k == 115 || k == 109 || k == 117 || k == 45 {
                 /// Flags: `(?ims-ims)` for the rest of the group, `(?ims-ims:...)` for the body only.
                 var at = p.pos + 1
                 var on = true
                 var flags = p.flags
+                var gotU = false
                 while at < s.len() && s.byteAt(at) != 41 && s.byteAt(at) != 58 {
                     const f = s.byteAt(at) to int
                     var bit = 0
@@ -292,6 +430,12 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
                         bit = 2
                     } else if f == 109 {
                         bit = 4
+                    } else if f == 117 && on && p.pos == 1 {
+                        /// `(?u)` only as the very first thing of the pattern, for the whole pattern.
+                        bit = 8
+                        gotU = true
+                    } else if f == 117 {
+                        return err(fail("in this matcher `u` must start the pattern: `(?u)...`"))
                     } else if f == 45 && on {
                         on = false
                     } else {
@@ -307,12 +451,14 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
                 if at >= s.len() { return err(fail("a group is not closed")) }
                 p.flags = flags
                 p.pos = at + 1
+                if gotU && s.byteAt(at) != 41 { return err(fail("in this matcher `u` must start the pattern: `(?u)...`")) }
                 if s.byteAt(at) == 41 { return ok(node(inout p, N_EMPTY, 0, 0, 0, 0)) }
                 capture = false
             } else if k == 58 {
                 capture = false
                 p.pos += 2
             } else if k == 61 || k == 33 {
+                if p.flags / 8 % 2 == 1 { return err(fail("lookahead is not supported in Unicode mode of this matcher")) }
                 capture = false
                 look = k == 61 ? 1 : 2
                 p.pos += 2
@@ -404,9 +550,20 @@ fn parseAtom(inout p: parser, s: str, depth: int) -> int ! parse_error {
             p.pos = end + 1
             return backref(inout p, "#(s[first..end])")
         }
+        if p.flags / 8 % 2 == 1 && (e == 112 || e == 80) {
+            var set = parseProperty(inout p, s, e == 80)?
+            if p.flags % 2 == 1 { set = regexunicode.fold(set) }
+            const start = p.ranges.len()
+            addSet(inout p, set)
+            p.classes.push!(start)
+            p.classes.push!(set.len() / 2)
+            p.classes.push!(0)
+            return ok(node(inout p, N_CLASS, p.classes.len() / 3 - 1, 0, 0, 0))
+        }
         return ok(escapeNode(inout p, e))
     }
     if c == 42 || c == 43 || c == 63 { return err(fail("a repeat has nothing to repeat")) }
+    if p.flags / 8 % 2 == 1 { return ok(uniLiteral(inout p, s)) }
     ok(byteNode(inout p, c))
 }
 
@@ -641,6 +798,7 @@ pub fn compileWithBackrefs(pattern: str) -> regex ! parse_error {
         groupCount: p.groups,
         names: copy p.names,
         looks: looks,
+        unicode: p.flags / 8 % 2 == 1,
     })
 }
 
@@ -663,6 +821,7 @@ pub fn fromTables(
     groupCount: groupCount,
     names: names,
     looks: looks,
+    unicode: false,
 }
 
 /// ---- Running ---------------------------------------------------------------------------------------
@@ -683,6 +842,23 @@ fn classHas(re: regex, index: int, b: int) -> bool {
     const start = re.classes[index * 3]
     const count = re.classes[index * 3 + 1]
     var inside = false
+    if re.unicode {
+        /// The ranges of a Unicode class are sorted and merged: binary search.
+        var lo = 0
+        var hi = count - 1
+        while lo <= hi {
+            const mid = (lo + hi) / 2
+            if b < re.ranges[start + 2 * mid] {
+                hi = mid - 1
+            } else if b > re.ranges[start + 2 * mid + 1] {
+                lo = mid + 1
+            } else {
+                inside = true
+                break
+            }
+        }
+        return re.classes[index * 3 + 2] == 1 ? !inside : inside
+    }
     var i = 0
     while i < count {
         if b >= re.ranges[start + 2 * i] && b <= re.ranges[start + 2 * i + 1] {
@@ -694,14 +870,57 @@ fn classHas(re: regex, index: int, b: int) -> bool {
     re.classes[index * 3 + 2] == 1 ? !inside : inside
 }
 
-/// Whether the assertion `kind` (0 start, 1 end, 2 word edge, 3 not a word edge, 4 line start, 5 line end) holds at `pos`.
-fn assertHolds(text: str, kind: int, pos: int) -> bool {
+/// Whether a word edge of Unicode mode lies at `pos`: a word character starts there (the bit of lookahead table `tab`, which holds `\\w`)
+/// or ends there (the character before `pos` starts where the bit is set and is as long as its first byte says), but not both: 1 for an edge, 0 for none, 2 inside a character (neither `\\b` nor `\\B` holds there).
+fn uniEdge(text: str, bits: [int], tab: int, pos: int) -> int {
+    if pos < text.len() && (text.byteAt(pos) to int) >= 128 && (text.byteAt(pos) to int) < 192 { return 2 }
+    const row = tab * (text.len() + 1)
+    const starts = bits[row + pos] == 1
+    var ends = false
+    if pos > 0 {
+        var q = pos - 1
+        while q > 0 && (text.byteAt(q) to int) >= 128 && (text.byteAt(q) to int) < 192 { q -= 1 }
+        const lead = text.byteAt(q) to int
+        const size = lead < 128 ? 1 : (lead < 224 ? 2 : (lead < 240 ? 3 : 4))
+        ends = bits[row + q] == 1 && size == pos - q
+    }
+    starts != ends ? 1 : 0
+}
+
+/// Whether the assertion `kind` (0 start, 1 end, 2 word edge, 3 not a word edge, 4 line start, 5 line end, 6 and 7 the same word
+/// edges in Unicode mode, whose lookahead table is `tab`) holds at `pos`.
+fn assertHolds(re: regex, text: str, kind: int, tab: int, pos: int, bits: [int]) -> bool {
     const before = pos > 0 ? text.byteAt(pos - 1) to int : -1
     const after = pos < text.len() ? text.byteAt(pos) to int : -1
     if kind == 0 { return pos == 0 }
     if kind == 1 { return pos == text.len() }
     if kind == 4 { return pos == 0 || before == 10 }
     if kind == 5 { return pos == text.len() || after == 10 }
+    if kind >= 6 { return uniEdge(text, bits, tab, pos) == (kind == 6 ? 1 : 0) }
+    if re.unicode {
+        /// A word edge between code points: the character before and the one after, by Python's `\w`.
+        const word = regexunicode.wordSet()
+        var atBoundary = true
+        if pos < text.len() {
+            const next = text.byteAt(pos) to int
+            if next >= 128 && next < 192 { atBoundary = false }
+        }
+        if !atBoundary { return false }
+        var beforeWord = false
+        if pos > 0 {
+            var q = pos - 1
+            while q > 0 && (text.byteAt(q) to int) >= 128 && (text.byteAt(q) to int) < 192 { q -= 1 }
+            const d = regexunicode.decodeAt(text, q)
+            beforeWord = d % 8 == pos - q && regexunicode.has(word, d / 8 - 1)
+        }
+        var afterWord = false
+        if pos < text.len() {
+            const d = regexunicode.decodeAt(text, pos)
+            afterWord = regexunicode.has(word, d / 8 - 1)
+        }
+        const uniEdgeHere = beforeWord != afterWord
+        return kind == 2 ? uniEdgeHere : !uniEdgeHere
+    }
     const edge = (before >= 0 && isWord(before)) != (after >= 0 && isWord(after))
     kind == 2 ? edge : !edge
 }
@@ -730,9 +949,12 @@ fn addThread(
         addThread(re, text, inout list, pc + 1, pos, next, gen, bits)
     } else if op == ASSERT {
         if assertHolds(
+            re,
             text,
             re.x[pc],
+            re.y[pc],
             pos,
+            bits,
         ) { addThread(re, text, inout list, pc + 1, pos, caps, gen, bits) }
     } else if op == LOOK {
         /// The bit of this lookahead at this position was worked out before the match started.
@@ -951,7 +1173,7 @@ fn backtrack(
                     mine[re.x[pc]] = pos
                     pc += 1
                 } else if op == ASSERT {
-                    if !assertHolds(text, re.x[pc], pos) { break }
+                    if !assertHolds(re, text, re.x[pc], re.y[pc], pos, bits) { break }
                     pc += 1
                 } else if op == LOOK {
                     if (bits[re.x[pc] * (text.len() + 1) + pos] == 1) == (re.y[pc] == 1) { break }
@@ -999,7 +1221,14 @@ fn run(re: regex, text: str, from: int, noEmptyAt: int, bits: [int]) -> [int] {
             addThread(re, text, inout current, 0, pos, start, gen, bits)
         }
         if current.pcs.len() == 0 && matched.len() > 0 { break }
-        const byte = pos < text.len() ? text.byteAt(pos) to int : -1
+        var byte = pos < text.len() ? text.byteAt(pos) to int : -1
+        var step = 1
+        if re.unicode && pos < text.len() {
+            /// Unicode mode: one code point at a time (`-1` for bytes that are not text).
+            const d = regexunicode.decodeAt(text, pos)
+            byte = d / 8 - 1
+            step = d % 8
+        }
         var t = 0
         while t < current.pcs.len() {
             const pc = current.pcs[t]
@@ -1019,7 +1248,7 @@ fn run(re: regex, text: str, from: int, noEmptyAt: int, bits: [int]) -> [int] {
             }
             if advance {
                 const carried = slice(current.caps, t * slots, (t + 1) * slots)
-                addThread(re, text, inout following, pc + 1, pos + 1, carried, gen + 1, bits)
+                addThread(re, text, inout following, pc + 1, pos + step, carried, gen + 1, bits)
             }
             t += 1
         }
@@ -1034,7 +1263,7 @@ fn run(re: regex, text: str, from: int, noEmptyAt: int, bits: [int]) -> [int] {
         current.mark = copy following.mark
         following.mark = marks
         gen += 1
-        pos += 1
+        pos += step
     }
     matched
 }

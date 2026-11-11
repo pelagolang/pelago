@@ -45,6 +45,7 @@ pub const STD_MODULES: &[(&str, &str)] = &[
     ("path", include_str!("../std/path.pel")),
     ("json", include_str!("../std/json.pel")),
     ("regex", include_str!("../std/regex.pel")),
+    ("regexunicode", include_str!("../std/regexunicode.pel")),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

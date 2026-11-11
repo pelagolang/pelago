@@ -142,7 +142,15 @@ pub fn folds(f: &Func, uses: &[u32], consts: &[Option<i64>]) -> Vec<Fold> {
                         }
                         Op::Bin(..) if on[ri] => {
                             if let Some((idx, scale)) = scaled[ri] {
-                                fold[ri] = Fold::Scaled { idx, scale };
+                                if fold[idx.0 as usize] == Fold::No {
+                                    fold[ri] = Fold::Scaled { idx, scale };
+                                } else {
+                                    // `(i * 2) * 8`: the index of an address is a register, and a scaled
+                                    // value is never in one, so the inner product stays an instruction.
+                                    fold[ri] = Fold::No;
+                                    on[ri] = false;
+                                    changed = true;
+                                }
                             }
                         }
                         _ => {}

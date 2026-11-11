@@ -92,16 +92,20 @@ A bad pattern, or a field the pattern cannot fill (`year` is not a group, a grou
 
 ## 6. Unicode mode (S-13, built 2026-11-11)
 
-**Surface (my recommendation, taken because the owner asked for the work; he can change it).** An opt-in flag `u`: `(?u)` at the start of the pattern, or `(?u:...)` for a part, like `i`, `s` and `m`. Without it nothing changes: patterns stay byte patterns, so every existing pattern keeps its meaning and its speed. Only `@regex` has it (the compiler writes the tables); `regex.compile` at run time refuses `(?u)` ("this flag is not supported"), because the Unicode tables belong in the compiler, not in every program.
+**Surface (my recommendation, taken because the owner asked for the work; he can change it).** An opt-in flag `u`: `(?u)` at the start of the pattern, or `(?u:...)` for a part, like `i`, `s` and `m`. Without it nothing changes: patterns stay byte patterns, so every existing pattern keeps its meaning and its speed. `@regex` has it from the compiler's tables; `regex.compile` at run time has it too (below), from the tables in `std.regexunicode`, only at the very start of the pattern.
 
 **What it does.** The matcher stays a byte machine, so time stays linear and no decoding step exists: a set of code points is turned at compile time into an alternation of UTF-8 byte-range sequences (the standard range split, `compiler/src/regexunicode.rs`), with sequences that share a tail sharing one node so `\w` is about 1400 states, not 5000. Under `(?u)`:
 - `.` is one code point (not a newline, unless `s`);
 - `[...]` and `[^...]` take code points and ranges (`[à-ÿ]`, `[😀-😂]`); `[^...]` is the complement over all code points;
 - a non-ASCII literal followed by a quantifier repeats the whole character (`é+`);
 - `\d`, `\w`, `\s` and their capitals are the sets Python's `re` uses on text (generated into `compiler/src/regexunicode_tables.rs` by `gen_regex_unicode.py`, so the Unicode version is Python 3.13's, 15.1); they work inside classes too (`[^\W\d]`);
-- `(?i)` adds the simple upper and lower case of every member (`é`/`É`, `я`/`Я`, `σ`/`Σ`).
+- `(?i)` follows Python's `re`: a letter matches the characters whose lower case is its lower case, plus Python's extra equivalences (`k` and the Kelvin sign, `s` and `ſ`, `ς`/`σ`, `ǅ`/`Ǆ`/`ǆ`);
+- `\b` and `\B` are Unicode word edges (a `\w` character on one side only). The compiler emits an assertion backed by a bit table ("a word character starts here") filled by a reversed scan like lookahead, so it stays linear; inside a lookahead it is a compile error;
+- `\p{L}`, `\pL`, `\p{Lu}`, `\P{..}`, `\p{^..}` and the long names (`Letter`, `Uppercase_Letter`, ...), `LC` and `Any`: general categories from Python's `unicodedata`; they work inside classes and fold under `(?i)`. Scripts (`\p{Greek}`) are not supported.
 
-**Not in it, on purpose.** `\b` and `\B` are an error under `(?u)` (the byte assertions look at ASCII word bytes; a Unicode word edge needs the code point before the position, which is lookbehind, not built); case folding with several-character results (`ß` and `SS`) and the extra equivalences Python adds (`ς`/`σ`, `K` and the Kelvin sign); general categories `\p{L}`; `.` on text that is not valid UTF-8 (bytes that are not a code point match nothing).
+**Not in it, on purpose.** Case folds with several-character results (`ß` and `SS`; Python does not do them either); scripts and other properties; `.` on text that is not valid UTF-8 (bytes that are not a code point match nothing).
 
-**Cost.** A pattern with `\w`, `\d` or `\s` in Unicode mode has a bigger program (`\w` 1400 states, `\d` 150, `\s` 30), and the Pike simulation touches the alternatives at each position; speed work (a byte-class table, a DFA) is Optimise. Test: `regexgen_unicode_agrees_with_python` runs the 22 cases of `regex_unicode.corpus` (expected spans from Python, in byte offsets) and `regex_unicode.pel` runs an `@regex` struct natively.
+**Run-time `(?u)` (reference engine).** `regex.compile("(?u)...")` and `(?iu)` work when the flag is the first thing in the pattern; `(?u:...)` and `(?-u)` are errors. The Pike VM decodes one code point per step, classes are sorted merged ranges searched by bisection. Not in the reference's Unicode mode: lookahead and backreferences (compile errors), and backreference comparison under `i` is ASCII-only. Test: `regex_unicode_ref.pel` runs every corpus case through it and matches Python.
+
+**Cost.** A pattern with `\w`, `\d` or `\s` in Unicode mode has a bigger program (`\w` 1400 states, `\d` 150, `\s` 30), and the Pike simulation touches the alternatives at each position; speed work (a byte-class table, a DFA) is Optimise. Test: `regexgen_unicode_agrees_with_python` runs the 40 cases of `regex_unicode.corpus` (expected spans from Python, in byte offsets) and `regex_unicode.pel` runs an `@regex` struct natively.
 

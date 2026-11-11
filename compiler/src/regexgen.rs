@@ -56,6 +56,8 @@ enum Node {
     Quest(Box<Node>, bool),
     Group(Box<Node>, usize),
     Assert(i64),
+    /// `\b` (or `\B` when true) in Unicode mode: the body is `\w`, whose lookahead bit at a position says a word character starts there.
+    WordEdge(Box<Node>, bool),
     Repeat(Box<Node>, i64, i64, bool),
     Look(Box<Node>, bool),
     /// `\1`, `\k<name>`: the group, and whether case is ignored.
@@ -120,6 +122,36 @@ impl<'a> Parser<'a> {
         let c = text.chars().next().ok_or("the pattern ends too early")?;
         self.pos += c.len_utf8();
         Ok(c as u32)
+    }
+
+    /// After `\\p` or `\\P`: the name (`L`, or `{Lu}`) and the set of code points it names (complemented for `\\P`).
+    fn property(&mut self, negated: bool) -> Res<Set> {
+        let name: String = if self.peek() == 123 {
+            let start = self.pos + 1;
+            let mut end = start;
+            while end < self.s.len() && self.s[end] != b'}' {
+                end += 1;
+            }
+            if end >= self.s.len() {
+                return Err("a property name is closed by `}`".into());
+            }
+            self.pos = end + 1;
+            String::from_utf8_lossy(&self.s[start..end]).into_owned()
+        } else if self.peek() >= 0 {
+            let c = self.peek() as u8 as char;
+            self.pos += 1;
+            c.to_string()
+        } else {
+            return Err("`\\p` needs a property name".into());
+        };
+        let (name, negated) = match name.strip_prefix('^') {
+            Some(rest) => (rest.to_string(), !negated),
+            None => (name, negated),
+        };
+        let set = uni::property(&name).ok_or_else(|| {
+            format!("`{name}` is not a Unicode general category (scripts are not supported)")
+        })?;
+        Ok(if negated { uni::complement(&set) } else { set })
     }
 
     /// The set of `\d \w \s` or their capitals in Unicode mode.
@@ -246,6 +278,11 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 if let Some(escaped) = Self::uni_escape(e as u8) {
                     set.extend(escaped);
+                    continue;
+                }
+                if matches!(e as u8, b'p' | b'P') {
+                    let named = self.property(e as u8 == b'P')?;
+                    set.extend(named);
                     continue;
                 }
                 Self::escaped(e as u8) as u32
@@ -488,10 +525,23 @@ impl<'a> Parser<'a> {
                     if let Some(set) = Self::uni_escape(e as u8) {
                         return Ok(self.cp_node(&set));
                     }
+                    if matches!(e as u8, b'p' | b'P') {
+                        let mut set = self.property(e as u8 == b'P')?;
+                        if self.flags & 1 == 1 {
+                            set = uni::fold(&set);
+                        }
+                        return Ok(self.cp_node(&set));
+                    }
                     if matches!(e as u8, b'b' | b'B') {
-                        return Err(
-                            "`\\b` and `\\B` are not supported in Unicode mode (`(?u)`) yet".into(),
-                        );
+                        if self.look_depth > 0 {
+                            return Err(
+                                "`\\b` and `\\B` are not supported inside a lookahead in Unicode mode (`(?u)`)"
+                                    .into(),
+                            );
+                        }
+                        let word = Self::uni_escape(b'w').expect("\\w is a set");
+                        let body = self.cp_node(&word);
+                        return Ok(Node::WordEdge(Box::new(body), e as u8 == b'B'));
                     }
                 }
                 Ok(self.escape_node(e as u8))
@@ -504,6 +554,10 @@ impl<'a> Parser<'a> {
                 if self.flags & 1 == 1 {
                     set = uni::fold(&set);
                 }
+                Ok(self.cp_node(&set))
+            }
+            _ if self.unicode() && self.flags & 1 == 1 && (c as u8).is_ascii_alphabetic() => {
+                let set = uni::fold(&vec![(c as u32, c as u32)]);
                 Ok(self.cp_node(&set))
             }
             _ => Ok(self.byte_node(c as u8)),
@@ -910,7 +964,11 @@ impl Parser<'_> {
                 }
                 capped(unique(out))
             }
-            Node::Group(..) | Node::Assert(_) | Node::Look(..) | Node::Backref(..) => None,
+            Node::Group(..)
+            | Node::Assert(_)
+            | Node::WordEdge(..)
+            | Node::Look(..)
+            | Node::Backref(..) => None,
         }
     }
 
@@ -1067,6 +1125,10 @@ impl Emitter {
             Node::Assert(k) => {
                 self.emit(ASSERT, *k, 0);
             }
+            Node::WordEdge(a, neg) => {
+                self.emit(ASSERT, if *neg { 7 } else { 6 }, self.pending.len() as i64);
+                self.pending.push((**a).clone());
+            }
             Node::Backref(g, ci) => {
                 self.emit(BACKREF, *g as i64, *ci as i64);
             }
@@ -1187,7 +1249,7 @@ impl Program {
     /// Longest match of a node in bytes (`None`: unbounded) and whether it matches digits only.
     fn shape(&self, n: &Node) -> (Option<u64>, bool) {
         match n {
-            Node::Empty | Node::Assert(_) | Node::Look(..) => (Some(0), true),
+            Node::Empty | Node::Assert(_) | Node::WordEdge(..) | Node::Look(..) => (Some(0), true),
             Node::Backref(..) => (None, false),
             Node::Byte(b) => (Some(1), b.is_ascii_digit()),
             Node::Any(_) => (Some(1), false),
@@ -1351,6 +1413,24 @@ fn @N@Program() -> @N@Prog = @N@Prog {
 
 fn @N@IsWord(b: int) -> bool = (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || b == 95 || (b >= 97 && b <= 122)
 
+/// Whether a word edge (`\\b` in Unicode mode) lies at `pos`: a word character starts at `pos` (the lookahead bit of table `tab`) or ends there (the character before `pos`
+/// starts where the bit is set and is exactly as long as its first byte says) but not both: 1 for an edge, 0 for none, 2 inside a character
+/// (neither `\\b` nor `\\B` holds there).
+fn @N@UniEdge(text: str, bits: [int], tab: int, pos: int) -> int {
+    if pos < text.len() && (text.byteAt(pos) to int) >= 128 && (text.byteAt(pos) to int) < 192 { return 2 }
+    const row = tab * (text.len() + 1)
+    const starts = bits[row + pos] == 1
+    var ends = false
+    if pos > 0 {
+        var q = pos - 1
+        while q > 0 && (text.byteAt(q) to int) >= 128 && (text.byteAt(q) to int) < 192 { q -= 1 }
+        const lead = text.byteAt(q) to int
+        const size = lead < 128 ? 1 : (lead < 224 ? 2 : (lead < 240 ? 3 : 4))
+        ends = bits[row + q] == 1 && size == pos - q
+    }
+    starts != ends ? 1 : 0
+}
+
 fn @N@ClassHas(p: @N@Prog, index: int, b: int) -> bool {
     const start = p.classes[index * 3]
     const count = p.classes[index * 3 + 1]
@@ -1392,6 +1472,8 @@ fn @N@Add(p: @N@Prog, text: str, inout list: @N@Threads, inout mark: [int; @M@],
             holds = pos == 0 || before == 10
         } else if kind == 5 {
             holds = pos == text.len() || after == 10
+        } else if kind >= 6 {
+            holds = @N@UniEdge(text, bits, p.y[pc], pos) == (kind == 6 ? 1 : 0)
         } else {
             const edge = (before >= 0 && @N@IsWord(before)) != (after >= 0 && @N@IsWord(after))
             holds = kind == 2 ? edge : !edge
@@ -1685,7 +1767,7 @@ fn @N@Search(p: @N@Prog, text: str, from: int, noEmptyAt: int, bits: [int], inou
                     mine[p.x[pc]] = pos
                     pc += 1
                 } else if op == 6 {
-                    if !@N@Holds(text, p.x[pc], pos) { break }
+                    if !@N@Holds(text, p.x[pc], p.y[pc], pos, bits) { break }
                     pc += 1
                 } else if op == 8 {
                     if (bits[p.x[pc] * (text.len() + 1) + pos] == 1) == (p.y[pc] == 1) { break }
@@ -1707,13 +1789,14 @@ fn @N@Search(p: @N@Prog, text: str, from: int, noEmptyAt: int, bits: [int], inou
     0
 }
 
-fn @N@Holds(text: str, kind: int, pos: int) -> bool {
+fn @N@Holds(text: str, kind: int, tab: int, pos: int, bits: [int]) -> bool {
     const before = pos > 0 ? text.byteAt(pos - 1) to int : -1
     const after = pos < text.len() ? text.byteAt(pos) to int : -1
     if kind == 0 { return pos == 0 }
     if kind == 1 { return pos == text.len() }
     if kind == 4 { return pos == 0 || before == 10 }
     if kind == 5 { return pos == text.len() || after == 10 }
+    if kind >= 6 { return @N@UniEdge(text, bits, tab, pos) == (kind == 6 ? 1 : 0) }
     const edge = (before >= 0 && @N@IsWord(before)) != (after >= 0 && @N@IsWord(after))
     kind == 2 ? edge : !edge
 }

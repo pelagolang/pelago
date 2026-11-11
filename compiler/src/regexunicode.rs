@@ -2,8 +2,8 @@
 //!
 //! The matcher stays a byte machine. A set of code points becomes an alternation of byte-range sequences (the
 //! standard UTF-8 range split), so one code point costs one pass over its bytes and the match stays linear. The
-//! sets for `\w`, `\d` and `\s` are Python's own (generated, see `regexunicode_tables.rs`); case folding uses the
-//! simple case mappings of the Rust standard library.
+//! sets for `\w`, `\d` and `\s`, the case equivalences and the general categories are Python's own data (generated, see
+//! `regexunicode_tables.rs`), so the engine and its test oracle agree.
 
 /// A sorted list of non-overlapping inclusive ranges of code points.
 pub type Set = Vec<(u32, u32)>;
@@ -72,31 +72,135 @@ pub fn space() -> Set {
     crate::regexunicode_tables::SPACE.to_vec()
 }
 
-/// The character an iterator holds when it holds exactly one.
-fn single(mut it: impl Iterator<Item = char>) -> Option<char> {
-    let x = it.next()?;
-    it.next().is_none().then_some(x)
+/// Whether the code point is in the (sorted, merged) set.
+fn has(v: &Set, cp: u32) -> bool {
+    let i = v.partition_point(|&(_, hi)| hi < cp);
+    i < v.len() && v[i].0 <= cp
 }
 
-/// Adds the simple upper and lower case of every member: `(?i)`.
+/// Adds every code point Python's `re` treats as the same letter as a member when it ignores case: all code points
+/// with the same lower case, and the extra equivalences of `re._casefix` (`s` and `\u{17f}`, `\u{3c3}` and `\u{3c2}`,
+/// the Kelvin sign and `k`, ...). Tables come from Python itself, so the two engines agree on which letters match.
 pub fn fold(v: &Set) -> Set {
+    use crate::regexunicode_tables::{EXTRA, LOWER};
+    use std::collections::HashMap;
+    let v = norm(v.clone());
+    let mut same: HashMap<u32, Vec<u32>> = HashMap::new();
+    for &(cp, low) in LOWER {
+        same.entry(low).or_default().push(cp);
+    }
+    let mut extra: HashMap<u32, Vec<u32>> = HashMap::new();
+    for &(k, other) in EXTRA {
+        extra.entry(k).or_default().push(other);
+    }
+    let lower = |cp: u32| match LOWER.binary_search_by_key(&cp, |p| p.0) {
+        Ok(i) => LOWER[i].1,
+        Err(_) => cp,
+    };
+    let mut cased: Vec<u32> = Vec::new();
+    for &(cp, low) in LOWER {
+        cased.push(cp);
+        cased.push(low);
+    }
+    for &(k, other) in EXTRA {
+        cased.push(k);
+        cased.push(other);
+    }
+    cased.sort_unstable();
+    cased.dedup();
     let mut out = v.clone();
-    for &(lo, hi) in v {
-        for cp in lo..=hi {
-            let Some(c) = char::from_u32(cp) else {
-                continue;
-            };
-            for x in [single(c.to_lowercase()), single(c.to_uppercase())]
-                .into_iter()
-                .flatten()
-            {
-                if x != c {
-                    out.push((x as u32, x as u32));
-                }
+    for c in cased {
+        if !has(&v, c) {
+            continue;
+        }
+        let k = lower(c);
+        let mut keys = vec![k];
+        keys.extend(extra.get(&k).cloned().unwrap_or_default());
+        for key in keys {
+            out.push((key, key));
+            for &x in same.get(&key).into_iter().flatten() {
+                out.push((x, x));
             }
         }
     }
     norm(out)
+}
+
+/// The two-letter general category a long or short property name stands for, or the group of them.
+fn category_codes(name: &str) -> Option<Vec<&'static str>> {
+    const LONG: &[(&str, &[&str])] = &[
+        ("Letter", &["Lu", "Ll", "Lt", "Lm", "Lo"]),
+        ("Cased_Letter", &["Lu", "Ll", "Lt"]),
+        ("Uppercase_Letter", &["Lu"]),
+        ("Lowercase_Letter", &["Ll"]),
+        ("Titlecase_Letter", &["Lt"]),
+        ("Modifier_Letter", &["Lm"]),
+        ("Other_Letter", &["Lo"]),
+        ("Mark", &["Mn", "Mc", "Me"]),
+        ("Nonspacing_Mark", &["Mn"]),
+        ("Spacing_Mark", &["Mc"]),
+        ("Enclosing_Mark", &["Me"]),
+        ("Number", &["Nd", "Nl", "No"]),
+        ("Decimal_Number", &["Nd"]),
+        ("Letter_Number", &["Nl"]),
+        ("Other_Number", &["No"]),
+        ("Punctuation", &["Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po"]),
+        ("Connector_Punctuation", &["Pc"]),
+        ("Dash_Punctuation", &["Pd"]),
+        ("Open_Punctuation", &["Ps"]),
+        ("Close_Punctuation", &["Pe"]),
+        ("Initial_Punctuation", &["Pi"]),
+        ("Final_Punctuation", &["Pf"]),
+        ("Other_Punctuation", &["Po"]),
+        ("Symbol", &["Sm", "Sc", "Sk", "So"]),
+        ("Math_Symbol", &["Sm"]),
+        ("Currency_Symbol", &["Sc"]),
+        ("Modifier_Symbol", &["Sk"]),
+        ("Other_Symbol", &["So"]),
+        ("Separator", &["Zs", "Zl", "Zp"]),
+        ("Space_Separator", &["Zs"]),
+        ("Line_Separator", &["Zl"]),
+        ("Paragraph_Separator", &["Zp"]),
+        ("Other", &["Cc", "Cf", "Cs", "Co", "Cn"]),
+        ("Control", &["Cc"]),
+        ("Format", &["Cf"]),
+        ("Surrogate", &["Cs"]),
+        ("Private_Use", &["Co"]),
+        ("Unassigned", &["Cn"]),
+    ];
+    use crate::regexunicode_tables::CATEGORY_NAMES;
+    if let Some((_, codes)) = LONG.iter().find(|(long, _)| *long == name) {
+        return Some(codes.to_vec());
+    }
+    if name == "LC" {
+        return Some(vec!["Lu", "Ll", "Lt"]);
+    }
+    if name == "Any" {
+        return Some(CATEGORY_NAMES.to_vec());
+    }
+    let found: Vec<&'static str> = CATEGORY_NAMES
+        .iter()
+        .copied()
+        .filter(|c| *c == name || (name.len() == 1 && c.starts_with(name)))
+        .collect();
+    (!found.is_empty()).then_some(found)
+}
+
+/// `\p{Name}`: the code points of a general category (`L`, `Lu`, `Letter`, `Uppercase_Letter`, `Nd`, ...), from Python's
+/// `unicodedata` for the same Unicode version as `\w`. `None` for a name that is not one.
+pub fn property(name: &str) -> Option<Set> {
+    use crate::regexunicode_tables::{CATEGORIES, CATEGORY_NAMES};
+    let codes = category_codes(name)?;
+    let wanted: Vec<usize> = codes
+        .iter()
+        .filter_map(|c| CATEGORY_NAMES.iter().position(|n| n == c))
+        .collect();
+    let set: Set = CATEGORIES
+        .iter()
+        .filter(|&&(_, _, c)| wanted.contains(&(c as usize)))
+        .map(|&(lo, hi, _)| (lo, hi))
+        .collect();
+    Some(without_surrogates(norm(set)))
 }
 
 /// The byte sequences of a range of code points, as lists of inclusive byte ranges (one range per byte).
@@ -199,5 +303,33 @@ mod tests {
     fn folding_adds_the_other_case() {
         let f = fold(&norm(vec![(0xE9, 0xE9)]));
         assert_eq!(f, vec![(0xC9, 0xC9), (0xE9, 0xE9)]);
+    }
+
+    #[test]
+    fn folding_follows_pythons_extra_equivalences() {
+        // `k` and the Kelvin sign, `s` and the long s, final and medial sigma, `ǅ` with both other forms.
+        assert_eq!(
+            fold(&vec![(0x6B, 0x6B)]),
+            vec![(0x4B, 0x4B), (0x6B, 0x6B), (0x212A, 0x212A)]
+        );
+        assert_eq!(
+            fold(&vec![(0x3C2, 0x3C2)]),
+            vec![(0x3A3, 0x3A3), (0x3C2, 0x3C3)]
+        );
+        assert_eq!(fold(&vec![(0x1C5, 0x1C5)]), vec![(0x1C4, 0x1C6)]);
+    }
+
+    #[test]
+    fn properties_name_general_categories() {
+        let upper = property("Lu").unwrap();
+        assert!(upper.contains(&(0x41, 0x5A)));
+        assert_eq!(property("Uppercase_Letter").unwrap(), upper);
+        let letters = property("L").unwrap();
+        assert!(letters.iter().any(|&(lo, hi)| lo <= 0x4E00 && hi >= 0x4E00));
+        assert_eq!(property("Letter").unwrap(), letters);
+        assert!(property("Nd").unwrap().contains(&(0x30, 0x39)));
+        assert!(property("Greek").is_none());
+        // Surrogates are not code points of text.
+        assert!(property("Cs").unwrap().is_empty());
     }
 }
