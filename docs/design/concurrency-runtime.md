@@ -158,7 +158,8 @@ runtime period, with the interpreter version making it testable in the meantime.
 
 ## 9. Decisions (owner, 2026-11-07; answered through the coordinator)
 
-1. **Stackful tasks and coroutines**, not state machines. Guard page on every task stack still to do.
+1. **Stackful tasks and coroutines**, not state machines. Every task and coroutine stack is a reserved range with a
+   no-access guard page below it (`rtOsReserve` and `rtOsCommit`), so running off the bottom stops the program.
 2. **`async` runs on tasks**: no separate coloured function world (C7).
 3. **No unwinding, ever.** This replaces the "unwind a cancelled coroutine" proposal. Dropping a suspended coroutine
    sets its cancelled flag and resumes it once, so a body that checks `cancelled()` can finish; whatever it still

@@ -43,9 +43,25 @@ const RT_TASK_STACK = 262144
 pub var rtStackPool: [int] = []
 const RT_STACK_POOL = 16
 
+//~ A stack of `size` bytes with a page of no access below it, so running off the bottom stops the program at once
+//~ instead of writing over whatever lies there.
+const RT_GUARD = 4096
+
+fn rtStackNew(size: int) -> ptr {
+    const r = rtOsReserve(size + RT_GUARD)
+    if r <= 0 { panic("out of memory for a stack") }
+    const base = r + RT_GUARD
+    if rtOsCommit(rtIntAddr(base), size) != 0 { panic("out of memory for a stack") }
+    rtIntAddr(base)
+}
+
+fn rtStackFree(p: ptr, size: int) {
+    rtOsRelease(rtIntAddr(rtAddrInt(p) - RT_GUARD), size + RT_GUARD)
+}
+
 fn rtStackTake() -> ptr {
     const n = rtStackPool.len()
-    if n == 0 { return rtAlloc(RT_TASK_STACK) }
+    if n == 0 { return rtStackNew(RT_TASK_STACK) }
     const p = rtStackPool[n - 1]
     rtStackPool.pop!()
     rtCast<int, ptr>(p)
@@ -55,7 +71,7 @@ fn rtStackGive(p: ptr) {
     if rtStackPool.len() < RT_STACK_POOL {
         rtStackPool.push!(rtAddrInt(p))
     } else {
-        rtFree(p)
+        rtStackFree(p, RT_TASK_STACK)
     }
 }
 
@@ -188,7 +204,7 @@ fn rtScopeLive(id: int) -> int {
 fn rtReleaseAll() {
     rtFree(rtCast<int, ptr>(rtTasks[0]))
     while rtStackPool.len() > 0 {
-        rtFree(rtStackTake())
+        rtStackFree(rtStackTake(), RT_TASK_STACK)
     }
     rtStackPool = []
     rtTasks = []
@@ -207,7 +223,7 @@ pub fn rtRunPending() {
         } else {
             /// A task that never started still owns its closure; one that did start leaks what its stack holds.
             if rtLoadInt(t) == 0 { rtDropAt<once fn()>(rtOffset(t, 32)) }
-            rtFree(rtLoadPtr(rtOffset(t, 24)))
+            rtStackFree(rtLoadPtr(rtOffset(t, 24)), RT_TASK_STACK)
             rtFree(t)
             rtTasks.remove!(i)
         }
@@ -668,7 +684,7 @@ pub struct coroutine<T> {
 
     init(sink f: once fn(yielder<T>)) {
         const p = rtAlloc(72 + rtSizeOf<T>())
-        const stack = rtAlloc(RT_CO_STACK)
+        const stack = rtStackNew(RT_CO_STACK)
         rtStorePtr(rtOffset(p, 24), stack)
         const runner = [sink f, sink p] () ~> rtCoBody<T>(p, sink f)
         rtWrite<once fn()>(rtOffset(p, 32), sink runner)
@@ -685,7 +701,7 @@ pub struct coroutine<T> {
             rtStoreInt(rtOffset(p, 56 + 8), 1)
             if rtCoResume(p) { rtDropAt<T>(rtOffset(p, 72)) }
         }
-        rtFree(rtLoadPtr(rtOffset(p, 24)))
+        rtStackFree(rtLoadPtr(rtOffset(p, 24)), RT_CO_STACK)
         rtFree(p)
     }
 }
