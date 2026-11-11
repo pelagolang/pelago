@@ -3653,6 +3653,60 @@ fn regexgen_tier_a_agrees_with_python() {
 }
 
 #[test]
+fn program_tail_local_owning_scalar_moves_out_of_a_generic_function() {
+    // `join` reads the task's result into a local and ends with it: the tail must move the box out,
+    // not free it with the local's scope.
+    let src =
+        "fn main() {\n const t = spawn(~> box(7))\n const b = t.join!!()\n print(b.get())\n}\n";
+    assert_eq!(output_of(src), "7\n");
+}
+
+/// Unicode mode (`(?u)`, `regexunicode.rs`): every case of `regex_unicode.corpus` (expected lines from Python's `re`,
+/// spans in byte offsets) must give Python's answer through the Rust front end and the matcher.
+#[test]
+fn regexgen_unicode_agrees_with_python() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("std/tests");
+    let corpus = std::fs::read_to_string(root.join("regex_unicode.corpus")).unwrap();
+    let list = |v: &[i64]| {
+        let items: Vec<String> = v.iter().map(|n| n.to_string()).collect();
+        format!("[{}]", items.join(", "))
+    };
+    let (mut calls, mut want, mut ran) = (String::new(), String::new(), 0);
+    for line in corpus.lines() {
+        let mut parts = line.split('\t');
+        let (pattern, text, expected) = (
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+        );
+        let p = crate::regexgen::compile(&format!("(?u){pattern}"))
+            .unwrap_or_else(|e| panic!("{pattern}: {e}"));
+        assert!(!p.tier_b, "{pattern}");
+        ran += 1;
+        want.push_str(expected);
+        want.push('\n');
+        let names: Vec<String> = p.names.iter().map(|n| format!("\"{n}\"")).collect();
+        calls.push_str(&format!(
+            "    u({}, {}, {}, {}, {}, {}, [{}], {}, \"{}\")\n",
+            list(&p.op),
+            list(&p.x),
+            list(&p.y),
+            list(&p.ranges),
+            list(&p.classes),
+            p.groups,
+            names.join(", "),
+            list(&p.looks),
+            text.replace('"', "\\\"")
+        ));
+    }
+    assert!(ran > 20);
+    let src = format!(
+        "import std.regex\n\nfn u(sink op: [int], sink x: [int], sink y: [int], sink ranges: [int], sink classes: [int], groups: int, sink names: [string], sink looks: [int], text: str) {{\n    const re = regex.fromTables(sink op, sink x, sink y, sink ranges, sink classes, groups, sink names, sink looks)\n    var spans = \"\"\n    const hits = re.findAll(text)\n    var i = 0\n    while i < hits.len() {{\n        spans.pushStr!(\"#(hits[i].start)-#(hits[i].end) \")\n        i += 1\n    }}\n    print(true, hits.len(), \"#(spans.trim())\")\n}}\n\nfn main() {{\n{calls}}}\n"
+    );
+    assert_eq!(output_of(&src), want);
+}
+
+#[test]
 fn two_conditions_that_never_hold_are_a_deadlock_not_a_livelock() {
     let src = "fn main() {\n const l = lock(0)\n scope s {\n  for i of 0..2 {\n   const m = copy l\n   s.spawn(() ~> m.withWhen((n) ~> n > 5, (inout n) ~> { n += 1 }))\n  }\n }\n}\n";
     let o = run_main(src);

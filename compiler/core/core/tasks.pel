@@ -360,7 +360,7 @@ impl<T> task<T> {
         const r = rtRead<T>(rtOffset(s, 80))
         rtFree(s)
         rtForgetTask<T>(sink self)
-        return r
+        r
     }
 }
 
