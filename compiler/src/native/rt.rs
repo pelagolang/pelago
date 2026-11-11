@@ -1597,12 +1597,7 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
             a.new_label(),
             a.new_label(),
         );
-        let (go, noent, acces, done) = (
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-        );
+        let (go, noent, acces, done) = (a.new_label(), a.new_label(), a.new_label(), a.new_label());
         a.bind(rt.os[12]);
         a.mov_rr(R8, RDX, 8);
         a.mov_rr(RCX, RDI, 8);
@@ -1639,12 +1634,8 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.mov_rr(RSI, RSP, 8);
         a.mov_ri(RAX, 4);
         a.syscall();
-        let (failed, is_file, is_dir, put) = (
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-            a.new_label(),
-        );
+        let (failed, is_file, is_dir, put) =
+            (a.new_label(), a.new_label(), a.new_label(), a.new_label());
         a.test_rr(RAX, RAX, 8);
         a.jcc(Cc::Ne, failed);
         a.load_ext(RDX, mem(RSP, 24), 4, false, false);
