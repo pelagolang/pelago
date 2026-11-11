@@ -36,10 +36,50 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// The moment a `timeout(d)` arm gives up, on the monotonic clock (0 when there is no such arm). `d` is evaluated
+    /// once, when the `select` starts; it is a `duration` (or any one-word value counting nanoseconds).
+    fn select_deadline(&mut self, arms: &'a [SelectArm]) -> Result<Value, Res> {
+        let none = self.konst(IrTy::I64, Const::Int(0), Span::new(0, 0));
+        for arm in arms {
+            if !matches!(self.arm_kind(arm), Some(ArmKind::Timeout)) {
+                continue;
+            }
+            let Some(ExprKind::Call { args, .. }) = arm.op.as_ref().map(|o| &o.kind) else {
+                continue;
+            };
+            let [arg] = args.as_slice() else {
+                return Err(self.unsupported(arm.span, "`timeout` with other than one argument"));
+            };
+            let Some(t) = self.ty_of(&arg.value) else {
+                return Err(self.unsupported(arm.span, "a `timeout` of unknown type"));
+            };
+            let slot = self.slot_for(t);
+            if matches!(self.into(&arg.value, slot, t), Res::Never) {
+                return Err(Res::Never);
+            }
+            let v = match self.repr(t) {
+                Repr::Scalar(s) => match self.emit(Op::Load(s, slot), Some(s), arm.span) {
+                    Some(v) => v,
+                    None => return Err(Res::Never),
+                },
+                _ => slot,
+            };
+            return match self.call_core_g("rtTimeoutAt", &[t], vec![v]) {
+                Some(d) => Ok(d),
+                None => Err(Res::Never),
+            };
+        }
+        Ok(none)
+    }
+
     pub(crate) fn select_expr(&mut self, e: &'a Expr, arms: &'a [SelectArm]) -> Res {
         let sp = e.span;
         let void = self.types.void;
         let done = self.new_block(&[]);
+        let deadline = match self.select_deadline(arms) {
+            Ok(d) => d,
+            Err(r) => return r,
+        };
         let head = self.new_block(&[]);
         self.jump(head, vec![]);
         self.start(head);
@@ -91,7 +131,7 @@ impl<'a> Lowerer<'a> {
                     self.select_body(d, done, void);
                 }
                 _ => {
-                    let Some(ran) = self.call_core("rtRunOnePending", vec![]) else {
+                    let Some(ran) = self.call_core("rtSelectWait", vec![deadline]) else {
                         return Res::Never;
                     };
                     let retry = self.new_block(&[]);

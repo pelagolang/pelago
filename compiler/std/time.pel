@@ -57,6 +57,10 @@ pub fn now() -> instant ! io_error = ok(instant { at: read(1)? })
 //~ The wall clock now, as the time since 1970-01-01 00:00:00 UTC (the Unix epoch).
 pub fn sinceEpoch() -> duration ! io_error = read(0)
 
+//~ Stops the running task for `d`; other tasks run meanwhile. With no other task ready it waits on the clock (a busy
+//~ wait until the system has a sleep call). A target with no clock stops the program, as `now()` would return an error.
+pub fn sleep(d: duration) = rtSleepNanos(d.nanos)
+
 impl duration {
     //~ Whole nanoseconds.
     fn asNanos(self) -> int = self.nanos

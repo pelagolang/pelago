@@ -25,7 +25,8 @@ accepted, S-04 (async suspension).
 - C1 context switch (`CtxInit`, `CtxSwitch`, interpreter baton, x86-64 and AArch64): done (#131).
 - C2 scheduler and blocking tasks in `tasks.pel`: done (#147).
 - C3a flat ring-buffer channels with enforced capacity, `lock` that waits: merged.
-- C3b (merged) clonable `lock` (`copy h` shares it across tasks), `lock.withWhen(ready, f)` instead of a `condvar` (no separate `once`), `semaphore`, `barrier`. `select` send arms now wait for room in a bounded channel. Left in C3: a `select` timeout (needs the clock).
-- C3c: waits park instead of polling (`rtPark`, an event counter and one parked word per task); deadlock is detected exactly when every task is parked. Per-object wait queues wait for several workers (C6).
+- C3b (merged) clonable `lock` (`copy h` shares it across tasks), `lock.withWhen(ready, f)` instead of a `condvar` (no separate `once`), `semaphore`, `barrier`. `select` send arms now wait for room in a bounded channel. - C3c: waits park instead of polling (`rtPark`, an event counter and one parked word per task); deadlock is detected exactly when every task is parked. Per-object wait queues wait for several workers (C6).
 - C4 (merged): `coroutine<T>` with `emit`/`next`/`iter`/`cancelled`, `task.cancel()` and `cancelled()`. Owner decisions on questions 1 to 5 recorded in the plan.
 - C4b (in review): `scope.cancel()`, `select` `case cancelled()`, scopes wait only for their own tasks, detached tasks abandoned at the end of `main`. Guard pages on task and coroutine stacks: in review. Left: C7 `async`.
+
+- C3d: `time.sleep(duration)` and the `select` `timeout(duration)` arm on the `std.time` clock (Linux; other targets stop with "no clock on this target yet"). Sleeping with nothing else to run busy-waits on the clock until a sleep call exists.
