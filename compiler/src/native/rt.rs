@@ -326,7 +326,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `rdi`, `rsi`, `rdx`, the result in `rax` (an address or 0, or a negative error).
-    pub os: [Label; 11],
+    pub os: [Label; 12],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -375,7 +375,7 @@ pub fn emit_for(
         write_u64: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 11].map(|_| a.new_label()),
+        os: [(); 12].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -1580,6 +1580,12 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.mov_ri(RAX, 3);
         a.syscall();
         a.ret();
+        // clock(which = rdi, timespec = rsi): `clock_gettime`, the kernel's `{ seconds, nanoseconds }` is the
+        // layout `OsKind::Clock` promises. 0, or a negative errno.
+        a.bind(rt.os[11]);
+        a.mov_ri(RAX, 228);
+        a.syscall();
+        a.ret();
     }
     if win {
         // The handle for descriptor `rdi` in `rax`: 0, 1 and 2 are the standard handles, anything else is a
@@ -1775,6 +1781,10 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.alu_rr(Alu::Xor, RAX, RAX, 4);
         a.ret();
         a.bind(bad_close);
+        a.mov_ri(RAX, -3);
+        a.ret();
+        // clock: no clock call on Windows yet.
+        a.bind(rt.os[11]);
         a.mov_ri(RAX, -3);
         a.ret();
     }

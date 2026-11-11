@@ -692,7 +692,8 @@ impl Machine<'_> {
             | OsKind::Exit
             | OsKind::Argv
             | OsKind::Open
-            | OsKind::Close => return self.os_layer(k, a, b, c),
+            | OsKind::Close
+            | OsKind::Clock => return self.os_layer(k, a, b, c),
             OsKind::Reserve => {
                 if !sized(a) {
                     OS_BAD
@@ -868,6 +869,25 @@ impl Machine<'_> {
             OsKind::Exit => {
                 self.os.exit = Some(a as i32);
                 return Err(EXIT.to_string());
+            }
+            OsKind::Clock => {
+                let p = b as usize;
+                self.check(p, 16)?;
+                let now = match a {
+                    0 => std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default(),
+                    1 => {
+                        // Measured from the first use, so the value is small and never goes back.
+                        static START: std::sync::OnceLock<std::time::Instant> =
+                            std::sync::OnceLock::new();
+                        START.get_or_init(std::time::Instant::now).elapsed()
+                    }
+                    _ => return Ok(-2),
+                };
+                self.mem[p..p + 8].copy_from_slice(&(now.as_secs() as i64).to_le_bytes());
+                self.mem[p + 8..p + 16].copy_from_slice(&(now.subsec_nanos() as i64).to_le_bytes());
+                0
             }
             OsKind::Argv => {
                 if self.os.block == 0 {

@@ -116,9 +116,8 @@ impl<'a> Lowerer<'a> {
                 Res::Unit
             }
             "rtOsReserve" | "rtOsCommit" | "rtOsRelease" | "rtOsRemap" | "rtOsAdviseNohuge"
-            | "rtOsWrite" | "rtOsRead" | "rtOsExit" | "rtOsArgv" | "rtOsOpen" | "rtOsClose" => {
-                self.intr_os(&name, args, sp)
-            }
+            | "rtOsWrite" | "rtOsRead" | "rtOsExit" | "rtOsArgv" | "rtOsOpen" | "rtOsClose"
+            | "rtOsClock" => self.intr_os(&name, args, sp),
             "rtDataWord" => {
                 // The address of the k-th word of the block the compiler keeps for the library's own
                 // state; `k` is a literal, so a bad one is a compile error, not a stop.
@@ -671,6 +670,7 @@ impl<'a> Lowerer<'a> {
             "rtOsArgv" => crate::ir::OsKind::Argv,
             "rtOsOpen" => crate::ir::OsKind::Open,
             "rtOsClose" => crate::ir::OsKind::Close,
+            "rtOsClock" => crate::ir::OsKind::Clock,
             "rtOsReserve" => crate::ir::OsKind::Reserve,
             "rtOsCommit" => crate::ir::OsKind::Commit,
             "rtOsRelease" => crate::ir::OsKind::Release,
@@ -684,7 +684,10 @@ impl<'a> Lowerer<'a> {
             };
             // An address travels as an `i64`: the first operand of the memory calls, the second of the
             // descriptor calls.
-            let addr_at = if matches!(kind, crate::ir::OsKind::Write | crate::ir::OsKind::Read) {
+            let addr_at = if matches!(
+                kind,
+                crate::ir::OsKind::Write | crate::ir::OsKind::Read | crate::ir::OsKind::Clock
+            ) {
                 1
             } else {
                 0

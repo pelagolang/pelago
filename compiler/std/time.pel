@@ -1,0 +1,123 @@
+/// Time: a monotonic clock for measuring, the wall clock for dates, and `duration`, a length of time that
+/// carries its unit (no bare `int` that might be seconds or milliseconds).
+///
+/// ```
+/// import std.time
+///
+/// fn main() -> void ! io_error {
+///     const start = time.now()?
+///     work()
+///     print((start.elapsed()?).asMillis(), "ms")
+///     print((time.sinceEpoch()?).asSeconds())    /// seconds since 1970-01-01 UTC
+///     print(time.seconds(90) + time.millis(500))
+/// }
+/// ```
+///
+/// A clock can fail (`io_error`) where the system has no clock call yet; that is Windows and macOS today. A
+/// `duration` is whole nanoseconds in an `int` (about 292 years either way), and arithmetic on it stops the
+/// program on overflow like any other integer arithmetic.
+
+/// A length of time, possibly negative. Make one with `time.seconds`, `time.millis`, `time.micros` or
+/// `time.nanos`.
+pub struct duration {
+    nanos: int
+}
+
+/// A point on the monotonic clock: only differences between two of them mean anything.
+pub struct instant {
+    at: duration
+}
+
+//~ A duration of `n` seconds.
+pub fn seconds(n: int) -> duration = duration { nanos: n * 1000000000 }
+
+//~ A duration of `n` milliseconds.
+pub fn millis(n: int) -> duration = duration { nanos: n * 1000000 }
+
+//~ A duration of `n` microseconds.
+pub fn micros(n: int) -> duration = duration { nanos: n * 1000 }
+
+//~ A duration of `n` nanoseconds.
+pub fn nanos(n: int) -> duration = duration { nanos: n }
+
+/// Reads clock `which` (0 wall, 1 monotonic).
+fn read(which: int) -> duration ! io_error {
+    /// Two words for the system to fill in: seconds, then nanoseconds.
+    const buf = [0, 0]
+    const r = rtOsClock(which, rtHdrData(rtAddrOf(buf)))
+    if r < 0 {
+        return err(io_error { kind: io_kind.other, message: "reading the clock: not supported on this target" })
+    }
+    ok(duration { nanos: buf[0] * 1000000000 + buf[1] })
+}
+
+//~ The monotonic clock now: it never goes back, whatever the date is set to.
+pub fn now() -> instant ! io_error = ok(instant { at: read(1)? })
+
+//~ The wall clock now, as the time since 1970-01-01 00:00:00 UTC (the Unix epoch).
+pub fn sinceEpoch() -> duration ! io_error = read(0)
+
+impl duration {
+    //~ Whole nanoseconds.
+    fn asNanos(self) -> int = self.nanos
+
+    //~ Whole microseconds, cut toward zero.
+    fn asMicros(self) -> int = self.nanos / 1000
+
+    //~ Whole milliseconds, cut toward zero.
+    fn asMillis(self) -> int = self.nanos / 1000000
+
+    //~ Whole seconds, cut toward zero.
+    fn asSeconds(self) -> int = self.nanos / 1000000000
+
+    //~ Seconds with a fraction.
+    fn asSecondsFloat(self) -> float = (self.nanos to float) / 1000000000.0
+
+    fn abs(self) -> duration = duration { nanos: self.nanos.abs() }
+}
+
+impl instant {
+    //~ How long after `earlier` this instant is (negative when it is before it).
+    fn since(self, earlier: instant) -> duration = self.at - earlier.at
+
+    //~ How long ago this instant was.
+    fn elapsed(self) -> duration ! io_error = ok((now()?).since(self))
+
+    //~ The instant `d` later.
+    fn plus(self, d: duration) -> instant = instant { at: self.at + d }
+}
+
+impl add for duration {
+    fn add(self, other: duration) -> duration = duration { nanos: self.nanos + other.nanos }
+}
+
+impl sub for duration {
+    fn sub(self, other: duration) -> duration = duration { nanos: self.nanos - other.nanos }
+}
+
+impl neg for duration {
+    fn neg(self) -> duration = duration { nanos: 0 - self.nanos }
+}
+
+impl eq for duration {
+    fn eq(self, other: duration) -> bool = self.nanos == other.nanos
+}
+
+impl order for duration {
+    fn cmp(
+        self,
+        other: duration,
+    ) -> int = self.nanos < other.nanos ? -1 : (self.nanos > other.nanos ? 1 : 0)
+}
+
+impl show for duration {
+    //~ The largest unit that keeps the number readable: `1.5s`, `250ms`, `42us`, `7ns`.
+    fn show(self) -> string {
+        const n = self.nanos
+        const a = n.abs()
+        if a >= 1000000000 { return "#(self.asSecondsFloat())s" }
+        if a >= 1000000 { return "#(n / 1000000)ms" }
+        if a >= 1000 { return "#(n / 1000)us" }
+        "#(n)ns"
+    }
+}
