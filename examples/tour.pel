@@ -59,6 +59,13 @@ fn finish(sink xs: [int]) -> int = xs.len()
 clear(inout scores)
 finish(sink scores)
 
+/// Short spellings, same meaning: `x!` is `inout x`, `x!!` is `sink x`.
+fn clear2(xs!: [int]) { xs.clear!() }
+fn finish2(xs!!: [int]) -> int = xs.len()
+
+clear2(scores!)
+finish2(scores!!)
+
 fn sum_to(n: int, acc: int = 0) -> int {
     if n == 0 { return acc }
     become sum_to(n - 1, acc + n)

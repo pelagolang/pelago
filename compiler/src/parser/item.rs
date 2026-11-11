@@ -330,6 +330,8 @@ impl Parser<'_> {
         } else {
             (self.ident("a parameter name"), false)
         };
+        let after = self.parse_mode_mark();
+        let mode = self.join_modes(mode, after);
         let ty = self.eat(Punct::Colon).then(|| self.parse_type());
         let default = if self.eat(Punct::Eq) {
             Some(self.parse_expr())

@@ -158,8 +158,8 @@ because TS/JS programmers expect it and it can step in odd ways.
 | Working | Meaning | Seen in | Phase | Your rename |
 |---|---|---|---|---|
 | `let` | Read-only access. The silent default. Optional to write | Hylo | 2 | |
-| `inout` | May change the caller's value, exclusive access while it runs | Ada, Swift, Hylo | 2 | |
-| `sink` | Takes the value away from the caller and consumes it | Hylo, Nim | 2 | |
+| `inout` | May change the caller's value, exclusive access while it runs. Short spelling: `x!` | Ada, Swift, Hylo | 2 | |
+| `sink` | Takes the value away from the caller and consumes it. Short spelling: `x!!` | Hylo, Nim | 2 | |
 | `copy` | Makes an independent duplicate of an owning value | Swift | 2 | |
 | `any` | "Any type that provides this interface" (dynamic dispatch) | Swift | 3 | |
 

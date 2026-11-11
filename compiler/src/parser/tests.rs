@@ -1202,3 +1202,60 @@ fn import_checks() {
     assert_flagged("import { a, b: a } = std.x", "imported twice");
     assert_clean("import { a: x, b: y } = std.x");
 }
+
+// ---- short spellings of the access modes: `x!` is `inout x`, `x!!` is `sink x` ----
+
+#[test]
+fn short_modes_in_arguments_and_closures() {
+    assert_eq!(one("clear(xs!)"), "(call clear (arg inout xs))");
+    assert_eq!(one("finish(xs!!)"), "(call finish (arg sink xs))");
+    assert_eq!(
+        one("f(a, n: b.items[0]!, c!!)"),
+        "(call f a (arg inout n: (index (. b items) 0)) (arg sink c))"
+    );
+    assert_eq!(
+        one("[total!, data!!] x ~> total += x"),
+        "(~> (capture (inout total) (sink data)) (x) (+= total x))"
+    );
+    assert_eq!(one("each(n! ~> n++)"), one("each(inout n ~> n++)"));
+}
+
+#[test]
+fn short_modes_in_declarations_and_patterns() {
+    assert_eq!(
+        one("fn f(xs!: [int], ys!!: [int]) { }"),
+        "(fn f ((inout xs : (list int)) (sink ys : (list int))) (block))"
+    );
+    assert_eq!(
+        one("fn f(self!, other!!: int) { }"),
+        "(fn f ((inout self) (sink other : int)) (block))"
+    );
+    assert_eq!(
+        one("for x! of xs { x++ }"),
+        "(for-of ((inout x)) xs (block (tail (++ x))))"
+    );
+    assert_eq!(
+        one("switch xs! { case [first!, ...rest!]: 1 }"),
+        one("switch inout xs { case [inout first, ...inout rest]: 1 }")
+    );
+    assert_eq!(
+        one("switch s { case point { x!, y }: 1 }"),
+        one("switch s { case point { inout x, y }: 1 }")
+    );
+}
+
+#[test]
+fn short_modes_leave_calls_and_comparisons_alone() {
+    assert_eq!(one("c.bump!(1)"), "(call! (. c bump) 1)");
+    assert_eq!(one("c.close!!()"), "(call!! (. c close))");
+    assert_eq!(one("a != b"), "(!= a b)");
+    assert_eq!(one("!done"), "(not done)");
+}
+
+#[test]
+fn short_mode_written_twice_is_an_error() {
+    assert!(errors("fn f(inout xs!: [int]) { }")
+        .iter()
+        .any(|m| m.contains("write the mode once")));
+    assert!(errors("fn f(xs !: [int]) { }").iter().any(|_| true));
+}

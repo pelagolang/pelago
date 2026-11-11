@@ -87,6 +87,8 @@ impl Parser<'_> {
             TokenKind::Keyword(Keyword::Let | Keyword::Inout | Keyword::Sink) => {
                 let mode = self.parse_mode();
                 let name = self.ident("a name to bind");
+                let after = self.parse_mode_mark();
+                let mode = self.join_modes(mode, after);
                 Pattern {
                     kind: PatternKind::Binding { mode, name },
                     span: t.span.to(name.span),
@@ -241,7 +243,17 @@ impl Parser<'_> {
                 let dots = self.bump().span;
                 let mode = self.parse_mode();
                 let name = (self.kind() == TokenKind::Ident).then(|| self.ident("a name"));
-                let end = name.map_or(dots, |n| n.span);
+                let after = if name.is_some() {
+                    self.parse_mode_mark()
+                } else {
+                    None
+                };
+                let mode = self.join_modes(mode, after);
+                let end = if after.is_some() {
+                    Span::new(dots.start, self.prev_end)
+                } else {
+                    name.map_or(dots, |n| n.span)
+                };
                 rests += 1;
                 if rests == 2 {
                     self.error(dots, "a list pattern can have only one `...`");
@@ -302,15 +314,17 @@ impl Parser<'_> {
         }
         if path.segments.len() == 1 {
             let name = path.segments[0];
+            let mut span = path.span;
             let kind = if after_is {
                 PatternKind::TypeTest(path.clone())
             } else {
-                PatternKind::Binding { mode: None, name }
+                let mode = self.parse_mode_mark();
+                if mode.is_some() {
+                    span = Span::new(span.start, self.prev_end);
+                }
+                PatternKind::Binding { mode, name }
             };
-            return Pattern {
-                kind,
-                span: path.span,
-            };
+            return Pattern { kind, span };
         }
         Pattern {
             span: path.span,
@@ -341,6 +355,8 @@ impl Parser<'_> {
             } else {
                 let mode = self.parse_mode();
                 let name = self.ident("a field name");
+                let after = self.parse_mode_mark();
+                let mode = self.join_modes(mode, after);
                 let pattern = self.eat(Punct::Colon).then(|| self.parse_pattern());
                 fields.push(FieldPat {
                     mode,
