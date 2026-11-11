@@ -16,6 +16,7 @@
 //! The generated code stands alone: it needs no import.
 
 use crate::ast::*;
+use crate::regexunicode::{self as uni, Set};
 use crate::span::Span;
 use std::fmt::Write;
 
@@ -106,6 +107,179 @@ impl<'a> Parser<'a> {
     fn range(&mut self, lo: i64, hi: i64) {
         self.ranges.push(lo);
         self.ranges.push(hi);
+    }
+
+    fn unicode(&self) -> bool {
+        self.flags & 8 != 0
+    }
+
+    /// The code point at the cursor (the pattern is UTF-8); the cursor moves past it.
+    fn code_point(&mut self) -> Res<u32> {
+        let end = (self.pos + 4).min(self.s.len());
+        let text = String::from_utf8_lossy(&self.s[self.pos..end]).into_owned();
+        let c = text.chars().next().ok_or("the pattern ends too early")?;
+        self.pos += c.len_utf8();
+        Ok(c as u32)
+    }
+
+    /// The set of `\d \w \s` or their capitals in Unicode mode.
+    fn uni_escape(e: u8) -> Option<Set> {
+        let set = match e.to_ascii_lowercase() {
+            b'd' => uni::digits(),
+            b'w' => uni::word(),
+            b's' => uni::space(),
+            _ => return None,
+        };
+        Some(if e.is_ascii_uppercase() {
+            uni::complement(&set)
+        } else {
+            set
+        })
+    }
+
+    fn byte_range_node(&mut self, lo: u8, hi: u8) -> Node {
+        if lo == hi {
+            return Node::Byte(lo);
+        }
+        let start = self.ranges.len();
+        self.range(lo as i64, hi as i64);
+        self.classes.push(start as i64);
+        self.classes.push(1);
+        self.classes.push(0);
+        Node::Class(self.classes.len() / 3 - 1)
+    }
+
+    /// One class node holding several byte ranges.
+    fn byte_class_node(&mut self, ranges: &[(u8, u8)]) -> Node {
+        if let [(lo, hi)] = ranges {
+            return self.byte_range_node(*lo, *hi);
+        }
+        let start = self.ranges.len();
+        for (lo, hi) in ranges {
+            self.range(*lo as i64, *hi as i64);
+        }
+        self.classes.push(start as i64);
+        self.classes.push(ranges.len() as i64);
+        self.classes.push(0);
+        Node::Class(self.classes.len() / 3 - 1)
+    }
+
+    /// The byte sequences as a tree: sequences with the same tail share one node for their first bytes, and the first
+    /// bytes of one-byte sequences become one class, so the program stays small (`\w` is a few hundred states).
+    fn sequences_node(&mut self, seqs: &[Vec<(u8, u8)>]) -> Node {
+        // Groups by first range (the sequences are sorted by code point, so equal first ranges are neighbours).
+        let mut groups: Vec<(Range, Vec<Seq>)> = Vec::new();
+        for seq in seqs {
+            let tail = seq[1..].to_vec();
+            match groups.last_mut() {
+                Some((first, tails)) if *first == seq[0] => tails.push(tail),
+                _ => groups.push((seq[0], vec![tail])),
+            }
+        }
+        // Merge the groups whose tails are the same: their first bytes share one class.
+        let mut merged: Vec<(Vec<Range>, Vec<Seq>)> = Vec::new();
+        for (first, tails) in groups {
+            match merged.iter_mut().find(|(_, t)| *t == tails) {
+                Some((firsts, _)) => firsts.push(first),
+                None => merged.push((vec![first], tails)),
+            }
+        }
+        let mut out: Option<Node> = None;
+        for (firsts, tails) in merged {
+            let head = self.byte_class_node(&firsts);
+            let node = if tails.iter().all(|t| t.is_empty()) {
+                head
+            } else {
+                let rest = self.sequences_node(&tails);
+                Node::Cat(Box::new(head), Box::new(rest))
+            };
+            out = Some(match out {
+                None => node,
+                Some(o) => Node::Alt(Box::new(o), Box::new(node)),
+            });
+        }
+        out.unwrap_or(Node::Empty)
+    }
+
+    /// A set of code points as byte sequences.
+    fn cp_node(&mut self, set: &Set) -> Node {
+        let mut seqs = Vec::new();
+        for &(lo, hi) in set {
+            uni::sequences(lo, hi, &mut seqs);
+        }
+        if seqs.is_empty() {
+            // An empty set matches nothing: a class without members.
+            let start = self.ranges.len();
+            self.classes.push(start as i64);
+            self.classes.push(0);
+            self.classes.push(0);
+            return Node::Class(self.classes.len() / 3 - 1);
+        }
+        self.sequences_node(&seqs)
+    }
+
+    /// `[...]` in Unicode mode: members are code points; `\d \w \s` and their capitals are Unicode sets.
+    fn unicode_class(&mut self) -> Res<Node> {
+        let mut set: Set = Vec::new();
+        let mut neg = false;
+        if self.peek() == 94 {
+            neg = true;
+            self.pos += 1;
+        }
+        let mut first = true;
+        loop {
+            let c = self.peek();
+            if c < 0 {
+                return Err("the character class is not closed".into());
+            }
+            if c == 93 && !first {
+                self.pos += 1;
+                break;
+            }
+            first = false;
+            let lo = if c == 92 {
+                self.pos += 1;
+                let e = self.peek();
+                if e < 0 {
+                    return Err("a pattern cannot end with a backslash".into());
+                }
+                self.pos += 1;
+                if let Some(escaped) = Self::uni_escape(e as u8) {
+                    set.extend(escaped);
+                    continue;
+                }
+                Self::escaped(e as u8) as u32
+            } else {
+                self.code_point()?
+            };
+            let mut hi = lo;
+            if self.peek() == 45 && self.pos + 1 < self.s.len() && self.s[self.pos + 1] != 93 {
+                self.pos += 1;
+                if self.peek() == 92 {
+                    self.pos += 1;
+                    let e = self.peek();
+                    if e < 0 {
+                        return Err("a pattern cannot end with a backslash".into());
+                    }
+                    self.pos += 1;
+                    hi = Self::escaped(e as u8) as u32;
+                } else {
+                    hi = self.code_point()?;
+                }
+                if hi < lo {
+                    return Err("a character range is backwards".into());
+                }
+            }
+            set.push((lo, hi));
+        }
+        let mut set = uni::norm(set);
+        if self.flags & 1 == 1 {
+            set = uni::fold(&set);
+        }
+        if neg {
+            set = uni::complement(&set);
+        }
+        Ok(self.cp_node(&set))
     }
 
     fn escape_ranges(&mut self, e: u8) -> bool {
@@ -266,7 +440,17 @@ impl<'a> Parser<'a> {
             return self.group(depth);
         }
         match c {
+            91 if self.unicode() => self.unicode_class(),
             91 => Ok(Node::Class(self.class()?)),
+            46 if self.unicode() => {
+                let dotall = self.flags / 2 % 2 == 1;
+                let set = if dotall {
+                    uni::complement(&Vec::new())
+                } else {
+                    uni::complement(&vec![(10, 10)])
+                };
+                Ok(self.cp_node(&set))
+            }
             46 => Ok(Node::Any(self.flags / 2 % 2 == 1)),
             94 => Ok(Node::Assert(if self.flags / 4 % 2 == 1 { 4 } else { 0 })),
             36 => Ok(Node::Assert(if self.flags / 4 % 2 == 1 { 5 } else { 1 })),
@@ -300,9 +484,28 @@ impl<'a> Parser<'a> {
                     self.pos = end + 1;
                     return self.backref_name(&name);
                 }
+                if self.unicode() {
+                    if let Some(set) = Self::uni_escape(e as u8) {
+                        return Ok(self.cp_node(&set));
+                    }
+                    if matches!(e as u8, b'b' | b'B') {
+                        return Err(
+                            "`\\b` and `\\B` are not supported in Unicode mode (`(?u)`) yet".into(),
+                        );
+                    }
+                }
                 Ok(self.escape_node(e as u8))
             }
             42 | 43 | 63 => Err("a repeat has nothing to repeat".into()),
+            _ if self.unicode() && c >= 0x80 => {
+                self.pos -= 1;
+                let cp = self.code_point()?;
+                let mut set: Set = vec![(cp, cp)];
+                if self.flags & 1 == 1 {
+                    set = uni::fold(&set);
+                }
+                Ok(self.cp_node(&set))
+            }
             _ => Ok(self.byte_node(c as u8)),
         }
     }
@@ -339,7 +542,7 @@ impl<'a> Parser<'a> {
         let saved = self.flags;
         if self.peek() == 63 {
             let k = self.s.get(self.pos + 1).map_or(-1, |b| *b as i32);
-            if matches!(k, 105 | 115 | 109 | 45) {
+            if matches!(k, 105 | 115 | 109 | 117 | 45) {
                 let mut at = self.pos + 1;
                 let mut on = true;
                 let mut flags = self.flags;
@@ -348,11 +551,12 @@ impl<'a> Parser<'a> {
                         b'i' => 1,
                         b's' => 2,
                         b'm' => 4,
+                        b'u' => 8,
                         b'-' if on => {
                             on = false;
                             0
                         }
-                        _ => return Err("this flag is not supported (use i, s or m)".into()),
+                        _ => return Err("this flag is not supported (use i, s, m or u)".into()),
                     };
                     if bit > 0 {
                         let has = flags & bit != 0;
@@ -538,6 +742,10 @@ impl<'a> Parser<'a> {
         Ok(left)
     }
 }
+
+/// A range of bytes and a sequence of them (one UTF-8 encoding pattern).
+type Range = (u8, u8);
+type Seq = Vec<Range>;
 
 /// The most strings a group may have for tier A, and the most alternatives the rewritten pattern may have.
 const MAX_STRINGS: usize = 256;
