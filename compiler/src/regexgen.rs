@@ -36,6 +36,8 @@ const ASSERT: i64 = 6;
 const MATCH: i64 = 7;
 /// A lookahead in the program: `x` is the number of its bit table (see `looks`), `y` is 1 for `(?!...)`.
 const LOOK: i64 = 8;
+/// A backreference: `x` is the group, `y` is 1 when case is ignored. Only the budgeted search runs it.
+const BACKREF: i64 = 10;
 
 /// A syntax tree node.
 #[derive(Clone, Debug)]
@@ -53,6 +55,8 @@ enum Node {
     Assert(i64),
     Repeat(Box<Node>, i64, i64, bool),
     Look(Box<Node>, bool),
+    /// `\1`, `\k<name>`: the group, and whether case is ignored.
+    Backref(usize, bool),
 }
 
 /// A compiled pattern: the tables the matcher in `std.regex` runs.
@@ -67,6 +71,8 @@ pub struct Program {
     pub names: Vec<String>,
     /// Where the reversed program of each lookahead body starts (it ends at its own `MATCH`).
     pub looks: Vec<i64>,
+    /// Some backreference could not be rewritten: the program needs the budgeted search.
+    pub tier_b: bool,
     tree: Option<Node>,
 }
 
@@ -78,6 +84,10 @@ struct Parser<'a> {
     groups: usize,
     names: Vec<String>,
     flags: u8,
+    /// Groups whose `)` is not read yet; groups written inside a lookahead; how many lookaheads we are inside.
+    open: Vec<usize>,
+    look_groups: Vec<usize>,
+    look_depth: usize,
 }
 
 type Res<T> = Result<T, String>;
@@ -264,10 +274,59 @@ impl<'a> Parser<'a> {
                     return Err("a pattern cannot end with a backslash".into());
                 }
                 self.pos += 1;
+                if (49..=57).contains(&e) {
+                    let mut n = (e - 48) as usize;
+                    if (48..=57).contains(&self.peek()) {
+                        n = n * 10 + (self.peek() - 48) as usize;
+                        self.pos += 1;
+                    }
+                    return self.backref_number(n);
+                }
+                if e == 107 {
+                    if self.peek() != 60 {
+                        return Err("`\\k` is followed by a group name in `<...>`".into());
+                    }
+                    let first = self.pos + 1;
+                    let mut end = first;
+                    while end < self.s.len() && is_word(self.s[end]) {
+                        end += 1;
+                    }
+                    if end == first || end >= self.s.len() || self.s[end] != b'>' {
+                        return Err("a group name is a word followed by `>`".into());
+                    }
+                    let name = String::from_utf8_lossy(&self.s[first..end]).into_owned();
+                    self.pos = end + 1;
+                    return self.backref_name(&name);
+                }
                 Ok(self.escape_node(e as u8))
             }
             42 | 43 | 63 => Err("a repeat has nothing to repeat".into()),
             _ => Ok(self.byte_node(c as u8)),
+        }
+    }
+
+    /// A backreference to group `n`: the group must be closed already and not sit in a lookahead, and the reference
+    /// must not sit in one either.
+    fn backref_number(&mut self, n: usize) -> Res<Node> {
+        if n > self.groups {
+            return Err("a backreference to a group that is not defined before it".into());
+        }
+        if self.open.contains(&n) {
+            return Err("a backreference inside the group it refers to".into());
+        }
+        if self.look_depth > 0 {
+            return Err("a backreference inside a lookahead is not supported".into());
+        }
+        if self.look_groups.contains(&n) {
+            return Err("a backreference to a group inside a lookahead is not supported".into());
+        }
+        Ok(Node::Backref(n, self.flags & 1 == 1))
+    }
+
+    fn backref_name(&mut self, name: &str) -> Res<Node> {
+        match self.names.iter().position(|n| n == name) {
+            Some(i) if i > 0 => self.backref_number(i),
+            _ => Err("a backreference to a group name that is not defined before it".into()),
         }
     }
 
@@ -322,6 +381,19 @@ impl<'a> Parser<'a> {
                 self.pos += 2;
             } else if k == 60 || k == 80 {
                 let mut at = self.pos + 2;
+                if k == 80 && at < self.s.len() && self.s[at] == b'=' {
+                    let first = at + 1;
+                    let mut end = first;
+                    while end < self.s.len() && is_word(self.s[end]) {
+                        end += 1;
+                    }
+                    if end == first || end >= self.s.len() || self.s[end] != b')' {
+                        return Err("a group name is a word followed by `)`".into());
+                    }
+                    let name = String::from_utf8_lossy(&self.s[first..end]).into_owned();
+                    self.pos = end + 1;
+                    return self.backref_name(&name);
+                }
                 if k == 80 {
                     if at >= self.s.len() || self.s[at] != b'<' {
                         return Err("this group syntax is not supported".into());
@@ -354,12 +426,25 @@ impl<'a> Parser<'a> {
                 self.names.push(String::new());
             }
             self.names[index] = name;
+            self.open.push(index);
+            if self.look_depth > 0 {
+                self.look_groups.push(index);
+            }
+        }
+        if look > 0 {
+            self.look_depth += 1;
         }
         let inner = self.alt(depth + 1)?;
         if self.peek() != 41 {
             return Err("a group is not closed".into());
         }
         self.pos += 1;
+        if look > 0 {
+            self.look_depth -= 1;
+        }
+        if capture {
+            self.open.pop();
+        }
         self.flags = saved;
         if look > 0 {
             return Ok(Node::Look(Box::new(inner), look == 2));
@@ -449,6 +534,235 @@ impl<'a> Parser<'a> {
             left = Node::Alt(Box::new(left), Box::new(right));
         }
         Ok(left)
+    }
+}
+
+/// The most strings a group may have for tier A, and the most alternatives the rewritten pattern may have.
+const MAX_STRINGS: usize = 256;
+const MAX_BRANCHES: usize = 256;
+
+fn has_backref(n: &Node) -> bool {
+    first_backref(n).is_some()
+}
+
+/// The lowest group number that some backreference in the tree reads.
+fn first_backref(n: &Node) -> Option<usize> {
+    match n {
+        Node::Backref(g, _) => Some(*g),
+        Node::Cat(a, b) | Node::Alt(a, b) => match (first_backref(a), first_backref(b)) {
+            (Some(x), Some(y)) => Some(x.min(y)),
+            (x, y) => x.or(y),
+        },
+        Node::Star(a, _)
+        | Node::Plus(a, _)
+        | Node::Quest(a, _)
+        | Node::Group(a, _)
+        | Node::Repeat(a, ..)
+        | Node::Look(a, _) => first_backref(a),
+        _ => None,
+    }
+}
+
+/// The body of the definition of group `g`, whether it always takes part in a match, and whether it sits inside a loop.
+fn find_group(n: &Node, g: usize, mandatory: bool, looped: bool) -> Option<(&Node, bool, bool)> {
+    match n {
+        Node::Group(a, i) if *i == g => Some((a, mandatory, looped)),
+        Node::Group(a, _) => find_group(a, g, mandatory, looped),
+        Node::Cat(a, b) => {
+            find_group(a, g, mandatory, looped).or_else(|| find_group(b, g, mandatory, looped))
+        }
+        Node::Alt(a, b) => {
+            find_group(a, g, false, looped).or_else(|| find_group(b, g, false, looped))
+        }
+        Node::Star(a, _) => find_group(a, g, false, true),
+        Node::Plus(a, _) => find_group(a, g, mandatory, true),
+        Node::Quest(a, _) => find_group(a, g, false, looped),
+        Node::Repeat(a, lo, hi, _) => {
+            find_group(a, g, mandatory && *lo > 0, looped || *hi < 0 || *hi > 1)
+        }
+        Node::Look(a, _) => find_group(a, g, false, looped),
+        _ => None,
+    }
+}
+
+impl Parser<'_> {
+    /// Every string a node can match, in the order a backtracking matcher would try them, without repeats; `None` for
+    /// an infinite or too large set and for nodes that are not plain text (assertions, groups, backreferences).
+    fn language(&self, n: &Node) -> Option<Vec<Vec<u8>>> {
+        let capped = |v: Vec<Vec<u8>>| (v.len() <= MAX_STRINGS).then_some(v);
+        let unique = |v: Vec<Vec<u8>>| {
+            let mut out: Vec<Vec<u8>> = Vec::new();
+            for s in v {
+                if !out.contains(&s) {
+                    out.push(s);
+                }
+            }
+            out
+        };
+        match n {
+            Node::Empty => Some(vec![Vec::new()]),
+            Node::Byte(b) => Some(vec![vec![*b]]),
+            Node::Any(nl) => Some(
+                (0..=255u8)
+                    .filter(|b| *nl || *b != 10)
+                    .map(|b| vec![b])
+                    .collect(),
+            ),
+            Node::Class(i) => {
+                let (start, count, neg) = (
+                    self.classes[*i * 3] as usize,
+                    self.classes[*i * 3 + 1] as usize,
+                    self.classes[*i * 3 + 2],
+                );
+                Some(
+                    (0..=255u8)
+                        .filter(|b| {
+                            let inside = (0..count).any(|k| {
+                                self.ranges[start + 2 * k] <= *b as i64
+                                    && *b as i64 <= self.ranges[start + 2 * k + 1]
+                            });
+                            inside != (neg == 1)
+                        })
+                        .map(|b| vec![b])
+                        .collect(),
+                )
+            }
+            Node::Cat(a, b) => {
+                let (la, lb) = (self.language(a)?, self.language(b)?);
+                let mut out = Vec::new();
+                for x in &la {
+                    for y in &lb {
+                        let mut s = x.clone();
+                        s.extend_from_slice(y);
+                        out.push(s);
+                        if out.len() > 4 * MAX_STRINGS * MAX_STRINGS {
+                            return None;
+                        }
+                    }
+                }
+                capped(unique(out))
+            }
+            Node::Alt(a, b) => {
+                let mut out = self.language(a)?;
+                out.extend(self.language(b)?);
+                capped(unique(out))
+            }
+            Node::Quest(a, greedy) => {
+                let l = self.language(a)?;
+                let mut out = Vec::new();
+                if !*greedy {
+                    out.push(Vec::new());
+                }
+                out.extend(l);
+                if *greedy {
+                    out.push(Vec::new());
+                }
+                capped(unique(out))
+            }
+            Node::Star(a, _) | Node::Plus(a, _) => {
+                let l = self.language(a)?;
+                (l.len() == 1 && l[0].is_empty()).then_some(l)
+            }
+            Node::Repeat(a, lo, hi, greedy) => {
+                if *hi < 0 {
+                    let l = self.language(a)?;
+                    return (l.len() == 1 && l[0].is_empty()).then_some(l);
+                }
+                let l = self.language(a)?;
+                // `times[k]` holds every string of exactly `k` repeats.
+                let mut times: Vec<Vec<Vec<u8>>> = vec![vec![Vec::new()]];
+                for k in 1..=*hi as usize {
+                    let mut next = Vec::new();
+                    for x in &times[k - 1] {
+                        for y in &l {
+                            let mut s = x.clone();
+                            s.extend_from_slice(y);
+                            next.push(s);
+                            if next.len() > 4 * MAX_STRINGS * MAX_STRINGS {
+                                return None;
+                            }
+                        }
+                    }
+                    let next = unique(next);
+                    if next.len() > MAX_STRINGS {
+                        return None;
+                    }
+                    times.push(next);
+                }
+                let order: Vec<usize> = if *greedy {
+                    (*lo as usize..=*hi as usize).rev().collect()
+                } else {
+                    (*lo as usize..=*hi as usize).collect()
+                };
+                let mut out = Vec::new();
+                for k in order {
+                    out.extend(times[k].clone());
+                }
+                capped(unique(out))
+            }
+            Node::Group(..) | Node::Assert(_) | Node::Look(..) | Node::Backref(..) => None,
+        }
+    }
+
+    /// `bytes` as a node; with `ci`, letters match in both cases.
+    fn literal_node(&mut self, bytes: &[u8], ci: bool) -> Node {
+        let saved = self.flags;
+        self.flags = if ci { saved | 1 } else { saved & !1 };
+        let mut out: Option<Node> = None;
+        for b in bytes {
+            let n = self.byte_node(*b);
+            out = Some(match out {
+                None => n,
+                Some(l) => Node::Cat(Box::new(l), Box::new(n)),
+            });
+        }
+        self.flags = saved;
+        out.unwrap_or(Node::Empty)
+    }
+
+    /// The tree with group `g` fixed to the string `s`: its definition matches exactly `s`, its backreferences too.
+    fn fix_group(&mut self, n: &Node, g: usize, s: &[u8]) -> Node {
+        let go = |p: &mut Self, n: &Node| p.fix_group(n, g, s);
+        match n {
+            Node::Group(_, i) if *i == g => Node::Group(Box::new(self.literal_node(s, false)), g),
+            Node::Backref(i, ci) if *i == g => self.literal_node(s, *ci),
+            Node::Cat(a, b) => Node::Cat(Box::new(go(self, a)), Box::new(go(self, b))),
+            Node::Alt(a, b) => Node::Alt(Box::new(go(self, a)), Box::new(go(self, b))),
+            Node::Star(a, x) => Node::Star(Box::new(go(self, a)), *x),
+            Node::Plus(a, x) => Node::Plus(Box::new(go(self, a)), *x),
+            Node::Quest(a, x) => Node::Quest(Box::new(go(self, a)), *x),
+            Node::Group(a, i) => Node::Group(Box::new(go(self, a)), *i),
+            Node::Repeat(a, lo, hi, x) => Node::Repeat(Box::new(go(self, a)), *lo, *hi, *x),
+            Node::Look(a, neg) => Node::Look(Box::new(go(self, a)), *neg),
+            other => other.clone(),
+        }
+    }
+
+    /// Tier A: rewrites the backreferences of a tree into alternatives, or `None` when some group does not qualify. A
+    /// group qualifies when it always takes part in a match, does not sit in a loop, and can match only a finite set of
+    /// plain strings (at most `MAX_STRINGS`); the tree then becomes one copy per string with the group and its
+    /// references fixed to it, in the order the backtracking matcher would try the strings. At most `MAX_BRANCHES`
+    /// copies in all.
+    fn tier_a(&mut self, n: Node, leaves: &mut usize) -> Option<Node> {
+        let Some(g) = first_backref(&n) else {
+            *leaves += 1;
+            return (*leaves <= MAX_BRANCHES).then_some(n);
+        };
+        let (body, mandatory, looped) = find_group(&n, g, true, false)?;
+        if !mandatory || looped {
+            return None;
+        }
+        let strings = self.language(body)?;
+        let mut branches = Vec::new();
+        for s in &strings {
+            let fixed = self.fix_group(&n, g, s);
+            branches.push(self.tier_a(fixed, leaves)?);
+        }
+        let mut out = branches.pop()?;
+        while let Some(b) = branches.pop() {
+            out = Node::Alt(Box::new(b), Box::new(out));
+        }
+        Some(out)
     }
 }
 
@@ -543,6 +857,9 @@ impl Emitter {
             Node::Assert(k) => {
                 self.emit(ASSERT, *k, 0);
             }
+            Node::Backref(g, ci) => {
+                self.emit(BACKREF, *g as i64, *ci as i64);
+            }
             Node::Look(a, neg) => {
                 self.emit(LOOK, self.pending.len() as i64, *neg as i64);
                 self.pending.push((**a).clone());
@@ -584,11 +901,23 @@ pub fn compile(pattern: &str) -> Result<Program, String> {
         groups: 0,
         names: vec![String::new()],
         flags: 0,
+        open: Vec::new(),
+        look_groups: Vec::new(),
+        look_depth: 0,
     };
     let root = p.alt(0)?;
     if p.pos < p.s.len() {
         return Err("an unmatched `)`".into());
     }
+    let original = root.clone();
+    // Backreferences: a group with a finite set of strings is rewritten into plain alternatives (tier A, linear).
+    // Whatever is left over keeps its `BACKREF` instructions and needs the budgeted search (tier B).
+    let root = if has_backref(&root) {
+        let mut leaves = 0;
+        p.tier_a(root.clone(), &mut leaves).unwrap_or(root)
+    } else {
+        root
+    };
     let mut e = Emitter {
         op: Vec::new(),
         x: Vec::new(),
@@ -609,6 +938,7 @@ pub fn compile(pattern: &str) -> Result<Program, String> {
         e.emit(MATCH, 0, 0);
         i += 1;
     }
+    let e_has_backref = e.op.contains(&BACKREF);
     Ok(Program {
         op: e.op,
         x: e.x,
@@ -618,7 +948,8 @@ pub fn compile(pattern: &str) -> Result<Program, String> {
         groups: p.groups,
         names: p.names,
         looks,
-        tree: Some(root),
+        tier_b: e_has_backref,
+        tree: Some(original),
     })
 }
 
@@ -647,6 +978,7 @@ impl Program {
     fn shape(&self, n: &Node) -> (Option<u64>, bool) {
         match n {
             Node::Empty | Node::Assert(_) | Node::Look(..) => (Some(0), true),
+            Node::Backref(..) => (None, false),
             Node::Byte(b) => (Some(1), b.is_ascii_digit()),
             Node::Any(_) => (Some(1), false),
             Node::Class(i) => (Some(1), self.class_digits(*i)),
@@ -917,6 +1249,31 @@ fn @N@Bits(p: @N@Prog, text: str) -> [int] {
     bits
 }
 
+@RUN@
+fn @N@Text(text: str, s: [int; @S@], g: int) -> string {
+    if s[2 * g] < 0 { return "" }
+    "#(text[s[2 * g]..s[2 * g + 1]])"
+}
+
+fn @N@Int(text: str, s: [int; @S@], g: int) -> int {
+    if s[2 * g] < 0 { return 0 }
+    var v = 0
+    var i = s[2 * g]
+    while i < s[2 * g + 1] {
+        v = v * 10 + (text.byteAt(i) to int) - 48
+        i += 1
+    }
+    v
+}
+
+fn @N@Of(text: str, s: [int; @S@]) -> @N@ {
+@BODY@    @N@ { @BUILD@}
+}
+
+@API@"##;
+
+/// The linear matcher of a pattern without a backreference left (or one that tier A rewrote).
+const RUN_LINEAR: &str = r##"
 /// The slots of the first match at or after `from` (`-2` in slot 0 when there is none).
 fn @N@Run(p: @N@Prog, text: str, from: int, noEmptyAt: int, bits: [int]) -> [int; @S@] {
     var matched: [int; @S@] = [-2; @S@]
@@ -982,27 +1339,9 @@ fn @N@Run(p: @N@Prog, text: str, from: int, noEmptyAt: int, bits: [int]) -> [int
     }
     matched
 }
+"##;
 
-fn @N@Text(text: str, s: [int; @S@], g: int) -> string {
-    if s[2 * g] < 0 { return "" }
-    "#(text[s[2 * g]..s[2 * g + 1]])"
-}
-
-fn @N@Int(text: str, s: [int; @S@], g: int) -> int {
-    if s[2 * g] < 0 { return 0 }
-    var v = 0
-    var i = s[2 * g]
-    while i < s[2 * g + 1] {
-        v = v * 10 + (text.byteAt(i) to int) - 48
-        i += 1
-    }
-    v
-}
-
-fn @N@Of(text: str, s: [int; @S@]) -> @N@ {
-@BODY@    @N@ { @BUILD@}
-}
-
+const API_LINEAR: &str = r##"
 pub fn @N@Find(text: str) -> @N@? {
     const p = @N@Program()
     const s = @N@Run(p, text, 0, -1, @N@Bits(p, text))
@@ -1029,6 +1368,188 @@ pub fn @N@FindAll(text: str) -> [@N@] {
 pub fn @N@IsMatch(text: str) -> bool {
     const p = @N@Program()
     @N@Run(p, text, 0, -1, @N@Bits(p, text))[0] >= 0
+}
+"##;
+
+/// The budgeted search of a pattern with a backreference left (tier B): the same steps as `backtrack` in
+/// `std/regex.pel`. A state is the program position, the text position and the spans of the referenced groups
+/// (`@REFS@`); each is explored once and `budget` counts them. The stack and the set of explored states grow with the
+/// search, so the memory is bounded by the budget, not by the pattern.
+const RUN_BUDGET: &str = r##"
+fn @N@SkipsEmpty(mine: [int; @S@], pos: int, noEmptyAt: int) -> bool {
+    if mine[0] == pos && pos == noEmptyAt { return true }
+    false
+}
+
+fn @N@Key(pc: int, pos: int, empty: bool, mine: [int; @S@], refs: [int; @RL@]) -> string {
+    var key = "#(pc),#(pos),#(empty ? 1 : 0)"
+    var r = 0
+    while r < @NR@ {
+        key.pushStr!(",#(mine[2 * refs[r]]),#(mine[2 * refs[r] + 1])")
+        r += 1
+    }
+    key
+}
+
+fn @N@BackrefLength(p: @N@Prog, text: str, pc: int, pos: int, mine: [int; @S@]) -> int {
+    const from0 = mine[2 * p.x[pc]]
+    const to0 = mine[2 * p.x[pc] + 1]
+    if from0 < 0 || to0 < 0 || pos + (to0 - from0) > text.len() { return -1 }
+    var q = 0
+    while q < to0 - from0 {
+        var a = text.byteAt(from0 + q) to int
+        var b = text.byteAt(pos + q) to int
+        if p.y[pc] == 1 {
+            if a >= 65 && a <= 90 { a += 32 }
+            if b >= 65 && b <= 90 { b += 32 }
+        }
+        if a != b { return -1 }
+        q += 1
+    }
+    to0 - from0
+}
+
+fn @N@Accepts(p: @N@Prog, text: str, pc: int, pos: int) -> bool {
+    const byte = pos < text.len() ? text.byteAt(pos) to int : -1
+    const op = p.op[pc]
+    if op == 0 { return byte == p.x[pc] }
+    if op == 1 { return byte >= 0 && (p.x[pc] == 1 || byte != 10) }
+    op == 2 && byte >= 0 && @N@ClassHas(p, p.x[pc], byte)
+}
+
+fn @N@Search(p: @N@Prog, text: str, from: int, noEmptyAt: int, bits: [int], inout budget: int, inout result: [int; @S@]) -> int {
+    const refs: [int; @RL@] = @REFS@
+    var seen: set<string> = set {}
+    var start = from
+    while start <= text.len() {
+        var pcs: [int] = [0]
+        var poss: [int] = [start]
+        var caps: [int] = []
+        var k = 0
+        while k < @S@ {
+            caps.push!(-1)
+            k += 1
+        }
+        while pcs.len() > 0 {
+            var pc = pcs[pcs.len() - 1]
+            pcs.pop!()
+            var pos = poss[poss.len() - 1]
+            poss.pop!()
+            var mine: [int; @S@] = [0; @S@]
+            var j = @S@ - 1
+            while j >= 0 {
+                mine[j] = caps[caps.len() - 1]
+                caps.pop!()
+                j -= 1
+            }
+            while true {
+                const empty = @N@SkipsEmpty(mine, pos, noEmptyAt)
+                var key = @N@Key(pc, pos, empty, mine, refs)
+                if key in seen { break }
+                seen.insert!(sink key)
+                if budget <= 0 { return 2 }
+                budget -= 1
+                const op = p.op[pc]
+                if op == 7 {
+                    if empty { break }
+                    result = mine
+                    return 1
+                } else if op == 4 {
+                    pc = p.x[pc]
+                } else if op == 3 {
+                    pcs.push!(p.y[pc])
+                    poss.push!(pos)
+                    var c = 0
+                    while c < @S@ {
+                        caps.push!(mine[c])
+                        c += 1
+                    }
+                    pc = p.x[pc]
+                } else if op == 5 {
+                    mine[p.x[pc]] = pos
+                    pc += 1
+                } else if op == 6 {
+                    if !@N@Holds(text, p.x[pc], pos) { break }
+                    pc += 1
+                } else if op == 8 {
+                    if (bits[p.x[pc] * (text.len() + 1) + pos] == 1) == (p.y[pc] == 1) { break }
+                    pc += 1
+                } else if op == 10 {
+                    const len = @N@BackrefLength(p, text, pc, pos, mine)
+                    if len < 0 { break }
+                    pos += len
+                    pc += 1
+                } else {
+                    if !@N@Accepts(p, text, pc, pos) { break }
+                    pos += 1
+                    pc += 1
+                }
+            }
+        }
+        start += 1
+    }
+    0
+}
+
+fn @N@Holds(text: str, kind: int, pos: int) -> bool {
+    const before = pos > 0 ? text.byteAt(pos - 1) to int : -1
+    const after = pos < text.len() ? text.byteAt(pos) to int : -1
+    if kind == 0 { return pos == 0 }
+    if kind == 1 { return pos == text.len() }
+    if kind == 4 { return pos == 0 || before == 10 }
+    if kind == 5 { return pos == text.len() || after == 10 }
+    const edge = (before >= 0 && @N@IsWord(before)) != (after >= 0 && @N@IsWord(after))
+    kind == 2 ? edge : !edge
+}
+"##;
+
+/// What a search that can give up returns: the match, no match, or the budget ran out (the caller decides what to do).
+const API_BUDGET: &str = r##"
+pub enum @N@Outcome {
+    matched(value: @N@)
+    nomatch
+    gaveUp
+}
+
+//~ The first match; `budget` is the most states the search may visit (the same input always gives the same answer).
+pub fn @N@Find(text: str, budget: int) -> @N@Outcome {
+    const p = @N@Program()
+    var left = budget
+    var s: [int; @S@] = [-2; @S@]
+    const status = @N@Search(p, text, 0, -1, @N@Bits(p, text), inout left, inout s)
+    if status == 2 { return @N@Outcome.gaveUp }
+    if status == 0 { return @N@Outcome.nomatch }
+    @N@Outcome.matched(value: @N@Of(text, s))
+}
+
+//~ Every match, or `none` when the search needed more than `budget` states in all.
+pub fn @N@FindAll(text: str, budget: int) -> [@N@]? {
+    const p = @N@Program()
+    const bits = @N@Bits(p, text)
+    var out: [@N@] = []
+    var left = budget
+    var from = 0
+    var noEmpty = -1
+    while from <= text.len() {
+        var s: [int; @S@] = [-2; @S@]
+        const status = @N@Search(p, text, from, noEmpty, bits, inout left, inout s)
+        if status == 2 { return none }
+        if status == 0 { break }
+        out.push!(@N@Of(text, s))
+        from = s[1]
+        noEmpty = s[1] > s[0] ? -1 : s[1]
+    }
+    out
+}
+
+//~ Whether the pattern matches, or `none` when the search needed more than `budget` states.
+pub fn @N@IsMatch(text: str, budget: int) -> bool? {
+    const p = @N@Program()
+    var left = budget
+    var s: [int; @S@] = [-2; @S@]
+    const status = @N@Search(p, text, 0, -1, @N@Bits(p, text), inout left, inout s)
+    if status == 2 { return none }
+    status == 1
 }
 "##;
 
@@ -1129,8 +1650,25 @@ fn one(src: &str, attr: &Attr, decl: &TypeDecl) -> Result<String, String> {
     let (classes, c) = list(&program.classes);
     let (looks, l) = list(&program.looks);
     let slots = 2 * (program.groups + 1);
+    let mut refs: Vec<i64> = Vec::new();
+    for (pc, op) in program.op.iter().enumerate() {
+        if *op == BACKREF && !refs.contains(&program.x[pc]) {
+            refs.push(program.x[pc]);
+        }
+    }
+    let (refs_text, rl) = list(&refs);
+    let (run, api) = if program.tier_b {
+        (RUN_BUDGET, API_BUDGET)
+    } else {
+        (RUN_LINEAR, API_LINEAR)
+    };
     let text = TEMPLATE
+        .replace("@RUN@", run)
+        .replace("@API@", api)
         .replace("@N@", n)
+        .replace("@REFS@", &refs_text)
+        .replace("@RL@", &rl.to_string())
+        .replace("@NR@", &refs.len().to_string())
         .replace("@M@", &m.to_string())
         .replace("@S@", &slots.to_string())
         .replace("@MS@", &(m * slots).to_string())
@@ -1162,6 +1700,38 @@ mod tests {
     fn expansion(src: &str) -> Expansion {
         let (out, _) = crate::parser::parse_source(src);
         expand(src, &out.file)
+    }
+
+    #[test]
+    fn backreferences_are_sorted_into_tiers() {
+        let tier = |p: &str| compile(p).unwrap().tier_b;
+        // Finite groups that always take part: rewritten, no BACKREF left.
+        assert!(!tier("(a|bc)\\1"));
+        assert!(!tier("(\\w)\\1"));
+        assert!(!tier("(?<q>['\"]).*?\\k<q>"));
+        assert!(!tier("(a?)\\1b"));
+        assert!(!tier("(\\w)(?:\\1)+"));
+        assert!(!tier("(?i)(a)\\1"));
+        // Unbounded, optional, in a loop, nested, or too many strings: the budgeted search.
+        assert!(tier("(a+)\\1"));
+        assert!(tier("(a)?\\1"));
+        assert!(tier("(?:(a|b)\\1)*"));
+        assert!(tier("(.)(.)\\2\\1"));
+        assert!(tier("(<(\\w+)>)\\2"));
+        // The rewritten pattern has no BACKREF instruction and a tier B one keeps it.
+        assert!(!compile("(a|b)\\1").unwrap().op.contains(&BACKREF));
+        assert!(compile("(a+)\\1").unwrap().op.contains(&BACKREF));
+        for bad in [
+            "\\1(a)",
+            "(a\\1)",
+            "(a)\\2",
+            "(?=(a))\\1",
+            "(?<x>a)(?=\\k<x>)",
+            "\\k<x>",
+            "(?P=x)(?P<x>a)",
+        ] {
+            assert!(compile(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

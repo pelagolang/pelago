@@ -12,6 +12,13 @@ struct pair {
     value: string
 }
 
+/// A backreference to a group with two possible strings is rewritten into two plain alternatives (tier A).
+@regex("(?<q>['\"])(?<body>[a-z ]*)\\k<q>")
+struct quoted {
+    q: string
+    body: string
+}
+
 fn show(d: date) {
     print(d.year, d.month, d.day)
 }
@@ -33,5 +40,11 @@ fn main() {
     while j < pairs.len() {
         print(pairs[j].key, pairs[j].value)
         j += 1
+    }
+    const quotes = quotedFindAll("say 'hi there' or \"yo\" or 'x\"")
+    var k = 0
+    while k < quotes.len() {
+        print(quotes[k].q, quotes[k].body)
+        k += 1
     }
 }
