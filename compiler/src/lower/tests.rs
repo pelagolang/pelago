@@ -3705,3 +3705,10 @@ fn regexgen_unicode_agrees_with_python() {
     );
     assert_eq!(output_of(&src), want);
 }
+
+#[test]
+fn two_conditions_that_never_hold_are_a_deadlock_not_a_livelock() {
+    let src = "fn main() {\n const l = lock(0)\n scope s {\n  for i of 0..2 {\n   const m = copy l\n   s.spawn(() ~> m.withWhen((n) ~> n > 5, (inout n) ~> { n += 1 }))\n  }\n }\n}\n";
+    let o = run_main(src);
+    assert!(o.result.is_err() && o.output.contains("deadlock"), "{o:?}");
+}
