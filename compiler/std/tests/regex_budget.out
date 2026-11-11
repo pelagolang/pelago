@@ -3,7 +3,7 @@ gaveUp
 nomatch
 the
 sat
-false
+false 256
 some(false) some(true) none
 nomatch
 gaveUp

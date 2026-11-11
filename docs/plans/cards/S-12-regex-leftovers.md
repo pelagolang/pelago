@@ -1,6 +1,6 @@
 Id: S-12
 Title: Regex: the leftovers of S-11
-Column: Ready (Build)
+Column: Done
 Order: -
 Depends on: S-11 (done)
 Size: S
@@ -10,7 +10,7 @@ Revisit when: -
 
 Three small things from [docs/design/regex.md](../../design/regex.md) section 5 that S-11 did not build (owner asked for them as a follow-up, 2026-11-11).
 
-# Plan
+# Plan (built; the limit is a second positional number, the tier is a warning for tier B and a comment in the generated code)
 
 1. **A limit on referenced groups.** The compiler counts the groups a tier B pattern reads and refuses more than 3 unless the attribute raises it (`@regex("...", groups: 5)`), so nobody gets a high-degree polynomial by accident. Check first that the attribute parser accepts named arguments; if not, a second positional integer.
 2. **The tier in `pelago check`.** `pelago check` prints, for each `@regex`, the tier (linear, tier A with the number of alternatives, tier B with the number of referenced groups), so a pattern that fell to tier B is visible.

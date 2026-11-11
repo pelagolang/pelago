@@ -14,6 +14,7 @@ fn lowered(src: &str) -> Lowered {
     let errs: Vec<&str> = typed
         .diagnostics
         .iter()
+        .filter(|d| !d.warning)
         .map(|d| d.message.as_str())
         .collect();
     assert!(errs.is_empty(), "the source does not check: {errs:?}");

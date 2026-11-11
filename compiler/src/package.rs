@@ -256,6 +256,14 @@ impl Program {
         // `@regex("...")` appends the compiled pattern and its functions the same way.
         let patterns = crate::regexgen::expand(&src, &file);
         derived.errors.extend(patterns.errors);
+        for (span, message) in patterns.warnings {
+            self.diagnostics.push(Diagnostic {
+                module: id,
+                span,
+                message,
+                warning: true,
+            });
+        }
         derived.text.push_str(&patterns.text);
         for (span, message) in derived.errors {
             self.diagnostics.push(Diagnostic {

@@ -30,7 +30,7 @@ fn main() {
             }
         case none: print("gaveUp")
     }
-    print(twiceFindAll("the the cat sat sat down", 5).isSome())
+    print(twiceFindAll("the the cat sat sat down", 5).isSome(), twiceBudget("abc"))
     print(twiceIsMatch("a b", 1000), twiceIsMatch("a a", 1000), twiceIsMatch("a a", 2))
     var noise = ""
     var k = 0
