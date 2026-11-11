@@ -72,6 +72,13 @@ workers sleep in `os_park_until`. A timer heap (task wake times) feeds `sleep(ms
 If every task is parked, no timer is pending and no I/O is outstanding, the program stops with
 `deadlock: N tasks are waiting` and a list of what each waits on (stop message, not unwinding).
 
+Built so far (one worker): epoch parking instead of per-object wait queues. One counter of events (a value sent or
+taken, a lock or permit released, a task finished, a cancel) and one word per task. A task that cannot go on parks
+at the current count and is skipped until the count changes, so waiting costs nothing while nothing happens, and
+every task parked is a deadlock at once, not after a count of idle switches. A lock handed back unchanged by
+`withWhen` has its own counter so condition waiters do not wake each other for ever. This is the one-worker
+version; per-object queues come with several workers (C6), where waking one task instead of all matters.
+
 **Channels.** A queue guarded by the channel's lock, a waiter list for receivers and one for senders.
 Bounded `send` parks when full (capacity is really enforced); `recv` parks when empty; closing wakes everyone.
 Capacity 0 stays "unbounded", as in `concurrency.md`. A rendezvous channel is `chan<T>(rendezvous)` later if wanted.
@@ -150,7 +157,7 @@ for x of g { print(x) }                                              // iterator
 | C0 | This plan, card A-12, S-02 and S-04 updated | nothing |
 | C1 | Context switch: `ctx_*` IR ops, interpreter baton, x86-64 and AArch64 emission, `os_stack_alloc` | backend |
 | C2 | Scheduler and blocking tasks in `core.pel`: `spawn`, `join`, `yield`, `sleep`, deadlock stop; `scope` joins; detached semantics | C1, `os_clock_now` |
-| C3 | Blocking channels (bounded enforced), real `select` with timeout, `lock` with wait queue and `withWhen`, `barrier`, `semaphore` (C3b, done: clonable handles, polling waits) | C2 |
+| C3 | Blocking channels (bounded enforced), real `select` with timeout, `lock` with wait queue and `withWhen`, `barrier`, `semaphore` (C3b, done: clonable handles; C3c, done: parking instead of polling) | C2 |
 | C4 | Coroutines (`coroutine<T>`, generator iteration) and cancellation (`cancel`, `cancelled`, `select` arm) | C2 |
 | C5 | IR atomics, atomic `shared`, `atomic<T>`, memory-model note in `concurrency.md` | IR, interpreter, both backends |
 | C6 | Several workers: `os_thread_start`, futex park, thread register, per-worker allocator, work stealing, `par_for`/`par_map` | C5, runtime period OS layer |
