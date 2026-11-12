@@ -161,6 +161,12 @@ struct Em<'e, 'a> {
     strings: &'e [String],
     cold: Vec<Cold>,
     used: [bool; 4],
+    /// The location of the instruction being emitted (`Span::at`; 0 for none).
+    loc: u32,
+    /// The entries of this function's stop routines that take the place in `x2`, made when a check names one.
+    at: [Option<Label>; 4],
+    /// The stubs that say where: one per kind and location, each `mov x2, location` and a branch to the `_at` entry.
+    places: Vec<(u32, u32, Label)>,
 }
 
 impl Em<'_, '_> {
@@ -175,14 +181,36 @@ impl Em<'_, '_> {
         }
     }
 
+    /// Where a check of kind `n` (a `SYM_*` number) branches when it fails: the function's stop routine, or the
+    /// stub for the place of the instruction being emitted when it knows one.
     fn stop(&mut self, n: u32) -> Label {
         self.used[n as usize] = true;
-        self.env.stops[n as usize]
+        let loc = self.loc;
+        if loc == 0 {
+            return self.env.stops[n as usize];
+        }
+        if let Some((_, _, l)) = self.places.iter().find(|p| p.0 == n && p.1 == loc) {
+            return *l;
+        }
+        if self.at[n as usize].is_none() {
+            self.at[n as usize] = Some(self.env.a.new_label());
+        }
+        let l = self.env.a.new_label();
+        self.places.push((n, loc, l));
+        l
     }
 
     fn stop_label(&mut self, o: &Operand) -> Label {
+        self.used_label(o)
+    }
+
+    /// The routine itself, with no place (unreachable code and compare-and-stop checks).
+    fn used_label(&mut self, o: &Operand) -> Label {
         match o {
-            Operand::Sym(n) => self.stop(*n),
+            Operand::Sym(n) => {
+                self.used[*n as usize] = true;
+                self.env.stops[*n as usize]
+            }
             o => panic!("a stop routine was expected: {o:?}"),
         }
     }
@@ -430,15 +458,28 @@ impl Em<'_, '_> {
     }
 
     fn stop_routines(&mut self) {
+        for (n, loc, l) in std::mem::take(&mut self.places) {
+            let at = self.at[n as usize].expect("a place stub has its entry");
+            let a = &mut *self.env.a;
+            a.bind(l);
+            a.mov_ri(hw::X2, i64::from(loc));
+            a.b(at);
+        }
         for (k, msg) in STOP_MESSAGES.iter().enumerate() {
             if !self.used[k] {
                 continue;
             }
             let off = self.env.ro.add(msg.as_bytes(), 1);
             let l = self.env.stops[k];
-            let stop = self.env.rt.stop;
+            let stop = self.env.rt.stop_at;
+            let at = self.at[k];
             let a = &mut *self.env.a;
             a.bind(l);
+            // A check with no place: the place is none.
+            a.mov_ri(hw::X2, 0);
+            if let Some(at) = at {
+                a.bind(at);
+            }
             a.lea_sect(hw::X0, Sect::Rodata, off);
             a.mov_ri(hw::X1, msg.len() as i64);
             a.bl(stop);
@@ -570,6 +611,7 @@ impl Em<'_, '_> {
     }
 
     fn inst(&mut self, i: &MInst, next: Option<u32>) {
+        self.loc = i.loc;
         let ops = &i.ops;
         match i.op {
             COPY => {
@@ -760,10 +802,15 @@ impl Em<'_, '_> {
                 let msg = &self.strings[n as usize];
                 let off = self.env.ro.add(msg.as_bytes(), 1);
                 let len = msg.len() as i64;
-                let stop = self.env.rt.stop;
+                let at = match ops.get(1) {
+                    Some(Operand::Imm(at)) => *at,
+                    _ => 0,
+                };
+                let stop = self.env.rt.stop_at;
                 let a = &mut *self.env.a;
                 a.lea_sect(hw::X0, Sect::Rodata, off);
                 a.mov_ri(hw::X1, len);
+                a.mov_ri(hw::X2, at);
                 a.bl(stop);
             }
             op::JMPSYM => {
@@ -937,6 +984,9 @@ pub fn emit(env: &mut Env, f: &MFunc, label: Label) {
         strings: &f.strings,
         cold: Vec::new(),
         used: [false; 4],
+        loc: 0,
+        at: [None; 4],
+        places: Vec::new(),
     };
     em.a().bind(label);
     em.prologue();
