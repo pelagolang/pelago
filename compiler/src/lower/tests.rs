@@ -1654,6 +1654,15 @@ fn appending_with_plus_assign_keeps_its_meaning() {
     }
 }
 
+/// The clocks and the system's random numbers answer on every target that runs here (Linux, and Windows through
+/// kernel32 and advapi32), the same as in the interpreter.
+#[test]
+fn native_clock_and_random_answer() {
+    agree(
+        "import std.time\nimport std.random\n\nfn main() -> void ! io_error {\n    const t0 = time.now()?\n    const epoch = time.sinceEpoch()?\n    print(epoch.asSeconds() > 1700000000, epoch.asSeconds() < 4000000000)\n    var acc = 0\n    for i of 0..20000 { acc += i }\n    const t1 = time.now()?\n    print(t1.since(t0).asNanos() >= 0, acc)\n    const b = random.bytes(64)?\n    var differ = false\n    for i of 1..64 { if b[i] != b[0] { differ = true } }\n    print(b.len(), differ)\n    const d = random.between(1, 6)?\n    print(d >= 1 && d <= 6)\n}",
+    );
+}
+
 /// The program does the same natively as in the interpreter: same output, and the same stop (message
 /// on standard error, status 1) or a clean exit.
 fn agree(src: &str) {

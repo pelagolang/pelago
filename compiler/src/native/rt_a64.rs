@@ -22,9 +22,9 @@ use super::a64::*;
 use super::elf::Blob;
 use super::rt::{
     IMP_ADD_VEH, IMP_CLOSE_HANDLE, IMP_CREATE_FILE, IMP_EXIT_PROCESS, IMP_GET_CONSOLE_MODE,
-    IMP_GET_LAST_ERROR, IMP_GET_STD_HANDLE, IMP_MULTI_BYTE, IMP_READ_FILE, IMP_RTL_GEN_RANDOM,
-    IMP_VIRTUAL_ALLOC, IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT, IMP_WRITE_FILE, REGION_BYTES,
-    REGION_MAX, REGION_MIN, SPAN_TABLE,
+    IMP_GET_LAST_ERROR, IMP_GET_STD_HANDLE, IMP_MULTI_BYTE, IMP_PERF_COUNTER, IMP_PERF_FREQUENCY,
+    IMP_READ_FILE, IMP_RTL_GEN_RANDOM, IMP_VIRTUAL_ALLOC, IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT,
+    IMP_WALL_TIME, IMP_WRITE_FILE, REGION_BYTES, REGION_MAX, REGION_MIN, SPAN_TABLE,
 };
 use super::{Os, Uses};
 
@@ -1914,10 +1914,50 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         sys(a, os, Sys::Close);
         a.ret();
     }
-    // clock(which, timespec): `clock_gettime` on Linux; -3 (no clock call yet) on Windows and macOS.
+    // clock(which, timespec): `clock_gettime` on Linux; on Windows the wall clock from
+    // `GetSystemTimePreciseAsFileTime` (100 ns steps since 1601) and the monotonic one from the performance
+    // counter; -3 (no clock call yet) on macOS.
     start(a, rt.os[11]);
     if win {
-        a.mov_ri(X0, -3);
+        let (mono, cbad) = (a.new_label(), a.new_label());
+        a.mov_rr(X19, X0);
+        a.mov_rr(X20, X1);
+        a.cbnz(X19, mono);
+        a.mov_rr(X0, X20);
+        win_call(a, IMP_WALL_TIME);
+        a.ldr(X9, X20, 0, 8);
+        a.mov_ri(X10, 10_000_000);
+        a.udiv(X11, X9, X10);
+        a.msub(X12, X11, X10, X9);
+        a.mov_ri(X13, 100);
+        a.mul(X12, X12, X13);
+        a.mov_ri(X13, 11_644_473_600); // seconds from 1601 to 1970
+        a.sub_rr(X11, X11, X13);
+        a.str(X11, X20, 0, 8);
+        a.str(X12, X20, 8, 8);
+        a.mov_ri(X0, 0);
+        finish(a);
+        a.bind(mono);
+        a.cmp_ri(X19, 1);
+        a.b_cond(Cond::Ne, cbad);
+        a.add_ri(X0, X20, 8);
+        win_call(a, IMP_PERF_FREQUENCY);
+        a.mov_rr(X0, X20);
+        win_call(a, IMP_PERF_COUNTER);
+        a.ldr(X9, X20, 0, 8);
+        a.ldr(X10, X20, 8, 8);
+        a.udiv(X11, X9, X10);
+        a.msub(X12, X11, X10, X9);
+        // The remainder is below the frequency, so `remainder * 10^9 / frequency` is below 10^9.
+        a.mov_ri(X13, 1_000_000_000);
+        a.mul(X12, X12, X13);
+        a.udiv(X12, X12, X10);
+        a.str(X11, X20, 0, 8);
+        a.str(X12, X20, 8, 8);
+        a.mov_ri(X0, 0);
+        finish(a);
+        a.bind(cbad);
+        a.mov_ri(X0, -2);
         finish(a);
     } else if os == Os::MacOs {
         a.mov_ri(X0, -3);
