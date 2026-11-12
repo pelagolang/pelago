@@ -132,8 +132,11 @@ In dependency order; each can be one PR.
   (`GetCommandLineW`, `GetEnvironmentStringsW`, `WideCharToMultiByte`). Splitting the command line is Pelago code
   (`core`'s `rtWinSplit`, the usual Windows quoting rules, in place), so the runtime stays a converter and the
   rules are tested in the interpreter.
-- **Not yet:** `main(args)` and `std.env` on macOS; the macOS clock; file-system calls
-  (`OsKind::Fs`, `Dents`) beyond x86-64 Linux; OS threads and atomics (`concurrency-runtime.md`).
+- **File system on AArch64 Linux (2026-11-12):** `OsKind::Fs` and `Dents` use the `*at` calls with `AT_FDCWD`
+  (`faccessat`, `unlinkat`, `mkdirat`, `renameat`, `newfstatat`, `getdents64`); the kernel's `stat` layout differs from x86-64's
+  (`st_mode` at 16, `st_size` at 48).
+- **Not yet:** `main(args)` and `std.env` on macOS; the macOS clock; file-system calls (`OsKind::Fs`, `Dents`) on Windows
+  and macOS; OS threads and atomics (`concurrency-runtime.md`).
 
 ## Related work already on the board
 

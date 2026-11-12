@@ -73,6 +73,12 @@ enum Sys {
     ClockGettime,
     Nanosleep,
     Getrandom,
+    Faccessat,
+    Unlinkat,
+    Mkdirat,
+    Renameat,
+    Fstatat,
+    Getdents64,
 }
 
 /// The call numbers: the generic Linux ones, and the BSD ones of macOS (`mremap` and `madvise`
@@ -99,6 +105,13 @@ fn number(os: Os, call: Sys) -> i64 {
         Sys::Nanosleep => (101, 0),
         // `getrandom` on Linux, `getentropy` on macOS (the buffer and at most 256 bytes).
         Sys::Getrandom => (278, 500),
+        // The file-system calls are Linux only here (`OsKind::Fs` and `Dents` answer -3 on the others).
+        Sys::Faccessat => (48, 0),
+        Sys::Unlinkat => (35, 0),
+        Sys::Mkdirat => (34, 0),
+        Sys::Renameat => (38, 0),
+        Sys::Fstatat => (79, 0),
+        Sys::Getdents64 => (61, 0),
     };
     if os == Os::MacOs {
         mac
@@ -2157,16 +2170,124 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         a.mov_ri(X0, 0);
         a.ret();
     }
-    // fs and dents: no file-system calls on the 64-bit Arm targets yet (-3).
-    for i in [12, 13] {
-        start(a, rt.os[i]);
-        if win {
-            a.mov_ri(X0, -3);
-            finish(a);
-        } else {
-            a.mov_ri(X0, -3);
-            a.ret();
+    // fs(op, path, aux): the path calls of `OsKind::Fs` on Linux (the `*at` forms with `AT_FDCWD`); -3 on Windows
+    // and macOS. 0, a size and kind written at `aux` for `stat`, or -4 (no such file), -5 (denied), -3 (anything
+    // else). `res` turns the kernel's `-errno` into those.
+    let res = a.new_label();
+    start(a, rt.os[12]);
+    if win || mac {
+        a.mov_ri(X0, -3);
+        finish(a);
+    } else {
+        let (acc, unl, rmd, mkd, ren, sta, go) = (
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+        );
+        a.mov_rr(X9, X0); // the operation
+        a.mov_rr(X10, X2); // aux
+        for (k, l) in [(0, acc), (1, unl), (2, rmd), (3, mkd), (4, ren), (5, sta)] {
+            a.cmp_ri(X9, k);
+            a.b_cond(Cond::Eq, l);
         }
+        a.mov_ri(X0, -2);
+        a.ret();
+        // Every call starts with `dirfd = AT_FDCWD` and the path in `x1`.
+        a.bind(acc);
+        a.mov_ri(X0, -100);
+        a.mov_ri(X2, 0); // F_OK
+        a.mov_ri(X3, 0);
+        sys(a, os, Sys::Faccessat);
+        a.b(res);
+        a.bind(unl);
+        a.mov_ri(X0, -100);
+        a.mov_ri(X2, 0);
+        a.b(go);
+        a.bind(rmd);
+        a.mov_ri(X0, -100);
+        a.mov_ri(X2, 0x200); // AT_REMOVEDIR
+        a.bind(go);
+        sys(a, os, Sys::Unlinkat);
+        a.b(res);
+        a.bind(mkd);
+        a.mov_ri(X0, -100);
+        a.mov_ri(X2, 0o777); // before the umask
+        sys(a, os, Sys::Mkdirat);
+        a.b(res);
+        a.bind(ren);
+        a.mov_ri(X0, -100);
+        a.mov_ri(X2, -100);
+        a.mov_rr(X3, X10);
+        sys(a, os, Sys::Renameat);
+        a.b(res);
+        // stat: the kernel's 128-byte record on the stack; `st_mode` is at 16 and `st_size` at 48.
+        a.bind(sta);
+        a.sub_ri(SP, SP, 144);
+        a.mov_ri(X0, -100);
+        a.add_ri(X2, SP, 0);
+        a.mov_ri(X3, 0);
+        sys(a, os, Sys::Fstatat);
+        let (failed, is_file, is_dir, put) =
+            (a.new_label(), a.new_label(), a.new_label(), a.new_label());
+        a.cbnz(X0, failed);
+        a.ldr(X11, SP, 16, 4);
+        assert!(a.and_ri(X11, X11, 0xF000));
+        a.mov_ri(X12, 3);
+        a.mov_ri(X13, 0x8000);
+        a.cmp_rr(X11, X13);
+        a.b_cond(Cond::Eq, is_file);
+        a.mov_ri(X13, 0x4000);
+        a.cmp_rr(X11, X13);
+        a.b_cond(Cond::Eq, is_dir);
+        a.b(put);
+        a.bind(is_file);
+        a.mov_ri(X12, 1);
+        a.b(put);
+        a.bind(is_dir);
+        a.mov_ri(X12, 2);
+        a.bind(put);
+        a.ldr(X11, SP, 48, 8);
+        a.str(X11, X10, 0, 8);
+        a.str(X12, X10, 8, 8);
+        a.add_ri(SP, SP, 144);
+        a.mov_ri(X0, 0);
+        a.ret();
+        a.bind(failed);
+        a.add_ri(SP, SP, 144);
+        a.bind(res);
+        let (err, noent, acces) = (a.new_label(), a.new_label(), a.new_label());
+        a.mov_ri(X15, -4095);
+        a.cmp_rr(X0, X15);
+        a.b_cond(Cond::Hs, err);
+        a.ret();
+        a.bind(err);
+        a.mov_ri(X15, -2);
+        a.cmp_rr(X0, X15);
+        a.b_cond(Cond::Eq, noent);
+        a.mov_ri(X15, -13);
+        a.cmp_rr(X0, X15);
+        a.b_cond(Cond::Eq, acces);
+        a.mov_ri(X0, -3);
+        a.ret();
+        a.bind(noent);
+        a.mov_ri(X0, -4);
+        a.ret();
+        a.bind(acces);
+        a.mov_ri(X0, -5);
+        a.ret();
+    }
+    // dents(fd, buffer, count): `getdents64`; the bytes written, 0 at the end, or the errors of `fs`.
+    start(a, rt.os[13]);
+    if win || mac {
+        a.mov_ri(X0, -3);
+        finish(a);
+    } else {
+        sys(a, os, Sys::Getdents64);
+        a.b(res);
     }
     // random(buffer, count): `getrandom` on Linux, `getentropy` on macOS, 1 to 256 bytes; `RtlGenRandom` on Windows.
     start(a, rt.os[14]);

@@ -1806,6 +1806,40 @@ fn native_args_and_environment() {
     }
 }
 
+/// The file-system calls natively, on every Linux back end that can run here (x86-64 and AArch64): make a
+/// directory tree, write, inspect, rename, list and remove, and meet the errors for a missing path.
+#[test]
+fn native_file_system_calls() {
+    use crate::native::{exec, gen, Arch, Os};
+    let want = "true\ntrue 5\ntrue\nb.txt\nc.txt\nsub\nfalse\ntrue\ntrue\n";
+    for (arch, tag) in [(Arch::X86_64, "x86"), (Arch::Aarch64, "a64")] {
+        let a64 = arch == Arch::Aarch64;
+        if (a64 && !exec::can_run_a64_on(Os::Linux)) || (!a64 && !exec::can_run(Os::Linux)) {
+            continue;
+        }
+        let dir = std::env::temp_dir().join(format!("pelago-fs-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let d = dir.display();
+        let src = format!(
+            "import std.fs\nimport std.io\n\nfn main() -> void ! io_error {{\n    const root = \"{d}\"\n    fs.createDirs(\"#(root)/sub/inner\")?\n    fs.writeText(\"#(root)/a.txt\", \"hello\")?\n    print(fs.exists(\"#(root)/a.txt\"))\n    const m = fs.metadata(\"#(root)/a.txt\")?\n    print(m.kind == fs.file_kind.file, m.size)\n    const sd = fs.metadata(\"#(root)/sub\")?\n    print(sd.kind == fs.file_kind.dir)\n    fs.rename(\"#(root)/a.txt\", \"#(root)/b.txt\")?\n    fs.writeText(\"#(root)/c.txt\", \"x\")?\n    fs.removeDir(\"#(root)/sub/inner\")?\n    for n of fs.readDir(root)? {{ print(n) }}\n    fs.removeFile(\"#(root)/b.txt\")?\n    fs.removeFile(\"#(root)/c.txt\")?\n    fs.removeDir(\"#(root)/sub\")?\n    print(fs.exists(\"#(root)/b.txt\"))\n    const e = fs.metadata(\"#(root)/b.txt\")\n    switch e {{\n        case ok(_): print(\"found\")\n        case err(x): print(x.kind == io_kind.notFound)\n    }}\n    fs.removeDir(root)?\n    print(!fs.exists(root))\n}}"
+        );
+        let l = lowered(&src);
+        let opts = gen::Options {
+            leak_check: false,
+            target: Os::Linux,
+            symbols: false,
+        };
+        let image = if a64 {
+            crate::native::gen_a64::compile(&l.module, "main", &opts).unwrap()
+        } else {
+            gen::compile(&l.module, "main", &opts).unwrap()
+        };
+        let r = exec::run_image_arch(arch, Os::Linux, &image).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!((r.out.as_str(), r.code), (want, 0), "{arch:?}: {}", r.err);
+    }
+}
+
 /// The program does the same natively as in the interpreter: same output, and the same stop (message
 /// on standard error, status 1) or a clean exit.
 fn agree(src: &str) {
