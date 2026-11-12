@@ -33,6 +33,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         opts.leak_check,
         opts.target,
         super::Uses::of(m),
+        &super::gen::used_files(m),
     );
     g.rt = Some(rt);
     let (offs, bss) = super::place_module_data(&m.data, &mut g.data, opts.target == Os::Linux);
