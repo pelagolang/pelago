@@ -53,7 +53,8 @@ pub ext fn rtPrint(p: ptr, n: int)
 //~ The operating system layer (docs/design/runtime.md). `rtOsWrite` flushes standard output first and
 //~ writes once: it gives the count written or a negative error number; `rtOsRead` gives the count read,
 //~ 0 at the end, or a negative error number. `rtOsArgv` is the start-up block: the count, that many
-//~ pointers to zero-terminated texts, a zero, then the environment the same way.
+//~ pointers to zero-terminated texts, a zero, then the environment the same way (on Windows the count is
+//~ negative and there is one text, the command line: see `rtWinSplit`).
 pub ext fn rtOsWrite(fd: int, p: ptr, n: int) -> int
 pub ext fn rtOsRead(fd: int, p: ptr, n: int) -> int
 pub ext fn rtOsExit(code: int)
@@ -122,21 +123,122 @@ pub ext fn rtCallBool2(f: ptr, a: ptr, b: ptr) -> bool
 pub ext fn rtCallInt2(f: ptr, a: ptr, b: ptr) -> int
 pub ext fn rtCallInt1(f: ptr, a: ptr) -> int
 
+//~ Windows has no start-up block of texts: its runtime makes one whose count is -1, with the whole command line
+//~ (UTF-8) as the one text; `rtWinSplit` turns it into the arguments. Splitting lives here, not in the runtime,
+//~ so both Windows back ends share it and the interpreter can test it.
+//~
+//~ The rules are the ones Windows programs agree on: the program name ends at the first blank, and quotes in it
+//~ only group. After it, blanks separate arguments outside quotes; 2n backslashes before a quote give n
+//~ backslashes and the quote groups, 2n+1 give n and a literal quote; `""` inside quotes is a literal quote;
+//~ other backslashes are themselves. The arguments are written in place over the text (never longer than what
+//~ they came from), each ending in a zero, one after another; the result is their count.
+pub fn rtWinSplit(s: ptr) -> int {
+    var r = 0
+    var w = 0
+    var q = false
+    /// The program name.
+    while true {
+        const c = rtLoadByte(rtOffset(s, r))
+        if c == 0 { break }
+        r += 1
+        if c == 34 {
+            q = !q
+        } else if !q && (c == 32 || c == 9) {
+            break
+        } else {
+            rtStoreByte(rtOffset(s, w), c)
+            w += 1
+        }
+    }
+    rtStoreByte(rtOffset(s, w), 0)
+    w += 1
+    var n = 1
+    while true {
+        while rtLoadByte(rtOffset(s, r)) == 32 || rtLoadByte(rtOffset(s, r)) == 9 { r += 1 }
+        if rtLoadByte(rtOffset(s, r)) == 0 { return n }
+        q = false
+        var going = true
+        while going {
+            var b = 0
+            while rtLoadByte(rtOffset(s, r)) == 92 {
+                b += 1
+                r += 1
+            }
+            const c = rtLoadByte(rtOffset(s, r))
+            if c == 34 {
+                var k = 0
+                while k < b / 2 {
+                    rtStoreByte(rtOffset(s, w), 92)
+                    w += 1
+                    k += 1
+                }
+                if b % 2 == 1 {
+                    rtStoreByte(rtOffset(s, w), 34)
+                    w += 1
+                    r += 1
+                } else if q && rtLoadByte(rtOffset(s, r + 1)) == 34 {
+                    rtStoreByte(rtOffset(s, w), 34)
+                    w += 1
+                    r += 2
+                } else {
+                    q = !q
+                    r += 1
+                }
+            } else {
+                var k = 0
+                while k < b {
+                    rtStoreByte(rtOffset(s, w), 92)
+                    w += 1
+                    k += 1
+                }
+                if c == 0 {
+                    going = false
+                } else if !q && (c == 32 || c == 9) {
+                    r += 1
+                    going = false
+                } else {
+                    rtStoreByte(rtOffset(s, w), c)
+                    w += 1
+                    r += 1
+                }
+            }
+        }
+        rtStoreByte(rtOffset(s, w), 0)
+        w += 1
+        n += 1
+    }
+    n
+}
+
+//~ The start-up block with its arguments as zero-terminated texts: on Windows, the first call splits the
+//~ command line and records the count as -2 - count. The count, and the first text (the rest follow it).
+fn rtArgsBlock(blk: ptr) -> int {
+    var raw = rtLoadInt(blk)
+    if raw == -1 {
+        raw = -2 - rtWinSplit(rtLoadPtr(rtOffset(blk, 8)))
+        rtStoreInt(blk, raw)
+    }
+    if raw < 0 { -2 - raw } else { raw }
+}
+
 //~ Writes the program's arguments as a `[string]` header (pointer, length, capacity) at `dst`. The texts stay
 //~ in the start-up block (capacity 0: borrowed); only the array of headers is allocated, and its owner frees it.
 pub fn rtArgsInto(dst: ptr) {
     const blk = rtIntAddr(rtOsArgv())
-    const n = rtLoadInt(blk)
+    const n = rtArgsBlock(blk)
+    const packed = rtLoadInt(blk) < 0
     const buf = rtAlloc(n * 24)
+    var s = rtLoadPtr(rtOffset(blk, 8))
     var i = 0
     while i < n {
-        const s = rtLoadPtr(rtOffset(blk, 8 + 8 * i))
+        if !packed { s = rtLoadPtr(rtOffset(blk, 8 + 8 * i)) }
         var len = 0
         while rtLoadByte(rtOffset(s, len)) != 0 { len += 1 }
         const h = rtOffset(buf, i * 24)
         rtStorePtr(h, s)
         rtStoreInt(rtOffset(h, 8), len)
         rtStoreInt(rtOffset(h, 16), 0)
+        s = rtOffset(s, len + 1)
         i += 1
     }
     rtStorePtr(dst, buf)
