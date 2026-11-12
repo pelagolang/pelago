@@ -70,6 +70,7 @@ enum Sys {
     Open,
     Close,
     ClockGettime,
+    Getrandom,
 }
 
 /// The call numbers: the generic Linux ones, and the BSD ones of macOS (`mremap` and `madvise`
@@ -92,6 +93,8 @@ fn number(os: Os, call: Sys) -> i64 {
         Sys::Close => (57, 6),
         // macOS has no such call (its clocks are in the commpage); `OsKind::Clock` answers -3 there.
         Sys::ClockGettime => (113, 0),
+        // `getrandom` on Linux, `getentropy` on macOS (the buffer and at most 256 bytes).
+        Sys::Getrandom => (278, 500),
     };
     if os == Os::MacOs {
         mac
@@ -130,7 +133,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `x0` to `x2`, the result in `x0` (an address or 0, or a negative error).
-    pub os: [Label; 14],
+    pub os: [Label; 15],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -452,7 +455,7 @@ pub fn emit_for(
         fmod: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 14].map(|_| a.new_label()),
+        os: [(); 15].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -1930,6 +1933,34 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
             a.mov_ri(X0, -3);
             finish(a);
         } else {
+            a.mov_ri(X0, -3);
+            a.ret();
+        }
+    }
+    // random(buffer, count): `getrandom` on Linux, `getentropy` on macOS, 1 to 256 bytes; -3 on Windows (which
+    // would need `RtlGenRandom` from advapi32, not imported yet).
+    start(a, rt.os[14]);
+    if win {
+        a.mov_ri(X0, -3);
+        finish(a);
+    } else {
+        a.cmp_ri(X1, 1);
+        a.b_cond(Cond::Lt, bad);
+        a.cmp_ri(X1, 256);
+        a.b_cond(Cond::Gt, bad);
+        a.mov_rr(X9, X1);
+        a.mov_ri(X2, 0);
+        sys(a, os, Sys::Getrandom);
+        if os == Os::MacOs {
+            // 0 or a negative error: anything else than 0 is an error.
+            a.ret();
+        } else {
+            let other = a.new_label();
+            a.cmp_rr(X0, X9);
+            a.b_cond(Cond::Ne, other);
+            a.mov_ri(X0, 0);
+            a.ret();
+            a.bind(other);
             a.mov_ri(X0, -3);
             a.ret();
         }

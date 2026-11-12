@@ -69,6 +69,9 @@ pub ext fn rtOsClose(fd: int) -> int
 pub ext fn rtOsClock(which: int, p: ptr) -> int
 pub ext fn rtOsFs(op: int, path: ptr, aux: int) -> int
 pub ext fn rtOsDents(fd: int, buf: ptr, n: int) -> int
+//~ `rtOsRandom(p, n)` fills `n` bytes (1 to 256) at `p` from the system's random generator: 0, or a negative error
+//~ (-3 where the target has no such call yet: Windows).
+pub ext fn rtOsRandom(p: ptr, n: int) -> int
 pub ext fn rtToByte(n: int) -> uint8
 pub ext fn rtWrap<T>(n: int) -> T
 pub ext fn rtToInt(x: float) -> int

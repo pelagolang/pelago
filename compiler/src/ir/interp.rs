@@ -699,7 +699,8 @@ impl Machine<'_> {
             | OsKind::Close
             | OsKind::Clock
             | OsKind::Fs
-            | OsKind::Dents => return self.os_layer(k, a, b, c),
+            | OsKind::Dents
+            | OsKind::Random => return self.os_layer(k, a, b, c),
             OsKind::Reserve => {
                 if !sized(a) {
                     OS_BAD
@@ -963,6 +964,22 @@ impl Machine<'_> {
                 match r {
                     Ok(()) => 0,
                     Err(e) => fail(e),
+                }
+            }
+            OsKind::Random => {
+                use std::io::Read;
+                let (p, n) = (a as usize, b);
+                if !(1..=256).contains(&n) {
+                    return Ok(OS_BAD);
+                }
+                self.check(p, n as usize)?;
+                let mut buf = vec![0u8; n as usize];
+                match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf)) {
+                    Ok(()) => {
+                        self.mem[p..p + n as usize].copy_from_slice(&buf);
+                        0
+                    }
+                    Err(_) => OS_FAIL,
                 }
             }
             OsKind::Dents => {

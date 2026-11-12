@@ -361,10 +361,14 @@ pub enum OsKind {
     /// `getdents64` does on Linux (records of inode, offset, length (`u16`), type (`u8`), zero-terminated
     /// name); the bytes written, 0 at the end, or a negative `OS_*` error.
     Dents,
+    /// `(address, count)`: fill `count` bytes (1 to 256) at `address` with random bytes from the system's
+    /// generator; 0, or a negative `OS_*` error (`OS_BAD` for a bad count, `OS_FAIL` where the target has no
+    /// such call yet).
+    Random,
 }
 
 impl OsKind {
-    pub const ALL: [OsKind; 14] = [
+    pub const ALL: [OsKind; 15] = [
         OsKind::Reserve,
         OsKind::Commit,
         OsKind::Release,
@@ -379,6 +383,7 @@ impl OsKind {
         OsKind::Clock,
         OsKind::Fs,
         OsKind::Dents,
+        OsKind::Random,
     ];
 
     /// Whether the call reaches the process (arguments, descriptors, exit) rather than memory.
@@ -394,6 +399,7 @@ impl OsKind {
                 | OsKind::Clock
                 | OsKind::Fs
                 | OsKind::Dents
+                | OsKind::Random
         )
     }
 
@@ -413,6 +419,7 @@ impl OsKind {
             OsKind::Clock => "os_clock",
             OsKind::Fs => "os_fs",
             OsKind::Dents => "os_dents",
+            OsKind::Random => "os_random",
         }
     }
 
@@ -425,7 +432,8 @@ impl OsKind {
             | OsKind::Release
             | OsKind::AdviseNoHuge
             | OsKind::Open
-            | OsKind::Clock => 2,
+            | OsKind::Clock
+            | OsKind::Random => 2,
             OsKind::Remap | OsKind::Write | OsKind::Read | OsKind::Fs | OsKind::Dents => 3,
         }
     }
