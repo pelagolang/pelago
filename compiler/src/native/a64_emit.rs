@@ -90,8 +90,8 @@ fn layout(f: &MFunc) -> Frame {
         *at += o.size as i32;
     };
     // The outgoing arguments first: they sit at `[sp]`.
-    for i in 0..f.frame.len() {
-        if f.frame[i].kind == FrameKind::Outgoing {
+    for (i, slot) in f.frame.iter().enumerate() {
+        if slot.kind == FrameKind::Outgoing {
             place(i, &mut at, &mut off);
         }
     }
@@ -114,8 +114,8 @@ fn layout(f: &MFunc) -> Frame {
     at = (at + 7) / 8 * 8;
     let save_at = at;
     at += 8 * saves.len() as i32;
-    for i in 0..f.frame.len() {
-        if !matches!(f.frame[i].kind, FrameKind::Outgoing | FrameKind::Incoming) {
+    for (i, slot) in f.frame.iter().enumerate() {
+        if !matches!(slot.kind, FrameKind::Outgoing | FrameKind::Incoming) {
             place(i, &mut at, &mut off);
         }
     }
