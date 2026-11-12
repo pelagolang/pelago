@@ -70,6 +70,12 @@ pub ext fn rtOsClock(which: int, p: ptr) -> int
 //~ `rtOsSleep(seconds, nanoseconds)` lets the process sleep (`nanosleep`); it may return early. 0, or a negative
 //~ error (-3 where the target has no such call yet: Windows, macOS).
 pub ext fn rtOsSleep(secs: int, nanos: int) -> int
+//~ Atomics on the 8 bytes at an 8-aligned address, all sequentially consistent, all giving the old value:
+//~ `rtAtomicCas(p, expected, desired)` stores `desired` only when the word equals `expected`; `rtAtomicAdd(p, d)`
+//~ adds (`d` 0 loads); `rtAtomicSwap(p, v)` stores. Runtime routines, not IR instructions.
+pub ext fn rtAtomicCas(p: ptr, expected: int, desired: int) -> int
+pub ext fn rtAtomicAdd(p: ptr, delta: int) -> int
+pub ext fn rtAtomicSwap(p: ptr, v: int) -> int
 pub ext fn rtOsFs(op: int, path: ptr, aux: int) -> int
 pub ext fn rtOsDents(fd: int, buf: ptr, n: int) -> int
 //~ `rtOsRandom(p, n)` fills `n` bytes (1 to 256) at `p` from the system's random generator: 0, or a negative error

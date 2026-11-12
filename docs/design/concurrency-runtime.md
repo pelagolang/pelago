@@ -108,8 +108,13 @@ more than one worker, then park. `with` keeps its shape (closure gets `inout`). 
 language: `lock.withWhen` (in place of a `condvar`; no separate `once` type, a `lock` around an `option` does it), `barrier`, `semaphore`, `rwlock` (read-mostly `shared` data), built from the same
 word-and-queue pair.
 
-**`shared<T>`** gets an atomic count (`AtomicRmw add`); **`atomic<T>`** is the IR atomics with a plain method
-surface (`load`, `store`, `add`, `swap`, `compare_swap`).
+**`shared<T>`** gets an atomic count; **`atomic`** has a plain method surface (`load`, `store`, `add`, `swap`,
+`compareSwap`) over an `int`. Built (C5): the atomics are three runtime routines (`OsKind::AtomicCas`, `AtomicAdd`,
+`AtomicSwap`; `rtAtomicCas/Add/Swap`), not IR instructions: `lock cmpxchg`, `lock xadd` and `xchg` on x86-64, a
+`ldaxr`/`stlxr` loop with a full `dmb ish` on AArch64, plain memory in the interpreter (it runs one task at a
+time). Every operation is sequentially consistent: there are no weaker orders to choose from, which keeps the memory
+model one sentence long. A call per atomic is the price; the weaker orders and inlined forms can come when a
+benchmark asks. `atomic<T>` over other types and the `shared` count follow with C6.
 
 **Allocator.** Stage 1 is single-worker, so unchanged. Before several workers: per-worker free lists (thread
 register from `os_thread_id`) with a locked global fallback; frees from another worker go to the owner's list.

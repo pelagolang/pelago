@@ -8,6 +8,18 @@ type Case = (&'static str, &'static str, fn(&mut Asm));
 pub fn golden() -> Vec<Case> {
     vec![
         ("mov rax, rbx", "48 89 d8", |a| a.mov_rr(RAX, RBX, 8)),
+        ("lock cmpxchg [rdi], rdx", "f0 48 0f b1 17", |a| {
+            a.lock_cmpxchg(mem(RDI, 0), RDX)
+        }),
+        ("lock xadd [rdi], rsi", "f0 48 0f c1 37", |a| {
+            a.lock_xadd(mem(RDI, 0), RSI)
+        }),
+        ("xchg [rdi], rsi", "48 87 37", |a| {
+            a.xchg_mem(mem(RDI, 0), RSI)
+        }),
+        ("lock cmpxchg [r9+8], r10", "f0 4d 0f b1 51 08", |a| {
+            a.lock_cmpxchg(mem(R9, 8), R10)
+        }),
         ("vfmadd231sd xmm0, xmm1, xmm2", "c4 e2 f1 b9 c2", |a| {
             a.vfmadd231(Xmm(0), Xmm(1), Fp::Reg(Xmm(2)), true)
         }),

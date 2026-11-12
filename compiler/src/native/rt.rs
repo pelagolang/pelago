@@ -332,7 +332,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `rdi`, `rsi`, `rdx`, the result in `rax` (an address or 0, or a negative error).
-    pub os: [Label; 16],
+    pub os: [Label; 19],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -384,7 +384,7 @@ pub fn emit_for(
         write_u64: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 16].map(|_| a.new_label()),
+        os: [(); 19].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -1778,6 +1778,23 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.mov_ri(RAX, -3);
         a.ret();
     }
+    // The atomics (the same on every x86-64 target: no system call). Each gives the old value in `rax` and is
+    // sequentially consistent, as the `lock` prefix and `xchg` are.
+    // cas(address = rdi, expected = rsi, new = rdx)
+    a.bind(rt.os[16]);
+    a.mov_rr(RAX, RSI, 8);
+    a.lock_cmpxchg(mem(RDI, 0), RDX);
+    a.ret();
+    // add(address = rdi, delta = rsi)
+    a.bind(rt.os[17]);
+    a.lock_xadd(mem(RDI, 0), RSI);
+    a.mov_rr(RAX, RSI, 8);
+    a.ret();
+    // swap(address = rdi, new = rsi)
+    a.bind(rt.os[18]);
+    a.xchg_mem(mem(RDI, 0), RSI);
+    a.mov_rr(RAX, RSI, 8);
+    a.ret();
     if win {
         // The handle for descriptor `rdi` in `rax`: 0, 1 and 2 are the standard handles, anything else is a
         // handle from `open`.

@@ -139,7 +139,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `x0` to `x2`, the result in `x0` (an address or 0, or a negative error).
-    pub os: [Label; 16],
+    pub os: [Label; 19],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -464,7 +464,7 @@ pub fn emit_for(
         fmod: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 16].map(|_| a.new_label()),
+        os: [(); 19].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -2052,6 +2052,46 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
             a.ret();
         }
     }
+    // The atomics (the same on every AArch64 target): `ldaxr`/`stlxr` loops with a full barrier before the
+    // return, so each is sequentially consistent. They give the old value in `x0`.
+    // cas(address = x0, expected = x1, new = x2)
+    let (cas_loop, cas_miss) = (a.new_label(), a.new_label());
+    a.bind(rt.os[16]);
+    a.bind(cas_loop);
+    a.ldaxr(X9, X0);
+    a.cmp_rr(X9, X1);
+    a.b_cond(Cond::Ne, cas_miss);
+    a.stlxr(X11, X2, X0);
+    a.cbnz(X11, cas_loop);
+    a.dmb_ish();
+    a.mov_rr(X0, X9);
+    a.ret();
+    a.bind(cas_miss);
+    a.clrex();
+    a.dmb_ish();
+    a.mov_rr(X0, X9);
+    a.ret();
+    // add(address = x0, delta = x1)
+    let add_loop = a.new_label();
+    a.bind(rt.os[17]);
+    a.bind(add_loop);
+    a.ldaxr(X9, X0);
+    a.add_rr(X10, X9, X1);
+    a.stlxr(X11, X10, X0);
+    a.cbnz(X11, add_loop);
+    a.dmb_ish();
+    a.mov_rr(X0, X9);
+    a.ret();
+    // swap(address = x0, new = x1)
+    let swap_loop = a.new_label();
+    a.bind(rt.os[18]);
+    a.bind(swap_loop);
+    a.ldaxr(X9, X0);
+    a.stlxr(X11, X1, X0);
+    a.cbnz(X11, swap_loop);
+    a.dmb_ish();
+    a.mov_rr(X0, X9);
+    a.ret();
     // The exits.
     a.bind(bad);
     a.mov_ri(X0, -2);
