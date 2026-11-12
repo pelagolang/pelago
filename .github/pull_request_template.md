@@ -73,7 +73,7 @@ Run `python3 bench/harness/run.py --runs 7` from the repository root (see `bench
 <paste>
 ```
 
-- [ ] `cargo run -- check examples` is clean; `examples/tour.pel` updated if syntax changed
+- [ ] `cargo run -- check examples/programs` is clean; `examples/tour.pel` updated if syntax changed (the tour is a syntax sampler: it must lex, parse and format, not type check)
 - [ ] `BLESS=1 cargo test` run and the golden `.ast` diff reviewed (syntax changes only)
 
 ## Language and docs in step

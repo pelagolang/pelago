@@ -1,5 +1,7 @@
 //~ A tour of the syntax decided so far. Not a program anyone can run yet:
 //~ it exists so the lexer (and later the parser) has something real to read.
+//~ It is a syntax sampler: it has to lex, parse and format, and it does not type check
+//~ (names are free-floating). Programs that must type check live in `examples/programs/`.
 
 //~* Documentation can also
     span many lines. *~//
