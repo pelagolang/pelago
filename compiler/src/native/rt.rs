@@ -19,12 +19,14 @@
 //! | 152 | Windows: the lowest committed address of our stack (it grows downwards on demand) |
 //! | 160 | scratch for `VirtualProtect` (Windows) |
 //! | 168 | Linux: the kernel's start block (the stack pointer at `_start`: argument count, arguments, environment) |
+//! | 176 | 1 once an operating system thread has been started: from then on `alloc`, `free`, `realloc` and `print` run under the lock |
+//! | 184 | that lock (0 free, 1 held) |
 
 use super::elf::Blob;
 use super::x86::*;
 use super::{Os, Uses};
 
-pub const STATE_SIZE: usize = 176;
+pub const STATE_SIZE: usize = 192;
 /// Size of the buffer that `print` fills; it is written out when full, at exit and at a stop.
 const PRINT_BUF: i64 = 64 * 1024;
 const CHUNK: i64 = 1 << 20;
@@ -332,6 +334,12 @@ pub struct Runtime {
     /// `rtRealloc(ptr = rdi, size = rsi) -> rax`: a block of the new size holding the old contents (null
     /// allocates); the rest is zero. A large block is remapped, so growing a big buffer copies nothing.
     pub realloc: Label,
+    /// The entry points the generated code calls for `print`, `alloc`, `free` and `realloc`: the routines above,
+    /// taken under the runtime's lock once a thread has been started (`rtThreadStart`), else just jumped to.
+    pub print_x: Label,
+    pub alloc_x: Label,
+    pub free_x: Label,
+    pub realloc_x: Label,
     /// `rtExit(status = rdi)`
     pub exit: Label,
     /// `rtWriteU64(fd = rdi, value = rsi)`: decimal digits.
@@ -392,6 +400,10 @@ pub fn emit_for(
         alloc: a.new_label(),
         free: a.new_label(),
         realloc: a.new_label(),
+        print_x: a.new_label(),
+        alloc_x: a.new_label(),
+        free_x: a.new_label(),
+        realloc_x: a.new_label(),
         exit: a.new_label(),
         write_u64: a.new_label(),
         ctx_init: a.new_label(),
@@ -940,6 +952,43 @@ pub fn emit_for(
         a.call(rt.stop);
     }
 
+    // The entry points of the shared routines. One thread (no `rtThreadStart` yet, the flag at 176 is 0): a jump
+    // to the routine, the whole cost. Several: a spin lock (a `lock cmpxchg` on the word at 184 with `pause`) held
+    // for the routine, one lock for the heap and the output buffer, since both are short. Per-worker free lists
+    // would remove the contention; that is an optimisation for when a benchmark shows it. The routines keep
+    // `rbx`, `rbp` and `r12` to `r15`, and the wrappers touch only `rax`, `r10` and `r11`, so every argument
+    // register reaches the routine as it was.
+    for (used, outer, inner) in [
+        (uses.print, rt.print_x, rt.print),
+        (alloc_used, rt.alloc_x, rt.alloc),
+        (free_used, rt.free_x, rt.free),
+        (uses.realloc, rt.realloc_x, rt.realloc),
+    ] {
+        if !used {
+            continue;
+        }
+        let (locked, spin) = (a.new_label(), a.new_label());
+        a.bind(outer);
+        state(a, R11, 176);
+        a.alu_mi(Alu::Cmp, mem(R11, 0), 0, 8);
+        a.jcc(Cc::Ne, locked);
+        a.jmp(inner);
+        a.bind(locked);
+        a.mov_ri(R10, 1);
+        a.bind(spin);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.lock_cmpxchg(mem(R11, 8), R10);
+        let got = a.new_label();
+        a.jcc(Cc::E, got);
+        a.byte(0xF3); // pause
+        a.byte(0x90);
+        a.jmp(spin);
+        a.bind(got);
+        a.call(inner);
+        state(a, R11, 176);
+        a.store_imm(mem(R11, 8), 0, 8);
+        a.ret();
+    }
     let oom = a.new_label();
     if alloc_used {
         // ---- out of memory -----------------------------------------------------------------------------
@@ -1815,6 +1864,8 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         // calls `code(arg)`, then ends only its own thread (`exit`, not `exit_group`).
         let (parent, failed) = (a.new_label(), a.new_label());
         a.bind(rt.os[19]);
+        state(a, R11, 176);
+        a.store_imm(mem(R11, 0), 1, 8); // from now on the heap and the output buffer are locked
         a.alu_ri(Alu::And, RDX, -16, 8);
         a.store(mem(RDX, -24), RDI, 8);
         a.store(mem(RDX, -32), RSI, 8);
