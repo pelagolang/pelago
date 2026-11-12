@@ -352,6 +352,7 @@ pub fn emit(
 
 /// Like [`emit`], with only the routines `uses` names (the labels of the others are never bound, so
 /// nothing may call them).
+#[allow(clippy::too_many_arguments)]
 pub fn emit_for(
     a: &mut Asm,
     ro: &mut Blob,
