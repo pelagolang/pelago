@@ -1,7 +1,7 @@
 (file
   (mod
     (doc
-      "A tour of the syntax decided so far. Not a program anyone can run yet:\nit exists so the lexer (and later the parser) has something real to read.\nDocumentation can also\nspan many lines.")
+      "A tour of the syntax decided so far. Not a program anyone can run yet:\nit exists so the lexer (and later the parser) has something real to read.\nIt is a syntax sampler: it has to lex, parse and format, and it does not type check\n(names are free-floating). Programs that must type check live in `examples/programs/`.\nDocumentation can also\nspan many lines.")
     tour)
   (import std)
   (const name (str "Dennis"))
