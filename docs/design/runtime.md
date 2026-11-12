@@ -66,7 +66,7 @@ Errors come back as one small `os_error` code, turned into the library's `io_err
 ## 5. Panics and stops
 
 One mechanism: `Stop(msg)`. It flushes standard output, writes `stopped: <msg>` to standard error and exits with
-status 1. A stop names its place: `file:line: stopped: message` (R4; the IR carries a file number and a line in each stop, the names sit in a table that only a stop reads). Built for the interpreter and x86-64; AArch64 still prints the message alone.
+status 1. A stop names its place: `file:line: stopped: message` (R4; the IR carries a file number and a line in each stop, the names sit in a table that only a stop reads). Built for the interpreter, x86-64 and AArch64.
 A stop in a task stops the whole program (CC1); the first stop wins. Nothing unwinds. This is one rule for
 assertion failures, overflow, division by zero, bounds, `unreachable`, out of memory and stack overflow.
 

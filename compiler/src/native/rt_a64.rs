@@ -111,6 +111,9 @@ pub struct Runtime {
     pub print: Label,
     /// `rtStop(ptr = x0, len = x1)`: prints `stopped: <message>` to standard error and exits with status 1.
     pub stop: Label,
+    /// `rtStopAt(ptr = x0, len = x1, location = x2)`: `rtStop` that also says where (a location, `Span::at`: the
+    /// file number over the line; 0 for nowhere): `file:line: stopped: <message>`.
+    pub stop_at: Label,
     /// `rtAlloc(size = x0) -> x0`: zeroed memory, 16-byte aligned; stops when out of memory.
     pub alloc: Label,
     /// `rtFree(ptr = x0)`: accepts null.
@@ -416,11 +419,12 @@ pub fn emit(
     leak_check: bool,
     os: Os,
 ) -> Runtime {
-    emit_for(a, ro, data, main, leak_check, os, Uses::ALL)
+    emit_for(a, ro, data, main, leak_check, os, Uses::ALL, &[])
 }
 
 /// Like [`emit`], with only the routines `uses` names (the labels of the others are never bound, so
 /// nothing may call them).
+#[allow(clippy::too_many_arguments)]
 pub fn emit_for(
     a: &mut Asm,
     ro: &mut Blob,
@@ -429,6 +433,7 @@ pub fn emit_for(
     leak_check: bool,
     os: Os,
     uses: Uses,
+    files: &[String],
 ) -> Runtime {
     // `realloc` allocates and frees; `print` and `realloc` copy.
     let alloc_used = uses.alloc || uses.realloc;
@@ -446,6 +451,7 @@ pub fn emit_for(
         write_fd: a.new_label(),
         print: a.new_label(),
         stop: a.new_label(),
+        stop_at: a.new_label(),
         alloc: a.new_label(),
         free: a.new_label(),
         realloc: a.new_label(),
@@ -462,6 +468,20 @@ pub fn emit_for(
     let tramp = a.new_label();
     let oom = a.new_label();
     let msg_stopped = ro.add(b"stopped: ", 1);
+    // The names of the files that a stop can name, one length byte and the name each, in file-number order (an
+    // empty name for a file no stop names).
+    let files_at = if files.iter().any(|f| !f.is_empty()) {
+        let mut table = Vec::new();
+        for f in files {
+            let n = f.len().min(255);
+            table.push(n as u8);
+            table.extend_from_slice(&f.as_bytes()[..n]);
+        }
+        Some(ro.add(&table, 1))
+    } else {
+        None
+    };
+    let (msg_colon, msg_colsp) = (ro.add(b":", 1), ro.add(b": ", 1));
     let msg_overflow = ro.add(b"stack overflow", 1);
     let msg_invalid = ro.add(b"invalid memory access", 1);
     let msg_nl = ro.add(b"\n", 1);
@@ -783,7 +803,7 @@ pub fn emit_for(
         a.ret();
     }
 
-    if leak_check || uses.write_u64 {
+    if leak_check || uses.write_u64 || files_at.is_some() {
         // ---- rtWriteU64 ------------------------------------------------------------------------------
         a.bind(rt.write_u64);
         {
@@ -857,10 +877,45 @@ pub fn emit_for(
 
     // ---- rtStop -----------------------------------------------------------------------------------
     a.bind(rt.stop);
+    a.mov_ri(X2, 0);
+    a.bind(rt.stop_at);
     a.mov_rr(X19, X0);
     a.mov_rr(X20, X1);
+    a.mov_rr(X21, X2);
     if uses.print {
         a.bl(flush); // what the program printed comes first
+    }
+    if let Some(files_at) = files_at {
+        // `file:line: ` first, when the stop knows where it happened: the file's name is the n-th entry of the
+        // table (a length byte, then the name), the line is the low 20 bits of the location.
+        let (skip, scan, found) = (a.new_label(), a.new_label(), a.new_label());
+        a.cbz(X21, skip);
+        a.lsr_ri(X9, X21, 20);
+        a.lea_sect(X1, Sect::Rodata, files_at);
+        a.bind(scan);
+        a.subs_ri(X9, X9, 1);
+        a.b_cond(Cond::Eq, found);
+        a.ldr(X10, X1, 0, 1);
+        a.add_rr(X1, X1, X10);
+        a.add_ri(X1, X1, 1);
+        a.b(scan);
+        a.bind(found);
+        a.ldr(X2, X1, 0, 1);
+        a.add_ri(X1, X1, 1);
+        a.mov_ri(X0, 2);
+        a.bl(rt.write_fd);
+        a.mov_ri(X0, 2);
+        a.lea_sect(X1, Sect::Rodata, msg_colon);
+        a.mov_ri(X2, 1);
+        a.bl(rt.write_fd);
+        a.mov_ri(X0, 2);
+        a.ubfx(X1, X21, 0, 20);
+        a.bl(rt.write_u64);
+        a.mov_ri(X0, 2);
+        a.lea_sect(X1, Sect::Rodata, msg_colsp);
+        a.mov_ri(X2, 2);
+        a.bl(rt.write_fd);
+        a.bind(skip);
     }
     a.mov_ri(X0, 2);
     a.lea_sect(X1, Sect::Rodata, msg_stopped);

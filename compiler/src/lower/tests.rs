@@ -1663,6 +1663,43 @@ fn native_clock_and_random_answer() {
     );
 }
 
+/// A native stop message without its place (`file:line: `) and the `stopped: ` before the message.
+fn unplaced(err: &str) -> &str {
+    let said = err.rsplit_once(": stopped: ").map_or(err, |(_, m)| m);
+    said.strip_prefix("stopped: ").unwrap_or(said)
+}
+
+/// A failed check names the file and line it is on, the same in the interpreter and on every back end (R4).
+#[test]
+fn native_stop_names_its_place() {
+    use crate::native::{exec, gen, Os};
+    let src = "fn main() {\n    var x = 9223372036854775807\n    print(1)\n    x = x + 1\n    print(x)\n}";
+    let l = lowered(src);
+    let o = run_full(&l.module, "main", &[]);
+    let (file, line) = o
+        .stop_at
+        .clone()
+        .expect("the interpreter knows where it stopped");
+    assert_eq!(line, 4);
+    let want = format!("{file}:4: stopped: arithmetic overflow\n");
+    for os in [Os::Linux, Os::Windows] {
+        if !exec::can_run(os) {
+            continue;
+        }
+        let opts = gen::Options {
+            leak_check: false,
+            target: os,
+            symbols: false,
+        };
+        let image = gen::compile(&l.module, "main", &opts).unwrap();
+        let r = exec::run_image(os, &image).unwrap();
+        assert_eq!((r.err.as_str(), r.code), (want.as_str(), 1), "{os:?}");
+    }
+    if let Some(r) = exec::build_and_run_a64(&l.module, false) {
+        assert_eq!((r.err.as_str(), r.code), (want.as_str(), 1), "AArch64");
+    }
+}
+
 /// The program does the same natively as in the interpreter: same output, and the same stop (message
 /// on standard error, status 1) or a clean exit.
 fn agree(src: &str) {
@@ -1704,14 +1741,8 @@ fn agree(src: &str) {
         match &o.result {
             Ok(_) => assert_eq!((r.err.as_str(), r.code), ("", 0), "{what} {os:?}: {src}"),
             Err(msg) => {
-                // The native stop names a place (`file:line: `); the message after it must agree.
-                let said = r
-                    .err
-                    .rsplit_once(": stopped: ")
-                    .map_or(r.err.as_str(), |(_, m)| m);
-                let said = said.strip_prefix("stopped: ").unwrap_or(said);
                 assert_eq!(
-                    (said, r.code),
+                    (unplaced(&r.err), r.code),
                     (format!("{msg}\n").as_str(), 1),
                     "{what} {os:?}: {src}"
                 )
@@ -1726,8 +1757,8 @@ fn agree(src: &str) {
         match &o.result {
             Ok(_) => assert_eq!((r.err.as_str(), r.code), ("", 0), "{what} AArch64: {src}"),
             Err(msg) => assert_eq!(
-                (r.err.as_str(), r.code),
-                (format!("stopped: {msg}\n").as_str(), 1),
+                (unplaced(&r.err), r.code),
+                (format!("{msg}\n").as_str(), 1),
                 "{what} AArch64: {src}"
             ),
         }
