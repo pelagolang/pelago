@@ -118,7 +118,8 @@ impl<'a> Lowerer<'a> {
             "rtOsReserve" | "rtOsCommit" | "rtOsRelease" | "rtOsRemap" | "rtOsAdviseNohuge"
             | "rtOsWrite" | "rtOsRead" | "rtOsExit" | "rtOsArgv" | "rtOsOpen" | "rtOsClose"
             | "rtOsClock" | "rtOsSleep" | "rtAtomicCas" | "rtAtomicAdd" | "rtAtomicSwap"
-            | "rtOsFs" | "rtOsDents" | "rtOsRandom" => self.intr_os(&name, args, sp),
+            | "rtThreadStart" | "rtFutexWait" | "rtFutexWake" | "rtOsFs" | "rtOsDents"
+            | "rtOsRandom" => self.intr_os(&name, args, sp),
             "rtDataWord" => {
                 // The address of the k-th word of the block the compiler keeps for the library's own
                 // state; `k` is a literal, so a bad one is a compile error, not a stop.
@@ -676,6 +677,9 @@ impl<'a> Lowerer<'a> {
             "rtAtomicCas" => crate::ir::OsKind::AtomicCas,
             "rtAtomicAdd" => crate::ir::OsKind::AtomicAdd,
             "rtAtomicSwap" => crate::ir::OsKind::AtomicSwap,
+            "rtThreadStart" => crate::ir::OsKind::ThreadStart,
+            "rtFutexWait" => crate::ir::OsKind::FutexWait,
+            "rtFutexWake" => crate::ir::OsKind::FutexWake,
             "rtOsFs" => crate::ir::OsKind::Fs,
             "rtOsDents" => crate::ir::OsKind::Dents,
             "rtOsRandom" => crate::ir::OsKind::Random,

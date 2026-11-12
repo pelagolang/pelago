@@ -733,7 +733,10 @@ impl Machine<'_> {
             | OsKind::Sleep
             | OsKind::AtomicCas
             | OsKind::AtomicAdd
-            | OsKind::AtomicSwap => return self.os_layer(k, a, b, c),
+            | OsKind::AtomicSwap
+            | OsKind::ThreadStart
+            | OsKind::FutexWait
+            | OsKind::FutexWake => return self.os_layer(k, a, b, c),
             OsKind::Reserve => {
                 if !sized(a) {
                     OS_BAD
@@ -963,6 +966,9 @@ impl Machine<'_> {
                 }
                 old
             }
+            // One task at a time here: no threads, a wait returns at once (the caller looks again), nobody to wake.
+            OsKind::ThreadStart => OS_FAIL,
+            OsKind::FutexWait | OsKind::FutexWake => 0,
             OsKind::Sleep => {
                 if a < 0 || !(0..1_000_000_000).contains(&b) {
                     return Ok(OS_BAD);
