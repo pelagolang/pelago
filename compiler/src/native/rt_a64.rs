@@ -22,11 +22,12 @@ use super::a64::*;
 use super::elf::Blob;
 use super::rt::{
     IMP_ADD_VEH, IMP_CLOSE_HANDLE, IMP_COMMAND_LINE, IMP_CREATE_DIRECTORY, IMP_CREATE_FILE,
-    IMP_DELETE_FILE, IMP_ENVIRONMENT, IMP_EXIT_PROCESS, IMP_FILE_ATTRIBUTES, IMP_GET_CONSOLE_MODE,
-    IMP_GET_LAST_ERROR, IMP_GET_STD_HANDLE, IMP_MOVE_FILE, IMP_MULTI_BYTE, IMP_PERF_COUNTER,
-    IMP_PERF_FREQUENCY, IMP_READ_FILE, IMP_REMOVE_DIRECTORY, IMP_RTL_GEN_RANDOM, IMP_VIRTUAL_ALLOC,
-    IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT, IMP_WALL_TIME, IMP_WIDE_CHAR, IMP_WRITE_FILE,
-    REGION_BYTES, REGION_MAX, REGION_MIN, SPAN_TABLE,
+    IMP_DELETE_FILE, IMP_ENVIRONMENT, IMP_EXIT_PROCESS, IMP_FILE_ATTRIBUTES,
+    IMP_FILE_INFO_BY_HANDLE, IMP_GET_CONSOLE_MODE, IMP_GET_LAST_ERROR, IMP_GET_STD_HANDLE,
+    IMP_MOVE_FILE, IMP_MULTI_BYTE, IMP_PERF_COUNTER, IMP_PERF_FREQUENCY, IMP_READ_FILE,
+    IMP_REMOVE_DIRECTORY, IMP_RTL_GEN_RANDOM, IMP_VIRTUAL_ALLOC, IMP_VIRTUAL_FREE,
+    IMP_VIRTUAL_PROTECT, IMP_WALL_TIME, IMP_WIDE_CHAR, IMP_WRITE_FILE, REGION_BYTES, REGION_MAX,
+    REGION_MIN, SPAN_TABLE,
 };
 use super::{Os, Uses};
 
@@ -1692,7 +1693,7 @@ fn win_open(a: &mut Asm, rt: &Runtime) {
     a.mov_rr(X0, X22);
     a.mov_ri(X2, 7); // share read, write, delete
     a.mov_ri(X3, 0);
-    a.mov_ri(X5, 0x80); // FILE_ATTRIBUTE_NORMAL
+    a.mov_ri(X5, 0x0200_0080); // FILE_ATTRIBUTE_NORMAL, and BACKUP_SEMANTICS so a directory opens
     a.mov_ri(X6, 0);
     win_call(a, IMP_CREATE_FILE);
     a.mov_rr(X19, X0);
@@ -2481,7 +2482,90 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
     }
     // dents(fd, buffer, count): `getdents64`; the bytes written, 0 at the end, or the errors of `fs`.
     start(a, rt.os[13]);
-    if win || mac {
+    if win {
+        // The next batch of the directory handle from `GetFileInformationByHandleEx` (`FileIdBothDirectoryInfo`, 2 KiB
+        // at a time) in the shape of Linux's `getdents64` records (see `rt.rs`). `x19` where the output starts,
+        // `x20` where it goes next, `x22` the entry being read.
+        let (lp, fin, err, exit, zero, nf, den, isdir) = (
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+        );
+        a.sub_ri(SP, SP, 2064);
+        a.mov_rr(X19, X1);
+        a.mov_rr(X20, X1);
+        a.mov_ri(X1, 10); // FileIdBothDirectoryInfo
+        a.mov_from_sp(X2);
+        a.mov_ri(X3, 2048);
+        win_call(a, IMP_FILE_INFO_BY_HANDLE);
+        a.uxt(X0, X0, 32);
+        a.cbz(X0, err);
+        a.mov_from_sp(X22);
+        a.bind(lp);
+        a.mov_ri(X0, 65001); // CP_UTF8
+        a.mov_ri(X1, 0);
+        a.add_ri(X2, X22, 104);
+        a.ldr(X3, X22, 60, 4);
+        a.lsr_ri(X3, X3, 1);
+        a.add_ri(X4, X20, 19);
+        a.mov_ri(X5, 1024);
+        a.mov_ri(X6, 0);
+        a.mov_ri(X7, 0);
+        win_call(a, IMP_WIDE_CHAR);
+        a.uxt(X0, X0, 32);
+        a.add_rr(X9, X20, X0);
+        a.str(XZR, X9, 19, 1);
+        a.add_ri(X10, X0, 27);
+        a.lsr_ri(X10, X10, 3);
+        a.lsl_ri(X10, X10, 3);
+        a.str(X10, X20, 16, 2);
+        a.ldr(X11, X22, 56, 4);
+        a.mov_ri(X12, 8); // a file
+        assert!(a.tst_ri(X11, 0x10));
+        a.b_cond(Cond::Eq, isdir);
+        a.mov_ri(X12, 4); // a directory
+        a.bind(isdir);
+        a.str(X12, X20, 18, 1);
+        a.str(XZR, X20, 0, 8);
+        a.str(XZR, X20, 8, 8);
+        a.add_rr(X20, X20, X10);
+        a.ldr(X9, X22, 0, 4);
+        a.cbz(X9, fin);
+        a.add_rr(X22, X22, X9);
+        a.b(lp);
+        a.bind(fin);
+        a.sub_rr(X0, X20, X19);
+        a.b(exit);
+        a.bind(err);
+        win_call(a, IMP_GET_LAST_ERROR);
+        a.uxt(X0, X0, 32);
+        a.cmp_ri(X0, 18); // ERROR_NO_MORE_FILES
+        a.b_cond(Cond::Eq, zero);
+        a.cmp_ri(X0, 2);
+        a.b_cond(Cond::Eq, nf);
+        a.cmp_ri(X0, 3);
+        a.b_cond(Cond::Eq, nf);
+        a.cmp_ri(X0, 5);
+        a.b_cond(Cond::Eq, den);
+        a.mov_ri(X0, -3);
+        a.b(exit);
+        a.bind(zero);
+        a.mov_ri(X0, 0);
+        a.b(exit);
+        a.bind(nf);
+        a.mov_ri(X0, -4);
+        a.b(exit);
+        a.bind(den);
+        a.mov_ri(X0, -5);
+        a.bind(exit);
+        a.add_ri(SP, SP, 2064);
+        finish(a);
+    } else if mac {
         a.mov_ri(X0, -3);
         finish(a);
     } else {
