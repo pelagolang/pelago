@@ -520,6 +520,15 @@ pub fn emit_for(
         a.mov_from_sp(X9);
         state(a, X10, 168);
         a.str(X9, X10, 0, 8);
+    } else if os == Os::MacOs {
+        // `dyld` calls the entry like `main(argc, argv, envp)`: x0 the count, x1 the argument pointers, with the
+        // environment's pointers right after their zero. The block the runtime reads (count, arguments, zero,
+        // environment, zero) is the same shape, so it starts one slot before `argv`, where the kernel's stack
+        // keeps the count; it is written again so the block does not depend on that.
+        a.sub_ri(X9, X1, 8);
+        a.str(X0, X9, 0, 8);
+        state(a, X10, 168);
+        a.str(X9, X10, 0, 8);
     }
     a.mov_rr(FP, XZR);
     // A big stack of our own, taken lazily, so deep recursion works like it does in the
@@ -1924,8 +1933,8 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
     // argv: the start-up block, at offset 168 of the state. Linux saves the kernel's at `_start`. Windows makes one
     // on the first call, the same as x86-64 (`rt.rs`): count -1, the command line in UTF-8 as its one text (`core`'s
     // `rtWinSplit` splits it), a zero, the environment's `NAME=value` texts without the `=C:` ones, a zero; one
-    // `VirtualAlloc` holds the header, room for the environment's pointers and the texts. macOS has none yet
-    // (refused at build time).
+    // `VirtualAlloc` holds the header, room for the environment's pointers and the texts. macOS's entry
+    // gets `argc` and `argv` from `dyld`, and `_start` builds the block from them.
     start(a, rt.os[8]);
     if win {
         let (out, scan, env_go, env_next, env_done) = (
@@ -2146,7 +2155,41 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         a.mov_ri(X0, -2);
         finish(a);
     } else if os == Os::MacOs {
-        a.mov_ri(X0, -3);
+        // No `clock_gettime` system call. Wall clock: `gettimeofday` (a timeval: seconds, then microseconds as
+        // 32 bits) turned into nanoseconds. Monotonic: the virtual counter (`CNTVCT_EL0`, which user code may
+        // read) at the 24 MHz that every Apple chip runs it at, split the same way as on Windows.
+        let (mono, cbad) = (a.new_label(), a.new_label());
+        a.cbnz(X0, mono);
+        a.mov_rr(X9, X1);
+        a.mov_rr(X0, X9);
+        a.mov_ri(X1, 0);
+        a.mov_ri(X2, 0);
+        a.str(XZR, X9, 8, 8);
+        a.mov_ri(X16, 116);
+        a.svc_imm(0x80);
+        a.ldr(X10, X9, 8, 4);
+        a.mov_ri(X11, 1000);
+        a.mul(X10, X10, X11);
+        a.str(X10, X9, 8, 8);
+        a.mov_ri(X0, 0);
+        a.ret();
+        a.bind(mono);
+        a.cmp_ri(X0, 1);
+        a.b_cond(Cond::Ne, cbad);
+        a.word(0xD503_3FDF); // isb
+        a.word(0xD53B_E049); // mrs x9, cntvct_el0
+        a.mov_ri(X10, 24_000_000);
+        a.udiv(X11, X9, X10);
+        a.msub(X12, X11, X10, X9);
+        a.mov_ri(X13, 1_000_000_000);
+        a.mul(X12, X12, X13);
+        a.udiv(X12, X12, X10);
+        a.str(X11, X1, 0, 8);
+        a.str(X12, X1, 8, 8);
+        a.mov_ri(X0, 0);
+        a.ret();
+        a.bind(cbad);
+        a.mov_ri(X0, -2);
         a.ret();
     } else {
         sys(a, os, Sys::ClockGettime);

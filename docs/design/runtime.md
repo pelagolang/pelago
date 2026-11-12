@@ -139,7 +139,12 @@ In dependency order; each can be one PR.
   runtime helper (heap block from the runtime's own allocator, freed after the call) and uses `GetFileAttributesExW`,
   `DeleteFileW`, `RemoveDirectoryW`, `CreateDirectoryW` and `MoveFileExW` (replace existing). `GetLastError` 2 and 3 become
   not-found, 5 permission denied. No `FindFirstFile` yet, so `Dents` (`readDir`) is still "other" there.
-- **Not yet:** `main(args)` and `std.env` on macOS; the macOS clock; `Dents` on Windows; file-system calls on macOS;
+- **macOS clock and arguments (2026-11-12):** `dyld` calls the entry like `main(argc, argv, envp)`, so `_start` writes the
+  count one slot before `argv` and uses that as the start block (the environment follows `argv`'s zero, as on Linux); the
+  `main(args)` refusal at build time is gone. Wall clock: the `gettimeofday` system call; monotonic: the virtual counter
+  (`CNTVCT_EL0`, readable from user code) at the fixed 24 MHz of Apple chips, split into seconds and nanoseconds.
+  Checked on the macOS CI job only (nothing here runs macOS).
+- **Not yet:** `Dents` on Windows; file-system calls on macOS;
   OS threads and atomics (`concurrency-runtime.md`).
 
 ## Related work already on the board
