@@ -1,0 +1,121 @@
+/// Random numbers, from two sources that you choose between on purpose: the system's (never repeats, cannot be
+/// replayed) and a seeded `rng` (the same seed always gives the same numbers, on every target).
+///
+/// ```
+/// import std.random
+///
+/// fn main() -> void ! io_error {
+///     print(random.between(1, 6)?)         /// a die, from the system's generator
+///     var r = random.seeded(42)             /// a generator you can replay
+///     print(r.between!(1, 6), r.fraction!())
+///     var s = random.fresh()?               /// a generator seeded from the system, for many draws
+///     print(s.next!())
+/// }
+/// ```
+///
+/// The system's generator can fail (`io_error`): where the target has no such call yet (Windows today) or when the
+/// system refuses. A seeded `rng` cannot fail, so its methods return plain values. `between(lo, hi)` includes both
+/// ends and is unbiased (no remainder trick that favours small numbers). None of this is for secrets: `rng` is a
+/// small fast generator (splitmix64), not a cipher.
+
+/// A generator you can replay: the same `seeded(n)` gives the same numbers on every machine and every target.
+pub struct rng {
+    state: int
+}
+
+/// 2^63 - 1, the largest `int`.
+const top = 9223372036854775807
+
+/// Fills `words` (one to 32 `int`s) from the system's generator.
+fn fill(words: [int]) -> void ! io_error {
+    const r = rtOsRandom(rtHdrData(rtAddrOf(words)), 8 * words.len())
+    if r < 0 {
+        return err(io_error { kind: io_kind.other, message: "random numbers: not supported on this target" })
+    }
+}
+
+/// One 64-bit word from the system.
+fn word() -> int ! io_error {
+    const buf = [0]
+    fill(buf)?
+    ok(buf[0])
+}
+
+/// How many of the 2^63 values are left over after the last whole multiple of `n` (`n` is at least 1): draws
+/// above `top - extra(n)` are thrown away, so no remainder is favoured.
+fn extra(n: int) -> int = (top % n + 1) % n
+
+/// The width of `lo ..= hi`, which must fit in an `int` (less than 2^63 wide).
+fn width(lo: int, hi: int) -> int {
+    assert(lo <= hi)
+    const n = hi -% lo +% 1
+    assert(n > 0)
+    n
+}
+
+//~ A number from `lo` to `hi`, both included, from the system's generator. Stops the program when `lo` is above
+//~ `hi`, or when the range is 2^63 or more wide.
+pub fn between(lo: int, hi: int) -> int ! io_error {
+    const n = width(lo, hi)
+    const e = extra(n)
+    var x = word()? & top
+    while x > top - e { x = word()? & top }
+    ok(lo + x % n)
+}
+
+//~ A fraction: a `float` from 0 (included) up to 1 (not included), from the system's generator.
+pub fn fraction() -> float ! io_error {
+    const w = word()?
+    ok((((w >> 11) & 9007199254740991) to float) / 9007199254740992.0)
+}
+
+//~ `n` random bytes from the system's generator.
+pub fn bytes(n: int) -> [byte] ! io_error {
+    var out: [byte] = []
+    var left = n
+    while left > 0 {
+        const words = (left + 7) / 8
+        const take = words > 32 ? 32 : words
+        var buf: [int] = []
+        for k of 0..take { buf.push!(0) }
+        fill(buf)?
+        var i = 0
+        while i < take * 8 && left > 0 {
+            out.push!((buf[i / 8] >> (8 * (i % 8))).wrapToByte())
+            i += 1
+            left -= 1
+        }
+    }
+    ok(out)
+}
+
+//~ A generator that always gives the same numbers for the same `seed`.
+pub fn seeded(seed: int) -> rng = rng { state: seed }
+
+//~ A generator seeded from the system's, for many cheap draws.
+pub fn fresh() -> rng ! io_error = ok(rng { state: word()? })
+
+impl rng {
+    //~ The next 64 random bits as an `int` (any sign).
+    fn next(inout self) -> int {
+        /// splitmix64, with the constants as the `int`s the same bits make.
+        self.state = self.state +% -7046029254386353131
+        var z = self.state
+        z = (z ^ ((z >> 30) & 17179869183)) *% -4658895280553007687
+        z = (z ^ ((z >> 27) & 137438953471)) *% -7723592293110705685
+        z ^ ((z >> 31) & 8589934591)
+    }
+
+    //~ A number from `lo` to `hi`, both included. Stops the program when `lo` is above `hi`, or when the range is
+    //~ 2^63 or more wide.
+    fn between(inout self, lo: int, hi: int) -> int {
+        const n = width(lo, hi)
+        const e = extra(n)
+        var x = self.next!() & top
+        while x > top - e { x = self.next!() & top }
+        lo + x % n
+    }
+
+    //~ A fraction: a `float` from 0 (included) up to 1 (not included).
+    fn fraction(inout self) -> float = (((self.next!() >> 11) & 9007199254740991) to float) / 9007199254740992.0
+}

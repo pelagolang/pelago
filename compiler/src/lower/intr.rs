@@ -117,7 +117,7 @@ impl<'a> Lowerer<'a> {
             }
             "rtOsReserve" | "rtOsCommit" | "rtOsRelease" | "rtOsRemap" | "rtOsAdviseNohuge"
             | "rtOsWrite" | "rtOsRead" | "rtOsExit" | "rtOsArgv" | "rtOsOpen" | "rtOsClose"
-            | "rtOsClock" | "rtOsFs" | "rtOsDents" => self.intr_os(&name, args, sp),
+            | "rtOsClock" | "rtOsFs" | "rtOsDents" | "rtOsRandom" => self.intr_os(&name, args, sp),
             "rtDataWord" => {
                 // The address of the k-th word of the block the compiler keeps for the library's own
                 // state; `k` is a literal, so a bad one is a compile error, not a stop.
@@ -673,6 +673,7 @@ impl<'a> Lowerer<'a> {
             "rtOsClock" => crate::ir::OsKind::Clock,
             "rtOsFs" => crate::ir::OsKind::Fs,
             "rtOsDents" => crate::ir::OsKind::Dents,
+            "rtOsRandom" => crate::ir::OsKind::Random,
             "rtOsReserve" => crate::ir::OsKind::Reserve,
             "rtOsCommit" => crate::ir::OsKind::Commit,
             "rtOsRelease" => crate::ir::OsKind::Release,

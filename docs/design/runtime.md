@@ -118,6 +118,9 @@ In dependency order; each can be one PR.
   of its own (the in-process loader has no kernel start block), so `argv[0]` is the temporary executable's path
   natively and the source path in the interpreter.
 - **Files (2026-11-08):** `os_open(path, mode)` and `os_close(fd)` on every target, `os_read` and `os_write` on every target (all but `os_argv`), see [`input.md`](input.md).
+- **Random (2026-11-12):** `OsKind::Random` (`rtOsRandom(p, n)`, 1 to 256 bytes): `getrandom` on x86-64 and AArch64 Linux,
+  `getentropy` on macOS, the interpreter reads `/dev/urandom`; Windows answers -3 until the image imports `RtlGenRandom` from
+  advapi32 (decision R3). `std.random` is the library on top of it, with a replayable seeded generator beside the system's.
 - **Not yet:** directories, environment lookup, time, random, a status returned from `main`, `main` returning
   `void ! E`, the same on AArch64, Windows and macOS.
 
