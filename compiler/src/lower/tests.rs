@@ -1700,6 +1700,112 @@ fn native_stop_names_its_place() {
     }
 }
 
+/// The Windows command line splits by the rules Windows programs agree on (quotes group, backslashes escape a
+/// quote only, `""` inside quotes is a quote), in place, as `main(args)` reads it there.
+#[test]
+fn windows_command_lines_split() {
+    let src = r##"fn split(text: str) {
+    const n = text.len()
+    const from = rtHdrData(rtAddrOf(text))
+    const p = rtAlloc(n + 1)
+    var i = 0
+    while i < n {
+        rtStoreByte(rtOffset(p, i), rtLoadByte(rtOffset(from, i)))
+        i += 1
+    }
+    const count = rtWinSplit(p)
+    var out = "#count"
+    var s = p
+    var k = 0
+    while k < count {
+        var len = 0
+        while rtLoadByte(rtOffset(s, len)) != 0 { len += 1 }
+        out.pushStr!(" [")
+        rtStrPush(rtAddrOf(out), s, len)
+        out.pushStr!("]")
+        s = rtOffset(s, len + 1)
+        k += 1
+    }
+    print(out)
+    rtFree(p)
+}
+
+fn main() {
+    split("prog a b c")
+    split("\"C:\\Program Files\\x.exe\" \"a b\" c")
+    split("p \"abc\" d e")
+    split("p a\\\\\\b d\"e f\"g h")
+    split("p a\\\\\\\"b c d")
+    split("p a\\\\\\\\\"b c\" d e")
+    split("p a\"b\"\" c d")
+    split("p  x\t ")
+    split("p \"\" x")
+    split("solo")
+    split("p café \"世界 x\"")
+}"##;
+    assert_eq!(
+        output_of(src),
+        "4 [prog] [a] [b] [c]\n\
+         3 [C:\\Program Files\\x.exe] [a b] [c]\n\
+         4 [p] [abc] [d] [e]\n\
+         4 [p] [a\\\\\\b] [de fg] [h]\n\
+         4 [p] [a\\\"b] [c] [d]\n\
+         4 [p] [a\\\\b c] [d] [e]\n\
+         2 [p] [ab\" c d]\n\
+         2 [p] [x]\n\
+         3 [p] [] [x]\n\
+         1 [solo]\n\
+         3 [p] [caf\u{e9}] [\u{4e16}\u{754c} x]\n"
+    );
+}
+
+/// `main(args)` and `std.env` natively: the arguments arrive whole (on Windows through the command line and
+/// `rtWinSplit`, quotes and backslashes included) and the environment is readable.
+#[test]
+fn native_args_and_environment() {
+    use crate::native::{exec, gen, Arch, Os};
+    let src = "import std.env\n\nfn main(args: [string]) {\n    print(args.len())\n    for i of 1..args.len() { print(\"[#(args[i])]\") }\n    print(env.get(\"PELAGO_T\").unwrapOr(\"none\"))\n    print(env.has(\"PELAGO_UNSET_VAR\"))\n}";
+    let l = lowered(src);
+    for (arch, os) in [
+        (Arch::X86_64, Os::Linux),
+        (Arch::X86_64, Os::Windows),
+        (Arch::Aarch64, Os::Linux),
+        (Arch::Aarch64, Os::Windows),
+    ] {
+        let a64 = arch == Arch::Aarch64;
+        if (a64 && !exec::can_run_a64_on(os)) || (!a64 && !exec::can_run(os)) {
+            continue;
+        }
+        let opts = gen::Options {
+            leak_check: true,
+            target: os,
+            symbols: false,
+        };
+        let image = if a64 {
+            crate::native::gen_a64::compile(&l.module, "main", &opts).unwrap()
+        } else {
+            gen::compile(&l.module, "main", &opts).unwrap()
+        };
+        let r = exec::run_image_with(
+            arch,
+            os,
+            &image,
+            &["a b", "c\"d", "e\\", "", "caf\u{e9}"],
+            &[("PELAGO_T", "x=1")],
+        )
+        .unwrap();
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            (
+                "6\n[a b]\n[c\"d]\n[e\\]\n[]\n[caf\u{e9}]\nx=1\nfalse\n",
+                "",
+                0
+            ),
+            "{arch:?} {os:?}"
+        );
+    }
+}
+
 /// The program does the same natively as in the interpreter: same output, and the same stop (message
 /// on standard error, status 1) or a clean exit.
 fn agree(src: &str) {

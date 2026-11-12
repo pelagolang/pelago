@@ -87,7 +87,7 @@ pub const PROCESS_REFUSED: &str = "the operating system layer is not built for t
 
 /// What a program that reads its arguments cannot yet be built for on Windows.
 pub const ARGV_REFUSED: &str =
-    "`main(args)` is built for x86-64 Linux only so far (the other targets have no start block yet)";
+    "`main(args)` and `std.env` are built for x86-64 (Linux and Windows) only so far (AArch64 has no start block yet)";
 
 /// Whether the module uses `OsKind::Argv`.
 pub fn uses_argv(m: &crate::ir::Module) -> bool {

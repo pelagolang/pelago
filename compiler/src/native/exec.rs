@@ -100,6 +100,17 @@ pub fn run_image(os: Os, image: &[u8]) -> Result<Ran, String> {
 
 /// The same for an executable of the given processor.
 pub fn run_image_arch(arch: Arch, os: Os, image: &[u8]) -> Result<Ran, String> {
+    run_image_with(arch, os, image, &[], &[])
+}
+
+/// The same with command-line arguments and extra environment variables.
+pub fn run_image_with(
+    arch: Arch,
+    os: Os,
+    image: &[u8],
+    args: &[&str],
+    vars: &[(&str, &str)],
+) -> Result<Ran, String> {
     let a64 = arch == Arch::Aarch64;
     if (a64 && !can_run_a64_on(os)) || (!a64 && !can_run(os)) {
         return Err(format!(
@@ -118,7 +129,7 @@ pub fn run_image_arch(arch: Arch, os: Os, image: &[u8]) -> Result<Ran, String> {
             .map_err(|e| e.to_string())?;
     }
     let make = || {
-        if a64 && qemu_a64().is_some() {
+        let mut c = if a64 && qemu_a64().is_some() {
             let mut c = std::process::Command::new("qemu-aarch64");
             c.arg(&path);
             c
@@ -131,7 +142,12 @@ pub fn run_image_arch(arch: Arch, os: Os, image: &[u8]) -> Result<Ran, String> {
             c
         } else {
             std::process::Command::new(&path)
+        };
+        c.args(args);
+        for (k, v) in vars {
+            c.env(k, v);
         }
+        c
     };
     // "Text file busy" happens when another thread still holds the file open for writing.
     let mut tries = 0;

@@ -37,7 +37,7 @@ const STACK_WIN: i64 = 1 << 28;
 const COMMIT_WIN: i64 = 512 * 1024;
 
 /// The kernel32 functions the Windows image imports, in the order of its import table.
-pub const IMPORTS: [&str; 17] = [
+pub const IMPORTS: [&str; 20] = [
     "GetStdHandle",
     "WriteFile",
     "ExitProcess",
@@ -54,13 +54,19 @@ pub const IMPORTS: [&str; 17] = [
     "GetSystemTimePreciseAsFileTime",
     "QueryPerformanceCounter",
     "QueryPerformanceFrequency",
+    "GetCommandLineW",
+    "GetEnvironmentStringsW",
+    "WideCharToMultiByte",
     // From advapi32.dll (the last import; see `pe.rs`).
     "SystemFunction036",
 ];
 pub(super) const IMP_WALL_TIME: usize = 13;
 pub(super) const IMP_PERF_COUNTER: usize = 14;
 pub(super) const IMP_PERF_FREQUENCY: usize = 15;
-pub(super) const IMP_RTL_GEN_RANDOM: usize = 16;
+pub(super) const IMP_COMMAND_LINE: usize = 16;
+pub(super) const IMP_ENVIRONMENT: usize = 17;
+pub(super) const IMP_WIDE_CHAR: usize = 18;
+pub(super) const IMP_RTL_GEN_RANDOM: usize = 19;
 pub(super) const IMP_GET_STD_HANDLE: usize = 0;
 pub(super) const IMP_WRITE_FILE: usize = 1;
 pub(super) const IMP_EXIT_PROCESS: usize = 2;
@@ -1858,9 +1864,132 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         }
         a.bind(rt.os[7]);
         a.jmp(rt.exit);
-        // argv: there is no start block on Windows yet; programs that ask for it are refused at build time.
+        // argv: the start-up block, made on the first call and kept at offset 168 of the state. Windows gives the
+        // command line as one UTF-16 text, so the block has count -1, the command line in UTF-8 as its one text
+        // (`core`'s `rtWinSplit` splits it), a zero, then the environment's `NAME=value` texts (without the
+        // `=C:` ones that hold the current directories) and a zero. One `VirtualAlloc` holds it all: the header,
+        // room for the environment's pointers (at most one per two bytes of it), then the texts.
+        let (made, scan, env_go, env_skip, env_next, env_done) = (
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+        );
         a.bind(rt.os[8]);
-        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        state(a, RAX, 168);
+        a.load(RAX, mem(RAX, 0), 8);
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::Ne, made);
+        a.push(RBX);
+        a.push(R12);
+        a.push(R13);
+        a.push(R14);
+        a.push(R15);
+        win_call(a, IMP_COMMAND_LINE, |_| {});
+        a.mov_rr(R12, RAX, 8);
+        win_call(a, IMP_ENVIRONMENT, |_| {});
+        a.mov_rr(R13, RAX, 8);
+        // r14: the environment's length in UTF-16 units, up to and with the second zero of the two that end it.
+        a.alu_rr(Alu::Xor, R14, R14, 4);
+        a.bind(scan);
+        a.load_ext(RAX, mem_idx(R13, R14, 2, 0), 2, false, true);
+        a.alu_ri(Alu::Add, R14, 1, 8);
+        a.test_rr(RAX, RAX, 4);
+        a.jcc(Cc::Ne, scan);
+        a.load_ext(RAX, mem_idx(R13, R14, 2, 0), 2, false, true);
+        a.test_rr(RAX, RAX, 4);
+        a.jcc(Cc::Ne, scan);
+        a.alu_ri(Alu::Add, R14, 1, 8);
+        // rbx and r15: the UTF-8 sizes of the command line (with its zero) and of the environment.
+        let size_of = |a: &mut Asm, text: Reg, units: Option<Reg>| {
+            a.mov_ri(RCX, 65001); // CP_UTF8
+            a.alu_rr(Alu::Xor, RDX, RDX, 4);
+            a.mov_rr(R8, text, 8);
+            match units {
+                Some(u) => a.mov_rr(R9, u, 8),
+                None => a.mov_ri(R9, -1),
+            }
+            win_call7(a, IMP_WIDE_CHAR, |a| {
+                for at in [32, 40, 48, 56] {
+                    a.store_imm(mem(RSP, at), 0, 8);
+                }
+            });
+        };
+        size_of(a, R12, None);
+        a.mov_rr(RBX, RAX, 8);
+        size_of(a, R13, Some(R14));
+        a.mov_rr(R15, RAX, 8);
+        // rdi: where the texts start; rsi: the block. Both survive the Windows calls.
+        a.mov_rr(RDI, R15, 8);
+        a.shift_imm(Shift::Shr, RDI, 1, 8);
+        a.lea(RDI, mem(RDI, 2));
+        a.shift_imm(Shift::Shl, RDI, 3, 8);
+        a.alu_ri(Alu::Add, RDI, 24, 8);
+        a.alu_rr(Alu::Xor, RCX, RCX, 4);
+        a.lea(RDX, mem_idx(RDI, RBX, 1, 0));
+        a.alu_rr(Alu::Add, RDX, R15, 8);
+        a.mov_ri(R8, 0x3000); // commit and reserve
+        a.mov_ri(R9, 4); // read and write
+        win_call(a, IMP_VIRTUAL_ALLOC, |_| {});
+        a.mov_rr(RSI, RAX, 8);
+        a.store_imm(mem(RSI, 0), -1, 8);
+        a.lea(RAX, mem_idx(RSI, RDI, 1, 0));
+        a.store(mem(RSI, 8), RAX, 8);
+        a.store_imm(mem(RSI, 16), 0, 8);
+        // The two conversions, into the texts area.
+        let convert = |a: &mut Asm, text: Reg, units: Option<Reg>, skip: Option<Reg>, room: Reg| {
+            a.mov_ri(RCX, 65001);
+            a.alu_rr(Alu::Xor, RDX, RDX, 4);
+            a.mov_rr(R8, text, 8);
+            match units {
+                Some(u) => a.mov_rr(R9, u, 8),
+                None => a.mov_ri(R9, -1),
+            }
+            win_call7(a, IMP_WIDE_CHAR, |a| {
+                a.lea(RAX, mem_idx(RSI, RDI, 1, 0));
+                if let Some(k) = skip {
+                    a.alu_rr(Alu::Add, RAX, k, 8);
+                }
+                a.store(mem(RSP, 32), RAX, 8);
+                a.store(mem(RSP, 40), room, 8);
+                a.store_imm(mem(RSP, 48), 0, 8);
+                a.store_imm(mem(RSP, 56), 0, 8);
+            });
+        };
+        convert(a, R12, None, None, RBX);
+        convert(a, R13, Some(R14), Some(RBX), R15);
+        // The environment's pointers: rcx walks the texts, rdx is the next slot.
+        a.lea(RCX, mem_idx(RSI, RDI, 1, 0));
+        a.alu_rr(Alu::Add, RCX, RBX, 8);
+        a.lea(RDX, mem(RSI, 24));
+        a.bind(env_go);
+        a.load_ext(RAX, mem(RCX, 0), 1, false, true);
+        a.test_rr(RAX, RAX, 4);
+        a.jcc(Cc::E, env_done);
+        a.alu_ri(Alu::Cmp, RAX, 61, 4); // `=`
+        a.jcc(Cc::E, env_skip);
+        a.store(mem(RDX, 0), RCX, 8);
+        a.alu_ri(Alu::Add, RDX, 8, 8);
+        a.bind(env_skip);
+        a.bind(env_next);
+        a.load_ext(RAX, mem(RCX, 0), 1, false, true);
+        a.alu_ri(Alu::Add, RCX, 1, 8);
+        a.test_rr(RAX, RAX, 4);
+        a.jcc(Cc::Ne, env_next);
+        a.jmp(env_go);
+        a.bind(env_done);
+        a.store_imm(mem(RDX, 0), 0, 8);
+        state(a, RAX, 168);
+        a.store(mem(RAX, 0), RSI, 8);
+        a.mov_rr(RAX, RSI, 8);
+        a.pop(R15);
+        a.pop(R14);
+        a.pop(R13);
+        a.pop(R12);
+        a.pop(RBX);
+        a.bind(made);
         a.ret();
         // open(path = rdi, mode = rsi): the zero-terminated UTF-8 path is converted to UTF-16 in a block of
         // its own (never longer than twice the bytes), then `CreateFileW`: mode 0 reads an existing file, 1
