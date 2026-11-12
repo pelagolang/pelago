@@ -37,7 +37,7 @@ const STACK_WIN: i64 = 1 << 28;
 const COMMIT_WIN: i64 = 512 * 1024;
 
 /// The kernel32 functions the Windows image imports, in the order of its import table.
-pub const IMPORTS: [&str; 14] = [
+pub const IMPORTS: [&str; 17] = [
     "GetStdHandle",
     "WriteFile",
     "ExitProcess",
@@ -51,10 +51,16 @@ pub const IMPORTS: [&str; 14] = [
     "CloseHandle",
     "MultiByteToWideChar",
     "GetLastError",
+    "GetSystemTimePreciseAsFileTime",
+    "QueryPerformanceCounter",
+    "QueryPerformanceFrequency",
     // From advapi32.dll (the last import; see `pe.rs`).
     "SystemFunction036",
 ];
-pub(super) const IMP_RTL_GEN_RANDOM: usize = 13;
+pub(super) const IMP_WALL_TIME: usize = 13;
+pub(super) const IMP_PERF_COUNTER: usize = 14;
+pub(super) const IMP_PERF_FREQUENCY: usize = 15;
+pub(super) const IMP_RTL_GEN_RANDOM: usize = 16;
 pub(super) const IMP_GET_STD_HANDLE: usize = 0;
 pub(super) const IMP_WRITE_FILE: usize = 1;
 pub(super) const IMP_EXIT_PROCESS: usize = 2;
@@ -1974,9 +1980,48 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.bind(bad_close);
         a.mov_ri(RAX, -3);
         a.ret();
-        // clock: no clock call on Windows yet.
+        // clock(which = rdi, timespec = rsi): the wall clock from `GetSystemTimePreciseAsFileTime` (100 ns steps
+        // since 1601), the monotonic one from the performance counter. `rsi` and `rdi` survive the calls (the
+        // Windows convention keeps them).
+        let (mono, cbad) = (a.new_label(), a.new_label());
         a.bind(rt.os[11]);
-        a.mov_ri(RAX, -3);
+        a.test_rr(RDI, RDI, 8);
+        a.jcc(Cc::Ne, mono);
+        a.mov_rr(RCX, RSI, 8);
+        win_call(a, IMP_WALL_TIME, |_| {});
+        a.load(RAX, mem(RSI, 0), 8);
+        a.alu_rr(Alu::Xor, RDX, RDX, 4);
+        a.mov_ri(RCX, 10_000_000);
+        a.div(RCX, 8);
+        a.imul_rri(RDX, RDX, 100, 8);
+        a.mov_ri(RCX, 11_644_473_600); // seconds from 1601 to 1970
+        a.alu_rr(Alu::Sub, RAX, RCX, 8);
+        a.store(mem(RSI, 0), RAX, 8);
+        a.store(mem(RSI, 8), RDX, 8);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.ret();
+        a.bind(mono);
+        a.alu_ri(Alu::Cmp, RDI, 1, 8);
+        a.jcc(Cc::Ne, cbad);
+        a.lea(RCX, mem(RSI, 8));
+        win_call(a, IMP_PERF_FREQUENCY, |_| {});
+        a.mov_rr(RCX, RSI, 8);
+        win_call(a, IMP_PERF_COUNTER, |_| {});
+        a.load(RAX, mem(RSI, 0), 8);
+        a.load(R8, mem(RSI, 8), 8);
+        a.alu_rr(Alu::Xor, RDX, RDX, 4);
+        a.div(R8, 8);
+        a.store(mem(RSI, 0), RAX, 8);
+        // The remainder is below the frequency, so `remainder * 10^9 / frequency` is below 10^9.
+        a.mov_rr(RAX, RDX, 8);
+        a.mov_ri(RCX, 1_000_000_000);
+        a.mul(RCX, 8);
+        a.div(R8, 8);
+        a.store(mem(RSI, 8), RAX, 8);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.ret();
+        a.bind(cbad);
+        a.mov_ri(RAX, -2);
         a.ret();
         // sleep: no sleep call on Windows yet.
         a.bind(rt.os[15]);

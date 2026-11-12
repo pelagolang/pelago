@@ -100,7 +100,7 @@ In dependency order; each can be one PR.
 6. Allocator for several threads, then `concurrency-runtime.md` stages.
 7. Spans in `Stop` messages.
 
-## 9. Built so far (Linux x86-64 and the interpreter)
+## 9. Built so far
 
 - **IR:** one operation, `Os(op, operands)`, with `os_write(fd, p, n)`, `os_read(fd, p, n)`, `os_exit(code)` and
   `os_argv()` (`OsKind::Write`, `Read`, `Exit` and `Argv` in `ir/mod.rs`, next to the memory calls of `os-memory.md`, verified, printed, never removed or moved by the optimiser).
@@ -119,10 +119,16 @@ In dependency order; each can be one PR.
   natively and the source path in the interpreter.
 - **Files (2026-11-08):** `os_open(path, mode)` and `os_close(fd)` on every target, `os_read` and `os_write` on every target (all but `os_argv`), see [`input.md`](input.md).
 - **Random (2026-11-12):** `OsKind::Random` (`rtOsRandom(p, n)`, 1 to 256 bytes): `getrandom` on x86-64 and AArch64 Linux,
-  `getentropy` on macOS, the interpreter reads `/dev/urandom`; Windows answers -3 until the image imports `RtlGenRandom` from
-  advapi32 (decision R3). `std.random` is the library on top of it, with a replayable seeded generator beside the system's.
-- **Not yet:** directories, environment lookup, time, random, a status returned from `main`, `main` returning
-  `void ! E`, the same on AArch64, Windows and macOS.
+  `getentropy` on macOS, `RtlGenRandom` (`SystemFunction036`) from advapi32 on Windows (decision R3; the image's
+  second import descriptor), the interpreter reads `/dev/urandom`. `std.random` is the library on top of it, with a
+  replayable seeded generator beside the system's.
+- **Clocks (2026-11-12):** `OsKind::Clock` is `clock_gettime` on Linux; on Windows (x86-64 and ARM64) the wall clock is
+  `GetSystemTimePreciseAsFileTime` and the monotonic clock the performance counter, both from kernel32.
+- **Stop places (2026-11-12, R4):** every stop says `file:line: stopped: message` in the interpreter and on both back
+  ends. Each check that fails jumps to a small stub for its kind and line; the file names are a table read only by
+  the stop routine. Cost: 7.4% on the 42 benchmark programs, nothing for a program with no checks.
+- **Not yet:** `main(args)` and `std.env` on AArch64, Windows and macOS; the macOS clock; file-system calls
+  (`OsKind::Fs`, `Dents`) beyond x86-64 Linux; OS threads and atomics (`concurrency-runtime.md`).
 
 ## Related work already on the board
 
