@@ -176,6 +176,13 @@ for x of g { print(x) }                                              // iterator
 | C6 | Several workers: `os_thread_start`, futex park, thread register, per-worker allocator, work stealing, `par_for`/`par_map` | C5, runtime period OS layer |
 | C7 | `async` on tasks (if Q2 says yes), `select` over futures | C3, C4 |
 
+C6a (built): `OsKind::ThreadStart` (`rtThreadStart(code, arg, stackTop)`: a raw `clone` on x86-64 Linux, the child calls
+`code(arg)` on the given stack and ends its own thread), `FutexWait` (`FUTEX_WAIT_PRIVATE`, relative timeout, always
+returns 0 so callers re-check) and `FutexWake`. The interpreter has no threads (`ThreadStart` fails, a wait returns at
+once), AArch64, Windows and macOS answer -3 until their calls exist. A thread started this way must not allocate yet:
+the per-worker allocator and the thread register are C6b, the scheduler on several workers is C6c. Test:
+`compiler/core/tests/os_threads.pel` (four threads, atomic adds, futex wake).
+
 C1 to C5 touch no OS service beyond what the backend already has (mmap, exit, a clock read), so they go ahead now.
 C6 is the one that needs the OS layer in full; its `os_*` functions are written to this table and implemented in the
 runtime period, with the interpreter version making it testable in the meantime.
