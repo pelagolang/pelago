@@ -379,10 +379,24 @@ pub enum OsKind {
     AtomicAdd,
     /// `(address, new)`: store `new` at the address; gives the old value.
     AtomicSwap,
+    /// `(code, arg, stack_top)`: start an operating system thread that calls `code(arg)` on the stack that
+    /// ends at `stack_top` (16-aligned, below it the memory is the thread's), and ends itself when `code`
+    /// returns. The 8 bytes at `stack_top - 8` are the thread's word: its id from the start, 0 once it has
+    /// ended (and a `FutexWake` on it), after which the stack may be freed. Gives the thread's id, or a negative `OS_*` error (`OS_FAIL` where the target has no threads
+    /// yet, and always in the interpreter, which runs one task at a time). The new thread must not use the
+    /// allocator until it is made safe for several threads.
+    ThreadStart,
+    /// `(address, expected, nanoseconds)`: if the 4 bytes at the address still equal `expected`, sleep until a
+    /// `FutexWake` on that address, or for at most `nanoseconds` (negative: no limit). Gives 0 after a wake, a
+    /// timeout or a spurious return alike, so the caller looks at its condition again; `OS_FAIL` where the
+    /// target has no such call.
+    FutexWait,
+    /// `(address, count)`: wake at most `count` threads waiting on the address; gives how many woke.
+    FutexWake,
 }
 
 impl OsKind {
-    pub const ALL: [OsKind; 19] = [
+    pub const ALL: [OsKind; 22] = [
         OsKind::Reserve,
         OsKind::Commit,
         OsKind::Release,
@@ -402,6 +416,9 @@ impl OsKind {
         OsKind::AtomicCas,
         OsKind::AtomicAdd,
         OsKind::AtomicSwap,
+        OsKind::ThreadStart,
+        OsKind::FutexWait,
+        OsKind::FutexWake,
     ];
 
     /// Whether the call reaches the process (arguments, descriptors, exit) rather than memory.
@@ -443,6 +460,9 @@ impl OsKind {
             OsKind::AtomicCas => "os_atomic_cas",
             OsKind::AtomicAdd => "os_atomic_add",
             OsKind::AtomicSwap => "os_atomic_swap",
+            OsKind::ThreadStart => "os_thread_start",
+            OsKind::FutexWait => "os_futex_wait",
+            OsKind::FutexWake => "os_futex_wake",
         }
     }
 
@@ -459,13 +479,16 @@ impl OsKind {
             | OsKind::Random
             | OsKind::Sleep
             | OsKind::AtomicAdd
-            | OsKind::AtomicSwap => 2,
+            | OsKind::AtomicSwap
+            | OsKind::FutexWake => 2,
             OsKind::Remap
             | OsKind::Write
             | OsKind::Read
             | OsKind::Fs
             | OsKind::Dents
-            | OsKind::AtomicCas => 3,
+            | OsKind::AtomicCas
+            | OsKind::ThreadStart
+            | OsKind::FutexWait => 3,
         }
     }
 }
