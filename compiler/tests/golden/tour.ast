@@ -309,6 +309,7 @@
   (import pub (read) = std.io)
   (use std.io)
   (type id int64)
+  (type wide int128)
   (type pair (generics A B) (tuple A B))
   (struct
     (@ derive eq order hash show)
