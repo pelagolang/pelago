@@ -183,6 +183,14 @@ once), AArch64, Windows and macOS answer -3 until their calls exist. A thread st
 the per-worker allocator and the thread register are C6b, the scheduler on several workers is C6c. Test:
 `compiler/core/tests/os_threads.pel` (four threads, atomic adds, futex wake).
 
+C6b (built, thread safety only): the heap and the output buffer are shared by every thread, so `alloc`, `free`, `realloc`
+and `print` go through entry points that jump straight to the routine until the first `rtThreadStart` (a word in the
+runtime state, so programs with one thread pay a compare and a jump), and from then on hold one spin lock (`lock
+cmpxchg` plus `pause`) around the routine. One lock, not per-worker free lists: the routines are short, and splitting
+the heap is an optimisation for when a benchmark shows contention. Not covered: the heap written in the language
+(`--heap=pelago`), which is still single-threaded, and a thread that stops while holding the lock. Tests:
+`os_threads_heap.pel` (four threads allocating, filling, checking and freeing; it crashes without the lock).
+
 C1 to C5 touch no OS service beyond what the backend already has (mmap, exit, a clock read), so they go ahead now.
 C6 is the one that needs the OS layer in full; its `os_*` functions are written to this table and implemented in the
 runtime period, with the interpreter version making it testable in the meantime.
