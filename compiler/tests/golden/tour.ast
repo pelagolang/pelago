@@ -353,6 +353,10 @@
     (block (tail none)))
   (fn sized (generics (meta N int)) () -> (array int N) (block (tail (repeat 0 N))))
   (fn apply ((f : (fn (int) -> int)) (x : int)) -> int = (call f (call f x)))
+  (fn
+    bump_twice
+    ((step : (fn ((inout int)))) (inout n : int))
+    (block (call step (arg inout n)) (tail (call step (arg inout n)))))
   (fn shapes_area ((xs : (list (any shape_like)))) -> float = 0.0)
   (fn
     dense

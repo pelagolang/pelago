@@ -22,7 +22,12 @@ impl Parser<'_> {
 
     fn parse_type_inner(&mut self) -> Type {
         let ok = self.parse_type_suffixed();
-        if self.at(Punct::Bang) {
+        // `fn(int!)`: a `!` right before `,` or `)` is a mode mark, not a result type.
+        let mark_only = matches!(
+            self.peek_sig(1).kind,
+            TokenKind::Punct(Punct::Comma | Punct::RParen)
+        );
+        if self.at(Punct::Bang) && !mark_only {
             self.bump();
             let err = self.parse_type_suffixed();
             let span = ok.span.to(err.span);
@@ -214,8 +219,10 @@ impl Parser<'_> {
             self.enter_brackets();
             while !self.at(Punct::RParen) && !self.at_eof() {
                 let before = self.pos;
-                let mode = self.parse_mode();
+                let before_mode = self.parse_mode();
                 let ty = self.parse_type();
+                let after_mode = self.parse_mode_mark();
+                let mode = self.join_modes(before_mode, after_mode);
                 params.push(FnTypeParam { mode, ty });
                 if !self.eat(Punct::Comma) {
                     break;

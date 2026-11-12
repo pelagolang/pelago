@@ -1538,3 +1538,14 @@ fn braid_methods_follow_the_length_and_the_cycle() {
         "is expected",
     );
 }
+
+#[test]
+fn short_modes_in_function_types_check_like_the_words() {
+    clean("fn bump(n!: int) { n += 1 }\nfn twice(f: fn(int!), n!: int) { f(n!)\n f(n!) }\nfn t() { var x = 1\n twice(bump, x!) }");
+    clean("fn eat(s!!: string) {}\nfn t(f: fn(string!!)) { f(\"a\") }\nfn u() { t(eat) }");
+    assert!(
+        !run("fn bump(n!: int) { n += 1 }\nfn t(f: fn(int)) {}\nfn u() { t(bump) }")
+            .errors()
+            .is_empty()
+    );
+}

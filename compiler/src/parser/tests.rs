@@ -1259,3 +1259,19 @@ fn short_mode_written_twice_is_an_error() {
         .any(|m| m.contains("write the mode once")));
     assert!(errors("fn f(xs !: [int]) { }").iter().any(|_| true));
 }
+
+#[test]
+fn short_modes_in_function_types() {
+    assert_eq!(
+        one("fn f(g: fn(int!, string!!, int) -> int) { }"),
+        one("fn f(g: fn(inout int, sink string, int) -> int) { }")
+    );
+    // A result type inside a function type is still a result type.
+    assert_eq!(
+        one("fn f(g: fn(int!string) -> int!string) { }"),
+        one("fn f(g: fn(int ! string) -> int ! string) { }")
+    );
+    assert!(errors("fn f(g: fn(inout int!) ) { }")
+        .iter()
+        .any(|m| m.contains("write the mode once")));
+}

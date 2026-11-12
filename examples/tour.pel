@@ -360,6 +360,11 @@ impl<T> show for stack<T> where T: show {
 fn largest<T>(xs: [T]) -> T? where T: ordered, T: eq { none }
 fn sized<meta N: int>() -> [int; N] { [0; N] }
 fn apply(f: fn(int) -> int, x: int) -> int = f(f(x))
+/// Access modes in a function type: `T!` is `inout T`, `T!!` is `sink T`.
+fn bump_twice(step: fn(int!), n!: int) {
+    step(n!)
+    step(n!)
+}
 fn shapes_area(xs: [any shape_like]) -> float = 0.0
 fn dense(points: soa<point, 8>, grid: (int, string; 4), pair: (int, int)) { }
 /// A braid: N slots whose types alternate. The annotation makes a list a braid; `(a, b; 6)` repeats a cycle.
