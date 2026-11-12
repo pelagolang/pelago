@@ -354,7 +354,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `rdi`, `rsi`, `rdx`, the result in `rax` (an address or 0, or a negative error).
-    pub os: [Label; 19],
+    pub os: [Label; 22],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -406,7 +406,7 @@ pub fn emit_for(
         write_u64: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 19].map(|_| a.new_label()),
+        os: [(); 22].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -1817,6 +1817,80 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
     a.xchg_mem(mem(RDI, 0), RSI);
     a.mov_rr(RAX, RSI, 8);
     a.ret();
+    if !win {
+        // thread_start(code = rdi, arg = rsi, stack_top = rdx): `clone` sharing the address space, files, handlers
+        // and thread group. The top of the stack holds, from `stack_top - 8` down, the thread's word (the kernel
+        // writes its id there at once and clears it, waking a futex wait, when the thread has ended: the stack is
+        // free to go after that), a pad, the code and the argument; the child pops the argument and the code and
+        // calls `code(arg)`, then ends only its own thread (`exit`, not `exit_group`).
+        let (parent, failed) = (a.new_label(), a.new_label());
+        a.bind(rt.os[19]);
+        a.alu_ri(Alu::And, RDX, -16, 8);
+        a.store(mem(RDX, -24), RDI, 8);
+        a.store(mem(RDX, -32), RSI, 8);
+        a.lea(RSI, mem(RDX, -32));
+        a.lea(R10, mem(RDX, -8));
+        a.mov_rr(RDX, R10, 8);
+        a.mov_ri(RDI, 0x350F00); // VM, FS, FILES, SIGHAND, THREAD, SYSVSEM, PARENT_SETTID, CHILD_CLEARTID
+        a.alu_rr(Alu::Xor, R8, R8, 4);
+        a.mov_ri(RAX, 56);
+        a.syscall();
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::Ne, parent);
+        a.pop(RDI);
+        a.pop(RAX);
+        a.call_reg(RAX);
+        a.alu_rr(Alu::Xor, RDI, RDI, 4);
+        a.mov_ri(RAX, 60);
+        a.syscall();
+        a.bind(parent);
+        a.alu_ri(Alu::Cmp, RAX, 0, 8);
+        a.jcc(Cc::L, failed);
+        a.ret();
+        a.bind(failed);
+        a.mov_ri(RAX, -3);
+        a.ret();
+        // futex_wait(address = rdi, expected = rsi, nanoseconds = rdx): `futex` with `FUTEX_WAIT` and a
+        // relative timeout (none when negative). Every outcome but a failure to call is 0.
+        let (forever, go) = (a.new_label(), a.new_label());
+        a.bind(rt.os[20]);
+        a.alu_ri(Alu::Sub, RSP, 16, 8);
+        a.alu_ri(Alu::Cmp, RDX, 0, 8);
+        a.jcc(Cc::L, forever);
+        a.mov_rr(RAX, RDX, 8);
+        a.mov_ri(RCX, 1_000_000_000);
+        a.alu_rr(Alu::Xor, RDX, RDX, 4);
+        a.div(RCX, 8);
+        a.store(mem(RSP, 0), RAX, 8);
+        a.store(mem(RSP, 8), RDX, 8);
+        a.mov_rr(R10, RSP, 8);
+        a.jmp(go);
+        a.bind(forever);
+        a.alu_rr(Alu::Xor, R10, R10, 4);
+        a.bind(go);
+        a.mov_rr(RDX, RSI, 8);
+        a.mov_ri(RSI, 0); // FUTEX_WAIT (not private: the kernel wakes a thread's word that way)
+        a.alu_rr(Alu::Xor, R8, R8, 4);
+        a.alu_rr(Alu::Xor, R9, R9, 4);
+        a.mov_ri(RAX, 202);
+        a.syscall();
+        a.alu_ri(Alu::Add, RSP, 16, 8);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.ret();
+        // futex_wake(address = rdi, count = rsi): `FUTEX_WAKE`; gives how many woke.
+        a.bind(rt.os[21]);
+        a.mov_rr(RDX, RSI, 8);
+        a.mov_ri(RSI, 1); // FUTEX_WAKE
+        a.mov_ri(RAX, 202);
+        a.syscall();
+        a.ret();
+    } else {
+        for i in [19, 20, 21] {
+            a.bind(rt.os[i]);
+            a.mov_ri(RAX, -3);
+            a.ret();
+        }
+    }
     if win {
         // The handle for descriptor `rdi` in `rax`: 0, 1 and 2 are the standard handles, anything else is a
         // handle from `open`.

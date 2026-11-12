@@ -77,6 +77,17 @@ pub ext fn rtOsSleep(secs: int, nanos: int) -> int
 pub ext fn rtAtomicCas(p: ptr, expected: int, desired: int) -> int
 pub ext fn rtAtomicAdd(p: ptr, delta: int) -> int
 pub ext fn rtAtomicSwap(p: ptr, v: int) -> int
+//~ Threads and futexes (Linux x86-64; elsewhere -3, and in the interpreter `rtThreadStart` always fails because it runs
+//~ one task at a time). `rtThreadStart(code, arg, stackTop)` (the stack top as an `int`, `rtAddrInt`) starts an operating system thread that calls `code(arg)`
+//~ (`code` from `rtFnAddr` takes no parameters, so `arg` is left in `rdi` unused) on the stack that ends at
+//~ `stackTop`, and gives its id or a negative error. The thread must not allocate yet (the allocator is single threaded).
+//~ `rtFutexWait(p, expected, nanos)` sleeps while the 4 bytes at `p` equal `expected` (until a wake or `nanos`, negative:
+//~ no limit); it also returns early now and then, so look at the condition again. `rtFutexWake(p, n)` wakes up to `n`.
+//~ The thread's word is the 8 bytes at `stackTop - 8`: its id while it runs, 0 once it has ended (`rtFutexWait` on it
+//~ to join; free the stack after that).
+pub ext fn rtThreadStart(code: ptr, arg: int, stackTop: int) -> int
+pub ext fn rtFutexWait(p: ptr, expected: int, nanos: int) -> int
+pub ext fn rtFutexWake(p: ptr, n: int) -> int
 pub ext fn rtOsFs(op: int, path: ptr, aux: int) -> int
 pub ext fn rtOsDents(fd: int, buf: ptr, n: int) -> int
 //~ `rtOsRandom(p, n)` fills `n` bytes (1 to 256) at `p` from the system's random generator: 0, or a negative error

@@ -90,8 +90,8 @@ fn layout(f: &MFunc) -> Frame {
         *at += o.size as i32;
     };
     // The outgoing arguments first: they sit at `[sp]`.
-    for i in 0..f.frame.len() {
-        if f.frame[i].kind == FrameKind::Outgoing {
+    for (i, o) in f.frame.iter().enumerate() {
+        if o.kind == FrameKind::Outgoing {
             place(i, &mut at, &mut off);
         }
     }
@@ -114,8 +114,8 @@ fn layout(f: &MFunc) -> Frame {
     at = (at + 7) / 8 * 8;
     let save_at = at;
     at += 8 * saves.len() as i32;
-    for i in 0..f.frame.len() {
-        if !matches!(f.frame[i].kind, FrameKind::Outgoing | FrameKind::Incoming) {
+    for (i, o) in f.frame.iter().enumerate() {
+        if !matches!(o.kind, FrameKind::Outgoing | FrameKind::Incoming) {
             place(i, &mut at, &mut off);
         }
     }
@@ -777,7 +777,7 @@ impl Em<'_, '_> {
                     op::RT_REALLOC => rt.realloc,
                     op::RT_CTX_INIT => rt.ctx_init,
                     op::RT_CTX_SWITCH => rt.ctx_switch,
-                    k if (op::RT_OS..op::RT_OS + 19).contains(&k) => {
+                    k if (op::RT_OS..op::RT_OS + 22).contains(&k) => {
                         rt.os[(k - op::RT_OS) as usize]
                     }
                     op::RT_MEMCPY => rt.memcpy,
