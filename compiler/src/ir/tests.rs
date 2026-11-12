@@ -326,7 +326,10 @@ fn memory_and_casts() {
 fn stop_and_unreachable_end_blocks() {
     let mut f = Func::new("f", &[], IrTy::Void);
     let e = f.entry();
-    f.terminate(e, Term::Stop("index out of range".to_string()));
+    f.terminate(
+        e,
+        Term::Stop("index out of range".to_string(), Span::default()),
+    );
     assert_eq!(verify_func(&f), Vec::<String>::new());
     assert!(print_func(&f, None).contains("stop \"index out of range\""));
 }

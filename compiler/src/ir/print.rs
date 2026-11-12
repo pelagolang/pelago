@@ -72,7 +72,7 @@ fn term_text(t: &Term) -> String {
         Term::Branch(c, a, b) => format!("branch {}, {}, {}", v(*c), target(a), target(b)),
         Term::Return(Some(x)) => format!("return {}", v(*x)),
         Term::Return(None) => "return".to_string(),
-        Term::Stop(msg) => format!("stop {msg:?}"),
+        Term::Stop(msg, _) => format!("stop {msg:?}"),
         Term::Unreachable => "unreachable".to_string(),
     }
 }

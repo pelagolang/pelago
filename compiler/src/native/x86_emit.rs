@@ -13,8 +13,18 @@ use super::rt::Runtime;
 use super::x86::{self, Alu, Asm, Cc, Fp, Label, Sect, Shift, Sse, VAlu};
 use super::x86_mir::{cc_of, op, SYM_DIV0, SYM_FUNC, SYM_OVERFLOW, SYM_SHIFT};
 
+/// The stubs that say where a check stopped: one per stop routine and location (a line), shared by every check
+/// of that kind on that line, in every function. Each is `mov edx, location` then a jump to the routine's
+/// `_at` entry (made by the generator once all functions are emitted).
+#[derive(Default)]
+pub struct Traps {
+    pub at: std::collections::HashMap<(u32, u32), Label>,
+    pub order: Vec<(u32, u32, Label)>,
+}
+
 /// What the emitter takes from the generator.
 pub struct Env<'a> {
+    pub traps: &'a mut Traps,
     pub a: &'a mut Asm,
     pub ro: &'a mut Blob,
     pub funcs: &'a [Label],
@@ -175,6 +185,21 @@ impl Em<'_, '_> {
             Operand::Block(b) => self.labels[*b as usize],
             o => panic!("a block was expected: {o:?}"),
         }
+    }
+
+    /// Where a check of kind `sym` (a `SYM_*` number) jumps when it fails: the shared routine, or the stub for
+    /// its place when the instruction knows one.
+    fn trap(&mut self, sym: u32, loc: u32) -> Label {
+        if loc == 0 {
+            return self.env.stops[sym as usize];
+        }
+        if let Some(l) = self.env.traps.at.get(&(sym, loc)) {
+            return *l;
+        }
+        let l = self.env.a.new_label();
+        self.env.traps.at.insert((sym, loc), l);
+        self.env.traps.order.push((sym, loc, l));
+        l
     }
 
     fn stop_label(&self, o: &Operand) -> Label {
@@ -529,12 +554,12 @@ impl Em<'_, '_> {
                 }
                 self.env.a.guard_jump(start, 6);
                 let cc = if kind <= op::CHK_MUL_S { Cc::O } else { Cc::B };
-                let l = self.env.stops[SYM_OVERFLOW as usize];
+                let l = self.trap(SYM_OVERFLOW, i.loc);
                 self.ov_jump(cc, l, &ops[3..]);
             }
             op::MULU_CHK => {
                 self.env.a.mul(gpr(phys(&ops[2])), 8);
-                let l = self.env.stops[SYM_OVERFLOW as usize];
+                let l = self.trap(SYM_OVERFLOW, i.loc);
                 self.ov_jump(Cc::B, l, &ops[3..]);
             }
             op::DIV => {
@@ -546,7 +571,7 @@ impl Em<'_, '_> {
                     kind & op::DIV_WIDE != 0,
                 );
                 self.env.a.test_rr(s, s, 8);
-                let z = self.env.stops[SYM_DIV0 as usize];
+                let z = self.trap(SYM_DIV0, i.loc);
                 self.env.a.jcc(Cc::E, z);
                 if signed {
                     let (normal, done) = (self.env.a.new_label(), self.env.a.new_label());
@@ -583,7 +608,7 @@ impl Em<'_, '_> {
                 let w = imm(&ops[3]) as i32;
                 if w != 0 {
                     self.env.a.alu_ri(Alu::Cmp, x86::RCX, w, 8);
-                    let l = self.env.stops[SYM_SHIFT as usize];
+                    let l = self.trap(SYM_SHIFT, i.loc);
                     self.env.a.jcc(Cc::Ae, l);
                 }
                 let sh = match imm(&ops[2]) {
@@ -625,8 +650,17 @@ impl Em<'_, '_> {
                 let off = self.env.ro.add(msg.as_bytes(), 1);
                 self.env.a.lea_sect(x86::RDI, Sect::Rodata, off);
                 self.env.a.mov_ri(x86::RSI, msg.len() as i64);
-                let stop = self.env.rt.stop;
-                self.env.a.call(stop);
+                match ops.get(1) {
+                    Some(Operand::Imm(at)) if *at != 0 => {
+                        self.env.a.mov_ri(x86::RDX, *at);
+                        let stop = self.env.rt.stop_at;
+                        self.env.a.call(stop);
+                    }
+                    _ => {
+                        let stop = self.env.rt.stop;
+                        self.env.a.call(stop);
+                    }
+                }
             }
             op::JMPSYM => {
                 let l = self.stop_label(&ops[0]);

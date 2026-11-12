@@ -601,7 +601,7 @@ impl<'a> Lowerer<'a> {
     }
 
     fn stop_with(&mut self, msg: &str) -> Res {
-        self.terminate(Term::Stop(msg.to_string()));
+        self.terminate(Term::Stop(msg.to_string(), self.f.loc));
         Res::Never
     }
 

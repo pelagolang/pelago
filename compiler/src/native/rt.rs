@@ -305,6 +305,9 @@ pub struct Runtime {
     pub write_fd: Label,
     /// `rtPrint(ptr = rsi, len = rdx)`: appends to the output buffer; clobbers the argument registers.
     pub print: Label,
+    /// `rtStopAt(ptr = rdi, len = rsi, location = rdx)`: `rtStop` that also says where (a location, `Span::at`: the
+    /// file number over the line; 0 for nowhere): `file:line: stopped: <message>`.
+    pub stop_at: Label,
     /// `rtStop(ptr = rdi, len = rsi)`: prints `stopped: <message>` to standard error and exits with status 1.
     pub stop: Label,
     /// `rtAlloc(size = rdi) -> rax`: zeroed memory, 16-byte aligned; never fails (stops when out of memory).
@@ -344,7 +347,7 @@ pub fn emit(
     leak_check: bool,
     target: Os,
 ) -> Runtime {
-    emit_for(a, ro, data, main, leak_check, target, Uses::ALL)
+    emit_for(a, ro, data, main, leak_check, target, Uses::ALL, &[])
 }
 
 /// Like [`emit`], with only the routines `uses` names (the labels of the others are never bound, so
@@ -357,6 +360,7 @@ pub fn emit_for(
     leak_check: bool,
     target: Os,
     uses: Uses,
+    files: &[String],
 ) -> Runtime {
     let win = target == Os::Windows;
     // `realloc` allocates and frees.
@@ -368,6 +372,7 @@ pub fn emit_for(
         write_fd: a.new_label(),
         print: a.new_label(),
         stop: a.new_label(),
+        stop_at: a.new_label(),
         alloc: a.new_label(),
         free: a.new_label(),
         realloc: a.new_label(),
@@ -380,6 +385,20 @@ pub fn emit_for(
     let flush = a.new_label();
     let fault = a.new_label();
     let msg_stopped = ro.add(b"stopped: ", 1);
+    // The names of the files that a stop can name, one length byte and the name each, in file-number order (an
+    // empty name for a file no stop names).
+    let files_at = if files.iter().any(|f| !f.is_empty()) {
+        let mut table = Vec::new();
+        for f in files {
+            let n = f.len().min(255);
+            table.push(n as u8);
+            table.extend_from_slice(&f.as_bytes()[..n]);
+        }
+        Some(ro.add(&table, 1))
+    } else {
+        None
+    };
+    let (msg_colon, msg_colsp) = (ro.add(b":", 1), ro.add(b": ", 1));
     let msg_overflow = ro.add(b"stack overflow", 1);
     let msg_invalid = ro.add(b"invalid memory access", 1);
     let msg_nl = ro.add(b"\n", 1);
@@ -746,7 +765,7 @@ pub fn emit_for(
         a.ret();
     }
 
-    if leak_check || uses.write_u64 {
+    if leak_check || uses.write_u64 || files_at.is_some() {
         // ---- rtWriteU64 ------------------------------------------------------------------------------
         a.bind(rt.write_u64);
         a.push(RBX);
@@ -774,10 +793,47 @@ pub fn emit_for(
 
     // ---- rtStop -----------------------------------------------------------------------------------
     a.bind(rt.stop);
+    a.alu_rr(Alu::Xor, RDX, RDX, 4);
+    a.bind(rt.stop_at);
     a.mov_rr(R12, RDI, 8);
     a.mov_rr(R13, RSI, 8);
+    a.mov_rr(R14, RDX, 8);
     if uses.print {
         a.call(flush); // what the program printed comes first
+    }
+    if let Some(files_at) = files_at {
+        // `file:line: ` first, when the stop knows where it happened: the file's name is the `rax`-th entry of
+        // the table (a length byte, then the name), the line is the low 20 bits of the location.
+        let (skip, scan, found) = (a.new_label(), a.new_label(), a.new_label());
+        a.test_rr(R14, R14, 8);
+        a.jcc(Cc::E, skip);
+        a.mov_rr(RAX, R14, 8);
+        a.shift_imm(Shift::Shr, RAX, 20, 8);
+        a.lea_sect(RSI, Sect::Rodata, files_at);
+        a.bind(scan);
+        a.alu_ri(Alu::Sub, RAX, 1, 8);
+        a.jcc(Cc::E, found);
+        a.load_ext(RCX, mem(RSI, 0), 1, false, true);
+        a.lea(RSI, mem_idx(RSI, RCX, 1, 1));
+        a.jmp(scan);
+        a.bind(found);
+        a.load_ext(RDX, mem(RSI, 0), 1, false, true);
+        a.alu_ri(Alu::Add, RSI, 1, 8);
+        a.mov_ri(RDI, 2);
+        a.call(rt.write_fd);
+        a.mov_ri(RDI, 2);
+        a.lea_sect(RSI, Sect::Rodata, msg_colon);
+        a.mov_ri(RDX, 1);
+        a.call(rt.write_fd);
+        a.mov_ri(RDI, 2);
+        a.mov_rr(RSI, R14, 8);
+        a.alu_ri(Alu::And, RSI, 0xF_FFFF, 8);
+        a.call(rt.write_u64);
+        a.mov_ri(RDI, 2);
+        a.lea_sect(RSI, Sect::Rodata, msg_colsp);
+        a.mov_ri(RDX, 2);
+        a.call(rt.write_fd);
+        a.bind(skip);
     }
     a.mov_ri(RDI, 2);
     a.lea_sect(RSI, Sect::Rodata, msg_stopped);

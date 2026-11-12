@@ -1694,11 +1694,19 @@ fn agree(src: &str) {
         );
         match &o.result {
             Ok(_) => assert_eq!((r.err.as_str(), r.code), ("", 0), "{what} {os:?}: {src}"),
-            Err(msg) => assert_eq!(
-                (r.err.as_str(), r.code),
-                (format!("stopped: {msg}\n").as_str(), 1),
-                "{what} {os:?}: {src}"
-            ),
+            Err(msg) => {
+                // The native stop names a place (`file:line: `); the message after it must agree.
+                let said = r
+                    .err
+                    .rsplit_once(": stopped: ")
+                    .map_or(r.err.as_str(), |(_, m)| m);
+                let said = said.strip_prefix("stopped: ").unwrap_or(said);
+                assert_eq!(
+                    (said, r.code),
+                    (format!("{msg}\n").as_str(), 1),
+                    "{what} {os:?}: {src}"
+                )
+            }
         }
     }
     for (what, m) in [("plain", &l.module), ("optimised", &optimised)] {

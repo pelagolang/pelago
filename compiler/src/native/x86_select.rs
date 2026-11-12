@@ -122,6 +122,8 @@ struct Sel<'m> {
     vreg: Vec<Option<Reg>>,
     slot_frame: HashMap<usize, FrameId>,
     cur: u32,
+    /// The location of the instruction being selected: every machine instruction it makes carries it.
+    cur_loc: u32,
     out_area: Option<FrameId>,
     out_size: u32,
     /// Comparisons whose only readers are selects in their own block: each select compares again.
@@ -185,6 +187,7 @@ pub fn select(f: &Func) -> Option<MFunc> {
         vreg: vec![None; f.values.len()],
         slot_frame: HashMap::new(),
         cur: 0,
+        cur_loc: 0,
         out_area: None,
         out_size: 0,
         deferred: HashMap::new(),
@@ -197,7 +200,10 @@ pub fn select(f: &Func) -> Option<MFunc> {
 }
 
 impl<'m> Sel<'m> {
-    fn emit(&mut self, i: MInst) {
+    fn emit(&mut self, mut i: MInst) {
+        if i.loc == 0 {
+            i.loc = self.cur_loc;
+        }
         let b = self.cur as usize;
         self.mf.blocks[b].insts.push(i);
     }
@@ -663,10 +669,16 @@ impl<'m> Sel<'m> {
                     );
                 }
             }
-            Term::Stop(msg) => {
+            Term::Stop(msg, at) => {
                 self.mf.strings.push(msg.clone());
                 let n = self.mf.strings.len() as i64 - 1;
-                self.emit(MInst::new(op::STOP, vec![Operand::Imm(n)]).nofall());
+                self.emit(
+                    MInst::new(
+                        op::STOP,
+                        vec![Operand::Imm(n), Operand::Imm(i64::from(at.start))],
+                    )
+                    .nofall(),
+                );
             }
             Term::Unreachable => {
                 self.emit(MInst::new(op::JMPSYM, vec![Operand::Sym(x::SYM_UNREACHABLE)]).nofall())
@@ -761,6 +773,7 @@ impl<'m> Sel<'m> {
     fn inst(&mut self, id: usize, bi: usize) {
         let f = self.f;
         let inst = &f.insts[id];
+        self.cur_loc = inst.span.start;
         let _ = bi;
         let res = inst.result;
         // A folded pointer or index is never computed (a `Slot` still clears its memory).

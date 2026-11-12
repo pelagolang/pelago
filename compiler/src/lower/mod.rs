@@ -175,6 +175,9 @@ pub(crate) struct Lowerer<'a> {
     pub meta_stack: Vec<(ModuleId, u32, u32)>,
     /// `@meta_limit(n)`: the item it is written on, and the step budget.
     pub meta_limits: Vec<(ModuleId, Span, u64)>,
+    /// The number each source file has in `Module::files` (locations name files by it), and each file's lines.
+    pub file_nums: HashMap<ModuleId, u32>,
+    pub line_idx: HashMap<ModuleId, crate::span::LineIndex>,
 }
 
 pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
@@ -223,6 +226,8 @@ pub fn lower_with(
         meta_cache: HashMap::new(),
         meta_stack: Vec::new(),
         meta_limits: Vec::new(),
+        file_nums: HashMap::new(),
+        line_idx: HashMap::new(),
     };
     lw.index();
     // Roots: every function of the program that needs no type arguments.
@@ -698,7 +703,10 @@ impl<'a> Lowerer<'a> {
         let name = self.unique_name(base);
         let mut func = Func::new(&name, &sig.ir_params, sig.ir_ret);
         let e = func.entry();
-        func.terminate(e, Term::Stop("not lowered yet".to_string()));
+        func.terminate(
+            e,
+            Term::Stop("not lowered yet".to_string(), Span::default()),
+        );
         let id = self.module.add(func);
         self.instances.insert(key, id);
         self.jobs.push(Job::Fn {

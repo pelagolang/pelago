@@ -516,8 +516,9 @@ pub enum Term {
     Jump(Target),
     Branch(Value, Target, Target),
     Return(Option<Value>),
-    /// Stop the program with a message (a bug was found: overflow, bounds, `panic`).
-    Stop(String),
+    /// Stop the program with a message (a bug was found: overflow, bounds, `panic`), and where in the source
+    /// (a location, see `Span::at`; the default span says nowhere).
+    Stop(String, Span),
     Unreachable,
 }
 
@@ -568,6 +569,9 @@ pub struct Module {
     pub data: Vec<Vec<u8>>,
     /// The number of the zeroed data block that holds the words of `rtDataWord`, once a function asks.
     pub words: Option<u32>,
+    /// The source files that locations (`Span::at`) name: file number `n` is `files[n - 1]`, written as a
+    /// diagnostic writes it (`core.rt`, `main`).
+    pub files: Vec<String>,
 }
 
 /// The words `rtDataWord` can name: the library keeps its own state there (the heap's chunk lists).

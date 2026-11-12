@@ -43,7 +43,10 @@ impl<'a> Lowerer<'a> {
         let name = self.unique_name(format!("{label}<{}>", self.show_ty(ty)));
         let mut func = Func::new(&name, &params, ret);
         let e = func.entry();
-        func.terminate(e, Term::Stop("not lowered yet".to_string()));
+        func.terminate(
+            e,
+            Term::Stop("not lowered yet".to_string(), Span::default()),
+        );
         let id = self.module.add(func);
         self.glue.insert((kind, ty), Some(id));
         self.jobs.push(Job::Glue { id, kind, ty });
@@ -600,7 +603,10 @@ impl<'a> Lowerer<'a> {
         let sp = Span::new(0, 0);
         let Some((m, map)) = self.find_impl_method(ty, "clone") else {
             // Only reachable through a `copy` the checker would have rejected.
-            self.terminate(Term::Stop("this object has no `clone`".to_string()));
+            self.terminate(Term::Stop(
+                "this object has no `clone`".to_string(),
+                Span::default(),
+            ));
             self.f.cur = Some(self.f.func.entry());
             return;
         };

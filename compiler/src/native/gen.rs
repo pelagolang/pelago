@@ -102,6 +102,7 @@ pub fn compile(m: &Module, entry: &str, opts: &Options) -> Result<Vec<u8>, Strin
         opts.leak_check,
         opts.target,
         super::Uses::of(m),
+        &used_files(m),
     );
     g.rt = Some(rt);
     let bss = g.place_data(opts.target == Os::Linux);
@@ -151,6 +152,9 @@ struct Gen<'m> {
     stop_shift: Label,
     stop_overflow: Label,
     stop_unreachable: Label,
+    /// The entries of those routines that take the place in `rdx`, by `SYM_*` number.
+    stop_at: [Label; 4],
+    traps: super::x86_emit::Traps,
 }
 
 impl<'m> Gen<'m> {
@@ -159,6 +163,7 @@ impl<'m> Gen<'m> {
         a.pad_jumps = true;
         let funcs = m.funcs.iter().map(|_| a.new_label()).collect();
         let (d, s, o, u) = (a.new_label(), a.new_label(), a.new_label(), a.new_label());
+        let stop_at = [(); 4].map(|_| a.new_label());
         Gen {
             m,
             a,
@@ -171,6 +176,8 @@ impl<'m> Gen<'m> {
             stop_shift: s,
             stop_overflow: o,
             stop_unreachable: u,
+            stop_at,
+            traps: Default::default(),
         }
     }
 
@@ -187,21 +194,39 @@ impl<'m> Gen<'m> {
 
     /// The shared exits for the checks that stop the program.
     fn stop_stubs(&mut self) {
+        // The stubs that say where first: each loads its place and joins the shared routine at its `_at` entry.
+        let places = std::mem::take(&mut self.traps.order);
+        for (sym, loc, label) in places {
+            self.a.bind(label);
+            self.a.mov_ri(RDX, i64::from(loc));
+            let at = self.stop_at[sym as usize];
+            self.a.jmp(at);
+        }
         // Only reached by `jcc`; a stub that no check names is left out, with its message.
-        for (label, msg) in [
+        for (i, (label, msg)) in [
             (self.stop_div0, "division by zero"),
             (self.stop_shift, "shifted by the width or more"),
             (self.stop_overflow, "arithmetic overflow"),
             (self.stop_unreachable, "reached unreachable code"),
-        ] {
-            if !self.a.is_referenced(label) {
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let at = self.stop_at[i];
+            let by_place = self.a.is_referenced(at);
+            if !self.a.is_referenced(label) && !by_place {
                 continue;
             }
             let off = self.ro.add(msg.as_bytes(), 1);
-            self.a.bind(label);
+            if self.a.is_referenced(label) {
+                // A check with no place: the place is none.
+                self.a.bind(label);
+                self.a.alu_rr(Alu::Xor, RDX, RDX, 4);
+            }
+            self.a.bind(at);
             self.a.lea_sect(RDI, Sect::Rodata, off);
             self.a.mov_ri(RSI, msg.len() as i64);
-            let stop = self.rt().stop;
+            let stop = self.rt().stop_at;
             self.a.call(stop);
         }
     }
@@ -266,7 +291,53 @@ impl<'m> Gen<'m> {
                 self.stop_unreachable,
             ],
             rt: self.rt.as_ref().expect("the runtime is emitted first"),
+            traps: &mut self.traps,
         };
         super::x86_emit::emit(&mut env, &mf, label);
     }
+}
+
+/// The names of the source files that a stop of the module can name, in file-number order; an empty name for a
+/// file none of them names (the runtime keeps no text for it).
+pub(super) fn used_files(m: &Module) -> Vec<String> {
+    use crate::ir::{BinOp, Op, Term};
+    let mut used = vec![false; m.files.len()];
+    let mut mark = |loc: crate::span::Span| {
+        if let Some((f, _)) = loc.place() {
+            if let Some(u) = used.get_mut(f as usize - 1) {
+                *u = true;
+            }
+        }
+    };
+    for f in &m.funcs {
+        for i in &f.insts {
+            let traps = match &i.op {
+                Op::Checked(..) | Op::CheckedIf(..) => true,
+                Op::Bin(o, ..) => matches!(
+                    o,
+                    BinOp::Div
+                        | BinOp::Rem
+                        | BinOp::UDiv
+                        | BinOp::URem
+                        | BinOp::Shl
+                        | BinOp::Shr
+                        | BinOp::UShr
+                ),
+                _ => false,
+            };
+            if traps {
+                mark(i.span);
+            }
+        }
+        for b in &f.blocks {
+            if let Some(Term::Stop(_, at)) = &b.term {
+                mark(*at);
+            }
+        }
+    }
+    m.files
+        .iter()
+        .zip(used)
+        .map(|(n, u)| if u { n.clone() } else { String::new() })
+        .collect()
 }

@@ -141,7 +141,7 @@ fn is_stop(f: &Func, b: BlockId, msg: Option<&str>) -> bool {
     blk.insts.is_empty()
         && blk.params.is_empty()
         && match &blk.term {
-            Some(Term::Stop(m)) => msg.is_none_or(|x| x == m),
+            Some(Term::Stop(m, _)) => msg.is_none_or(|x| x == m),
             _ => false,
         }
 }

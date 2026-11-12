@@ -532,7 +532,10 @@ fn ir_or_run(
             eprintln!("steps: {}", out.steps);
         }
         if let Err(e) = out.result {
-            eprintln!("stopped: {e}");
+            match &out.stop_at {
+                Some((file, line)) => eprintln!("{file}:{line}: stopped: {e}"),
+                None => eprintln!("stopped: {e}"),
+            }
             std::process::exit(1);
         }
         if out.leaked > 0 {

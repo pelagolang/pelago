@@ -81,6 +81,16 @@ impl<'a> Lowerer<'a> {
         if self.f.cur.is_none() || self.failed() {
             return Res::Never;
         }
+        // What stops inside this expression says where it is; the outer expression's place comes back after.
+        let saved = self.f.loc;
+        self.f.loc = self.loc_of(e.span);
+        let r = self.expr_kind(e);
+        self.f.loc = saved;
+        r
+    }
+
+    #[inline(never)]
+    fn expr_kind(&mut self, e: &'a Expr) -> Res {
         match &e.kind {
             ExprKind::Int => self.int_literal(e),
             ExprKind::Float => {

@@ -191,6 +191,8 @@ pub struct MInst {
     /// a call leaves undefined, or the registers a macro uses inside itself. The allocator keeps
     /// reloads out of them and, for a call, splits the values that live across it.
     pub clobbers: RegSet,
+    /// Where in the source this came from (a location, `Span::at`; 0 for nowhere): what a check that stops says.
+    pub loc: u32,
 }
 
 impl MInst {
@@ -200,6 +202,7 @@ impl MInst {
             ops,
             flags: IFlags::default(),
             clobbers: RegSet::default(),
+            loc: 0,
         }
     }
 
