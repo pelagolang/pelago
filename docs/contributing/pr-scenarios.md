@@ -92,7 +92,7 @@ Branch `dennis/feat/for-step`, title `feat(parser): add step to for ranges`.
 > ## Evidence
 > - Parser test `for_step`, checker test `step_must_be_integer`, run test `for_step_counts`.
 > - `BLESS=1 cargo test` rewrote `tour.ast`; diff reviewed, one line added.
-> - `cargo run -- check examples` clean.
+> - `cargo run -- check examples/programs` clean (`examples/tour.pel` is a syntax sampler that only has to lex, parse and format).
 >
 > ## Language and docs in step
 > - [x] `docs/design/basics.md` and the `ROADMAP.md` decisions table updated in this PR
