@@ -58,6 +58,8 @@ Exact sizes for when you care about memory:
 | `int128` | `uint128` | about -1.7e38 to 1.7e38 |
 | `int256` | `uint256` | about -5.8e76 to 5.8e76 |
 
+Decimals: `float32`, `float64`, and the software formats `float16` (about 3 digits), `float128` (about 34 digits) and `float256` (about 71 digits); see [soft-floats.md](soft-floats.md).
+
 and `float32`, `float64` for decimals. The 128 and 256 bit types have the same operators and the same overflow
 stops as the others ([wide-integers.md](wide-integers.md)).
 

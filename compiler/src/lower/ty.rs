@@ -86,6 +86,11 @@ impl<'a> Lowerer<'a> {
                 align: 8,
             }),
             TyKind::Int(k) => Repr::Scalar(IrTy::Int(k.bits() as u8)),
+            // Floats without machine instructions are memory values done in software (`softf.rs`).
+            TyKind::Float(k) if k.soft() => Repr::Mem(Layout {
+                size: k.bytes(),
+                align: k.bytes().min(8),
+            }),
             TyKind::Float(FloatKind::F32) => Repr::Scalar(IrTy::F32),
             TyKind::Float(FloatKind::F64) => Repr::Scalar(IrTy::F64),
             TyKind::Bool => Repr::Scalar(IrTy::Bool),
@@ -124,6 +129,10 @@ impl<'a> Lowerer<'a> {
             TyKind::Int(k) if k.words() > 0 => Layout {
                 size: k.bits() / 8,
                 align: 8,
+            },
+            TyKind::Float(k) if k.soft() => Layout {
+                size: k.bytes(),
+                align: k.bytes().min(8),
             },
             TyKind::Int(_)
             | TyKind::Float(_)
