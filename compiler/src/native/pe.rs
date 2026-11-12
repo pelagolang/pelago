@@ -1,5 +1,5 @@
 //! Writes a Windows executable (PE32+, console subsystem) for x86-64 or ARM64 that imports a few
-//! functions from `kernel32.dll` and nothing else.
+//! functions from `kernel32.dll` and `SystemFunction036` (`RtlGenRandom`) from `advapi32.dll`.
 //!
 //! Layout (file alignment 0x200, section alignment 0x1000, image base 0x1_4000_0000, no relocations:
 //! the image does not ask for address randomisation):
@@ -21,13 +21,25 @@ const SECT_ALIGN: u64 = 0x1000;
 const FILE_ALIGN: u64 = 0x200;
 const HEADERS: u64 = 0x200;
 
-/// Offset of the first import address table slot inside `.idata`: two import descriptors (one real,
-/// one null), then the lookup table of `IMPORTS.len() + 1` entries, then the address table.
-const DESCRIPTORS: u32 = 40;
+/// The imports from `kernel32.dll` come first; the last one, `RtlGenRandom`, is from `advapi32.dll`.
+const KERNEL: usize = IMPORTS.len() - 1;
+
+/// Offset of the first descriptor's lookup table inside `.idata`: three import descriptors (two real,
+/// one null), then the two lookup tables, then the two address tables.
+const DESCRIPTORS: u32 = 60;
+
+/// Offset of the first import address table slot: after both lookup tables.
+const fn iat_base() -> u32 {
+    DESCRIPTORS + 8 * (KERNEL as u32 + 1) + 8 * 2
+}
 
 /// Offset of the n-th import's address slot in `.idata`; the code calls through it.
 pub const fn iat_slot(n: usize) -> u32 {
-    DESCRIPTORS + 8 * (IMPORTS.len() as u32 + 1) + 8 * n as u32
+    if n < KERNEL {
+        iat_base() + 8 * n as u32
+    } else {
+        iat_base() + 8 * (KERNEL as u32 + 1) + 8 * (n - KERNEL) as u32
+    }
 }
 
 fn align_up(v: u64, a: u64) -> u64 {
@@ -58,11 +70,12 @@ impl W {
 
 /// The `.idata` section placed at relative address `rva`.
 fn idata(rva: u32) -> Vec<u8> {
-    let table = DESCRIPTORS;
-    let lookup = table;
-    let iat = iat_slot(0);
-    let names_at = iat + 8 * (IMPORTS.len() as u32 + 1);
-    // Names: one hint/name record per function, then the library name.
+    let lookup_k = DESCRIPTORS;
+    let lookup_a = lookup_k + 8 * (KERNEL as u32 + 1);
+    let iat_k = iat_slot(0);
+    let iat_a = iat_slot(KERNEL);
+    let names_at = iat_a + 8 * 2;
+    // Names: one hint/name record per function, then the library names.
     let mut names: Vec<u8> = Vec::new();
     let mut name_rvas: Vec<u32> = Vec::new();
     for n in IMPORTS {
@@ -74,24 +87,30 @@ fn idata(rva: u32) -> Vec<u8> {
         names.extend_from_slice(n.as_bytes());
         names.push(0);
     }
-    let dll_rva = rva + names_at + names.len() as u32;
+    let kernel_rva = rva + names_at + names.len() as u32;
     names.extend_from_slice(b"KERNEL32.dll\0");
+    let advapi_rva = rva + names_at + names.len() as u32;
+    names.extend_from_slice(b"ADVAPI32.dll\0");
 
     let mut w = W(Vec::new());
     // Import descriptor: lookup table, time stamp, forwarder chain, library name, address table.
-    w.u32(rva + lookup);
-    w.u32(0);
-    w.u32(0);
-    w.u32(dll_rva);
-    w.u32(rva + iat);
+    for (lookup, dll, iat) in [(lookup_k, kernel_rva, iat_k), (lookup_a, advapi_rva, iat_a)] {
+        w.u32(rva + lookup);
+        w.u32(0);
+        w.u32(0);
+        w.u32(dll);
+        w.u32(rva + iat);
+    }
     w.0.extend_from_slice(&[0; 20]); // the null descriptor
     debug_assert_eq!(w.0.len() as u32, DESCRIPTORS);
-    // Lookup table and address table start out the same: the loader overwrites the second.
+    // Lookup tables, then address tables, which start out the same: the loader overwrites the second.
     for _ in 0..2 {
-        for r in &name_rvas {
-            w.u64(*r as u64);
+        for part in [&name_rvas[..KERNEL], &name_rvas[KERNEL..]] {
+            for r in part {
+                w.u64(*r as u64);
+            }
+            w.u64(0);
         }
-        w.u64(0);
     }
     w.0.extend_from_slice(&names);
     w.0
@@ -239,7 +258,7 @@ fn write_with(
             }
             12 => {
                 w.u32((id_rva) as u32 + iat_slot(0));
-                w.u32(8 * (IMPORTS.len() as u32 + 1));
+                w.u32(8 * (IMPORTS.len() as u32 + 2));
             }
             _ => {
                 w.u32(0);

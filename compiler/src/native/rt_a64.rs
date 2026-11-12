@@ -22,9 +22,9 @@ use super::a64::*;
 use super::elf::Blob;
 use super::rt::{
     IMP_ADD_VEH, IMP_CLOSE_HANDLE, IMP_CREATE_FILE, IMP_EXIT_PROCESS, IMP_GET_CONSOLE_MODE,
-    IMP_GET_LAST_ERROR, IMP_GET_STD_HANDLE, IMP_MULTI_BYTE, IMP_READ_FILE, IMP_VIRTUAL_ALLOC,
-    IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT, IMP_WRITE_FILE, REGION_BYTES, REGION_MAX, REGION_MIN,
-    SPAN_TABLE,
+    IMP_GET_LAST_ERROR, IMP_GET_STD_HANDLE, IMP_MULTI_BYTE, IMP_READ_FILE, IMP_RTL_GEN_RANDOM,
+    IMP_VIRTUAL_ALLOC, IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT, IMP_WRITE_FILE, REGION_BYTES,
+    REGION_MAX, REGION_MIN, SPAN_TABLE,
 };
 use super::{Os, Uses};
 
@@ -1937,10 +1937,20 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
             a.ret();
         }
     }
-    // random(buffer, count): `getrandom` on Linux, `getentropy` on macOS, 1 to 256 bytes; -3 on Windows (which
-    // would need `RtlGenRandom` from advapi32, not imported yet).
+    // random(buffer, count): `getrandom` on Linux, `getentropy` on macOS, 1 to 256 bytes; `RtlGenRandom` on Windows.
     start(a, rt.os[14]);
     if win {
+        let wfail = a.new_label();
+        a.cmp_ri(X1, 1);
+        a.b_cond(Cond::Lt, bad);
+        a.cmp_ri(X1, 256);
+        a.b_cond(Cond::Gt, bad);
+        win_call(a, IMP_RTL_GEN_RANDOM); // a BOOLEAN in `w0`
+        a.uxt(X0, X0, 8);
+        a.cbz(X0, wfail);
+        a.mov_ri(X0, 0);
+        finish(a);
+        a.bind(wfail);
         a.mov_ri(X0, -3);
         finish(a);
     } else {

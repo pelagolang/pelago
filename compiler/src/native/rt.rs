@@ -37,7 +37,7 @@ const STACK_WIN: i64 = 1 << 28;
 const COMMIT_WIN: i64 = 512 * 1024;
 
 /// The kernel32 functions the Windows image imports, in the order of its import table.
-pub const IMPORTS: [&str; 13] = [
+pub const IMPORTS: [&str; 14] = [
     "GetStdHandle",
     "WriteFile",
     "ExitProcess",
@@ -51,7 +51,10 @@ pub const IMPORTS: [&str; 13] = [
     "CloseHandle",
     "MultiByteToWideChar",
     "GetLastError",
+    // From advapi32.dll (the last import; see `pe.rs`).
+    "SystemFunction036",
 ];
+pub(super) const IMP_RTL_GEN_RANDOM: usize = 13;
 pub(super) const IMP_GET_STD_HANDLE: usize = 0;
 pub(super) const IMP_WRITE_FILE: usize = 1;
 pub(super) const IMP_EXIT_PROCESS: usize = 2;
@@ -1912,8 +1915,24 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.bind(rt.os[13]);
         a.mov_ri(RAX, -3);
         a.ret();
-        // random: `RtlGenRandom` needs advapi32, which the image does not import yet.
+        // random(buffer = rdi, count = rsi): `RtlGenRandom` (`SystemFunction036`), 1 to 256 bytes.
+        let (wbad, wfail) = (a.new_label(), a.new_label());
         a.bind(rt.os[14]);
+        a.alu_ri(Alu::Cmp, RSI, 1, 8);
+        a.jcc(Cc::L, wbad);
+        a.alu_ri(Alu::Cmp, RSI, 256, 8);
+        a.jcc(Cc::G, wbad);
+        a.mov_rr(RCX, RDI, 8);
+        a.mov_rr(RDX, RSI, 8);
+        win_call(a, IMP_RTL_GEN_RANDOM, |_| {});
+        a.test_rr(RAX, RAX, 1); // a BOOLEAN in `al`
+        a.jcc(Cc::E, wfail);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.ret();
+        a.bind(wbad);
+        a.mov_ri(RAX, -2);
+        a.ret();
+        a.bind(wfail);
         a.mov_ri(RAX, -3);
         a.ret();
     }
