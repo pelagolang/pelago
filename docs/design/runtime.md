@@ -127,12 +127,12 @@ In dependency order; each can be one PR.
 - **Stop places (2026-11-12, R4):** every stop says `file:line: stopped: message` in the interpreter and on both back
   ends. Each check that fails jumps to a small stub for its kind and line; the file names are a table read only by
   the stop routine. Cost: 7.4% on the 42 benchmark programs, nothing for a program with no checks.
-- **Arguments on Windows (2026-11-12):** Windows has no start block of texts, so the x86-64 runtime makes one on the
-  first `os_argv`: count -1, the command line converted to UTF-8 as its one text, then the environment
+- **Arguments on Windows and AArch64 (2026-11-12):** AArch64 Linux saves the kernel's start block at `_start`, as
+  x86-64 does. Windows has no start block of texts, so its runtime (x86-64 and ARM64) makes one on the first `os_argv`: count -1, the command line converted to UTF-8 as its one text, then the environment
   (`GetCommandLineW`, `GetEnvironmentStringsW`, `WideCharToMultiByte`). Splitting the command line is Pelago code
   (`core`'s `rtWinSplit`, the usual Windows quoting rules, in place), so the runtime stays a converter and the
   rules are tested in the interpreter.
-- **Not yet:** `main(args)` and `std.env` on AArch64 (Linux, Windows, macOS); the macOS clock; file-system calls
+- **Not yet:** `main(args)` and `std.env` on macOS; the macOS clock; file-system calls
   (`OsKind::Fs`, `Dents`) beyond x86-64 Linux; OS threads and atomics (`concurrency-runtime.md`).
 
 ## Related work already on the board

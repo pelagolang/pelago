@@ -21,10 +21,11 @@
 use super::a64::*;
 use super::elf::Blob;
 use super::rt::{
-    IMP_ADD_VEH, IMP_CLOSE_HANDLE, IMP_CREATE_FILE, IMP_EXIT_PROCESS, IMP_GET_CONSOLE_MODE,
-    IMP_GET_LAST_ERROR, IMP_GET_STD_HANDLE, IMP_MULTI_BYTE, IMP_PERF_COUNTER, IMP_PERF_FREQUENCY,
-    IMP_READ_FILE, IMP_RTL_GEN_RANDOM, IMP_VIRTUAL_ALLOC, IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT,
-    IMP_WALL_TIME, IMP_WRITE_FILE, REGION_BYTES, REGION_MAX, REGION_MIN, SPAN_TABLE,
+    IMP_ADD_VEH, IMP_CLOSE_HANDLE, IMP_COMMAND_LINE, IMP_CREATE_FILE, IMP_ENVIRONMENT,
+    IMP_EXIT_PROCESS, IMP_GET_CONSOLE_MODE, IMP_GET_LAST_ERROR, IMP_GET_STD_HANDLE, IMP_MULTI_BYTE,
+    IMP_PERF_COUNTER, IMP_PERF_FREQUENCY, IMP_READ_FILE, IMP_RTL_GEN_RANDOM, IMP_VIRTUAL_ALLOC,
+    IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT, IMP_WALL_TIME, IMP_WIDE_CHAR, IMP_WRITE_FILE,
+    REGION_BYTES, REGION_MAX, REGION_MIN, SPAN_TABLE,
 };
 use super::{Os, Uses};
 
@@ -500,6 +501,12 @@ pub fn emit_for(
     };
 
     // ---- _start ------------------------------------------------------------------------------------
+    if os == Os::Linux {
+        // The kernel's start block (argument count, arguments, environment) is where the stack starts.
+        a.mov_from_sp(X9);
+        state(a, X10, 168);
+        a.str(X9, X10, 0, 8);
+    }
     a.mov_rr(FP, XZR);
     // A big stack of our own, taken lazily, so deep recursion works like it does in the
     // interpreter; if the mapping fails, the stack the system gave us stays.
@@ -1900,10 +1907,117 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
     }
     start(a, rt.os[7]);
     a.b(rt.exit);
-    // argv: no start block yet on the AArch64 targets; programs that ask for it are refused at build time.
+    // argv: the start-up block, at offset 168 of the state. Linux saves the kernel's at `_start`. Windows makes one
+    // on the first call, the same as x86-64 (`rt.rs`): count -1, the command line in UTF-8 as its one text (`core`'s
+    // `rtWinSplit` splits it), a zero, the environment's `NAME=value` texts without the `=C:` ones, a zero; one
+    // `VirtualAlloc` holds the header, room for the environment's pointers and the texts. macOS has none yet
+    // (refused at build time).
     start(a, rt.os[8]);
-    a.mov_ri(X0, 0);
-    finish(a);
+    if win {
+        let (out, scan, env_go, env_next, env_done) = (
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+        );
+        a.stp_pre(X23, X24, SP, -32);
+        a.str(X25, SP, 16, 8);
+        state(a, X9, 168);
+        a.ldr(X0, X9, 0, 8);
+        a.cbnz(X0, out);
+        win_call(a, IMP_COMMAND_LINE);
+        a.mov_rr(X19, X0);
+        win_call(a, IMP_ENVIRONMENT);
+        a.mov_rr(X20, X0);
+        // x21: the environment's length in UTF-16 units, up to and with the second zero of the two that end it.
+        a.mov_ri(X21, 0);
+        a.bind(scan);
+        a.ldr_idx(X9, X20, X21, 2, true);
+        a.add_ri(X21, X21, 1);
+        a.cbnz(X9, scan);
+        a.ldr_idx(X9, X20, X21, 2, true);
+        a.cbnz(X9, scan);
+        a.add_ri(X21, X21, 1);
+        // `WideCharToMultiByte(CP_UTF8, 0, text, units, out, room, 0, 0)`.
+        let wide = |a: &mut Asm, text: Reg, units: Option<Reg>| {
+            a.mov_ri(X0, 65001);
+            a.mov_ri(X1, 0);
+            a.mov_rr(X2, text);
+            match units {
+                Some(u) => a.mov_rr(X3, u),
+                None => a.mov_ri(X3, -1),
+            }
+            a.mov_ri(X6, 0);
+            a.mov_ri(X7, 0);
+        };
+        // x22 and x23: the UTF-8 sizes of the command line (with its zero) and of the environment.
+        wide(a, X19, None);
+        a.mov_ri(X4, 0);
+        a.mov_ri(X5, 0);
+        win_call(a, IMP_WIDE_CHAR);
+        a.mov_rr(X22, X0);
+        wide(a, X20, Some(X21));
+        a.mov_ri(X4, 0);
+        a.mov_ri(X5, 0);
+        win_call(a, IMP_WIDE_CHAR);
+        a.mov_rr(X23, X0);
+        // x24: where the texts start; x25: the block.
+        a.lsr_ri(X24, X23, 1);
+        a.add_ri(X24, X24, 2);
+        a.lsl_ri(X24, X24, 3);
+        a.add_ri(X24, X24, 24);
+        a.mov_ri(X0, 0);
+        a.add_rr(X1, X24, X22);
+        a.add_rr(X1, X1, X23);
+        a.mov_ri(X2, 0x3000); // commit and reserve
+        a.mov_ri(X3, 4); // read and write
+        win_call(a, IMP_VIRTUAL_ALLOC);
+        a.mov_rr(X25, X0);
+        a.mov_ri(X9, -1);
+        a.str(X9, X25, 0, 8);
+        a.add_rr(X9, X25, X24);
+        a.str(X9, X25, 8, 8);
+        a.str(XZR, X25, 16, 8);
+        wide(a, X19, None);
+        a.add_rr(X4, X25, X24);
+        a.mov_rr(X5, X22);
+        win_call(a, IMP_WIDE_CHAR);
+        wide(a, X20, Some(X21));
+        a.add_rr(X4, X25, X24);
+        a.add_rr(X4, X4, X22);
+        a.mov_rr(X5, X23);
+        win_call(a, IMP_WIDE_CHAR);
+        // The environment's pointers: x10 walks the texts, x11 is the next slot.
+        a.add_rr(X10, X25, X24);
+        a.add_rr(X10, X10, X22);
+        a.add_ri(X11, X25, 24);
+        a.bind(env_go);
+        a.ldr(X9, X10, 0, 1);
+        a.cbz(X9, env_done);
+        a.cmp_ri(X9, 61); // `=`
+        a.b_cond(Cond::Eq, env_next);
+        a.str(X10, X11, 0, 8);
+        a.add_ri(X11, X11, 8);
+        a.bind(env_next);
+        a.ldr(X9, X10, 0, 1);
+        a.add_ri(X10, X10, 1);
+        a.cbnz(X9, env_next);
+        a.b(env_go);
+        a.bind(env_done);
+        a.str(XZR, X11, 0, 8);
+        state(a, X9, 168);
+        a.str(X25, X9, 0, 8);
+        a.mov_rr(X0, X25);
+        a.bind(out);
+        a.ldr(X25, SP, 16, 8);
+        a.ldp_post(X23, X24, SP, 32);
+        finish(a);
+    } else {
+        state(a, X9, 168);
+        a.ldr(X0, X9, 0, 8);
+        a.ret();
+    }
     // open(path, mode): mode 0 reads, 1 writes (create, empty), else appends (create).
     start(a, rt.os[9]);
     if win && !heap {
