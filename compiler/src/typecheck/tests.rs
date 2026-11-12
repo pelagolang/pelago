@@ -1549,3 +1549,22 @@ fn short_modes_in_function_types_check_like_the_words() {
             .is_empty()
     );
 }
+
+#[test]
+fn wide_literals_must_fit() {
+    flagged(
+        "fn t() { const x: int128 = 170141183460469231731687303715884105728 }",
+        "does not fit",
+    );
+    flagged("fn t() { const x: uint128 = -1 }", "does not fit");
+    flagged(
+        "fn t() { const x: uint256 = 115792089237316195423570985008687907853269984665640564039457584007913129639936 }",
+        "this number is too large",
+    );
+    flagged(
+        "fn t() { const x: uint128 = 340282366920938463463374607431768211456 }",
+        "does not fit",
+    );
+    let c = run("fn t() { const x: uint256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935 }");
+    assert!(c.errors().is_empty(), "{:?}", c.errors());
+}

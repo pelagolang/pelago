@@ -80,6 +80,11 @@ impl<'a> Lowerer<'a> {
     pub(crate) fn repr(&mut self, t: Ty) -> Repr {
         let t = self.types.shallow(t);
         match self.kind(t) {
+            // A wide integer is a few 64-bit words in memory (`wide.rs`).
+            TyKind::Int(k) if k.words() > 0 => Repr::Mem(Layout {
+                size: k.bits() / 8,
+                align: 8,
+            }),
             TyKind::Int(k) => Repr::Scalar(IrTy::Int(k.bits() as u8)),
             TyKind::Float(FloatKind::F32) => Repr::Scalar(IrTy::F32),
             TyKind::Float(FloatKind::F64) => Repr::Scalar(IrTy::F64),
@@ -116,6 +121,10 @@ impl<'a> Lowerer<'a> {
 
     fn compute_layout(&mut self, t: Ty) -> Layout {
         match self.kind(t) {
+            TyKind::Int(k) if k.words() > 0 => Layout {
+                size: k.bits() / 8,
+                align: 8,
+            },
             TyKind::Int(_)
             | TyKind::Float(_)
             | TyKind::Bool

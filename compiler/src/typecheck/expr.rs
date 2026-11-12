@@ -425,11 +425,22 @@ impl<'p> Checker<'p> {
             Some(v) => self.lits.push(LitCheck {
                 ty,
                 magnitude: v,
+                big: None,
                 negative,
                 file: self.file,
                 span: e.span,
             }),
-            None => self.err(e.span, "this number is too large"),
+            None => match crate::typecheck::literal_words(text) {
+                Some(w) => self.lits.push(LitCheck {
+                    ty,
+                    magnitude: u128::MAX,
+                    big: Some(w),
+                    negative,
+                    file: self.file,
+                    span: e.span,
+                }),
+                None => self.err(e.span, "this number is too large"),
+            },
         }
         self.record(e, ty);
         ty
@@ -1665,7 +1676,7 @@ impl<'p> Checker<'p> {
             }
             (TyKind::Var(_), TyKind::Int(_)) => self.is_integer(vt),
             (TyKind::Var(_), TyKind::Float(_)) => self.is_numeric(vt),
-            (TyKind::Int(a), TyKind::Float(_)) => a.bits() <= 64,
+            (TyKind::Int(_), TyKind::Float(_)) => true,
             (TyKind::Float(FloatKind::F32), TyKind::Float(FloatKind::F64)) => true,
             (TyKind::Char, TyKind::Int(b)) => b.bits() >= 32,
             (TyKind::Bool, TyKind::Int(_)) => true,

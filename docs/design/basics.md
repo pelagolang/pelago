@@ -55,8 +55,11 @@ Exact sizes for when you care about memory:
 | `int16` | `uint16` | about -32 thousand to 32 thousand |
 | `int32` | `uint32` | about -2.1 billion to 2.1 billion |
 | `int64` | `uint64` | about -9.2 quintillion to 9.2 quintillion |
+| `int128` | `uint128` | about -1.7e38 to 1.7e38 |
+| `int256` | `uint256` | about -5.8e76 to 5.8e76 |
 
-and `float32`, `float64` for decimals.
+and `float32`, `float64` for decimals. The 128 and 256 bit types have the same operators and the same overflow
+stops as the others ([wide-integers.md](wide-integers.md)).
 
 ## 4. Writing the type yourself
 

@@ -3959,3 +3959,40 @@ fn two_conditions_that_never_hold_are_a_deadlock_not_a_livelock() {
     let o = run_main(src);
     assert!(o.result.is_err() && o.output.contains("deadlock"), "{o:?}");
 }
+
+/// Wide integers keep the language's stops: overflow, division by zero and a shift by the width or more.
+#[test]
+fn wide_integers_stop_like_the_narrow_ones() {
+    let stop = |src: &str| run_main(src).result;
+    let over = Err("arithmetic overflow".to_string());
+    assert_eq!(
+        stop("fn main() { var x: uint128 = 340282366920938463463374607431768211455\n x += 1\n print(x) }"),
+        over
+    );
+    assert_eq!(
+        stop(
+            "fn main() { const x: int128 = -170141183460469231731687303715884105728\n print(-x) }"
+        ),
+        over
+    );
+    assert_eq!(
+        stop("fn main() { const x: int256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968\n print(x * -1) }"),
+        over
+    );
+    assert_eq!(
+        stop("fn main() { const x: int128 = -170141183460469231731687303715884105728\n print(x / -1) }"),
+        over
+    );
+    assert_eq!(
+        stop("fn main() { const z: uint128 = 0\n print(10 to uint128 / z) }"),
+        Err("division by zero".to_string())
+    );
+    assert_eq!(
+        stop("fn main() { const z: int256 = 0\n print(10 to int256 % z) }"),
+        Err("division by zero".to_string())
+    );
+    assert_eq!(
+        stop("fn main() { const x: uint128 = 1\n print(x << 128) }"),
+        Err("shifted by the width or more".to_string())
+    );
+}

@@ -18,10 +18,14 @@ pub enum IntKind {
     I16,
     I32,
     I64,
+    I128,
+    I256,
     U8,
     U16,
     U32,
     U64,
+    U128,
+    U256,
 }
 
 impl IntKind {
@@ -31,13 +35,20 @@ impl IntKind {
             IntKind::I16 | IntKind::U16 => 16,
             IntKind::I32 | IntKind::U32 => 32,
             IntKind::I64 | IntKind::U64 => 64,
+            IntKind::I128 | IntKind::U128 => 128,
+            IntKind::I256 | IntKind::U256 => 256,
         }
     }
 
     pub const fn signed(self) -> bool {
         matches!(
             self,
-            IntKind::I8 | IntKind::I16 | IntKind::I32 | IntKind::I64
+            IntKind::I8
+                | IntKind::I16
+                | IntKind::I32
+                | IntKind::I64
+                | IntKind::I128
+                | IntKind::I256
         )
     }
 
@@ -51,12 +62,26 @@ impl IntKind {
             IntKind::U16 => "uint16",
             IntKind::U32 => "uint32",
             IntKind::U64 => "uint64",
+            IntKind::I128 => "int128",
+            IntKind::U128 => "uint128",
+            IntKind::I256 => "int256",
+            IntKind::U256 => "uint256",
+        }
+    }
+
+    /// How many 64-bit words a value of this type takes when it is wider than a machine word, else 0.
+    pub const fn words(self) -> u32 {
+        if self.bits() > 64 {
+            self.bits() / 64
+        } else {
+            0
         }
     }
 
     /// Does the value `magnitude` (negated if `negative`) fit?
     pub fn fits(self, magnitude: u128, negative: bool) -> bool {
-        let bits = self.bits();
+        // Literals are read as `u128`, so 256-bit types accept what a `u128` can hold.
+        let bits = self.bits().min(128);
         if self.signed() {
             let max = (1u128 << (bits - 1)) - 1;
             if negative {
@@ -65,7 +90,7 @@ impl IntKind {
                 magnitude <= max
             }
         } else {
-            (!negative || magnitude == 0) && magnitude < (1u128 << bits)
+            (!negative || magnitude == 0) && (bits == 128 || magnitude < (1u128 << bits))
         }
     }
 }

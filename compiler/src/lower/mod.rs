@@ -33,6 +33,7 @@ mod select;
 mod seq;
 mod soa;
 mod ty;
+mod wide;
 
 use crate::ast::*;
 use crate::ir::{
