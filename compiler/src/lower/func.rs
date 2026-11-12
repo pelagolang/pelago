@@ -75,7 +75,10 @@ pub(crate) struct FnState<'a> {
     pub locals: HashMap<DefId, Local>,
     pub scopes: Vec<Vec<ScopeItem<'a>>>,
     pub loops: Vec<LoopCtx>,
-    pub stops: HashMap<String, BlockId>,
+    /// One block per message and place, so a stop says where it was (the place is the line of the expression).
+    pub stops: HashMap<(String, Span), BlockId>,
+    /// The place (a location, `Span::at`) of the expression being lowered; no location is the default span.
+    pub loc: Span,
     pub pending_label: Option<String>,
     /// The (concrete) return type and where a memory result is written.
     pub ret_ty: Ty,
@@ -104,6 +107,7 @@ impl<'a> FnState<'a> {
             scopes: Vec::new(),
             loops: Vec::new(),
             stops: HashMap::new(),
+            loc: Span::default(),
             pending_label: None,
             ret_ty: void,
             sret: None,
@@ -132,7 +136,32 @@ impl<'a> Lowerer<'a> {
 
     pub(crate) fn emit(&mut self, op: Op, ty: Option<IrTy>, span: Span) -> Option<Value> {
         let b = self.f.cur?;
-        self.f.func.emit_at(b, op, ty, span)
+        let loc = self.loc_of(span);
+        self.f.func.emit_at(b, op, ty, loc)
+    }
+
+    /// The location of a source span of the function being lowered: its file's number and its line. A span that
+    /// says nowhere (`0..0`) has no location.
+    pub(crate) fn loc_of(&mut self, span: Span) -> Span {
+        if span == Span::default() {
+            return Span::default();
+        }
+        let file = self.f.file;
+        let n = match self.file_nums.get(&file) {
+            Some(n) => *n,
+            None => {
+                let m = self.program.module(file);
+                self.module.files.push(m.path.clone());
+                let n = self.module.files.len() as u32;
+                self.file_nums.insert(file, n);
+                self.line_idx
+                    .insert(file, crate::span::LineIndex::new(&m.src));
+                n
+            }
+        };
+        let m = self.program.module(file);
+        let (line, _) = self.line_idx[&file].line_col(&m.src, span.start);
+        Span::at(n, line as u32)
     }
 
     pub(crate) fn konst(&mut self, ty: IrTy, c: Const, span: Span) -> Value {
@@ -198,12 +227,15 @@ impl<'a> Lowerer<'a> {
 
     /// The block that stops the program with this message (one per message and function).
     pub(crate) fn stop_block(&mut self, msg: &str) -> BlockId {
-        if let Some(b) = self.f.stops.get(msg) {
+        let key = (msg.to_string(), self.f.loc);
+        if let Some(b) = self.f.stops.get(&key) {
             return *b;
         }
         let b = self.new_block(&[]);
-        self.f.func.terminate(b, Term::Stop(msg.to_string()));
-        self.f.stops.insert(msg.to_string(), b);
+        self.f
+            .func
+            .terminate(b, Term::Stop(msg.to_string(), self.f.loc));
+        self.f.stops.insert(key, b);
         b
     }
 

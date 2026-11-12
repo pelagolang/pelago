@@ -1053,10 +1053,10 @@ fn blocks_that_stop_go_last() {
         args: vec![],
     };
     f.terminate(e, Term::Branch(c, to(bad), to(ok)));
-    f.terminate(bad, Term::Stop("no".into()));
+    f.terminate(bad, Term::Stop("no".into(), Span::default()));
     f.terminate(ok, Term::Return(Some(a)));
     assert!(layout::run(&mut f));
-    assert!(matches!(f.blocks[2].term, Some(Term::Stop(_))));
+    assert!(matches!(f.blocks[2].term, Some(Term::Stop(..))));
     assert!(verify_func(&f).is_empty(), "{}", print_func(&f, None));
     let m = module_of(f);
     assert_eq!(run_full(&m, "main", &[Val::Int(7)]).result, Ok(Val::Int(7)));

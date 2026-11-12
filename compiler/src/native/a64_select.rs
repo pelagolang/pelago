@@ -614,7 +614,7 @@ impl<'m> Sel<'m> {
                     );
                 }
             }
-            Term::Stop(msg) => {
+            Term::Stop(msg, _) => {
                 self.mf.strings.push(msg.clone());
                 let n = self.mf.strings.len() as i64 - 1;
                 self.emit(MInst::new(op::STOP, vec![Operand::Imm(n)]).nofall());

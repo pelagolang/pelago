@@ -141,7 +141,10 @@ impl<'a> Lowerer<'a> {
         let name = self.unique_name("meta".to_string());
         let mut func = Func::new(&name, &params, ret);
         let entry = func.entry();
-        func.terminate(entry, Term::Stop("not lowered yet".to_string()));
+        func.terminate(
+            entry,
+            Term::Stop("not lowered yet".to_string(), Span::default()),
+        );
         let id = self.module.add(func);
         self.jobs.push(Job::Meta(MetaJob {
             id,

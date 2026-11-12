@@ -14,6 +14,27 @@ impl Span {
         Span { start, end }
     }
 
+    /// Inside the IR a span is a source *location*, so it keeps its meaning when the inliner moves an
+    /// instruction into another function: `start` packs the file number (12 bits, from 1) over the line
+    /// (20 bits, from 1) and `end` is the same. `Span::default()` is "no location".
+    pub const fn at(file: u32, line: u32) -> Span {
+        if file == 0 || file > 0xFFF || line == 0 {
+            return Span { start: 0, end: 0 };
+        }
+        let line = if line > 0xF_FFFF { 0xF_FFFF } else { line };
+        let n = (file << 20) | line;
+        Span { start: n, end: n }
+    }
+
+    /// The file number and line of a location made by [`Span::at`], or `None` for no location.
+    pub const fn place(self) -> Option<(u32, u32)> {
+        if self.start == 0 {
+            None
+        } else {
+            Some((self.start >> 20, self.start & 0xF_FFFF))
+        }
+    }
+
     pub const fn len(self) -> u32 {
         self.end - self.start
     }

@@ -144,6 +144,7 @@ impl<'a> Lowerer<'a> {
                         Some(t) => self.select_body(t, done, void),
                         None => self.terminate(Term::Stop(
                             "deadlock: every `select` arm is waiting".to_string(),
+                            Span::default(),
                         )),
                     }
                 }

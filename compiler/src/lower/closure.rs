@@ -227,7 +227,10 @@ impl<'a> Lowerer<'a> {
         let name = self.unique_name(format!("closure in {}", self.f.func.name));
         let mut func = Func::new(&name, &sig.ir_params, sig.ir_ret);
         let entry = func.entry();
-        func.terminate(entry, Term::Stop("not lowered yet".to_string()));
+        func.terminate(
+            entry,
+            Term::Stop("not lowered yet".to_string(), Span::default()),
+        );
         let id = self.module.add(func);
         let it = self
             .res
@@ -256,7 +259,10 @@ impl<'a> Lowerer<'a> {
         let name = self.unique_name(format!("env drop in {}", self.f.func.name));
         let mut func = Func::new(&name, &[IrTy::Ptr], IrTy::Void);
         let entry = func.entry();
-        func.terminate(entry, Term::Stop("not lowered yet".to_string()));
+        func.terminate(
+            entry,
+            Term::Stop("not lowered yet".to_string(), Span::default()),
+        );
         let id = self.module.add(func);
         let owned: Vec<(u32, Ty)> = caps
             .iter()
@@ -477,7 +483,10 @@ impl<'a> Lowerer<'a> {
         ));
         let mut func = Func::new(&name, &vsig.ir_params, vsig.ir_ret);
         let entry = func.entry();
-        func.terminate(entry, Term::Stop("not lowered yet".to_string()));
+        func.terminate(
+            entry,
+            Term::Stop("not lowered yet".to_string(), Span::default()),
+        );
         let id = self.module.add(func);
         self.thunks.push(ThunkJob {
             id,

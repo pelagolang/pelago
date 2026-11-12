@@ -638,7 +638,7 @@ fn check_term(f: &Func, term: &Term) -> Vec<String> {
                 }
             }
         },
-        Term::Stop(_) | Term::Unreachable => {}
+        Term::Stop(..) | Term::Unreachable => {}
     }
     e
 }

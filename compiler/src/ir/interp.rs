@@ -156,6 +156,8 @@ struct Machine<'m> {
     depth: u32,
     max_depth: u32,
     trace: Vec<String>,
+    /// Where the stop that is unwinding happened (the innermost place that knew), once it has.
+    stop_at: Span,
     /// The part of memory slots are taken from (`sp` moves inside it).
     stack_lo: usize,
     stack_hi: usize,
@@ -181,6 +183,9 @@ pub struct Outcome {
     pub steps: u64,
     /// When the run stopped with an error: the functions that were running, innermost first (at most 12).
     pub trace: Vec<String>,
+    /// When the run stopped with an error: the file and line of the instruction that stopped it, when the
+    /// IR knew (see `Span::at`).
+    pub stop_at: Option<(String, u32)>,
 }
 
 /// Runs the function called `name`. `Err` holds the message of a stop.
@@ -238,6 +243,7 @@ fn run_inner(
                 leaked: 0,
                 steps: 0,
                 trace: Vec::new(),
+                stop_at: None,
             },
             Vec::new(),
             0,
@@ -284,6 +290,7 @@ fn run_inner(
         depth: 0,
         max_depth: MAX_DEPTH,
         trace: Vec::new(),
+        stop_at: Span::default(),
         stack_lo: stack_base,
         stack_hi: stack_base + STACK_SIZE,
         ctxs: vec![CtxInfo {
@@ -355,6 +362,10 @@ fn run_inner(
         leaked,
         steps: mc.steps,
         trace: std::mem::take(&mut mc.trace),
+        stop_at: mc
+            .stop_at
+            .place()
+            .and_then(|(f, l)| m.files.get(f as usize - 1).map(|name| (name.clone(), l))),
     };
     let image = if ret_size.is_some() {
         std::mem::take(&mut mc.mem)
@@ -373,6 +384,15 @@ impl Machine<'_> {
             }
         }
         r
+    }
+
+    /// Remembers where the first stop happened: the innermost instruction knows, the callers it passes through
+    /// do not overwrite it.
+    #[inline(never)]
+    fn note(&mut self, at: Span, msg: &str) {
+        if self.stop_at == Span::default() && msg != SHUTDOWN && msg != EXIT {
+            self.stop_at = at;
+        }
     }
 
     fn call_inner(&mut self, fi: usize, args: &[Val]) -> Result<Val, String> {
@@ -417,7 +437,13 @@ impl Machine<'_> {
                         let _ = align;
                         Val::Ptr(at)
                     }
-                    op => self.exec(f, &vals, op)?,
+                    op => match self.exec(f, &vals, op) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.note(inst.span, &e);
+                            return Err(e);
+                        }
+                    },
                 };
                 if let Some(r) = inst.result {
                     vals[r.0 as usize] = v;
@@ -434,7 +460,10 @@ impl Machine<'_> {
                     block = enter(f, &mut vals, t);
                 }
                 Term::Return(x) => break x.map_or(Val::Unit, |x| vals[x.0 as usize]),
-                Term::Stop(msg) => return Err(msg.clone()),
+                Term::Stop(msg, at) => {
+                    self.note(*at, msg);
+                    return Err(msg.clone());
+                }
                 Term::Unreachable => return Err("reached unreachable code".to_string()),
             }
         };
