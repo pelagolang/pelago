@@ -1,0 +1,317 @@
+/// SHA-2 (FIPS 180-4): SHA-224, SHA-256, SHA-384, SHA-512, SHA-512/224 and SHA-512/256, as `hasher`s.
+///
+/// ```
+/// import std.sha2
+/// import std.hash
+import { hasher } = std.hash
+///
+/// fn main() {
+///     print(hash.hex(hash.digestText(sha256.new(), "abc")))
+///     /// ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+/// }
+/// ```
+///
+/// Conventional: the algorithms are the standard ones. Pelago's part: the state is a plain value, so `finish` pads a
+/// copy and a hasher can be cloned or kept after reading a digest. There are no secret-dependent branches or table
+/// lookups, only `+%`, rotations and bit operations, so time does not depend on the data. Every digest is checked
+/// against the NIST examples and against Python's `hashlib` (`compiler/std/tests/sha2.pel`).
+
+import std.hash
+
+const k256: [uint32] = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]
+
+const k512: [uint64] = [
+    0x428a2f98d728ae22, 0x7137449123ef65cd, 0xb5c0fbcfec4d3b2f, 0xe9b5dba58189dbbc, 0x3956c25bf348b538,
+    0x59f111f1b605d019, 0x923f82a4af194f9b, 0xab1c5ed5da6d8118, 0xd807aa98a3030242, 0x12835b0145706fbe,
+    0x243185be4ee4b28c, 0x550c7dc3d5ffb4e2, 0x72be5d74f27b896f, 0x80deb1fe3b1696b1, 0x9bdc06a725c71235,
+    0xc19bf174cf692694, 0xe49b69c19ef14ad2, 0xefbe4786384f25e3, 0x0fc19dc68b8cd5b5, 0x240ca1cc77ac9c65,
+    0x2de92c6f592b0275, 0x4a7484aa6ea6e483, 0x5cb0a9dcbd41fbd4, 0x76f988da831153b5, 0x983e5152ee66dfab,
+    0xa831c66d2db43210, 0xb00327c898fb213f, 0xbf597fc7beef0ee4, 0xc6e00bf33da88fc2, 0xd5a79147930aa725,
+    0x06ca6351e003826f, 0x142929670a0e6e70, 0x27b70a8546d22ffc, 0x2e1b21385c26c926, 0x4d2c6dfc5ac42aed,
+    0x53380d139d95b3df, 0x650a73548baf63de, 0x766a0abb3c77b2a8, 0x81c2c92e47edaee6, 0x92722c851482353b,
+    0xa2bfe8a14cf10364, 0xa81a664bbc423001, 0xc24b8b70d0f89791, 0xc76c51a30654be30, 0xd192e819d6ef5218,
+    0xd69906245565a910, 0xf40e35855771202a, 0x106aa07032bbd1b8, 0x19a4c116b8d2d0c8, 0x1e376c085141ab53,
+    0x2748774cdf8eeb99, 0x34b0bcb5e19b48a8, 0x391c0cb3c5c95a63, 0x4ed8aa4ae3418acb, 0x5b9cca4f7763e373,
+    0x682e6ff3d6b2b8a3, 0x748f82ee5defb2fc, 0x78a5636f43172f60, 0x84c87814a1f0ab72, 0x8cc702081a6439ec,
+    0x90befffa23631e28, 0xa4506cebde82bde9, 0xbef9a3f7b2c67915, 0xc67178f2e372532b, 0xca273eceea26619c,
+    0xd186b8c721c0c207, 0xeada7dd6cde0eb1e, 0xf57d4f7fee6ed178, 0x06f067aa72176fba, 0x0a637dc5a2c898a6,
+    0x113f9804bef90dae, 0x1b710b35131c471b, 0x28db77f523047d84, 0x32caab7b40c72493, 0x3c9ebe0a15c9bebc,
+    0x431d67c49c100d4c, 0x4cc5d4becb3e42b6, 0x597f299cfc657e2a, 0x5fcb6fab3ad6faec, 0x6c44198c4a475817,
+]
+
+fn rotr32(x: uint32, n: int) -> uint32 = (x >> n) | (x << (32 - n))
+fn rotr64(x: uint64, n: int) -> uint64 = (x >> n) | (x << (64 - n))
+
+/// SHA-224 and SHA-256: 64-byte blocks, 32-bit words. `size` is 28 or 32. Build one with `sha256.new()` or
+/// `sha256.new224()`.
+pub struct sha256 {
+    state: [uint32]
+    buf: [byte]
+    total: int
+    size: int
+
+    //~ A new SHA-256 hasher.
+    fn new() -> sha256 = sha256 { state: iv256(32), buf: [], total: 0, size: 32 }
+    //~ A new SHA-224 hasher (SHA-256's rounds, other start values, digest cut to 28 bytes).
+    fn new224() -> sha256 = sha256 { state: iv256(28), buf: [], total: 0, size: 28 }
+}
+
+fn iv256(size: int) -> [uint32] {
+    if size == 28 {
+        return [
+            0xc1059ed8,
+            0x367cd507,
+            0x3070dd17,
+            0xf70e5939,
+            0xffc00b31,
+            0x68581511,
+            0x64f98fa7,
+            0xbefa4fa4,
+        ]
+    }
+    [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19]
+}
+
+fn compress256(inout state: [uint32], block: [byte], at: int) {
+    var w: [uint32] = []
+    for t of 0..16 {
+        const j = at + 4 * t
+        w.push!(((block[j] to uint32) << 24) | ((block[j + 1] to uint32) << 16) | ((block[j + 2] to uint32) << 8) | (block[j + 3] to uint32))
+    }
+    for t of 16..64 {
+        const a = w[t - 15]
+        const b = w[t - 2]
+        const s0 = rotr32(a, 7) ^ rotr32(a, 18) ^ (a >> 3)
+        const s1 = rotr32(b, 17) ^ rotr32(b, 19) ^ (b >> 10)
+        w.push!(w[t - 16] +% s0 +% w[t - 7] +% s1)
+    }
+    var a = state[0]
+    var b = state[1]
+    var c = state[2]
+    var d = state[3]
+    var e = state[4]
+    var f = state[5]
+    var g = state[6]
+    var h = state[7]
+    for t of 0..64 {
+        const s1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25)
+        const ch = (e & f) ^ (~e & g)
+        const t1 = h +% s1 +% ch +% k256[t] +% w[t]
+        const s0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22)
+        const maj = (a & b) ^ (a & c) ^ (b & c)
+        const t2 = s0 +% maj
+        h = g
+        g = f
+        f = e
+        e = d +% t1
+        d = c
+        c = b
+        b = a
+        a = t1 +% t2
+    }
+    state[0] = state[0] +% a
+    state[1] = state[1] +% b
+    state[2] = state[2] +% c
+    state[3] = state[3] +% d
+    state[4] = state[4] +% e
+    state[5] = state[5] +% f
+    state[6] = state[6] +% g
+    state[7] = state[7] +% h
+}
+
+/// Feeds `data` through `buf` (a partial block) and `state`; shared by 256 and 512 with block size `bs`.
+fn absorb256(inout h: sha256, data: [byte]) {
+    h.total += data.len()
+    var i = 0
+    if h.buf.len() > 0 {
+        while i < data.len() && h.buf.len() < 64 {
+            h.buf.push!(data[i])
+            i += 1
+        }
+        if h.buf.len() < 64 { return }
+        compress256(h.state!, h.buf, 0)
+        h.buf = []
+    }
+    while i + 64 <= data.len() {
+        compress256(h.state!, data, i)
+        i += 64
+    }
+    while i < data.len() {
+        h.buf.push!(data[i])
+        i += 1
+    }
+}
+
+impl hasher for sha256 {
+    fn update(inout self, data: [byte]) { absorb256(self!, data) }
+    fn finish(self) -> [byte] {
+        var c = copy self
+        const bits = self.total * 8
+        var pad: [byte] = [128]
+        while (self.total + pad.len()) % 64 != 56 { pad.push!(0) }
+        for i of 0..8 { pad.push!(((bits >> (56 - 8 * i)) & 255).wrapToByte()) }
+        const total = c.total
+        absorb256(c!, pad)
+        c.total = total
+        var out: [byte] = []
+        for w of c.state {
+            out.push!(((w >> 24) to int).wrapToByte())
+            out.push!(((w >> 16) to int).wrapToByte())
+            out.push!(((w >> 8) to int).wrapToByte())
+            out.push!((w to int).wrapToByte())
+        }
+        out.truncate!(self.size)
+        out
+    }
+    fn reset(inout self) {
+        self.state = iv256(self.size)
+        self.buf = []
+        self.total = 0
+    }
+    fn fresh(self) -> sha256 = sha256 { state: iv256(self.size), buf: [], total: 0, size: self.size }
+    fn outputSize(self) -> int = self.size
+    fn blockSize(self) -> int = 64
+}
+
+/// SHA-384, SHA-512, SHA-512/224 and SHA-512/256: 128-byte blocks, 64-bit words. `size` is 28, 32, 48 or 64.
+/// Build one with `sha512.new()`, `new384()`, `new512t256()` or `new512t224()`.
+pub struct sha512 {
+    state: [uint64]
+    buf: [byte]
+    total: int
+    size: int
+
+    //~ A new SHA-512 hasher.
+    fn new() -> sha512 = sha512 { state: iv512(64), buf: [], total: 0, size: 64 }
+    //~ A new SHA-384 hasher.
+    fn new384() -> sha512 = sha512 { state: iv512(48), buf: [], total: 0, size: 48 }
+    //~ A new SHA-512/256 hasher (SHA-512 with its own start values, cut to 32 bytes).
+    fn new512t256() -> sha512 = sha512 { state: iv512(32), buf: [], total: 0, size: 32 }
+    //~ A new SHA-512/224 hasher.
+    fn new512t224() -> sha512 = sha512 { state: iv512(28), buf: [], total: 0, size: 28 }
+}
+
+fn iv512(size: int) -> [uint64] {
+    if size == 48 {
+        return [0xcbbb9d5dc1059ed8, 0x629a292a367cd507, 0x9159015a3070dd17, 0x152fecd8f70e5939,
+                0x67332667ffc00b31, 0x8eb44a8768581511, 0xdb0c2e0d64f98fa7, 0x47b5481dbefa4fa4]
+    }
+    if size == 28 {
+        return [0x8c3d37c819544da2, 0x73e1996689dcd4d6, 0x1dfab7ae32ff9c82, 0x679dd514582f9fcf,
+                0x0f6d2b697bd44da8, 0x77e36f7304c48942, 0x3f9d85a86a1d36c8, 0x1112e6ad91d692a1]
+    }
+    if size == 32 {
+        return [0x22312194fc2bf72c, 0x9f555fa3c84c64c2, 0x2393b86b6f53b151, 0x963877195940eabd,
+                0x96283ee2a88effe3, 0xbe5e1e2553863992, 0x2b0199fc2c85b8aa, 0x0eb72ddc81c52ca2]
+    }
+    [0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
+        0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179]
+}
+
+fn compress512(inout state: [uint64], block: [byte], at: int) {
+    var w: [uint64] = []
+    for t of 0..16 {
+        const j = at + 8 * t
+        var x: uint64 = 0
+        for i of 0..8 { x = (x << 8) | (block[j + i] to uint64) }
+        w.push!(x)
+    }
+    for t of 16..80 {
+        const a = w[t - 15]
+        const b = w[t - 2]
+        const s0 = rotr64(a, 1) ^ rotr64(a, 8) ^ (a >> 7)
+        const s1 = rotr64(b, 19) ^ rotr64(b, 61) ^ (b >> 6)
+        w.push!(w[t - 16] +% s0 +% w[t - 7] +% s1)
+    }
+    var a = state[0]
+    var b = state[1]
+    var c = state[2]
+    var d = state[3]
+    var e = state[4]
+    var f = state[5]
+    var g = state[6]
+    var h = state[7]
+    for t of 0..80 {
+        const s1 = rotr64(e, 14) ^ rotr64(e, 18) ^ rotr64(e, 41)
+        const ch = (e & f) ^ (~e & g)
+        const t1 = h +% s1 +% ch +% k512[t] +% w[t]
+        const s0 = rotr64(a, 28) ^ rotr64(a, 34) ^ rotr64(a, 39)
+        const maj = (a & b) ^ (a & c) ^ (b & c)
+        const t2 = s0 +% maj
+        h = g
+        g = f
+        f = e
+        e = d +% t1
+        d = c
+        c = b
+        b = a
+        a = t1 +% t2
+    }
+    state[0] = state[0] +% a
+    state[1] = state[1] +% b
+    state[2] = state[2] +% c
+    state[3] = state[3] +% d
+    state[4] = state[4] +% e
+    state[5] = state[5] +% f
+    state[6] = state[6] +% g
+    state[7] = state[7] +% h
+}
+
+fn absorb512(inout h: sha512, data: [byte]) {
+    h.total += data.len()
+    var i = 0
+    if h.buf.len() > 0 {
+        while i < data.len() && h.buf.len() < 128 {
+            h.buf.push!(data[i])
+            i += 1
+        }
+        if h.buf.len() < 128 { return }
+        compress512(h.state!, h.buf, 0)
+        h.buf = []
+    }
+    while i + 128 <= data.len() {
+        compress512(h.state!, data, i)
+        i += 128
+    }
+    while i < data.len() {
+        h.buf.push!(data[i])
+        i += 1
+    }
+}
+
+impl hasher for sha512 {
+    fn update(inout self, data: [byte]) { absorb512(self!, data) }
+    fn finish(self) -> [byte] {
+        var c = copy self
+        const bits = self.total * 8
+        var pad: [byte] = [128]
+        while (self.total + pad.len()) % 128 != 112 { pad.push!(0) }
+        /// A 128-bit length: the high 8 bytes are zero for any message that fits in memory.
+        for i of 0..8 { pad.push!(0) }
+        for i of 0..8 { pad.push!(((bits >> (56 - 8 * i)) & 255).wrapToByte()) }
+        absorb512(c!, pad)
+        var out: [byte] = []
+        for w of c.state {
+            for i of 0..8 { out.push!(rtCast<uint64, int>(w >> (56 - 8 * i)).wrapToByte()) }
+        }
+        out.truncate!(self.size)
+        out
+    }
+    fn reset(inout self) {
+        self.state = iv512(self.size)
+        self.buf = []
+        self.total = 0
+    }
+    fn fresh(self) -> sha512 = sha512 { state: iv512(self.size), buf: [], total: 0, size: self.size }
+    fn outputSize(self) -> int = self.size
+    fn blockSize(self) -> int = 128
+}
