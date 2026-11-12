@@ -729,7 +729,8 @@ impl Machine<'_> {
             | OsKind::Clock
             | OsKind::Fs
             | OsKind::Dents
-            | OsKind::Random => return self.os_layer(k, a, b, c),
+            | OsKind::Random
+            | OsKind::Sleep => return self.os_layer(k, a, b, c),
             OsKind::Reserve => {
                 if !sized(a) {
                     OS_BAD
@@ -943,6 +944,13 @@ impl Machine<'_> {
                 };
                 self.mem[p..p + 8].copy_from_slice(&(now.as_secs() as i64).to_le_bytes());
                 self.mem[p + 8..p + 16].copy_from_slice(&(now.subsec_nanos() as i64).to_le_bytes());
+                0
+            }
+            OsKind::Sleep => {
+                if a < 0 || !(0..1_000_000_000).contains(&b) {
+                    return Ok(OS_BAD);
+                }
+                std::thread::sleep(std::time::Duration::new(a as u64, b as u32));
                 0
             }
             OsKind::Fs => {

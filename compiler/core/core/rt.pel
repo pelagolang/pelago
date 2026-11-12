@@ -67,6 +67,9 @@ pub ext fn rtOsClose(fd: int) -> int
 //~ (since 1970-01-01 UTC), 1 the monotonic clock. 0 on success, a negative error otherwise (-3 where the
 //~ target has no clock call yet: Windows, macOS).
 pub ext fn rtOsClock(which: int, p: ptr) -> int
+//~ `rtOsSleep(seconds, nanoseconds)` lets the process sleep (`nanosleep`); it may return early. 0, or a negative
+//~ error (-3 where the target has no such call yet: Windows, macOS).
+pub ext fn rtOsSleep(secs: int, nanos: int) -> int
 pub ext fn rtOsFs(op: int, path: ptr, aux: int) -> int
 pub ext fn rtOsDents(fd: int, buf: ptr, n: int) -> int
 //~ `rtOsRandom(p, n)` fills `n` bytes (1 to 256) at `p` from the system's random generator: 0, or a negative error

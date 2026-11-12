@@ -70,6 +70,7 @@ enum Sys {
     Open,
     Close,
     ClockGettime,
+    Nanosleep,
     Getrandom,
 }
 
@@ -93,6 +94,8 @@ fn number(os: Os, call: Sys) -> i64 {
         Sys::Close => (57, 6),
         // macOS has no such call (its clocks are in the commpage); `OsKind::Clock` answers -3 there.
         Sys::ClockGettime => (113, 0),
+        // `nanosleep`; macOS has none in this table, `OsKind::Sleep` answers -3 there.
+        Sys::Nanosleep => (101, 0),
         // `getrandom` on Linux, `getentropy` on macOS (the buffer and at most 256 bytes).
         Sys::Getrandom => (278, 500),
     };
@@ -136,7 +139,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `x0` to `x2`, the result in `x0` (an address or 0, or a negative error).
-    pub os: [Label; 15],
+    pub os: [Label; 16],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -461,7 +464,7 @@ pub fn emit_for(
         fmod: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 15].map(|_| a.new_label()),
+        os: [(); 16].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -1979,6 +1982,25 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         a.ret();
     } else {
         sys(a, os, Sys::ClockGettime);
+        a.ret();
+    }
+    // sleep(seconds, nanoseconds): `nanosleep` on Linux, from a timespec on the stack; -3 on Windows and macOS.
+    start(a, rt.os[15]);
+    if win || os == Os::MacOs {
+        a.mov_ri(X0, -3);
+        if win {
+            finish(a);
+        } else {
+            a.ret();
+        }
+    } else {
+        a.sub_ri(SP, SP, 16);
+        a.stp(X0, X1, SP, 0);
+        a.mov_rr(X0, SP);
+        a.mov_ri(X1, 0);
+        sys(a, os, Sys::Nanosleep);
+        a.add_ri(SP, SP, 16);
+        a.mov_ri(X0, 0);
         a.ret();
     }
     // fs and dents: no file-system calls on the 64-bit Arm targets yet (-3).
