@@ -90,8 +90,8 @@ fn layout(f: &MFunc) -> Frame {
         *at += o.size as i32;
     };
     // The outgoing arguments first: they sit at `[sp]`.
-    for i in 0..f.frame.len() {
-        if f.frame[i].kind == FrameKind::Outgoing {
+    for (i, o) in f.frame.iter().enumerate() {
+        if o.kind == FrameKind::Outgoing {
             place(i, &mut at, &mut off);
         }
     }
