@@ -78,6 +78,12 @@ impl<'a> Lowerer<'a> {
             self.require_true(r, fail);
             return true;
         }
+        if let Some((n, _)) = self.wide_of(ty) {
+            if let Some(c) = self.wide_eq_glue(a, b, n) {
+                self.require_true(c, fail);
+            }
+            return true;
+        }
         match self.kind(ty) {
             TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Ptr => {
                 let s = self.scalar_of(ty).unwrap_or(IrTy::I64);
@@ -214,6 +220,11 @@ impl<'a> Lowerer<'a> {
             let Some(r) = self.emit(Op::Call(f, vec![a, b]), Some(IrTy::I64), sp) else {
                 return false;
             };
+            self.return_if_nonzero(r);
+            return true;
+        }
+        if let Some((n, signed)) = self.wide_of(ty) {
+            let r = self.wide_cmp_glue(a, b, n, signed);
             self.return_if_nonzero(r);
             return true;
         }
@@ -376,6 +387,12 @@ impl<'a> Lowerer<'a> {
                 return false;
             };
             self.mix(acc, r);
+            return true;
+        }
+        if let Some((n, _)) = self.wide_of(ty) {
+            for w in self.wide_words(a, n) {
+                self.mix(acc, w);
+            }
             return true;
         }
         match self.kind(ty) {

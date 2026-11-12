@@ -309,6 +309,8 @@ pub(crate) struct LoopCtx {
 struct LitCheck {
     ty: Ty,
     magnitude: u128,
+    /// The four words of a literal that is too large for a `u128` (only a 256-bit type can hold it).
+    big: Option<[u64; 4]>,
     negative: bool,
     file: ModuleId,
     span: Span,
@@ -392,6 +394,37 @@ pub(crate) struct Checker<'p> {
     owning_cache: Option<std::collections::HashSet<DefId>>,
     linear: std::collections::HashSet<DefId>,
     pending_nonlinear: Vec<(ModuleId, Span, Ty, DefId)>,
+}
+
+/// A literal as four 64-bit words, least significant first: for the numbers a `u128` cannot hold (`int256`).
+pub fn literal_words(text: &str) -> Option<[u64; 4]> {
+    let t: String = text.chars().filter(|c| *c != '_').collect();
+    let (digits, radix) = if let Some(h) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+        (h, 16u64)
+    } else if let Some(b) = t.strip_prefix("0b").or_else(|| t.strip_prefix("0B")) {
+        (b, 2)
+    } else if let Some(o) = t.strip_prefix("0o").or_else(|| t.strip_prefix("0O")) {
+        (o, 8)
+    } else {
+        (t.as_str(), 10)
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let mut w = [0u64; 4];
+    for c in digits.chars() {
+        let d = c.to_digit(radix as u32)? as u64;
+        let mut carry = d as u128;
+        for x in w.iter_mut() {
+            let v = (*x as u128) * radix as u128 + carry;
+            *x = v as u64;
+            carry = v >> 64;
+        }
+        if carry != 0 {
+            return None;
+        }
+    }
+    Some(w)
 }
 
 fn int_text(text: &str) -> Option<u128> {
@@ -1552,6 +1585,10 @@ impl<'p> Checker<'p> {
             "int16" => tt.mk(TyKind::Int(IntKind::I16)),
             "int32" => tt.mk(TyKind::Int(IntKind::I32)),
             "uint" | "uint64" => tt.mk(TyKind::Int(IntKind::U64)),
+            "int128" => tt.mk(TyKind::Int(IntKind::I128)),
+            "uint128" => tt.mk(TyKind::Int(IntKind::U128)),
+            "int256" => tt.mk(TyKind::Int(IntKind::I256)),
+            "uint256" => tt.mk(TyKind::Int(IntKind::U256)),
             "uint8" | "byte" => tt.mk(TyKind::Int(IntKind::U8)),
             "uint16" => tt.mk(TyKind::Int(IntKind::U16)),
             "uint32" => tt.mk(TyKind::Int(IntKind::U32)),
@@ -1700,7 +1737,17 @@ impl<'p> Checker<'p> {
         let lits = std::mem::take(&mut self.lits);
         for l in lits {
             if let Some(k) = self.tt.int_kind(l.ty) {
-                if !k.fits(l.magnitude, l.negative) {
+                let fits = match l.big {
+                    Some(w) => {
+                        k.bits() == 256
+                            && (!k.signed()
+                                || w[3] >> 63 == 0
+                                || (l.negative && w == [0, 0, 0, 1 << 63]))
+                            && (k.signed() || !l.negative)
+                    }
+                    None => k.fits(l.magnitude, l.negative),
+                };
+                if !fits {
                     let text = if l.negative {
                         format!("-{}", l.magnitude)
                     } else {

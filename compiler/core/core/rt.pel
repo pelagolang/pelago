@@ -96,6 +96,13 @@ pub ext fn rtOsRandom(p: ptr, n: int) -> int
 pub ext fn rtToByte(n: int) -> uint8
 pub ext fn rtWrap<T>(n: int) -> T
 pub ext fn rtToInt(x: float) -> int
+//~ The 64-bit words of the wide integers as unsigned numbers: `rtULt(a, b)` is `a < b`, `rtUShr` a logical shift
+//~ right (0 to 63), `rtUMulHi` the high 64 bits of the 128-bit product, `rtUDiv` and `rtURem` the quotient and remainder.
+pub ext fn rtULt(a: int, b: int) -> bool
+pub ext fn rtUShr(a: int, n: int) -> int
+pub ext fn rtUMulHi(a: int, b: int) -> int
+pub ext fn rtUDiv(a: int, b: int) -> int
+pub ext fn rtURem(a: int, b: int) -> int
 pub ext fn rtFma(a: float, b: float, c: float) -> float
 pub ext fn rtSqrt(a: float) -> float
 pub ext fn rtFloor(a: float) -> float

@@ -251,6 +251,9 @@ impl<'a> Lowerer<'a> {
     /// Appends the text of the value at `p` (a scalar is loaded). `quoted` wraps text in quotes, as
     /// inside a list.
     pub(crate) fn show_at(&mut self, p: Value, t: Ty, out: Value, quoted: bool) -> bool {
+        if let Some((n, signed)) = self.wide_of(t) {
+            return self.wide_show(p, n, signed, out);
+        }
         match self.kind(t) {
             TyKind::String | TyKind::Str => {
                 if quoted {
@@ -371,7 +374,7 @@ impl<'a> Lowerer<'a> {
     fn print_int_line(&mut self, e: &'a Expr, x: &'a Expr) -> Option<Res> {
         let t = self.ty_of(x)?;
         let k = match self.kind(t) {
-            TyKind::Int(k) => k,
+            TyKind::Int(k) if k.words() == 0 => k,
             _ => return None,
         };
         let Some(v) = self.scalar(x) else {

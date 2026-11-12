@@ -313,6 +313,24 @@ impl<'a> Lowerer<'a> {
                 };
                 self.wrap(Op::FUn(o, x), IrTy::F64, sp)
             }
+            "rtULt" | "rtUShr" | "rtUMulHi" | "rtUDiv" | "rtURem" => {
+                let (Some(a), Some(b)) = (self.arg_scalar(args, 0), self.arg_scalar(args, 1))
+                else {
+                    return Res::Never;
+                };
+                match name.as_str() {
+                    "rtULt" => self.wrap(Op::Cmp(CmpOp::ULt, a, b), IrTy::Bool, sp),
+                    other => {
+                        let o = match other {
+                            "rtUShr" => BinOp::UShr,
+                            "rtUMulHi" => BinOp::UMulHi,
+                            "rtUDiv" => BinOp::UDiv,
+                            _ => BinOp::URem,
+                        };
+                        self.wrap(Op::Bin(o, a, b), IrTy::I64, sp)
+                    }
+                }
+            }
             "rtToInt" => {
                 let Some(x) = self.arg_scalar(args, 0) else {
                     return Res::Never;

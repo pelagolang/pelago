@@ -397,6 +397,11 @@ impl<'a> Lowerer<'a> {
             ExprKind::Set(items) => self.set_lit(e, items, dst, t),
             ExprKind::Repeat { value, count } => self.repeat_lit(e, value, count, dst, t),
             ExprKind::Binary { .. } => self.binary_mem(e, dst, t),
+            ExprKind::Int => match self.wide_of(t) {
+                Some((n, _)) => self.wide_int_literal(e, dst, n),
+                None => self.unsupported(e.span, "an integer of this type"),
+            },
+            ExprKind::Unary { op, operand } => self.wide_unary(e, *op, operand, dst, t),
             ExprKind::Range { .. } => self.range_value(e, dst, t),
             ExprKind::Guard { .. }
             | ExprKind::Return(_)
@@ -408,7 +413,10 @@ impl<'a> Lowerer<'a> {
 
     // ---- Literals -----------------------------------------------------------------------------------------
 
-    fn int_literal(&mut self, e: &Expr) -> Res {
+    fn int_literal(&mut self, e: &'a Expr) -> Res {
+        if self.ty_of(e).is_some_and(|t| self.wide_of(t).is_some()) {
+            return self.rvalue_expr(e);
+        }
         let Some(ty) = self.scalar_ty_of(e) else {
             return self.unsupported(e.span, "an integer of this type");
         };
@@ -838,6 +846,9 @@ impl<'a> Lowerer<'a> {
         if let Some(r) = self.user_operator(e, e.span) {
             return r;
         }
+        if self.ty_of(e).is_some_and(|t| self.wide_of(t).is_some()) {
+            return self.rvalue_expr(e);
+        }
         let Some(ty) = self.scalar_ty_of(e) else {
             return self.unsupported(e.span, "this operand type");
         };
@@ -915,6 +926,11 @@ impl<'a> Lowerer<'a> {
 
     /// Operators on memory types: joining text.
     fn binary_mem(&mut self, e: &'a Expr, dst: Value, t: Ty) -> Res {
+        if let ExprKind::Binary { op, lhs, rhs } = &e.kind {
+            if self.wide_of(t).is_some() && self.call_target(e.span).is_none() {
+                return self.wide_binary(e, *op, lhs, rhs, dst, t);
+            }
+        }
         if let ExprKind::Binary {
             op: Punct::Plus,
             lhs,
@@ -1008,6 +1024,9 @@ impl<'a> Lowerer<'a> {
         let Some(lt) = self.ty_of(lhs) else {
             return self.unsupported(e.span, "comparing values of unknown type");
         };
+        if self.wide_of(lt).is_some() && self.call_target(e.span).is_none() {
+            return self.wide_compare(e, op, lhs, rhs, lt);
+        }
         if !self.is_scalar(lt) || matches!(self.kind(lt), TyKind::Box(_)) {
             return self.compare_mem(e, op, lhs, rhs, lt);
         }
@@ -1199,6 +1218,25 @@ impl<'a> Lowerer<'a> {
             return Res::Unit;
         }
         // `a op= b`: numbers (and text for `+=`).
+        if self.wide_of(lt).is_some() {
+            let base = match op {
+                Punct::PlusEq => Punct::Plus,
+                Punct::MinusEq => Punct::Minus,
+                Punct::StarEq => Punct::Star,
+                Punct::SlashEq => Punct::Slash,
+                Punct::PercentEq => Punct::Percent,
+                Punct::AmpEq => Punct::Amp,
+                Punct::PipeEq => Punct::Pipe,
+                Punct::CaretEq => Punct::Caret,
+                Punct::ShlEq => Punct::Shl,
+                Punct::ShrEq => Punct::Shr,
+                Punct::PlusPercentEq => Punct::PlusPercent,
+                Punct::MinusPercentEq => Punct::MinusPercent,
+                Punct::StarPercentEq => Punct::StarPercent,
+                _ => return self.unsupported(e.span, "this assignment operator"),
+            };
+            return self.wide_assign(e, base, p, lt, rhs);
+        }
         let Repr::Scalar(ty) = self.repr(lt) else {
             return self.append_assign(e, op, p, lt, rhs);
         };
@@ -1326,6 +1364,12 @@ impl<'a> Lowerer<'a> {
         let Some(t) = self.ty_of(operand) else {
             return self.unsupported(e.span, "`++` on a value of unknown type");
         };
+        if self.wide_of(t).is_some() {
+            let Some(p) = self.place(operand) else {
+                return self.unsupported(e.span, "`++` on this kind of place");
+            };
+            return self.wide_incdec(e, op, p, t);
+        }
         let Some(ty) = self.scalar_of(t) else {
             return self.unsupported(e.span, "`++` on this type");
         };
@@ -1359,6 +1403,15 @@ impl<'a> Lowerer<'a> {
         }
         if !self.is_scalar(to) {
             return self.rvalue_expr(e);
+        }
+        if self.wide_of(from).is_some() {
+            let Some(ti) = self.scalar_of(to) else {
+                return self.unsupported(e.span, "this conversion");
+            };
+            if ti.is_float() {
+                return self.wide_to_float(e, value, from, ti);
+            }
+            return self.unsupported(e.span, "this conversion");
         }
         let (Some(fi), Some(ti)) = (self.scalar_of(from), self.scalar_of(to)) else {
             return self.unsupported(e.span, "this conversion");

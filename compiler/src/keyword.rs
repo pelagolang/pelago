@@ -230,8 +230,9 @@ impl Keyword {
 /// Names of the built-in types. Not keywords, but reserved by the standard library.
 pub const PRELUDE_TYPES: &[&str] = &[
     "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64",
-    "byte", "float", "float32", "float64", "bool", "char", "string", "str", "map", "set", "range",
-    "option", "result", "box", "soa", "rc", "ptr", "void", "never", "error",
+    "int128", "uint128", "int256", "uint256", "byte", "float", "float32", "float64", "bool",
+    "char", "string", "str", "map", "set", "range", "option", "result", "box", "soa", "rc", "ptr",
+    "void", "never", "error",
 ];
 
 /// Names of the built-in functions. Not keywords.

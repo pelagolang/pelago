@@ -1,0 +1,319 @@
+/// The wide integers (`int128`, `uint128`, `int256`, `uint256`): the parts of their arithmetic that the lowering
+/// does not write out inline. A wide integer is `n` 64-bit words in memory, least significant first, in two's
+/// complement; the same code serves every width (`n` is 2 for 128 bits and 4 for 256 bits).
+///
+/// Addition, subtraction, comparison, bit operations and conversions are expanded inline by the lowering
+/// (`compiler/src/lower/wide.rs`). What is here is multiplication, division, shifts and printing. These are
+/// plain loops over the words, written for being correct first; `docs/design/wide-integers.md` lists how they
+/// get faster. The routines that can overflow give back a `bool` and the caller stops the program, so the
+/// stop is reported at the line of the arithmetic and not inside the library.
+
+fn wGet(p: ptr, i: int) -> int = rtLoadInt(rtOffset(p, i * 8))
+
+fn wPut(p: ptr, i: int, v: int) {
+    rtStoreInt(rtOffset(p, i * 8), v)
+}
+
+fn wZero(p: ptr, n: int) {
+    var i = 0
+    while i < n {
+        wPut(p, i, 0)
+        i += 1
+    }
+}
+
+/// Two's complement negation in place.
+fn wNeg(a: ptr, n: int) {
+    var carry = 1
+    var i = 0
+    while i < n {
+        const s = ~wGet(a, i) +% carry
+        carry = if carry == 1 && s == 0 { 1 } else { 0 }
+        wPut(a, i, s)
+        i += 1
+    }
+}
+
+/// `a -= b` over `n` words (unsigned).
+fn wSubIn(a: ptr, b: ptr, n: int) {
+    var borrow = 0
+    var i = 0
+    while i < n {
+        const x = wGet(a, i)
+        const y = wGet(b, i)
+        const d1 = x -% y
+        const b1 = if rtULt(x, y) { 1 } else { 0 }
+        const d2 = d1 -% borrow
+        const b2 = if rtULt(d1, borrow) { 1 } else { 0 }
+        wPut(a, i, d2)
+        borrow = b1 + b2
+        i += 1
+    }
+}
+
+/// `a >= b`, both unsigned.
+fn wGeU(a: ptr, b: ptr, n: int) -> bool {
+    var i = n - 1
+    while i >= 0 {
+        const x = wGet(a, i)
+        const y = wGet(b, i)
+        if x != y { return !rtULt(x, y) }
+        i -= 1
+    }
+    return true
+}
+
+/// `a = a << 1 | bit`.
+fn wShl1(a: ptr, n: int, bit: int) {
+    var carry = bit
+    var i = 0
+    while i < n {
+        const x = wGet(a, i)
+        wPut(a, i, (x << 1) | carry)
+        carry = rtUShr(x, 63)
+        i += 1
+    }
+}
+
+fn wBit(a: ptr, bit: int) -> int = rtUShr(wGet(a, bit / 64), bit % 64) & 1
+
+/// Words above the top read as `fill`, words below the bottom as 0.
+fn wSrc(a: ptr, i: int, n: int, fill: int) -> int {
+    if i < 0 { return 0 }
+    if i >= n { return fill }
+    return wGet(a, i)
+}
+
+fn wLowestBit() -> int = 1 << 63
+
+//~ `dst = a * b` over `n` words. With `wrap` the product is cut to the width and the answer is always `false`;
+//~ otherwise the answer is `true` when the exact product does not fit (the caller stops the program).
+pub fn rtWideMul(dst: ptr, a: ptr, b: ptr, n: int, signed: bool, wrap: bool) -> bool {
+    const bytes = n * 8
+    const ma = rtAlloc(bytes)
+    const mb = rtAlloc(bytes)
+    const prod = rtAlloc(bytes * 2)
+    rtCopy(ma, a, bytes)
+    rtCopy(mb, b, bytes)
+    var negA = false
+    var negB = false
+    if signed && !wrap {
+        negA = wGet(a, n - 1) < 0
+        negB = wGet(b, n - 1) < 0
+        if negA { wNeg(ma, n) }
+        if negB { wNeg(mb, n) }
+    }
+    wZero(prod, n * 2)
+    var i = 0
+    while i < n {
+        var carry = 0
+        var j = 0
+        while j < n {
+            const x = wGet(ma, i)
+            const y = wGet(mb, j)
+            const lo = x *% y
+            const hi = rtUMulHi(x, y)
+            const p0 = wGet(prod, i + j)
+            const s1 = p0 +% lo
+            const c1 = if rtULt(s1, p0) { 1 } else { 0 }
+            const s2 = s1 +% carry
+            const c2 = if rtULt(s2, s1) { 1 } else { 0 }
+            wPut(prod, i + j, s2)
+            carry = hi + c1 + c2
+            j += 1
+        }
+        wPut(prod, i + n, carry)
+        i += 1
+    }
+    var overflow = false
+    if !wrap {
+        var k = n
+        while k < n * 2 {
+            if wGet(prod, k) != 0 { overflow = true }
+            k += 1
+        }
+        if signed && !overflow {
+            const top = wGet(prod, n - 1)
+            if negA != negB {
+                /// The magnitude may be as large as 2^(64n-1), the smallest number.
+                if top < 0 {
+                    var rest = false
+                    var m = 0
+                    while m < n - 1 {
+                        if wGet(prod, m) != 0 { rest = true }
+                        m += 1
+                    }
+                    if top != wLowestBit() || rest { overflow = true }
+                }
+                if !overflow { wNeg(prod, n) }
+            } else if top < 0 {
+                overflow = true
+            }
+        }
+    }
+    rtCopy(dst, prod, bytes)
+    rtFree(ma)
+    rtFree(mb)
+    rtFree(prod)
+    return overflow
+}
+
+//~ `q = a / b` and `r = a % b` over `n` words, rounding towards zero (the remainder has the sign of `a`). The caller
+//~ has seen that `b` is not zero. The answer is `true` when the quotient does not fit (the smallest signed number
+//~ divided by -1).
+pub fn rtWideDiv(q: ptr, r: ptr, a: ptr, b: ptr, n: int, signed: bool) -> bool {
+    const bytes = n * 8
+    const ua = rtAlloc(bytes)
+    const ub = rtAlloc(bytes)
+    const qq = rtAlloc(bytes)
+    const rr = rtAlloc(bytes)
+    rtCopy(ua, a, bytes)
+    rtCopy(ub, b, bytes)
+    wZero(qq, n)
+    wZero(rr, n)
+    var negA = false
+    var negB = false
+    var overflow = false
+    if signed {
+        negA = wGet(a, n - 1) < 0
+        negB = wGet(b, n - 1) < 0
+        if negA {
+            var restZero = true
+            var m = 0
+            while m < n - 1 {
+                if wGet(a, m) != 0 { restZero = false }
+                m += 1
+            }
+            var allOnes = true
+            m = 0
+            while m < n {
+                if wGet(b, m) != -1 { allOnes = false }
+                m += 1
+            }
+            if restZero && wGet(a, n - 1) == wLowestBit() && allOnes { overflow = true }
+            wNeg(ua, n)
+        }
+        if negB { wNeg(ub, n) }
+    }
+    if !overflow {
+        var small = true
+        var m = 1
+        while m < n {
+            if wGet(ua, m) != 0 || wGet(ub, m) != 0 { small = false }
+            m += 1
+        }
+        if small {
+            wPut(qq, 0, rtUDiv(wGet(ua, 0), wGet(ub, 0)))
+            wPut(rr, 0, rtURem(wGet(ua, 0), wGet(ub, 0)))
+        } else {
+            var bit = n * 64 - 1
+            while bit >= 0 {
+                wShl1(rr, n, wBit(ua, bit))
+                if wGeU(rr, ub, n) {
+                    wSubIn(rr, ub, n)
+                    const w = bit / 64
+                    wPut(qq, w, wGet(qq, w) | (1 << (bit % 64)))
+                }
+                bit -= 1
+            }
+        }
+        if negA != negB { wNeg(qq, n) }
+        if negA { wNeg(rr, n) }
+    }
+    rtCopy(q, qq, bytes)
+    rtCopy(r, rr, bytes)
+    rtFree(ua)
+    rtFree(ub)
+    rtFree(qq)
+    rtFree(rr)
+    return overflow
+}
+
+//~ `dst = a << amt` (`kind` 0), a logical `a >> amt` (1) or an arithmetic one (2), for `amt` from 0 to 64n - 1.
+pub fn rtWideShift(dst: ptr, a: ptr, amt: int, n: int, kind: int) {
+    const w = amt / 64
+    const bits = amt % 64
+    const fill = if kind == 2 && wGet(a, n - 1) < 0 { -1 } else { 0 }
+    var i = 0
+    while i < n {
+        var v = 0
+        if kind == 0 {
+            v = wSrc(a, i - w, n, 0) << bits
+            if bits > 0 { v = v | rtUShr(wSrc(a, i - w - 1, n, 0), 64 - bits) }
+        } else {
+            v = rtUShr(wSrc(a, i + w, n, fill), bits)
+            if bits > 0 { v = v | (wSrc(a, i + w + 1, n, fill) << (64 - bits)) }
+        }
+        wPut(dst, i, v)
+        i += 1
+    }
+}
+
+//~ Appends the decimal text of the wide integer at `a` to the string `out`.
+pub fn rtWideShow(out: ptr, a: ptr, n: int, signed: bool) {
+    const bytes = n * 8
+    const m = rtAlloc(bytes)
+    rtCopy(m, a, bytes)
+    var neg = false
+    if signed && wGet(a, n - 1) < 0 {
+        neg = true
+        wNeg(m, n)
+    }
+    /// The digits, least significant first, built by doubling and adding each bit from the top.
+    const dg = rtAlloc(96)
+    rtStoreByte(dg, rtToByte(0))
+    var len = 1
+    var bit = n * 64 - 1
+    while bit >= 0 {
+        var carry = wBit(m, bit)
+        var k = 0
+        while k < len {
+            const v = (rtLoadByte(rtOffset(dg, k)) to int) * 2 + carry
+            if v >= 10 {
+                rtStoreByte(rtOffset(dg, k), rtToByte(v - 10))
+                carry = 1
+            } else {
+                rtStoreByte(rtOffset(dg, k), rtToByte(v))
+                carry = 0
+            }
+            k += 1
+        }
+        if carry == 1 {
+            rtStoreByte(rtOffset(dg, len), rtToByte(1))
+            len += 1
+        }
+        bit -= 1
+    }
+    if neg { rtPushByte(out, 45) }
+    var k = len - 1
+    while k >= 0 {
+        rtPushByte(out, 48 + (rtLoadByte(rtOffset(dg, k)) to int))
+        k -= 1
+    }
+    rtFree(dg)
+    rtFree(m)
+}
+
+//~ The wide integer at `a` as a `float` (nearest within one step in the last place).
+pub fn rtWideToFloat(a: ptr, n: int, signed: bool) -> float {
+    const bytes = n * 8
+    const m = rtAlloc(bytes)
+    rtCopy(m, a, bytes)
+    var neg = false
+    if signed && wGet(a, n - 1) < 0 {
+        neg = true
+        wNeg(m, n)
+    }
+    var f = 0.0
+    var i = n - 1
+    while i >= 0 {
+        const w = wGet(m, i)
+        const hi = rtUShr(w, 32)
+        const lo = w & 4294967295
+        f = f * 4294967296.0 + (hi to float)
+        f = f * 4294967296.0 + (lo to float)
+        i -= 1
+    }
+    rtFree(m)
+    return if neg { 0.0 - f } else { f }
+}

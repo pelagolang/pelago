@@ -94,6 +94,9 @@ impl<'a> Lowerer<'a> {
         let Some(from) = self.ty_of(v) else {
             return self.unsupported(e.span, "this conversion");
         };
+        if self.wide_of(t).is_some() && !matches!(self.kind(from), TyKind::String) {
+            return self.wide_convert(e, v, from, t, dst);
+        }
         match (self.kind(from), self.kind(t)) {
             (TyKind::String, TyKind::String) => self.into(v, dst, t),
             (_, TyKind::String) => {
