@@ -1,0 +1,91 @@
+/// The one streaming interface every hash in `std` shares, and the byte helpers around it.
+///
+/// ```
+/// import std.hash
+/// import std.sha2
+///
+/// fn main() {
+///     var h = sha256.new()
+///     h.update!("hello ".bytes().toList())
+///     h.update!("world".bytes().toList())
+///     print(hash.hex(h.finish()))                 /// finish works on a copy: `h` can keep going
+///     print(hash.hex(hash.digest(sha256.new(), "abc".bytes().toList())))   /// one call
+/// }
+/// ```
+///
+/// A `hasher` is a plain value. `update!` feeds it bytes in any chunking (the digest never depends on where the
+/// chunks split), `finish` reads the digest from a copy so the hasher stays usable (value semantics: no "finalised"
+/// state to misuse), and `reset!` starts over. Hashes live in their own modules (`std.sha2`, `std.sha3`, ...).
+/// The plan and the catalogue are in `docs/design/crypto.md`.
+
+pub interface hasher {
+    //~ Feeds `data` into the hash.
+    fn update(inout self, data: [byte])
+    //~ The digest of everything fed so far. Does not change the hasher.
+    fn finish(self) -> [byte]
+    //~ Back to the state of a new hasher.
+    fn reset(inout self)
+    //~ A new hasher of the same kind (same variant, nothing fed): how generic code starts over without a clone.
+    fn fresh(self) -> Self
+    //~ Bytes in the digest.
+    fn outputSize(self) -> int
+    //~ Bytes the hash takes at a time (HMAC needs it).
+    fn blockSize(self) -> int
+}
+
+/// The digest of `data` from a new hasher of the kind of `h` (what `h` has been fed is ignored).
+pub fn digest<H: hasher>(h: H, data: [byte]) -> [byte] {
+    var x = h.fresh()
+    x.update!(data)
+    x.finish()
+}
+
+/// The digest of the text's UTF-8 bytes.
+pub fn digestText<H: hasher>(h: H, text: str) -> [byte] = digest(h, text.bytes().toList())
+
+/// Lowercase hex of `data`.
+pub fn hex(data: [byte]) -> string {
+    var s = ""
+    for b of data {
+        const hi = (b to int) >> 4
+        const lo = (b to int) & 15
+        s.pushByte!((hi < 10 ? 48 + hi : 87 + hi).wrapToByte())
+        s.pushByte!((lo < 10 ? 48 + lo : 87 + lo).wrapToByte())
+    }
+    s
+}
+
+fn nibble(c: int) -> int {
+    if c >= 48 && c <= 57 { return c - 48 }
+    if c >= 97 && c <= 102 { return c - 87 }
+    if c >= 65 && c <= 70 { return c - 55 }
+    -1
+}
+
+//~ The bytes a hex text spells; `none` when the length is odd or a character is not a hex digit.
+pub fn fromHex(text: str) -> [byte]? {
+    if text.len() % 2 != 0 { return none }
+    var out: [byte] = []
+    var i = 0
+    while i < text.len() {
+        const hi = nibble(text.byteAt(i) to int)
+        const lo = nibble(text.byteAt(i + 1) to int)
+        if hi < 0 || lo < 0 { return none }
+        out.push!(((hi << 4) | lo).wrapToByte())
+        i += 2
+    }
+    out
+}
+
+//~ Compares two byte lists in time that depends only on their length, never on where they differ. Use it for
+//~ MACs, tokens and password hashes; `==` stops at the first difference and leaks it.
+pub fn equalConstTime(a: [byte], b: [byte]) -> bool {
+    if a.len() != b.len() { return false }
+    var diff = 0
+    var i = 0
+    while i < a.len() {
+        diff = diff | ((a[i] to int) ^ (b[i] to int))
+        i += 1
+    }
+    diff == 0
+}

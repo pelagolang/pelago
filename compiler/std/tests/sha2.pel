@@ -1,0 +1,88 @@
+/// `std.sha2`: every variant against Python's `hashlib` (see `gen_crypto.py`) and the NIST examples.
+import std.hash
+import std.sha2
+import { sha256, sha512 } = std.sha2
+
+fn pattern(n: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * 7 + 3) & 255).wrapToByte()) }
+    out
+}
+
+fn text(s: str) -> [byte] = s.bytes().toList()
+
+fn main() {
+    const lens = [
+        0,
+        1,
+        3,
+        55,
+        56,
+        57,
+        63,
+        64,
+        65,
+        111,
+        112,
+        113,
+        119,
+        127,
+        128,
+        129,
+        200,
+        255,
+        256,
+        1000,
+    ]
+    for n of lens {
+        const m = pattern(n)
+        print(n, hash.hex(hash.digest(sha256.new224(), m)))
+        print(n, hash.hex(hash.digest(sha256.new(), m)))
+        print(n, hash.hex(hash.digest(sha512.new384(), m)))
+        print(n, hash.hex(hash.digest(sha512.new(), m)))
+        print(n, hash.hex(hash.digest(sha512.new512t224(), m)))
+        print(n, hash.hex(hash.digest(sha512.new512t256(), m)))
+    }
+    /// NIST: "abc", the 448-bit and the 896-bit messages.
+    print(hash.hex(hash.digest(sha256.new(), text("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))))
+    print(hash.hex(hash.digest(sha512.new(), text("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"))))
+    /// Streaming: any chunking gives the same digest, and `finish` leaves the hasher usable.
+    var ok = true
+    const whole = pattern(777)
+    const want256 = hash.hex(hash.digest(sha256.new(), whole))
+    const want512 = hash.hex(hash.digest(sha512.new(), whole))
+    for step of [1, 5, 63, 64, 65, 127, 128, 129, 500] {
+        var a = sha256.new()
+        var b = sha512.new()
+        var i = 0
+        while i < whole.len() {
+            const end = i + step < whole.len() ? i + step : whole.len()
+            var part: [byte] = []
+            for j of i..end { part.push!(whole[j]) }
+            a.update!(part)
+            b.update!(part)
+            i = end
+        }
+        if hash.hex(a.finish()) != want256 { ok = false }
+        if hash.hex(b.finish()) != want512 { ok = false }
+        if hash.hex(a.finish()) != want256 { ok = false }
+    }
+    print(ok)
+    /// Many small updates (the NIST million-'a' message is too slow for the interpreter's step limit).
+    var m = sha256.new()
+    var m5 = sha512.new()
+    var block: [byte] = []
+    for i of 0..100 { block.push!(97) }
+    for i of 0..30 {
+        m.update!(block)
+        m5.update!(block)
+    }
+    print(hash.hex(m.finish()))
+    print(hash.hex(m5.finish()))
+    print(
+        hash.equalConstTime(text("abc"), text("abc")),
+        hash.equalConstTime(text("abc"), text("abd")),
+        hash.equalConstTime(text("ab"), text("abc")),
+    )
+    print(hash.fromHex("00ff10"), hash.fromHex("0g"), hash.fromHex("abc"))
+}

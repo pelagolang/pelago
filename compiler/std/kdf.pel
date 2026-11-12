@@ -1,0 +1,86 @@
+/// Key derivation: HKDF (RFC 5869) and PBKDF2 (RFC 8018), both over HMAC with any `hasher`.
+///
+/// ```
+/// import std.hash
+/// import std.kdf
+/// import std.sha2
+/// import { sha256 } = std.sha2
+///
+/// fn main() {
+///     const salt = hash.fromHex("000102030405060708090a0b0c") ?? []
+///     const key = kdf.hkdf(sha256.new(), salt, "input key".bytes().toList(), "context".bytes().toList(), 32)
+///     const pw = kdf.pbkdf2(sha256.new(), "password".bytes().toList(), "salt".bytes().toList(), 100000, 32)
+///     print(hash.hex(key), hash.hex(pw))
+/// }
+/// ```
+///
+/// HKDF turns one secret that is already random (a key-exchange result) into any number of keys, one per `info`.
+/// PBKDF2 turns a password into a key by repeating the HMAC `iterations` times; it is old and cheap to attack on
+/// GPUs, so prefer `argon2` for new password storage (planned, `docs/design/crypto.md`). `length` stops the program
+/// when it is below 0 or above the format's limit (HKDF: 255 hash lengths). Checked against the RFC 5869 vectors and
+/// Python's `hashlib.pbkdf2_hmac`.
+
+import std.hash
+import std.mac
+import { hasher } = std.hash
+
+//~ HKDF-Extract: a fixed-size key from `ikm` (input key material) and an optional `salt` (empty: zeros).
+pub fn hkdfExtract<H: hasher>(h: H, salt: [byte], ikm: [byte]) -> [byte] {
+    if salt.len() == 0 {
+        var zeros: [byte] = []
+        for i of 0..h.outputSize() { zeros.push!(0) }
+        return mac.sign(h, zeros, ikm)
+    }
+    mac.sign(h, salt, ikm)
+}
+
+//~ HKDF-Expand: `length` bytes from a pseudorandom key `prk` and context text `info`.
+pub fn hkdfExpand<H: hasher>(h: H, prk: [byte], info: [byte], length: int) -> [byte] {
+    const n = h.outputSize()
+    assert(length >= 0 && length <= 255 * n)
+    var out: [byte] = []
+    var prev: [byte] = []
+    var counter = 1
+    while out.len() < length {
+        var m = mac.start(h, prk)
+        m.update!(prev)
+        m.update!(info)
+        m.update!([counter.wrapToByte()])
+        prev = m.finish()
+        for b of prev { if out.len() < length { out.push!(b) } }
+        counter += 1
+    }
+    out
+}
+
+//~ HKDF in one call: extract, then expand.
+pub fn hkdf<H: hasher>(h: H, salt: [byte], ikm: [byte], info: [byte], length: int) -> [byte] =
+    hkdfExpand(h, hkdfExtract(h, salt, ikm), info, length)
+
+//~ PBKDF2-HMAC: `length` bytes from `password` and `salt`, `iterations` (at least 1) rounds per output block.
+pub fn pbkdf2<H: hasher>(
+    h: H,
+    password: [byte],
+    salt: [byte],
+    iterations: int,
+    length: int,
+) -> [byte] {
+    assert(iterations >= 1 && length >= 0)
+    const n = h.outputSize()
+    var out: [byte] = []
+    var block = 1
+    while out.len() < length {
+        var m = mac.start(h, password)
+        m.update!(salt)
+        m.update!([((block >> 24) & 255).wrapToByte(), ((block >> 16) & 255).wrapToByte(), ((block >> 8) & 255).wrapToByte(), (block & 255).wrapToByte()])
+        var u = m.finish()
+        var t: [byte] = copy u
+        for round of 1..iterations {
+            u = mac.sign(h, password, u)
+            for i of 0..n { t[i] = t[i] ^ u[i] }
+        }
+        for b of t { if out.len() < length { out.push!(b) } }
+        block += 1
+    }
+    out
+}
