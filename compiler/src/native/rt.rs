@@ -332,7 +332,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `rdi`, `rsi`, `rdx`, the result in `rax` (an address or 0, or a negative error).
-    pub os: [Label; 15],
+    pub os: [Label; 16],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -384,7 +384,7 @@ pub fn emit_for(
         write_u64: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 15].map(|_| a.new_label()),
+        os: [(); 16].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -1742,6 +1742,19 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.mov_ri(RAX, 217);
         a.syscall();
         a.jmp(res);
+        // sleep(seconds = rdi, nanoseconds = rsi): `nanosleep` on a timespec built on the stack. An early
+        // return (a signal) is not an error: the caller looks at the clock again.
+        a.bind(rt.os[15]);
+        a.alu_ri(Alu::Sub, RSP, 16, 8);
+        a.store(mem(RSP, 0), RDI, 8);
+        a.store(mem(RSP, 8), RSI, 8);
+        a.mov_rr(RDI, RSP, 8);
+        a.alu_rr(Alu::Xor, RSI, RSI, 4);
+        a.mov_ri(RAX, 35);
+        a.syscall();
+        a.alu_ri(Alu::Add, RSP, 16, 8);
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
+        a.ret();
         // random(buffer = rdi, count = rsi): `getrandom` with no flags. A count of 1 to 256 is never cut short
         // by a signal once the generator is ready, so anything but the whole count is an error.
         let (rbad, rother) = (a.new_label(), a.new_label());
@@ -1963,6 +1976,10 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.ret();
         // clock: no clock call on Windows yet.
         a.bind(rt.os[11]);
+        a.mov_ri(RAX, -3);
+        a.ret();
+        // sleep: no sleep call on Windows yet.
+        a.bind(rt.os[15]);
         a.mov_ri(RAX, -3);
         a.ret();
         // fs and dents: no file-system calls on Windows yet.

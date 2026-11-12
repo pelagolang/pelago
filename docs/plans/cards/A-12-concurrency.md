@@ -29,4 +29,4 @@ accepted, S-04 (async suspension).
 - C4 (merged): `coroutine<T>` with `emit`/`next`/`iter`/`cancelled`, `task.cancel()` and `cancelled()`. Owner decisions on questions 1 to 5 recorded in the plan.
 - C4b (in review): `scope.cancel()`, `select` `case cancelled()`, scopes wait only for their own tasks, detached tasks abandoned at the end of `main`. Guard pages on task and coroutine stacks: in review. Left: C7 `async`.
 
-- C3d: `time.sleep(duration)` and the `select` `timeout(duration)` arm on the `std.time` clock (Linux; other targets stop with "no clock on this target yet"). Sleeping with nothing else to run busy-waits on the clock until a sleep call exists.
+- C3d: `time.sleep(duration)` and the `select` `timeout(duration)` arm on the `std.time` clock (Linux; other targets stop with "no clock on this target yet"). Sleeping with nothing else to run sleeps in the kernel until the earliest deadline (`OsKind::Sleep`, `rtOsSleep`: `nanosleep` on Linux x86-64 and AArch64, the interpreter's thread sleep; Windows and macOS have no call yet, and no clock either).

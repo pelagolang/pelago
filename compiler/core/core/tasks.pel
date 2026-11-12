@@ -135,8 +135,24 @@ fn rtRunnable(t: int, now: int) -> bool {
     d != 0 && now >= d
 }
 
+//~ Every task is parked and some wait for a deadline: lets the process sleep until the earliest one (`now` is the
+//~ time just read). A sleep that fails, or ends early, is harmless: the scheduler looks at the clock again.
+fn rtSleepToFirstDeadline(now: int) {
+    var first = 0
+    var j = 0
+    while j < rtTasks.len() {
+        const d = rtLoadInt(rtOffset(rtCast<int, ptr>(rtTasks[j]), 72))
+        if d != 0 && (first == 0 || d < first) { first = d }
+        j += 1
+    }
+    if first > now {
+        const n = first - now
+        rtOsSleep(n / 1000000000, n % 1000000000)
+    }
+}
+
 //~ Lets the next task that can run go; false when there is none besides the running one. When every task is parked
-//~ but some wait for a deadline, waits for the clock (a busy wait until the system has a sleep call) and goes on with
+//~ but some wait for a deadline, sleeps until the first one (`rtOsSleep`) and goes on with
 //~ whichever deadline comes first, which may be the running task's own (nothing switches then, and this is true).
 fn rtSwitchNext() -> bool {
     rtMainInit()
@@ -155,6 +171,7 @@ fn rtSwitchNext() -> bool {
         }
         if rtTimers == 0 { return false }
         if rtRunnable(rtCur, now) { return true }
+        rtSleepToFirstDeadline(now)
     }
     false
 }

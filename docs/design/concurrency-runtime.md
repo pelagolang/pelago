@@ -80,9 +80,9 @@ every task parked is a deadlock at once, not after a count of idle switches. A l
 version; per-object queues come with several workers (C6), where waking one task instead of all matters.
 
 Timers (C3d, built on `rtOsClock`): a parked task may carry a deadline in its block. The scheduler reads the clock only
-while some task has one. If every task is parked and some wait for a deadline, it waits on the clock (a busy wait
-until the system has a sleep call: the next runtime call to add, `nanosleep`/futex timeout) and goes on with the
-first deadline to pass. `time.sleep(d)` is `rtSleepNanos`; `select`'s `case timeout(d)` evaluates `d` (a `duration`)
+while some task has one. If every task is parked and some wait for a deadline, it sleeps until the
+earliest deadline (`OsKind::Sleep`, `rtOsSleep`: `nanosleep`; a futex timeout comes with real threads) and goes on
+with the first deadline to pass, so waiting costs no CPU. `time.sleep(d)` is `rtSleepNanos`; `select`'s `case timeout(d)` evaluates `d` (a `duration`)
 when the select starts and takes that arm once the time is up; with no timeout arm a select with nothing ready and
 no task that can change that is a deadlock, as before. Linux x86-64 and AArch64 only until Windows and macOS get a
 clock call.

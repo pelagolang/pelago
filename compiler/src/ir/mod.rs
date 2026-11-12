@@ -365,10 +365,14 @@ pub enum OsKind {
     /// generator; 0, or a negative `OS_*` error (`OS_BAD` for a bad count, `OS_FAIL` where the target has no
     /// such call yet).
     Random,
+    /// `(seconds, nanoseconds)`: let the process sleep for that long (`nanosleep`); it may return early,
+    /// so callers look at the clock again. 0, or a negative `OS_*` error (`OS_FAIL` where the target has
+    /// no such call yet).
+    Sleep,
 }
 
 impl OsKind {
-    pub const ALL: [OsKind; 15] = [
+    pub const ALL: [OsKind; 16] = [
         OsKind::Reserve,
         OsKind::Commit,
         OsKind::Release,
@@ -384,6 +388,7 @@ impl OsKind {
         OsKind::Fs,
         OsKind::Dents,
         OsKind::Random,
+        OsKind::Sleep,
     ];
 
     /// Whether the call reaches the process (arguments, descriptors, exit) rather than memory.
@@ -400,6 +405,7 @@ impl OsKind {
                 | OsKind::Fs
                 | OsKind::Dents
                 | OsKind::Random
+                | OsKind::Sleep
         )
     }
 
@@ -420,6 +426,7 @@ impl OsKind {
             OsKind::Fs => "os_fs",
             OsKind::Dents => "os_dents",
             OsKind::Random => "os_random",
+            OsKind::Sleep => "os_sleep",
         }
     }
 
@@ -433,7 +440,8 @@ impl OsKind {
             | OsKind::AdviseNoHuge
             | OsKind::Open
             | OsKind::Clock
-            | OsKind::Random => 2,
+            | OsKind::Random
+            | OsKind::Sleep => 2,
             OsKind::Remap | OsKind::Write | OsKind::Read | OsKind::Fs | OsKind::Dents => 3,
         }
     }
