@@ -37,7 +37,7 @@ const STACK_WIN: i64 = 1 << 28;
 const COMMIT_WIN: i64 = 512 * 1024;
 
 /// The kernel32 functions the Windows image imports, in the order of its import table.
-pub const IMPORTS: [&str; 20] = [
+pub const IMPORTS: [&str; 25] = [
     "GetStdHandle",
     "WriteFile",
     "ExitProcess",
@@ -57,6 +57,11 @@ pub const IMPORTS: [&str; 20] = [
     "GetCommandLineW",
     "GetEnvironmentStringsW",
     "WideCharToMultiByte",
+    "GetFileAttributesExW",
+    "DeleteFileW",
+    "RemoveDirectoryW",
+    "CreateDirectoryW",
+    "MoveFileExW",
     // From advapi32.dll (the last import; see `pe.rs`).
     "SystemFunction036",
 ];
@@ -66,7 +71,12 @@ pub(super) const IMP_PERF_FREQUENCY: usize = 15;
 pub(super) const IMP_COMMAND_LINE: usize = 16;
 pub(super) const IMP_ENVIRONMENT: usize = 17;
 pub(super) const IMP_WIDE_CHAR: usize = 18;
-pub(super) const IMP_RTL_GEN_RANDOM: usize = 19;
+pub(super) const IMP_FILE_ATTRIBUTES: usize = 19;
+pub(super) const IMP_DELETE_FILE: usize = 20;
+pub(super) const IMP_REMOVE_DIRECTORY: usize = 21;
+pub(super) const IMP_CREATE_DIRECTORY: usize = 22;
+pub(super) const IMP_MOVE_FILE: usize = 23;
+pub(super) const IMP_RTL_GEN_RANDOM: usize = 24;
 pub(super) const IMP_GET_STD_HANDLE: usize = 0;
 pub(super) const IMP_WRITE_FILE: usize = 1;
 pub(super) const IMP_EXIT_PROCESS: usize = 2;
@@ -2173,10 +2183,179 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.bind(rt.os[15]);
         a.mov_ri(RAX, -3);
         a.ret();
-        // fs and dents: no file-system calls on Windows yet.
-        a.bind(rt.os[12]);
-        a.mov_ri(RAX, -3);
-        a.ret();
+        // fs(op = rdi, path = rsi, aux = rdx): the path calls of `OsKind::Fs` through kernel32, the path (and for
+        // `rename` the second one, `aux`) converted to UTF-16 first. 0, a size and kind written at `aux` for `stat`,
+        // or -4 (no such file), -5 (denied), -3 (anything else). Without the allocator there is nothing to convert
+        // with. `dents` (directory listing) has no Windows form yet.
+        if !heap {
+            a.bind(rt.os[12]);
+            a.mov_ri(RAX, -3);
+            a.ret();
+        } else {
+            let wide = a.new_label();
+            let (stat, del, rmd, mkd, ren, fin, fail, ok_exit, bad_op) = (
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+            );
+            // wide(utf8 = rdi) -> rax: the UTF-16 copy in a block of its own (never longer than twice the bytes).
+            a.bind(wide);
+            a.push(RBX);
+            a.push(R12);
+            a.push(R13);
+            a.mov_rr(RBX, RDI, 8);
+            a.alu_rr(Alu::Xor, R12, R12, 4);
+            let (wl, wd) = (a.new_label(), a.new_label());
+            a.bind(wl);
+            a.load_ext(RAX, mem_idx(RBX, R12, 1, 0), 1, false, true);
+            a.test_rr(RAX, RAX, 4);
+            a.jcc(Cc::E, wd);
+            a.alu_ri(Alu::Add, R12, 1, 8);
+            a.jmp(wl);
+            a.bind(wd);
+            a.lea(RDI, mem_idx(R12, R12, 1, 2));
+            a.call(rt.alloc);
+            a.mov_rr(R13, RAX, 8);
+            a.mov_ri(RCX, 65001); // CP_UTF8
+            a.alu_rr(Alu::Xor, RDX, RDX, 4);
+            a.mov_rr(R8, RBX, 8);
+            a.mov_ri(R9, -1);
+            win_call(a, IMP_MULTI_BYTE, |a| {
+                a.store(mem(RSP, 32), R13, 8);
+                a.lea(RAX, mem(R12, 1));
+                a.store(mem(RSP, 40), RAX, 8);
+            });
+            a.mov_rr(RAX, R13, 8);
+            a.pop(R13);
+            a.pop(R12);
+            a.pop(RBX);
+            a.ret();
+            // fs: rbx the path, r14 the second path (`rename`), r13 `aux`, r12 the operation, r15 the `stat` record.
+            a.bind(rt.os[12]);
+            a.push(RBX);
+            a.push(R12);
+            a.push(R13);
+            a.push(R14);
+            a.push(R15);
+            a.mov_rr(R12, RDI, 8);
+            a.mov_rr(R13, RDX, 8);
+            a.alu_rr(Alu::Xor, R14, R14, 4);
+            a.mov_rr(RDI, RSI, 8);
+            a.call(wide);
+            a.mov_rr(RBX, RAX, 8);
+            let no2 = a.new_label();
+            a.alu_ri(Alu::Cmp, R12, 4, 8);
+            a.jcc(Cc::Ne, no2);
+            a.mov_rr(RDI, R13, 8);
+            a.call(wide);
+            a.mov_rr(R14, RAX, 8);
+            a.bind(no2);
+            for (k, l) in [(0, stat), (5, stat), (1, del), (2, rmd), (3, mkd), (4, ren)] {
+                a.alu_ri(Alu::Cmp, R12, k, 8);
+                a.jcc(Cc::E, l);
+            }
+            a.jmp(bad_op);
+            // exists (0) and stat (5): `GetFileAttributesExW(path, 0, &data)`; the record is 36 bytes (attributes at 0,
+            // size high at 28, size low at 32).
+            a.bind(stat);
+            a.alu_ri(Alu::Sub, RSP, 48, 8);
+            a.mov_rr(R15, RSP, 8);
+            a.mov_rr(RCX, RBX, 8);
+            a.alu_rr(Alu::Xor, RDX, RDX, 4);
+            a.mov_rr(R8, R15, 8);
+            win_call(a, IMP_FILE_ATTRIBUTES, |_| {});
+            let (statfail, is_dir, put) = (a.new_label(), a.new_label(), a.new_label());
+            a.test_rr(RAX, RAX, 4);
+            a.jcc(Cc::E, statfail);
+            a.alu_rr(Alu::Xor, RAX, RAX, 4);
+            a.alu_ri(Alu::Cmp, R12, 0, 8);
+            a.jcc(Cc::E, put);
+            a.load_ext(RDX, mem(R15, 28), 4, false, true);
+            a.shift_imm(Shift::Shl, RDX, 32, 8);
+            a.load_ext(RCX, mem(R15, 32), 4, false, true);
+            a.alu_rr(Alu::Or, RDX, RCX, 8);
+            a.store(mem(R13, 0), RDX, 8);
+            a.load_ext(RCX, mem(R15, 0), 4, false, true);
+            a.mov_ri(RDX, 1);
+            a.alu_ri(Alu::And, RCX, 0x10, 4);
+            a.jcc(Cc::E, is_dir);
+            a.mov_ri(RDX, 2);
+            a.bind(is_dir);
+            a.store(mem(R13, 8), RDX, 8);
+            a.bind(put);
+            a.alu_ri(Alu::Add, RSP, 48, 8);
+            a.jmp(ok_exit);
+            a.bind(statfail);
+            a.alu_ri(Alu::Add, RSP, 48, 8);
+            a.jmp(fail);
+            for (l, imp) in [(del, IMP_DELETE_FILE), (rmd, IMP_REMOVE_DIRECTORY)] {
+                a.bind(l);
+                a.mov_rr(RCX, RBX, 8);
+                win_call(a, imp, |_| {});
+                a.jmp(fin);
+            }
+            a.bind(mkd);
+            a.mov_rr(RCX, RBX, 8);
+            a.alu_rr(Alu::Xor, RDX, RDX, 4);
+            win_call(a, IMP_CREATE_DIRECTORY, |_| {});
+            a.jmp(fin);
+            a.bind(ren);
+            a.mov_rr(RCX, RBX, 8);
+            a.mov_rr(RDX, R14, 8);
+            a.mov_ri(R8, 1); // MOVEFILE_REPLACE_EXISTING
+            win_call(a, IMP_MOVE_FILE, |_| {});
+            // A BOOL in `eax`: 0 is a failure.
+            a.bind(fin);
+            a.test_rr(RAX, RAX, 4);
+            a.jcc(Cc::E, fail);
+            a.bind(ok_exit);
+            a.alu_rr(Alu::Xor, R12, R12, 4);
+            let freeing = a.new_label();
+            a.jmp(freeing);
+            // The error number, read before anything else can change it.
+            a.bind(fail);
+            win_call(a, IMP_GET_LAST_ERROR, |_| {});
+            let (nf, den, other) = (a.new_label(), a.new_label(), a.new_label());
+            a.mov_ri(R12, -3);
+            a.alu_ri(Alu::Cmp, RAX, 2, 4);
+            a.jcc(Cc::E, nf);
+            a.alu_ri(Alu::Cmp, RAX, 3, 4);
+            a.jcc(Cc::E, nf);
+            a.alu_ri(Alu::Cmp, RAX, 5, 4);
+            a.jcc(Cc::E, den);
+            a.jmp(other);
+            a.bind(nf);
+            a.mov_ri(R12, -4);
+            a.jmp(other);
+            a.bind(den);
+            a.mov_ri(R12, -5);
+            a.bind(other);
+            a.bind(freeing);
+            a.mov_rr(RDI, RBX, 8);
+            a.call(rt.free);
+            let no_free2 = a.new_label();
+            a.test_rr(R14, R14, 8);
+            a.jcc(Cc::E, no_free2);
+            a.mov_rr(RDI, R14, 8);
+            a.call(rt.free);
+            a.bind(no_free2);
+            a.mov_rr(RAX, R12, 8);
+            a.pop(R15);
+            a.pop(R14);
+            a.pop(R13);
+            a.pop(R12);
+            a.pop(RBX);
+            a.ret();
+            a.bind(bad_op);
+            a.mov_ri(R12, -2);
+            a.jmp(freeing);
+        }
         a.bind(rt.os[13]);
         a.mov_ri(RAX, -3);
         a.ret();

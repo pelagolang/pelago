@@ -135,8 +135,12 @@ In dependency order; each can be one PR.
 - **File system on AArch64 Linux (2026-11-12):** `OsKind::Fs` and `Dents` use the `*at` calls with `AT_FDCWD`
   (`faccessat`, `unlinkat`, `mkdirat`, `renameat`, `newfstatat`, `getdents64`); the kernel's `stat` layout differs from x86-64's
   (`st_mode` at 16, `st_size` at 48).
-- **Not yet:** `main(args)` and `std.env` on macOS; the macOS clock; file-system calls (`OsKind::Fs`, `Dents`) on Windows
-  and macOS; OS threads and atomics (`concurrency-runtime.md`).
+- **File system on Windows (2026-11-12):** `OsKind::Fs` on x86-64 and ARM64 turns the UTF-8 path into UTF-16 with a small
+  runtime helper (heap block from the runtime's own allocator, freed after the call) and uses `GetFileAttributesExW`,
+  `DeleteFileW`, `RemoveDirectoryW`, `CreateDirectoryW` and `MoveFileExW` (replace existing). `GetLastError` 2 and 3 become
+  not-found, 5 permission denied. No `FindFirstFile` yet, so `Dents` (`readDir`) is still "other" there.
+- **Not yet:** `main(args)` and `std.env` on macOS; the macOS clock; `Dents` on Windows; file-system calls on macOS;
+  OS threads and atomics (`concurrency-runtime.md`).
 
 ## Related work already on the board
 
