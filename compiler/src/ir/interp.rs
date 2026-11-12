@@ -974,12 +974,28 @@ impl Machine<'_> {
                 }
                 self.check(p, n as usize)?;
                 let mut buf = vec![0u8; n as usize];
-                match std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf)) {
-                    Ok(()) => {
-                        self.mem[p..p + n as usize].copy_from_slice(&buf);
-                        0
+                let got = match std::fs::File::open("/dev/urandom")
+                    .and_then(|mut f| f.read_exact(&mut buf))
+                {
+                    Ok(()) => true,
+                    // No `/dev/urandom` (Windows): the standard library's hasher keys come from the system.
+                    Err(_) => {
+                        use std::hash::{BuildHasher, Hasher};
+                        for chunk in buf.chunks_mut(8) {
+                            let w = std::collections::hash_map::RandomState::new()
+                                .build_hasher()
+                                .finish()
+                                .to_le_bytes();
+                            chunk.copy_from_slice(&w[..chunk.len()]);
+                        }
+                        true
                     }
-                    Err(_) => OS_FAIL,
+                };
+                if got {
+                    self.mem[p..p + n as usize].copy_from_slice(&buf);
+                    0
+                } else {
+                    OS_FAIL
                 }
             }
             OsKind::Dents => {
