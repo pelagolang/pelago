@@ -85,19 +85,6 @@ pub struct Uses {
 /// What a program that talks to its process (arguments, descriptors, exit) cannot yet be built for.
 pub const PROCESS_REFUSED: &str = "the operating system layer is not built for this target";
 
-/// What a program that reads its arguments cannot yet be built for on Windows.
-pub const ARGV_REFUSED: &str =
-    "`main(args)` and `std.env` are not built for macOS yet (it has no start block)";
-
-/// Whether the module uses `OsKind::Argv`.
-pub fn uses_argv(m: &crate::ir::Module) -> bool {
-    use crate::ir::{Op, OsKind};
-    m.funcs
-        .iter()
-        .flat_map(|f| &f.insts)
-        .any(|i| matches!(&i.op, Op::Os(OsKind::Argv, ..)))
-}
-
 /// Whether the module uses `OsKind::Write`, `Read`, `Exit` or `Argv`.
 pub fn uses_process(m: &crate::ir::Module) -> bool {
     use crate::ir::Op;
