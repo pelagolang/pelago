@@ -1,0 +1,39 @@
+/// Four operating system threads (where the target has them) count to 100000 each with atomic adds; the main thread
+/// joins them through their thread words and frees the stacks. The interpreter and the other targets have no threads
+/// and run the same work on the one thread, so the output is the same everywhere. Threads must not allocate.
+fn count() {
+    const total = rtDataWord(0)
+    var i = 0
+    while i < 100000 {
+        rtAtomicAdd(total, 1)
+        i += 1
+    }
+}
+
+fn main() {
+    var stacks: [int] = []
+    var k = 0
+    while k < 4 {
+        const stack = rtAlloc(65536)
+        stacks.push!(rtAddrInt(stack))
+        const top = rtAddrInt(rtOffset(stack, 65536))
+        if rtThreadStart(rtFnAddr(count), 0, top) < 0 {
+            count()
+            rtStoreInt(rtOffset(stack, 65536 - 8), 0)
+        }
+        k += 1
+    }
+    k = 0
+    while k < 4 {
+        const stack = rtCast<int, ptr>(stacks[k])
+        const word = rtOffset(stack, 65536 - 8)
+        while true {
+            const seen = rtAtomicAdd(word, 0)
+            if seen == 0 { break }
+            rtFutexWait(word, seen, 1000000000)
+        }
+        rtFree(stack)
+        k += 1
+    }
+    print(rtAtomicAdd(rtDataWord(0), 0))
+}

@@ -153,7 +153,7 @@ pub struct Runtime {
     pub ctx_switch: Label,
     /// The operating system memory calls, by `OsKind` order (reserve, commit, release, remap, advise):
     /// arguments in `x0` to `x2`, the result in `x0` (an address or 0, or a negative error).
-    pub os: [Label; 19],
+    pub os: [Label; 22],
 }
 
 fn state(a: &mut Asm, r: Reg, off: u32) {
@@ -478,7 +478,7 @@ pub fn emit_for(
         fmod: a.new_label(),
         ctx_init: a.new_label(),
         ctx_switch: a.new_label(),
-        os: [(); 19].map(|_| a.new_label()),
+        os: [(); 22].map(|_| a.new_label()),
     };
     let flush = a.new_label();
     let fault = a.new_label();
@@ -2367,6 +2367,12 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
     a.dmb_ish();
     a.mov_rr(X0, X9);
     a.ret();
+    // Threads and futexes: not on the 64-bit Arm targets yet (-3).
+    for i in [19, 20, 21] {
+        a.bind(rt.os[i]);
+        a.mov_ri(X0, -3);
+        a.ret();
+    }
     // The exits.
     a.bind(bad);
     a.mov_ri(X0, -2);
