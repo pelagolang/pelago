@@ -451,6 +451,23 @@ impl Asm {
         self.int_op(size, &[op], src.0, Rm::Mem(m), &[src], 0);
     }
 
+    /// `lock cmpxchg [m], src`: compares `rax` with the memory; equal stores `src`, else loads it into `rax`.
+    pub fn lock_cmpxchg(&mut self, m: Mem, src: Reg) {
+        self.byte(0xF0);
+        self.int_op(8, &[0x0F, 0xB1], src.0, Rm::Mem(m), &[src], 0);
+    }
+
+    /// `lock xadd [m], src`: adds `src` to the memory and puts the old value in `src`.
+    pub fn lock_xadd(&mut self, m: Mem, src: Reg) {
+        self.byte(0xF0);
+        self.int_op(8, &[0x0F, 0xC1], src.0, Rm::Mem(m), &[src], 0);
+    }
+
+    /// `xchg [m], src` (locked by the processor): swaps the register and the memory.
+    pub fn xchg_mem(&mut self, m: Mem, src: Reg) {
+        self.int_op(8, &[0x87], src.0, Rm::Mem(m), &[src], 0);
+    }
+
     /// Stores a sign-extended 32-bit constant.
     pub fn store_imm(&mut self, m: Mem, v: i32, size: u8) {
         if size == 1 {

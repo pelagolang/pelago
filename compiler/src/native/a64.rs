@@ -693,6 +693,26 @@ impl Asm {
         self.mem_op(size.trailing_zeros(), 2, false, rt.0, base, off);
     }
 
+    /// `ldaxr rt, [base]`: load-acquire exclusive, 64 bits.
+    pub fn ldaxr(&mut self, rt: Reg, base: Reg) {
+        self.word(0xC85F_FC00 | (base.0 as u32) << 5 | rt.0 as u32);
+    }
+
+    /// `stlxr ws, rt, [base]`: store-release exclusive, 64 bits; `ws` is 0 when the store happened.
+    pub fn stlxr(&mut self, ws: Reg, rt: Reg, base: Reg) {
+        self.word(0xC800_FC00 | (ws.0 as u32) << 16 | (base.0 as u32) << 5 | rt.0 as u32);
+    }
+
+    /// `dmb ish`: a full barrier.
+    pub fn dmb_ish(&mut self) {
+        self.word(0xD503_3BBF);
+    }
+
+    /// `clrex`
+    pub fn clrex(&mut self) {
+        self.word(0xD503_3F5F);
+    }
+
     pub fn str(&mut self, rt: Reg, base: Reg, off: i32, size: u8) {
         self.mem_op(size.trailing_zeros(), 0, false, rt.0, base, off);
     }

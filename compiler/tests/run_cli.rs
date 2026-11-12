@@ -279,6 +279,16 @@ fn sleep_and_select_timeouts_use_the_clock() {
 }
 
 #[test]
+fn atomics_give_the_old_value_and_share_through_a_copy() {
+    let src = "fn main() {\n    const a = atomic(5)\n    print(a.add(3))\n    print(a.load())\n    print(a.swap(10))\n    print(a.compareSwap(10, 11))\n    print(a.compareSwap(10, 12))\n    print(a.load())\n    a.store(1)\n    const b = copy a\n    b.add(4)\n    print(a.load())\n}\n";
+    for flags in args_modes() {
+        let (out, err, code) = run_with(flags, src, &[], "");
+        assert_eq!(out, "5\n8\n8\ntrue\nfalse\n11\n5\n", "{flags:?}: {err}");
+        assert_eq!(code, 0, "{flags:?}");
+    }
+}
+
+#[test]
 fn exit_ends_the_program_with_its_status() {
     let src = "import std.os\nfn main() {\n    print(\"before\")\n    os.exit(7)\n}\n";
     for flags in os_modes() {

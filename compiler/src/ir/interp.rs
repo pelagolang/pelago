@@ -730,7 +730,10 @@ impl Machine<'_> {
             | OsKind::Fs
             | OsKind::Dents
             | OsKind::Random
-            | OsKind::Sleep => return self.os_layer(k, a, b, c),
+            | OsKind::Sleep
+            | OsKind::AtomicCas
+            | OsKind::AtomicAdd
+            | OsKind::AtomicSwap => return self.os_layer(k, a, b, c),
             OsKind::Reserve => {
                 if !sized(a) {
                     OS_BAD
@@ -945,6 +948,20 @@ impl Machine<'_> {
                 self.mem[p..p + 8].copy_from_slice(&(now.as_secs() as i64).to_le_bytes());
                 self.mem[p + 8..p + 16].copy_from_slice(&(now.subsec_nanos() as i64).to_le_bytes());
                 0
+            }
+            OsKind::AtomicCas | OsKind::AtomicAdd | OsKind::AtomicSwap => {
+                let p = a as usize;
+                self.check(p, 8)?;
+                let old = i64::from_le_bytes(self.mem[p..p + 8].try_into().unwrap());
+                let new = match k {
+                    OsKind::AtomicCas => (old == b).then_some(c),
+                    OsKind::AtomicAdd => Some(old.wrapping_add(b)),
+                    _ => Some(b),
+                };
+                if let Some(n) = new {
+                    self.mem[p..p + 8].copy_from_slice(&n.to_le_bytes());
+                }
+                old
             }
             OsKind::Sleep => {
                 if a < 0 || !(0..1_000_000_000).contains(&b) {

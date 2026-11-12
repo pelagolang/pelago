@@ -725,6 +725,49 @@ impl clone for semaphore {
     }
 }
 
+//~ An `int` that can be read and changed by several tasks (and, later, threads) without a lock: `atomic(0)`;
+//~ `load`, `store`, `add` and `swap` give or take the whole value, `add` and `swap` return the old one, and
+//~ `compareSwap(expected, desired)` stores only if the value is still `expected` and says whether it did. Every
+//~ operation is sequentially consistent. `copy handle` shares it, as with `lock`.
+pub struct atomic {
+    p: ptr
+
+    init(value: int) {
+        /// The block: [value][handles].
+        const p = rtAlloc(16)
+        rtStoreInt(p, value)
+        rtStoreInt(rtOffset(p, 8), 1)
+        self.p = p
+    }
+
+    deinit {
+        if rtAtomicAdd(rtOffset(self.p, 8), -1) == 1 {
+            rtFree(self.p)
+        }
+    }
+}
+
+impl atomic {
+    fn load(self) -> int = rtAtomicAdd(self.p, 0)
+
+    fn store(self, v: int) {
+        rtAtomicSwap(self.p, v)
+    }
+
+    fn add(self, d: int) -> int = rtAtomicAdd(self.p, d)
+
+    fn swap(self, v: int) -> int = rtAtomicSwap(self.p, v)
+
+    fn compareSwap(self, expected: int, desired: int) -> bool = rtAtomicCas(self.p, expected, desired) == expected
+}
+
+impl clone for atomic {
+    fn clone(self) -> atomic {
+        rtAtomicAdd(rtOffset(self.p, 8), 1)
+        atomic { p: self.p }
+    }
+}
+
 //~ A meeting point for `n` tasks: `barrier(n)`; `wait` returns once all `n` have called it, and the barrier
 //~ can be used again. `copy handle` shares it.
 pub struct barrier {

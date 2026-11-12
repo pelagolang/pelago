@@ -369,10 +369,20 @@ pub enum OsKind {
     /// so callers look at the clock again. 0, or a negative `OS_*` error (`OS_FAIL` where the target has
     /// no such call yet).
     Sleep,
+    /// `(address, expected, new)`: if the 8 bytes at the (8-aligned) address equal `expected`, store `new`
+    /// there; either way gives the value that was there. Sequentially consistent. Atomics are runtime
+    /// routines (`lock cmpxchg` on x86-64, a `ldaxr`/`stlxr` loop on AArch64), not IR instructions of their
+    /// own: they are rare, and the call keeps the optimiser and both back ends' instruction sets as they are.
+    AtomicCas,
+    /// `(address, delta)`: add `delta` to the 8 bytes at the address, wrapping; gives the old value.
+    /// `delta` 0 is an atomic load.
+    AtomicAdd,
+    /// `(address, new)`: store `new` at the address; gives the old value.
+    AtomicSwap,
 }
 
 impl OsKind {
-    pub const ALL: [OsKind; 16] = [
+    pub const ALL: [OsKind; 19] = [
         OsKind::Reserve,
         OsKind::Commit,
         OsKind::Release,
@@ -389,6 +399,9 @@ impl OsKind {
         OsKind::Dents,
         OsKind::Random,
         OsKind::Sleep,
+        OsKind::AtomicCas,
+        OsKind::AtomicAdd,
+        OsKind::AtomicSwap,
     ];
 
     /// Whether the call reaches the process (arguments, descriptors, exit) rather than memory.
@@ -427,6 +440,9 @@ impl OsKind {
             OsKind::Dents => "os_dents",
             OsKind::Random => "os_random",
             OsKind::Sleep => "os_sleep",
+            OsKind::AtomicCas => "os_atomic_cas",
+            OsKind::AtomicAdd => "os_atomic_add",
+            OsKind::AtomicSwap => "os_atomic_swap",
         }
     }
 
@@ -441,8 +457,15 @@ impl OsKind {
             | OsKind::Open
             | OsKind::Clock
             | OsKind::Random
-            | OsKind::Sleep => 2,
-            OsKind::Remap | OsKind::Write | OsKind::Read | OsKind::Fs | OsKind::Dents => 3,
+            | OsKind::Sleep
+            | OsKind::AtomicAdd
+            | OsKind::AtomicSwap => 2,
+            OsKind::Remap
+            | OsKind::Write
+            | OsKind::Read
+            | OsKind::Fs
+            | OsKind::Dents
+            | OsKind::AtomicCas => 3,
         }
     }
 }
