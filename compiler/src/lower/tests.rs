@@ -1811,22 +1811,40 @@ fn native_args_and_environment() {
 #[test]
 fn native_file_system_calls() {
     use crate::native::{exec, gen, Arch, Os};
-    let want = "true\ntrue 5\ntrue\nb.txt\nc.txt\nsub\nfalse\ntrue\ntrue\n";
-    for (arch, tag) in [(Arch::X86_64, "x86"), (Arch::Aarch64, "a64")] {
+    let listing = "b.txt\nc.txt\nsub\n";
+    let all = [
+        (Arch::X86_64, Os::Linux, "x86"),
+        (Arch::Aarch64, Os::Linux, "a64"),
+        (Arch::X86_64, Os::Windows, "x86w"),
+        (Arch::Aarch64, Os::Windows, "a64w"),
+    ];
+    for (arch, os, tag) in all {
         let a64 = arch == Arch::Aarch64;
-        if (a64 && !exec::can_run_a64_on(Os::Linux)) || (!a64 && !exec::can_run(Os::Linux)) {
+        if (a64 && !exec::can_run_a64_on(os)) || (!a64 && !exec::can_run(os)) {
             continue;
         }
+        // Reading a directory is not built on Windows yet, so that line and its output drop out there.
+        let win = os == Os::Windows;
+        let want = if win {
+            "true\ntrue 5\ntrue\nfalse\ntrue\ntrue\n".to_string()
+        } else {
+            format!("true\ntrue 5\ntrue\n{listing}false\ntrue\ntrue\n")
+        };
         let dir = std::env::temp_dir().join(format!("pelago-fs-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let d = dir.display();
+        let d = dir.display().to_string().replace('\\', "/");
         let src = format!(
             "import std.fs\nimport std.io\n\nfn main() -> void ! io_error {{\n    const root = \"{d}\"\n    fs.createDirs(\"#(root)/sub/inner\")?\n    fs.writeText(\"#(root)/a.txt\", \"hello\")?\n    print(fs.exists(\"#(root)/a.txt\"))\n    const m = fs.metadata(\"#(root)/a.txt\")?\n    print(m.kind == fs.file_kind.file, m.size)\n    const sd = fs.metadata(\"#(root)/sub\")?\n    print(sd.kind == fs.file_kind.dir)\n    fs.rename(\"#(root)/a.txt\", \"#(root)/b.txt\")?\n    fs.writeText(\"#(root)/c.txt\", \"x\")?\n    fs.removeDir(\"#(root)/sub/inner\")?\n    for n of fs.readDir(root)? {{ print(n) }}\n    fs.removeFile(\"#(root)/b.txt\")?\n    fs.removeFile(\"#(root)/c.txt\")?\n    fs.removeDir(\"#(root)/sub\")?\n    print(fs.exists(\"#(root)/b.txt\"))\n    const e = fs.metadata(\"#(root)/b.txt\")\n    switch e {{\n        case ok(_): print(\"found\")\n        case err(x): print(x.kind == io_kind.notFound)\n    }}\n    fs.removeDir(root)?\n    print(!fs.exists(root))\n}}"
         );
+        let src = if win {
+            src.replace("    for n of fs.readDir(root)? { print(n) }\n", "")
+        } else {
+            src
+        };
         let l = lowered(&src);
         let opts = gen::Options {
             leak_check: false,
-            target: Os::Linux,
+            target: os,
             symbols: false,
         };
         let image = if a64 {
@@ -1834,9 +1852,14 @@ fn native_file_system_calls() {
         } else {
             gen::compile(&l.module, "main", &opts).unwrap()
         };
-        let r = exec::run_image_arch(arch, Os::Linux, &image).unwrap();
+        let r = exec::run_image_arch(arch, os, &image).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
-        assert_eq!((r.out.as_str(), r.code), (want, 0), "{arch:?}: {}", r.err);
+        assert_eq!(
+            (r.out.as_str(), r.code),
+            (want.as_str(), 0),
+            "{arch:?} {os:?}: {}",
+            r.err
+        );
     }
 }
 

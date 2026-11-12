@@ -21,9 +21,10 @@
 use super::a64::*;
 use super::elf::Blob;
 use super::rt::{
-    IMP_ADD_VEH, IMP_CLOSE_HANDLE, IMP_COMMAND_LINE, IMP_CREATE_FILE, IMP_ENVIRONMENT,
-    IMP_EXIT_PROCESS, IMP_GET_CONSOLE_MODE, IMP_GET_LAST_ERROR, IMP_GET_STD_HANDLE, IMP_MULTI_BYTE,
-    IMP_PERF_COUNTER, IMP_PERF_FREQUENCY, IMP_READ_FILE, IMP_RTL_GEN_RANDOM, IMP_VIRTUAL_ALLOC,
+    IMP_ADD_VEH, IMP_CLOSE_HANDLE, IMP_COMMAND_LINE, IMP_CREATE_DIRECTORY, IMP_CREATE_FILE,
+    IMP_DELETE_FILE, IMP_ENVIRONMENT, IMP_EXIT_PROCESS, IMP_FILE_ATTRIBUTES, IMP_GET_CONSOLE_MODE,
+    IMP_GET_LAST_ERROR, IMP_GET_STD_HANDLE, IMP_MOVE_FILE, IMP_MULTI_BYTE, IMP_PERF_COUNTER,
+    IMP_PERF_FREQUENCY, IMP_READ_FILE, IMP_REMOVE_DIRECTORY, IMP_RTL_GEN_RANDOM, IMP_VIRTUAL_ALLOC,
     IMP_VIRTUAL_FREE, IMP_VIRTUAL_PROTECT, IMP_WALL_TIME, IMP_WIDE_CHAR, IMP_WRITE_FILE,
     REGION_BYTES, REGION_MAX, REGION_MIN, SPAN_TABLE,
 };
@@ -2175,7 +2176,162 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
     // else). `res` turns the kernel's `-errno` into those.
     let res = a.new_label();
     start(a, rt.os[12]);
-    if win || mac {
+    if win && !heap {
+        // No allocator in this program: nothing to convert the path with.
+        a.mov_ri(X0, -3);
+        finish(a);
+    } else if win {
+        let wide = a.new_label();
+        let (stat, del, rmd, mkd, ren, fin, fail, ok_exit, bad_op, freeing) = (
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+            a.new_label(),
+        );
+        let after = a.new_label();
+        a.b(after);
+        // wide(utf8 = x0) -> x0: the UTF-16 copy in a block of its own (never longer than twice the bytes).
+        a.bind(wide);
+        enter(a);
+        let (wl, wd) = (a.new_label(), a.new_label());
+        a.mov_rr(X19, X0);
+        a.mov_ri(X21, 0);
+        a.bind(wl);
+        a.add_rr(X10, X19, X21);
+        a.ldr(X9, X10, 0, 1);
+        a.cbz(X9, wd);
+        a.add_ri(X21, X21, 1);
+        a.b(wl);
+        a.bind(wd);
+        a.lsl_ri(X0, X21, 1);
+        a.add_ri(X0, X0, 2);
+        a.bl(rt.alloc);
+        a.mov_rr(X22, X0);
+        a.mov_ri(X0, 65001); // CP_UTF8
+        a.mov_ri(X1, 0);
+        a.mov_rr(X2, X19);
+        a.mov_ri(X3, -1);
+        a.mov_rr(X4, X22);
+        a.add_ri(X5, X21, 1);
+        win_call(a, IMP_MULTI_BYTE);
+        a.mov_rr(X0, X22);
+        leave(a);
+        a.ret();
+        a.bind(after);
+        // Redo the entry: `start` made it before the jump, which skipped over the helper only.
+        // x19 the path, x20 the second path (`rename`), x21 `aux`, x22 the operation, x23 the `stat` record.
+        a.mov_rr(X22, X0);
+        a.mov_rr(X21, X2);
+        a.mov_rr(X0, X1);
+        a.bl(wide);
+        a.mov_rr(X19, X0);
+        a.mov_ri(X20, 0);
+        let no2 = a.new_label();
+        a.cmp_ri(X22, 4);
+        a.b_cond(Cond::Ne, no2);
+        a.mov_rr(X0, X21);
+        a.bl(wide);
+        a.mov_rr(X20, X0);
+        a.bind(no2);
+        for (k, l) in [(0, stat), (5, stat), (1, del), (2, rmd), (3, mkd), (4, ren)] {
+            a.cmp_ri(X22, k);
+            a.b_cond(Cond::Eq, l);
+        }
+        a.b(bad_op);
+        // exists (0) and stat (5): `GetFileAttributesExW(path, 0, &data)`; the record is 36 bytes (attributes at 0,
+        // size high at 28, size low at 32).
+        a.bind(stat);
+        a.sub_ri(SP, SP, 48);
+        a.mov_from_sp(X23);
+        a.mov_rr(X0, X19);
+        a.mov_ri(X1, 0);
+        a.mov_rr(X2, X23);
+        win_call(a, IMP_FILE_ATTRIBUTES);
+        let (statfail, file, put) = (a.new_label(), a.new_label(), a.new_label());
+        a.uxt(X0, X0, 32); // a BOOL
+        a.cbz(X0, statfail);
+        a.cmp_ri(X22, 0);
+        a.b_cond(Cond::Eq, put);
+        a.ldr(X9, X23, 28, 4);
+        a.lsl_ri(X9, X9, 32);
+        a.ldr(X10, X23, 32, 4);
+        a.orr_rr(X9, X9, X10);
+        a.str(X9, X21, 0, 8);
+        a.ldr(X10, X23, 0, 4);
+        a.mov_ri(X9, 1);
+        a.mov_ri(X11, 0x10);
+        a.tst_rr(X10, X11);
+        a.b_cond(Cond::Eq, file);
+        a.mov_ri(X9, 2);
+        a.bind(file);
+        a.str(X9, X21, 8, 8);
+        a.bind(put);
+        a.add_ri(SP, SP, 48);
+        a.b(ok_exit);
+        a.bind(statfail);
+        a.add_ri(SP, SP, 48);
+        a.b(fail);
+        for (l, imp) in [(del, IMP_DELETE_FILE), (rmd, IMP_REMOVE_DIRECTORY)] {
+            a.bind(l);
+            a.mov_rr(X0, X19);
+            win_call(a, imp);
+            a.b(fin);
+        }
+        a.bind(mkd);
+        a.mov_rr(X0, X19);
+        a.mov_ri(X1, 0);
+        win_call(a, IMP_CREATE_DIRECTORY);
+        a.b(fin);
+        a.bind(ren);
+        a.mov_rr(X0, X19);
+        a.mov_rr(X1, X20);
+        a.mov_ri(X2, 1); // MOVEFILE_REPLACE_EXISTING
+        win_call(a, IMP_MOVE_FILE);
+        // A BOOL in `w0`: 0 is a failure.
+        a.bind(fin);
+        a.uxt(X0, X0, 32);
+        a.cbz(X0, fail);
+        a.bind(ok_exit);
+        a.mov_ri(X23, 0);
+        a.b(freeing);
+        // The error number, read before anything else can change it.
+        a.bind(fail);
+        win_call(a, IMP_GET_LAST_ERROR);
+        let (nf, den, done) = (a.new_label(), a.new_label(), a.new_label());
+        a.mov_ri(X23, -3);
+        a.cmp_ri(X0, 2);
+        a.b_cond(Cond::Eq, nf);
+        a.cmp_ri(X0, 3);
+        a.b_cond(Cond::Eq, nf);
+        a.cmp_ri(X0, 5);
+        a.b_cond(Cond::Eq, den);
+        a.b(done);
+        a.bind(nf);
+        a.mov_ri(X23, -4);
+        a.b(done);
+        a.bind(den);
+        a.mov_ri(X23, -5);
+        a.bind(done);
+        a.bind(freeing);
+        a.mov_rr(X0, X19);
+        a.bl(rt.free);
+        let no_free2 = a.new_label();
+        a.cbz(X20, no_free2);
+        a.mov_rr(X0, X20);
+        a.bl(rt.free);
+        a.bind(no_free2);
+        a.mov_rr(X0, X23);
+        finish(a);
+        a.bind(bad_op);
+        a.mov_ri(X23, -2);
+        a.b(freeing);
+    } else if mac {
         a.mov_ri(X0, -3);
         finish(a);
     } else {
