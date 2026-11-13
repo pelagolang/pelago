@@ -172,7 +172,7 @@ impl<'a> Lowerer<'a> {
     /// The comparison operators on two soft floats: a Bool.
     pub(crate) fn soft_compare(
         &mut self,
-        e: &'a Expr,
+        _e: &'a Expr,
         op: Punct,
         lhs: &'a Expr,
         rhs: &'a Expr,
@@ -184,10 +184,22 @@ impl<'a> Lowerer<'a> {
         let Some(b) = self.sf_operand(rhs, k) else {
             return Res::Never;
         };
+        match self.soft_cmp_ptrs(op, a, b, k) {
+            Some(v) => Res::Val(v),
+            None => Res::Never,
+        }
+    }
+
+    /// The comparison `op` on the whole-word copies `a` and `b` of two soft floats: a Bool.
+    pub(crate) fn soft_cmp_ptrs(
+        &mut self,
+        op: Punct,
+        a: Value,
+        b: Value,
+        k: FloatKind,
+    ) -> Option<Value> {
         let [n, eb, mb] = self.sf_fmt(k);
-        let Some(r) = self.call_core("rtFloatCmp", vec![a, b, n, eb, mb]) else {
-            return Res::Never;
-        };
+        let r = self.call_core("rtFloatCmp", vec![a, b, n, eb, mb])?;
         let c = |s: &mut Self, v: i64| s.i64c(v);
         // The answer is -1, 0, 1, or 2 for a NaN.
         let (cmp, rv, lhs_v) = match op {
@@ -202,7 +214,30 @@ impl<'a> Lowerer<'a> {
             }
             _ => (CmpOp::ULt, c(self, 2), r),
         };
-        self.wrap(Op::Cmp(cmp, lhs_v, rv), IrTy::Bool, e.span)
+        self.emit(Op::Cmp(cmp, lhs_v, rv), Some(IrTy::Bool), SP)
+    }
+
+    /// `cur += step` in place; without a step, `cur += 1`.
+    pub(crate) fn soft_step(&mut self, cur: Value, step: Option<Value>, k: FloatKind) {
+        let b = match step {
+            Some(s) => s,
+            None => self.soft_from_int(1, k),
+        };
+        let a = self.sf_copy(cur, k);
+        self.sf_arith(0, cur, a, b, k);
+    }
+
+    /// A whole-word slot holding the small integer `v` as a float.
+    pub(crate) fn soft_from_int(&mut self, v: i64, k: FloatKind) -> Value {
+        let tmp = self.sf_zeroed(k.words());
+        let src = self.sf_zeroed(1);
+        let w = self.i64c(v);
+        self.store_at(src, 0, w);
+        let [n, eb, mb] = self.sf_fmt(k);
+        let one = self.sf_i(1);
+        let t = self.konst(IrTy::Bool, Const::Bool(true), SP);
+        self.call_core("rtFloatFromInt", vec![tmp, src, one, t, n, eb, mb]);
+        tmp
     }
 
     fn wrap_bin(&mut self, op: BinOp, a: Value, b: Value) -> Value {

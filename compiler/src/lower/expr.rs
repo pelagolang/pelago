@@ -2057,6 +2057,19 @@ impl<'a> Lowerer<'a> {
         let Some(sty) = self.ty_of(start) else {
             return self.unsupported(span, "a range of unknown type");
         };
+        if let Some(r) = self.for_range_mem(
+            label.clone(),
+            var,
+            sty,
+            start,
+            end,
+            inclusive,
+            step_e,
+            body,
+            span,
+        ) {
+            return r;
+        }
         let Some(ty) = self.scalar_of(sty) else {
             return self.unsupported(span, "a range of this type");
         };

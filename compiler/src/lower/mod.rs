@@ -25,6 +25,7 @@ mod expr;
 mod func;
 mod glue;
 mod intr;
+mod memnum;
 mod meta;
 mod obj;
 mod ops;
