@@ -25,7 +25,7 @@ use super::rt::{
     IMP_DELETE_FILE, IMP_ENVIRONMENT, IMP_EXIT_PROCESS, IMP_FILE_ATTRIBUTES,
     IMP_FILE_INFO_BY_HANDLE, IMP_GET_CONSOLE_MODE, IMP_GET_LAST_ERROR, IMP_GET_STD_HANDLE,
     IMP_MOVE_FILE, IMP_MULTI_BYTE, IMP_PERF_COUNTER, IMP_PERF_FREQUENCY, IMP_READ_FILE,
-    IMP_REMOVE_DIRECTORY, IMP_RTL_GEN_RANDOM, IMP_VIRTUAL_ALLOC, IMP_VIRTUAL_FREE,
+    IMP_REMOVE_DIRECTORY, IMP_RTL_GEN_RANDOM, IMP_SLEEP, IMP_VIRTUAL_ALLOC, IMP_VIRTUAL_FREE,
     IMP_VIRTUAL_PROTECT, IMP_WALL_TIME, IMP_WIDE_CHAR, IMP_WRITE_FILE, REGION_BYTES, REGION_MAX,
     REGION_MIN, SPAN_TABLE,
 };
@@ -2205,7 +2205,25 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
     // sleep(seconds, nanoseconds): `nanosleep` on Linux, from a timespec on the stack; -3 on Windows and macOS.
     start(a, rt.os[15]);
     if win {
-        a.mov_ri(X0, -3);
+        // `Sleep` in whole milliseconds, rounded up and held to 2^31 - 1 (see `rt.rs`).
+        let (clamp, go) = (a.new_label(), a.new_label());
+        a.mov_ri(X9, 2_000_000);
+        a.cmp_rr(X0, X9);
+        a.b_cond(Cond::Hi, clamp);
+        a.mov_ri(X9, 1000);
+        a.mul(X0, X0, X9);
+        a.add_ri(X1, X1, 999_999);
+        a.mov_ri(X9, 1_000_000);
+        a.udiv(X1, X1, X9);
+        a.add_rr(X0, X0, X1);
+        a.mov_ri(X9, 0x7FFF_FFFF);
+        a.cmp_rr(X0, X9);
+        a.b_cond(Cond::Ls, go);
+        a.bind(clamp);
+        a.mov_ri(X0, 0x7FFF_FFFF);
+        a.bind(go);
+        win_call(a, IMP_SLEEP);
+        a.mov_ri(X0, 0);
         finish(a);
     } else if os == Os::MacOs {
         // `select(0, 0, 0, 0, &timeval)`: no descriptors, so it only waits. Microseconds (nanoseconds / 1000, cut
