@@ -18,7 +18,8 @@
 /// Conventional: Keccak-f[1600] and the sponge, as in the standard. Pelago's part: the state is a plain value, so
 /// `finish` and `squeeze` work on a copy and the hasher stays usable. Only `^`, `&`, `~` and rotations touch the data
 /// (no table lookups, no data-dependent branches). Checked against Python's `hashlib` (`compiler/std/tests/sha3.pel`).
-/// Not yet here: cSHAKE, KMAC, TupleHash, ParallelHash (SP 800-185) and KangarooTwelve (see `docs/design/crypto.md`).
+/// cSHAKE and KMAC (SP 800-185) are here too; TupleHash, ParallelHash and KangarooTwelve are not yet (see
+/// `docs/design/crypto.md`).
 
 import std.hash
 import { hasher } = std.hash
@@ -104,23 +105,106 @@ pub struct keccak {
     rate: int
     size: int
     suffix: int
+    prefix: [byte]
+    tail: [byte]
 
     //~ SHA-3 with a digest of `bits` bits: 224, 256, 384 or 512 (stops the program otherwise).
     fn sha3(bits: int) -> keccak {
         assert(bits == 224 || bits == 256 || bits == 384 || bits == 512)
-        keccak { state: zeros(), buf: [], rate: 200 - bits / 4, size: bits / 8, suffix: 6 }
+        keccak.build(200 - bits / 4, bits / 8, 6, [], [])
     }
     //~ The original Keccak (padding byte 0x01, not SHA-3's 0x06; the digests differ): `bits` is 224, 256, 384 or
     //~ 512. Keccak-256 is the hash Ethereum calls "keccak256".
     fn original(bits: int) -> keccak {
         assert(bits == 224 || bits == 256 || bits == 384 || bits == 512)
-        keccak { state: zeros(), buf: [], rate: 200 - bits / 4, size: bits / 8, suffix: 1 }
+        keccak.build(200 - bits / 4, bits / 8, 1, [], [])
     }
     //~ SHAKE with security `strength` 128 or 256 and a default output of `size` bytes (`squeeze` gives any length).
     fn shake(strength: int, size: int) -> keccak {
         assert(strength == 128 || strength == 256)
-        keccak { state: zeros(), buf: [], rate: 200 - strength / 4, size: size, suffix: 31 }
+        keccak.build(200 - strength / 4, size, 31, [], [])
     }
+    //~ cSHAKE (NIST SP 800-185): SHAKE with a function name and a customisation string, so the same input gives
+    //~ unrelated outputs in different uses. `strength` is 128 or 256, `size` the default output length in bytes.
+    //~ With an empty `name` and `custom` it is plain SHAKE.
+    fn cshake(strength: int, size: int, name: [byte], custom: [byte]) -> keccak {
+        assert(strength == 128 || strength == 256)
+        const rate = 200 - strength / 4
+        if name.len() == 0 && custom.len() == 0 { return keccak.build(rate, size, 31, [], []) }
+        var head = encodeString(name)
+        for b of encodeString(custom) { head.push!(b) }
+        return keccak.build(rate, size, 4, bytepad(head, rate), [])
+    }
+    //~ KMAC (NIST SP 800-185): a keyed MAC built on cSHAKE, with a `key` of any length, an output of `size` bytes
+    //~ (part of the result: a different `size` gives an unrelated tag) and an optional customisation string.
+    fn kmac(strength: int, size: int, key: [byte], custom: [byte]) -> keccak {
+        assert(strength == 128 || strength == 256)
+        const rate = 200 - strength / 4
+        var head = encodeString("KMAC".bytes().toList())
+        for b of encodeString(custom) { head.push!(b) }
+        var prefix = bytepad(head, rate)
+        for b of bytepad(encodeString(key), rate) { prefix.push!(b) }
+        return keccak.build(rate, size, 4, prefix, rightEncode(size * 8))
+    }
+    //~ KMACXOF: like `kmac` but the output length is not mixed into the tag, so `squeeze(n)` gives a prefix-consistent
+    //~ stream of any length.
+    fn kmacXof(strength: int, size: int, key: [byte], custom: [byte]) -> keccak {
+        assert(strength == 128 || strength == 256)
+        const rate = 200 - strength / 4
+        var head = encodeString("KMAC".bytes().toList())
+        for b of encodeString(custom) { head.push!(b) }
+        var prefix = bytepad(head, rate)
+        for b of bytepad(encodeString(key), rate) { prefix.push!(b) }
+        return keccak.build(rate, size, 4, prefix, rightEncode(0))
+    }
+    fn build(rate: int, size: int, suffix: int, prefix: [byte], tail: [byte]) -> keccak {
+        var k = keccak { state: zeros(), buf: [], rate: rate, size: size, suffix: suffix, prefix: copy prefix, tail: copy tail }
+        if prefix.len() > 0 { absorb(k!, prefix) }
+        k
+    }
+}
+
+/// SP 800-185 helpers: the shortest big-endian bytes of `x`, with its length before (`left`) or after (`right`).
+fn encodeNumber(x: int) -> [byte] {
+    var digits: [byte] = []
+    var v = x
+    while v > 0 {
+        digits.push!((v & 255).wrapToByte())
+        v = v >> 8
+    }
+    if digits.len() == 0 { digits.push!(0) }
+    var out: [byte] = []
+    var i = digits.len()
+    while i > 0 {
+        i -= 1
+        out.push!(digits[i])
+    }
+    out
+}
+
+fn leftEncode(x: int) -> [byte] {
+    var out: [byte] = [encodeNumber(x).len().wrapToByte()]
+    for b of encodeNumber(x) { out.push!(b) }
+    out
+}
+
+fn rightEncode(x: int) -> [byte] {
+    var out: [byte] = encodeNumber(x)
+    out.push!(encodeNumber(x).len().wrapToByte())
+    out
+}
+
+fn encodeString(s: [byte]) -> [byte] {
+    var out: [byte] = leftEncode(s.len() * 8)
+    for b of s { out.push!(b) }
+    out
+}
+
+fn bytepad(x: [byte], w: int) -> [byte] {
+    var out: [byte] = leftEncode(w)
+    for b of x { out.push!(b) }
+    while out.len() % w != 0 { out.push!(0) }
+    out
 }
 
 /// XORs one full block (`rate` bytes at `at`) into the state, then permutes.
@@ -163,8 +247,15 @@ impl hasher for keccak {
     fn reset(inout self) {
         self.state = zeros()
         self.buf = []
+        if self.prefix.len() > 0 { absorb(self!, copy self.prefix) }
     }
-    fn fresh(self) -> keccak = keccak { state: zeros(), buf: [], rate: self.rate, size: self.size, suffix: self.suffix }
+    fn fresh(self) -> keccak = keccak.build(
+        self.rate,
+        self.size,
+        self.suffix,
+        copy self.prefix,
+        copy self.tail,
+    )
     fn outputSize(self) -> int = self.size
     fn blockSize(self) -> int = self.rate
 }
@@ -174,8 +265,10 @@ impl keccak {
     //~ Works on a copy.
     fn squeeze(self, n: int) -> [byte] {
         var c = copy self
+        if self.tail.len() > 0 { absorb(c!, copy self.tail) }
         var pad: [byte] = [self.suffix.wrapToByte()]
-        while (self.buf.len() + pad.len()) % self.rate != 0 { pad.push!(0) }
+        const used = c.buf.len()
+        while (used + pad.len()) % self.rate != 0 { pad.push!(0) }
         pad[pad.len() - 1] = (((pad[pad.len() - 1] to int) | 128)).wrapToByte()
         absorb(c!, pad)
         var out: [byte] = []

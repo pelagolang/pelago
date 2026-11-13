@@ -1,0 +1,69 @@
+/// `std.blake2`: BLAKE2b and BLAKE2s against Python's `hashlib` (sizes, keys, salts, personalisation, streaming).
+import std.blake2
+import std.hash
+import { blake2b, blake2s } = std.blake2
+
+fn pattern(n: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * 7 + 3) & 255).wrapToByte()) }
+    out
+}
+
+fn main() {
+    for n of [0, 1, 63, 64, 65, 127, 128, 129, 255, 256, 257, 300] {
+        const m = pattern(n)
+        print(
+            n,
+            hash.hex(hash.digest(blake2b.new(64), m)),
+            hash.hex(hash.digest(blake2s.new(32), m)),
+        )
+    }
+    for size of [1, 20, 32, 48] {
+        const m = pattern(100)
+        print(
+            size,
+            hash.hex(hash.digest(blake2b.new(size), m)),
+            hash.hex(hash.digest(blake2s.new(size > 32 ? 32 : size), m)),
+        )
+    }
+    /// Keys (one byte, a few, the longest) with messages around the block edge.
+    for kl of [1, 7, 32] {
+        for n of [0, 5, 64, 128, 129] {
+            const m = pattern(n)
+            const k = pattern(kl)
+            print(
+                kl,
+                n,
+                hash.hex(hash.digest(blake2b.keyed(32, k), m)),
+                hash.hex(hash.digest(blake2s.keyed(32, k), m)),
+            )
+        }
+    }
+    const k64 = pattern(64)
+    print(hash.hex(hash.digest(blake2b.keyed(64, k64), pattern(200))))
+    /// Salt and personalisation.
+    print(hash.hex(hash.digest(blake2b.custom(40, pattern(9), pattern(16), pattern(16)), pattern(77))))
+    print(hash.hex(hash.digest(blake2s.custom(24, pattern(9), pattern(8), pattern(8)), pattern(77))))
+    /// Streaming in odd chunks, and `finish` leaves the hasher usable.
+    const whole = pattern(500)
+    const wantB = hash.hex(hash.digest(blake2b.keyed(48, pattern(5)), whole))
+    const wantS = hash.hex(hash.digest(blake2s.keyed(32, pattern(5)), whole))
+    var ok = true
+    for step of [1, 3, 63, 64, 128, 129] {
+        var b = blake2b.keyed(48, pattern(5))
+        var s = blake2s.keyed(32, pattern(5))
+        var i = 0
+        while i < whole.len() {
+            const end = i + step < whole.len() ? i + step : whole.len()
+            var part: [byte] = []
+            for j of i..end { part.push!(whole[j]) }
+            b.update!(part)
+            s.update!(part)
+            i = end
+        }
+        if hash.hex(b.finish()) != wantB { ok = false }
+        if hash.hex(s.finish()) != wantS { ok = false }
+        if hash.hex(b.finish()) != wantB { ok = false }
+    }
+    print(ok)
+}

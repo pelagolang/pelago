@@ -63,9 +63,11 @@ Status: **built**, **next** (batch number), or **later**.
 | SHA3-224/256/384/512 | `std.sha3` | built (batch 2a) | Keccak-f[1600]; the type is `keccak` (`keccak.sha3(256)`) so module and type names do not clash |
 | Keccak-256 / 512 (pre-NIST padding) | `std.sha3` | built (batch 2a) | Ethereum; `keccak.original(256)` |
 | SHAKE128, SHAKE256 (XOF) | `std.sha3` | built (batch 2a) | `keccak.shake(128, 32)`, `squeeze(n)` for any length |
-| cSHAKE, KMAC, TupleHash, ParallelHash (SP 800-185) | `std.sha3` | batch 2b | |
-| BLAKE2b, BLAKE2s (plain, keyed, salt, personal; BLAKE2X) | `std.blake2` | batch 2 | needed by Argon2 |
-| BLAKE3 (hash, keyed, derive_key, XOF) | `std.blake3` | batch 2 | Islet's hash; no official 32-bit-only limitation |
+| cSHAKE, KMAC, KMACXOF (SP 800-185) | `std.sha3` | built (batch 2b) | `keccak.cshake(...)`, `keccak.kmac(...)`; checked against the NIST samples |
+| TupleHash, ParallelHash (SP 800-185) | `std.sha3` | batch 4 | |
+| BLAKE2b, BLAKE2s (plain, keyed, salt, personal) | `std.blake2` | built (batch 2b) | needed by Argon2 |
+| BLAKE2X (XOF), BLAKE2bp / BLAKE2sp (parallel) | `std.blake2` | batch 4 | |
+| BLAKE3 (hash, keyed, derive_key, XOF) | `std.blake3` | built (batch 2b) | Islet's hash; the type is `blake3hash`; serial, no SIMD yet |
 | TurboSHAKE, KangarooTwelve | `std.kangaroo` | batch 4 | Keccak with 12 rounds, tree mode |
 | SM3 (China GB/T 32905) | `std.sm3` | batch 4 | |
 | Streebog-256/512 (GOST R 34.11-2012) | `std.streebog` | batch 4 | |
@@ -95,9 +97,12 @@ Question 2 proposes that importing `std.legacy` gives a compiler warning unless 
 | CRC-32 (IEEE), CRC-32C (Castagnoli), CRC-64 (ECMA, XZ), CRC-16 (several), CRC-8, any CRC by parameters (Rocksoft model) | `std.checksum` | built (batch 2a); any CRC of whole-byte width 8 to 64 by Rocksoft parameters, eight common ones ready |
 | Adler-32 | `std.checksum` | built (batch 2a) |
 | Fletcher-16/32/64 | `std.checksum` | batch 4 |
-| xxHash32, xxHash64, XXH3-64, XXH3-128 | `std.fasthash` | batch 2 |
-| FNV-1, FNV-1a (32, 64, 128) | `std.fasthash` | batch 2 |
-| SipHash-2-4, SipHash-1-3, SipHash-128 | `std.fasthash` | batch 2 (a keyed PRF: safe against hash flooding, not a collision-resistant hash) |
+| xxHash32, xxHash64 | `std.fasthash` | built (batch 2b) |
+| XXH3-64, XXH3-128 | `std.fasthash` | batch 4 |
+| FNV-1, FNV-1a (32, 64) | `std.fasthash` | built (batch 2b) |
+| FNV 128, 256, 512, 1024 | `std.fasthash` | batch 4 |
+| SipHash-2-4, SipHash-1-3 (64-bit output) | `std.fasthash` | built (batch 2b); a keyed PRF: safe against hash flooding, not a collision-resistant hash |
+| SipHash 128-bit output, HalfSipHash | `std.fasthash` | batch 4 |
 | MurmurHash3 (32, x86-128, x64-128), wyhash, CityHash, FarmHash, MetroHash, t1ha, SpookyHash, HighwayHash | `std.fasthash` | batch 4 |
 
 ### MACs, key derivation, password hashing
@@ -106,7 +111,7 @@ Question 2 proposes that importing `std.legacy` gives a compiler warning unless 
 |---|---|---|
 | HMAC (any hasher) | `std.mac` | built |
 | HKDF, PBKDF2-HMAC | `std.kdf` | built |
-| KMAC128/256 | `std.sha3` | batch 2 |
+| KMAC128/256 | `std.sha3` | built (batch 2b) |
 | Poly1305, CMAC (AES), GMAC | `std.mac` | batch 3 (Poly1305), batch 5 |
 | scrypt | `std.password` | batch 3 |
 | Argon2d / 2i / 2id (RFC 9106) | `std.password` | batch 3 (after BLAKE2b) |
@@ -127,7 +132,11 @@ work. Constant-time big arithmetic for those is its own design.
 1. **Batch 1 (this PR, built):** `std.hash`, `std.sha2` (all six), `std.mac` (HMAC), `std.kdf` (HKDF, PBKDF2),
    constant-time compare, hex.
 2. **Batch 2a (built):** `std.sha3` (SHA-3, Keccak, SHAKE), `std.legacy` (MD5, SHA-1), `std.checksum` (CRC, Adler-32).
-   **Batch 2b:** `std.blake2`, `std.blake3`, `std.fasthash` (xxHash, FNV, SipHash), cSHAKE and KMAC.
+   **Batch 2b (built):** `std.blake2`, `std.blake3`, `std.fasthash` (FNV, xxHash32/64, SipHash), cSHAKE and KMAC.
+   BLAKE3 has no reference implementation here to test against (the official one is not in the sandbox), so its
+   expectations come from an independent Python port of the specification, which reproduces the published values for
+   "", one byte and "abc" (`compiler/std/tests/blake3_ref.py`); the same method is used for FNV, xxHash and SipHash
+   (`fast_ref.py`). Running the official test vectors from the BLAKE3 repository is a good follow-up.
 3. **Batch 3:** ChaCha20, Poly1305, AEAD, CSPRNG, scrypt, Argon2, bcrypt, PHC strings.
 4. **Batch 4:** the rest of the hash catalogue (RIPEMD, SM3, Streebog, Whirlpool, Tiger, K12, MD4, MD2, the rest of
    `std.fasthash`).
