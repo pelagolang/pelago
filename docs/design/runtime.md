@@ -152,8 +152,9 @@ In dependency order; each can be one PR.
   macOS's directory records differ from Linux's (name at 21, type at 20), so the runtime rewrites each batch to the
   Linux shape and `readDir` stays one piece of Pelago code. Sleep is `select` with no descriptors and a timeout. Checked
   on the macOS CI job only.
-- **Not yet:** Windows sleep;
-  OS threads and atomics (`concurrency-runtime.md`).
+- **Windows sleep (2026-11-13):** `Sleep` in whole milliseconds, rounded up and held to 2^31 - 1; an early return is not an error
+  because the caller looks at the clock again.
+- **Not yet:** OS threads and atomics (`concurrency-runtime.md`).
 
 ## Related work already on the board
 

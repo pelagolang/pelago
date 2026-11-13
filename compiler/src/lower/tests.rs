@@ -1684,23 +1684,41 @@ fn native_clock_on_macos() {
     assert_eq!((r.out, r.code), (o.output, 0), "{}", r.err);
 }
 
-/// Sleeping on macOS (AArch64 only, so it runs on the macOS CI job): the system call waits, the clock sees it.
+/// Sleeping natively, on every target that can run here: the system call waits and the clock sees it.
 #[test]
-fn native_sleep_on_macos() {
+fn native_sleep_waits() {
     use crate::native::{exec, gen, Arch, Os};
-    if !exec::can_run_a64_on(Os::MacOs) {
-        return;
-    }
     let src = "import std.time\n\nfn main() -> void ! io_error {\n    const t0 = time.now()?\n    time.sleep(time.millis(30))\n    print((t0.elapsed()?).asMillis() >= 30)\n}";
     let l = lowered(src);
-    let opts = gen::Options {
-        leak_check: false,
-        target: Os::MacOs,
-        symbols: false,
-    };
-    let image = crate::native::gen_a64::compile(&l.module, "main", &opts).unwrap();
-    let r = exec::run_image_arch(Arch::Aarch64, Os::MacOs, &image).unwrap();
-    assert_eq!((r.out.as_str(), r.code), ("true\n", 0), "{}", r.err);
+    for (arch, os) in [
+        (Arch::X86_64, Os::Linux),
+        (Arch::X86_64, Os::Windows),
+        (Arch::Aarch64, Os::Linux),
+        (Arch::Aarch64, Os::Windows),
+        (Arch::Aarch64, Os::MacOs),
+    ] {
+        let a64 = arch == Arch::Aarch64;
+        if (a64 && !exec::can_run_a64_on(os)) || (!a64 && !exec::can_run(os)) {
+            continue;
+        }
+        let opts = gen::Options {
+            leak_check: false,
+            target: os,
+            symbols: false,
+        };
+        let image = if a64 {
+            crate::native::gen_a64::compile(&l.module, "main", &opts).unwrap()
+        } else {
+            gen::compile(&l.module, "main", &opts).unwrap()
+        };
+        let r = exec::run_image_arch(arch, os, &image).unwrap();
+        assert_eq!(
+            (r.out.as_str(), r.code),
+            ("true\n", 0),
+            "{arch:?} {os:?}: {}",
+            r.err
+        );
+    }
 }
 
 /// A native stop message without its place (`file:line: `) and the `stopped: ` before the message.
