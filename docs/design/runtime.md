@@ -147,7 +147,12 @@ In dependency order; each can be one PR.
   `main(args)` refusal at build time is gone. Wall clock: the `gettimeofday` system call; monotonic: the virtual counter
   (`CNTVCT_EL0`, readable from user code) at the fixed 24 MHz of Apple chips, split into seconds and nanoseconds.
   Checked on the macOS CI job only (nothing here runs macOS).
-- **Not yet:** file-system calls on macOS;
+- **File system and sleep on macOS (2026-11-13):** the plain BSD calls (`access`, `unlink`, `rmdir`, `mkdir`, `rename`,
+  `stat64`, `getdirentries64`) with the path moved to `x0`; the stat record has a 16-bit `st_mode` at 4 and `st_size` at 96.
+  macOS's directory records differ from Linux's (name at 21, type at 20), so the runtime rewrites each batch to the
+  Linux shape and `readDir` stays one piece of Pelago code. Sleep is `select` with no descriptors and a timeout. Checked
+  on the macOS CI job only.
+- **Not yet:** Windows sleep;
   OS threads and atomics (`concurrency-runtime.md`).
 
 ## Related work already on the board
