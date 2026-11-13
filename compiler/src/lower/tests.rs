@@ -1833,7 +1833,7 @@ fn native_args_and_environment() {
 #[test]
 fn native_file_system_calls() {
     use crate::native::{exec, gen, Arch, Os};
-    let listing = "b.txt\nc.txt\nsub\n";
+    let listing = "b.txt\nc.txt\nsub\n\u{e9}.txt\n";
     let all = [
         (Arch::X86_64, Os::Linux, "x86"),
         (Arch::Aarch64, Os::Linux, "a64"),
@@ -1845,24 +1845,13 @@ fn native_file_system_calls() {
         if (a64 && !exec::can_run_a64_on(os)) || (!a64 && !exec::can_run(os)) {
             continue;
         }
-        // Reading a directory is not built on Windows yet, so that line and its output drop out there.
-        let win = os == Os::Windows;
-        let want = if win {
-            "true\ntrue 5\ntrue\nfalse\ntrue\ntrue\n".to_string()
-        } else {
-            format!("true\ntrue 5\ntrue\n{listing}false\ntrue\ntrue\n")
-        };
+        let want = format!("true\ntrue 5\ntrue\n{listing}false\ntrue\ntrue\n");
         let dir = std::env::temp_dir().join(format!("pelago-fs-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let d = dir.display().to_string().replace('\\', "/");
         let src = format!(
-            "import std.fs\nimport std.io\n\nfn main() -> void ! io_error {{\n    const root = \"{d}\"\n    fs.createDirs(\"#(root)/sub/inner\")?\n    fs.writeText(\"#(root)/a.txt\", \"hello\")?\n    print(fs.exists(\"#(root)/a.txt\"))\n    const m = fs.metadata(\"#(root)/a.txt\")?\n    print(m.kind == fs.file_kind.file, m.size)\n    const sd = fs.metadata(\"#(root)/sub\")?\n    print(sd.kind == fs.file_kind.dir)\n    fs.rename(\"#(root)/a.txt\", \"#(root)/b.txt\")?\n    fs.writeText(\"#(root)/c.txt\", \"x\")?\n    fs.removeDir(\"#(root)/sub/inner\")?\n    for n of fs.readDir(root)? {{ print(n) }}\n    fs.removeFile(\"#(root)/b.txt\")?\n    fs.removeFile(\"#(root)/c.txt\")?\n    fs.removeDir(\"#(root)/sub\")?\n    print(fs.exists(\"#(root)/b.txt\"))\n    const e = fs.metadata(\"#(root)/b.txt\")\n    switch e {{\n        case ok(_): print(\"found\")\n        case err(x): print(x.kind == io_kind.notFound)\n    }}\n    fs.removeDir(root)?\n    print(!fs.exists(root))\n}}"
+            "import std.fs\nimport std.io\n\nfn main() -> void ! io_error {{\n    const root = \"{d}\"\n    fs.createDirs(\"#(root)/sub/inner\")?\n    fs.writeText(\"#(root)/a.txt\", \"hello\")?\n    print(fs.exists(\"#(root)/a.txt\"))\n    const m = fs.metadata(\"#(root)/a.txt\")?\n    print(m.kind == fs.file_kind.file, m.size)\n    const sd = fs.metadata(\"#(root)/sub\")?\n    print(sd.kind == fs.file_kind.dir)\n    fs.rename(\"#(root)/a.txt\", \"#(root)/b.txt\")?\n    fs.writeText(\"#(root)/c.txt\", \"x\")?\n    fs.writeText(\"#(root)/\u{e9}.txt\", \"y\")?\n    fs.removeDir(\"#(root)/sub/inner\")?\n    for n of fs.readDir(root)? {{ print(n) }}\n    fs.removeFile(\"#(root)/b.txt\")?\n    fs.removeFile(\"#(root)/c.txt\")?\n    fs.removeFile(\"#(root)/\u{e9}.txt\")?\n    fs.removeDir(\"#(root)/sub\")?\n    print(fs.exists(\"#(root)/b.txt\"))\n    const e = fs.metadata(\"#(root)/b.txt\")\n    switch e {{\n        case ok(_): print(\"found\")\n        case err(x): print(x.kind == io_kind.notFound)\n    }}\n    fs.removeDir(root)?\n    print(!fs.exists(root))\n}}"
         );
-        let src = if win {
-            src.replace("    for n of fs.readDir(root)? { print(n) }\n", "")
-        } else {
-            src
-        };
         let l = lowered(&src);
         let opts = gen::Options {
             leak_check: false,
