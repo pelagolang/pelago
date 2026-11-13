@@ -1,0 +1,37 @@
+fn kind(x: int128) -> string {
+    return switch x {
+        case 0: "zero"
+        case 1..10: "small"
+        case 100000000000000000000: "huge"
+        case -5..=-1: "negative"
+        default: "other"
+    }
+}
+
+fn fk(x: float128) -> string {
+    return switch x {
+        case 0.0: "zero"
+        case 0.5: "half"
+        case 1.0..2.0: "one-ish"
+        default: "other"
+    }
+}
+
+fn main() {
+    print(kind(0), kind(5), kind(100000000000000000000), kind(-3), kind(50))
+    print(fk(0.0), fk(0.5), fk(1.5), fk(2.0))
+    var sum: int256 = 0
+    for i in 0..5 { sum += i * 1000000000000000000000000000000 }
+    print(sum)
+    var t: int128 = 0
+    for i in 10..=20 step 5 { t += i }
+    print(t)
+    for i in 3..0 step -1 { print(i) }
+    var f: float128 = 0.0
+    for x in 0.0..1.0 step 0.25 { f += x }
+    print(f)
+    const lo: uint256 = 115792089237316195423570985008687907853269984665640564039457584007913129639933
+    var c = 0
+    for u in lo..=115792089237316195423570985008687907853269984665640564039457584007913129639935 { c += 1 }
+    print(c)
+}
