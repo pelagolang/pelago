@@ -598,6 +598,91 @@ pub fn document(text: str) -> value ! json_error {
     ok(r?)
 }
 
+
+/// The whole number in `s` (digits, an optional leading `-`) as an `int128`, or `none` when it is not one or does not fit.
+fn parseInt128(s: str) -> int128? {
+    var p = 0
+    var neg = false
+    if s.len() > 0 && s.byteAt(0) == 45 {
+        neg = true
+        p = 1
+    }
+    if p >= s.len() { return none }
+    /// Built downwards from zero, so the smallest number fits.
+    var r: int128 = 0
+    const low: int128 = -170141183460469231731687303715884105728
+    while p < s.len() {
+        const b = s.byteAt(p)
+        if b < 48 || b > 57 { return none }
+        const d: int128 = (b - 48) to int128
+        if r < (low + d) / 10 { return none }
+        r = r * 10 - d
+        p += 1
+    }
+    if neg { return r }
+    if r == low { return none }
+    -r
+}
+
+/// The whole number in `s` (digits only) as a `uint128`, or `none` when it is not one or does not fit.
+fn parseUint128(s: str) -> uint128? {
+    if s.len() == 0 { return none }
+    var r: uint128 = 0
+    const high: uint128 = 340282366920938463463374607431768211455
+    var p = 0
+    while p < s.len() {
+        const b = s.byteAt(p)
+        if b < 48 || b > 57 { return none }
+        const d: uint128 = (b - 48) to uint128
+        if r > (high - d) / 10 { return none }
+        r = r * 10 + d
+        p += 1
+    }
+    r
+}
+
+/// The whole number in `s` (digits, an optional leading `-`) as an `int256`, or `none` when it is not one or does not fit.
+fn parseInt256(s: str) -> int256? {
+    var p = 0
+    var neg = false
+    if s.len() > 0 && s.byteAt(0) == 45 {
+        neg = true
+        p = 1
+    }
+    if p >= s.len() { return none }
+    /// Built downwards from zero, so the smallest number fits.
+    var r: int256 = 0
+    const low: int256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968
+    while p < s.len() {
+        const b = s.byteAt(p)
+        if b < 48 || b > 57 { return none }
+        const d: int256 = (b - 48) to int256
+        if r < (low + d) / 10 { return none }
+        r = r * 10 - d
+        p += 1
+    }
+    if neg { return r }
+    if r == low { return none }
+    -r
+}
+
+/// The whole number in `s` (digits only) as a `uint256`, or `none` when it is not one or does not fit.
+fn parseUint256(s: str) -> uint256? {
+    if s.len() == 0 { return none }
+    var r: uint256 = 0
+    const high: uint256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935
+    var p = 0
+    while p < s.len() {
+        const b = s.byteAt(p)
+        if b < 48 || b > 57 { return none }
+        const d: uint256 = (b - 48) to uint256
+        if r > (high - d) / 10 { return none }
+        r = r * 10 + d
+        p += 1
+    }
+    r
+}
+
 /// What kind of value this is, for messages.
 fn describe(v: value) -> string {
     switch v {
@@ -681,6 +766,101 @@ impl value {
         switch self {
             case .text(t): ok(copy t)
             case _: err(self.mismatch("text", at))
+        }
+    }
+
+    //~ A `float16`: JSON text (how `toJson` writes it, so every digit is kept; `inf`, `-inf` and `nan` too), or a JSON number.
+    fn toFloat16(self, at: [int]) -> float16 ! json_error {
+        switch self {
+            case .number(n): ok("#n".parseFloat16().or(0.0 to float16))
+            case .integer(n): ok(n to float16)
+            case .text(t):
+                const r = t.parseFloat16()
+                if r.isErr() { return err(problem("\"#t\" is not a number", at)) }
+                ok(r.or(0.0 to float16))
+            case _: err(self.mismatch("a number or text", at))
+        }
+    }
+
+    //~ A `float128`: JSON text (how `toJson` writes it, so every digit is kept; `inf`, `-inf` and `nan` too), or a JSON number.
+    fn toFloat128(self, at: [int]) -> float128 ! json_error {
+        switch self {
+            case .number(n): ok(n to float128)
+            case .integer(n): ok(n to float128)
+            case .text(t):
+                const r = t.parseFloat128()
+                if r.isErr() { return err(problem("\"#t\" is not a number", at)) }
+                ok(r.or(0.0 to float128))
+            case _: err(self.mismatch("a number or text", at))
+        }
+    }
+
+    //~ A `float256`: JSON text (how `toJson` writes it, so every digit is kept; `inf`, `-inf` and `nan` too), or a JSON number.
+    fn toFloat256(self, at: [int]) -> float256 ! json_error {
+        switch self {
+            case .number(n): ok(n to float256)
+            case .integer(n): ok(n to float256)
+            case .text(t):
+                const r = t.parseFloat256()
+                if r.isErr() { return err(problem("\"#t\" is not a number", at)) }
+                ok(r.or(0.0 to float256))
+            case _: err(self.mismatch("a number or text", at))
+        }
+    }
+
+    //~ A whole number as an `int128`: JSON text of digits (how `toJson` writes it, so no digit is lost) or an
+    //~ integer that fits `int`.
+    fn toInt128(self, at: [int]) -> int128 ! json_error {
+        switch self {
+            case .integer(n): ok(n to int128)
+            case .text(t):
+                const r = parseInt128(t)
+                if r.isNone() { return err(problem("\"#t\" is not a whole number that fits in int128 (-170141183460469231731687303715884105728 to 170141183460469231731687303715884105727)", at)) }
+                ok(r.unwrapOr(0))
+            case _: err(self.mismatch("a whole number or text of digits", at))
+        }
+    }
+
+    //~ A whole number as an `uint128`: JSON text of digits (how `toJson` writes it, so no digit is lost) or an
+    //~ integer that fits `int`.
+    fn toUint128(self, at: [int]) -> uint128 ! json_error {
+        switch self {
+            case .integer(n):
+                if n < 0 { return err(problem("#n does not fit in uint128 (0 to 340282366920938463463374607431768211455)", at)) }
+                ok(parseUint128("#n").unwrapOr(0))
+            case .text(t):
+                const r = parseUint128(t)
+                if r.isNone() { return err(problem("\"#t\" is not a whole number that fits in uint128 (0 to 340282366920938463463374607431768211455)", at)) }
+                ok(r.unwrapOr(0))
+            case _: err(self.mismatch("a whole number or text of digits", at))
+        }
+    }
+
+    //~ A whole number as an `int256`: JSON text of digits (how `toJson` writes it, so no digit is lost) or an
+    //~ integer that fits `int`.
+    fn toInt256(self, at: [int]) -> int256 ! json_error {
+        switch self {
+            case .integer(n): ok(n to int256)
+            case .text(t):
+                const r = parseInt256(t)
+                if r.isNone() { return err(problem("\"#t\" is not a whole number that fits in int256 (-57896044618658097711785492504343953926634992332820282019728792003956564819968 to 57896044618658097711785492504343953926634992332820282019728792003956564819967)", at)) }
+                ok(r.unwrapOr(0))
+            case _: err(self.mismatch("a whole number or text of digits", at))
+        }
+    }
+
+    //~ A whole number as an `uint256`: JSON text of digits (how `toJson` writes it, so no digit is lost) or an
+    //~ integer that fits `int`.
+    fn toUint256(self, at: [int]) -> uint256 ! json_error {
+        switch self {
+            case .integer(n):
+                if n < 0 { return err(problem("#n does not fit in uint256 (0 to 115792089237316195423570985008687907853269984665640564039457584007913129639935)", at)) }
+                ok(parseUint256("#n").unwrapOr(0))
+            case .text(t):
+                const r = parseUint256(t)
+                if r.isNone() { return err(problem("\"#t\" is not a whole number that fits in uint256 (0 to 115792089237316195423570985008687907853269984665640564039457584007913129639935)", at)) }
+                ok(r.unwrapOr(0))
+            case _: err(self.mismatch("a whole number or text of digits", at))
         }
     }
 }
