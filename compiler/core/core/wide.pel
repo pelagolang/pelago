@@ -322,3 +322,69 @@ pub fn rtWideToFloat(a: ptr, n: int, signed: bool) -> float {
     rtFree(m)
     return if neg { 0.0 - f } else { f }
 }
+
+impl int128 {
+    fn abs(self) -> int128 = self < 0 ? 0 - self : self
+    fn min(self, other: int128) -> int128 = self < other ? self : other
+    fn max(self, other: int128) -> int128 = self > other ? self : other
+
+    //~ `self` to the power of `exponent` (a whole number, not below 0); stops the program when the result does not fit.
+    fn pow(self, exponent: int) -> int128 {
+        var result: int128 = 1
+        var i = 0
+        while i < exponent {
+            result *= self
+            i += 1
+        }
+        result
+    }
+}
+
+impl uint128 {
+    fn min(self, other: uint128) -> uint128 = self < other ? self : other
+    fn max(self, other: uint128) -> uint128 = self > other ? self : other
+
+    //~ `self` to the power of `exponent` (a whole number, not below 0); stops the program when the result does not fit.
+    fn pow(self, exponent: int) -> uint128 {
+        var result: uint128 = 1
+        var i = 0
+        while i < exponent {
+            result *= self
+            i += 1
+        }
+        result
+    }
+}
+
+impl int256 {
+    fn abs(self) -> int256 = self < 0 ? 0 - self : self
+    fn min(self, other: int256) -> int256 = self < other ? self : other
+    fn max(self, other: int256) -> int256 = self > other ? self : other
+
+    //~ `self` to the power of `exponent` (a whole number, not below 0); stops the program when the result does not fit.
+    fn pow(self, exponent: int) -> int256 {
+        var result: int256 = 1
+        var i = 0
+        while i < exponent {
+            result *= self
+            i += 1
+        }
+        result
+    }
+}
+
+impl uint256 {
+    fn min(self, other: uint256) -> uint256 = self < other ? self : other
+    fn max(self, other: uint256) -> uint256 = self > other ? self : other
+
+    //~ `self` to the power of `exponent` (a whole number, not below 0); stops the program when the result does not fit.
+    fn pow(self, exponent: int) -> uint256 {
+        var result: uint256 = 1
+        var i = 0
+        while i < exponent {
+            result *= self
+            i += 1
+        }
+        result
+    }
+}
