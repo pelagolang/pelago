@@ -47,4 +47,4 @@ Correct first, as agreed. Where the time goes, in the order to attack it:
 
 ## Floats
 
-`float128` (software IEEE binary128) and `float16` are the next step; see the card in `docs/plans/`.
+See [soft-floats.md](soft-floats.md): `float16`, `float128` and `float256` are built on these words.

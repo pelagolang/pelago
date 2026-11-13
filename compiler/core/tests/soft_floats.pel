@@ -1,0 +1,23 @@
+/// float16, float128 and float256: literals, arithmetic, comparison, conversion and printing.
+fn bits(x: float128) -> uint128 = rtCast<float128, uint128>(sink x)
+
+fn main() {
+    const a: float128 = 1.0
+    const b: float128 = 3.0
+    print(a / b, a + b, a - b, a * b, b % 2.0, -a)
+    var c: float128 = 0.1
+    c += 0.2
+    print(c, c == 0.3, c > 0.3, a < b, a <= a, a >= b, a != b)
+    /// A literal is rounded once, correctly: these are the exact binary128 bit patterns.
+    print(bits(0.1), bits(1.0), bits(3.14159265358979323846264338327950288))
+    print(bits(1e4000), bits(1e-4940), bits(5e-324))
+    const d: float256 = 1.0
+    print(d / 3.0, (d / 3.0) * 3.0, d / 7.0 == d / 7.0)
+    const h: float16 = 0.1
+    print(h, h + h, 65504.0 to float16, h * 1000.0)
+    print(5 to float128, (7 to int128) to float256, (a / b).toFloat() == 1.0 / 3.0, (0.5 to float256) + (a to float256))
+    const big: float128 = 1e4000
+    const tiny: float128 = 1e-4940
+    print(big, big * big, tiny / 2.0, -big * big, big * big - big * big)
+    print(a / (a - a), (a - a) / (a - a), (a - a) == -(a - a), (big * big) == (big * big))
+}

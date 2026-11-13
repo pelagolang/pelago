@@ -154,7 +154,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// An operand in a private slot (the right-hand side may change the variable the left one names).
-    fn wide_operand(&mut self, e: &'a Expr, t: Ty) -> Option<Value> {
+    pub(crate) fn wide_operand(&mut self, e: &'a Expr, t: Ty) -> Option<Value> {
         let Res::Val(p) = self.expr(e) else {
             return None;
         };

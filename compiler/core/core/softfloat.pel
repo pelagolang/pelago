@@ -1,0 +1,823 @@
+/// Software IEEE 754 binary floating point of any width: `float128` (15 exponent bits, 112 fraction bits),
+/// `float256` (19 and 236) and, with the same code, `float64` (11 and 52) and `float16` (5 and 10). A value is
+/// `n` 64-bit words in memory (its bits, least significant word first); the format is described by the number
+/// of exponent bits `eb` and fraction bits `mb`, so one set of routines serves every width.
+///
+/// Every operation unpacks to (sign, exponent, integer mantissa), does the arithmetic exactly on the wide
+/// integers of `wide.pel`, and packs with one rounding to nearest, ties to even (`sfPack`). Subnormals, infinities,
+/// signed zeros and NaN follow IEEE 754. Printing finds the shortest decimal text that reads back as the same
+/// value (the exact method of Steele and White, with Burger and Dybvig's ends rule) on arrays of words.
+///
+/// A working context `c` is `64 + 8L` bytes: words 0 sign, 1 exponent, 2 class (0 zero, 1 finite, 2 infinity,
+/// 3 NaN), 3 sticky bit, 4 `L`, 5 the shift that made a subnormal's mantissa 'normal'; from byte 64 the
+/// mantissa (`L` words). A finite number is `mantissa * 2^exponent`.
+
+fn wIsZero(a: ptr, n: int) -> bool {
+    var i = 0
+    while i < n {
+        if wGet(a, i) != 0 { return false }
+        i += 1
+    }
+    return true
+}
+
+fn wAddIn(a: ptr, b: ptr, n: int) -> int {
+    var carry = 0
+    var i = 0
+    while i < n {
+        const x = wGet(a, i)
+        const y = wGet(b, i)
+        const s1 = x +% y
+        const c1 = if rtULt(s1, x) { 1 } else { 0 }
+        const s2 = s1 +% carry
+        const c2 = if rtULt(s2, s1) { 1 } else { 0 }
+        wPut(a, i, s2)
+        carry = c1 + c2
+        i += 1
+    }
+    return carry
+}
+
+fn wInc(a: ptr, n: int) {
+    var i = 0
+    var go = true
+    while go && i < n {
+        const s = wGet(a, i) +% 1
+        wPut(a, i, s)
+        go = s == 0
+        i += 1
+    }
+}
+
+/// The number of bits of the value: the index of the highest set bit plus one (0 for zero).
+fn wBitLen(a: ptr, n: int) -> int {
+    var i = n - 1
+    while i >= 0 {
+        const w = wGet(a, i)
+        if w != 0 {
+            var b = 64
+            var t = w
+            while t > 0 {
+                t = t << 1
+                b -= 1
+            }
+            return i * 64 + b
+        }
+        i -= 1
+    }
+    return 0
+}
+
+fn wSetBit(a: ptr, bit: int) {
+    const w = bit / 64
+    wPut(a, w, wGet(a, w) | (1 << (bit % 64)))
+}
+
+/// Is any of the lowest `bits` bits set?
+fn wLowAny(m: ptr, n: int, bits: int) -> bool {
+    var i = 0
+    while i < n && i * 64 + 64 <= bits {
+        if wGet(m, i) != 0 { return true }
+        i += 1
+    }
+    const r = bits - i * 64
+    if r > 0 && i < n {
+        if (wGet(m, i) & ((1 << r) -% 1)) != 0 { return true }
+    }
+    return false
+}
+
+fn wShlTo(dst: ptr, a: ptr, amt: int, n: int) {
+    if amt >= n * 64 { wZero(dst, n) } else { rtWideShift(dst, a, amt, n, 0) }
+}
+
+fn wShrTo(dst: ptr, a: ptr, amt: int, n: int) {
+    if amt >= n * 64 { wZero(dst, n) } else { rtWideShift(dst, a, amt, n, 1) }
+}
+
+fn wLtU(a: ptr, b: ptr, n: int) -> bool = !wGeU(a, b, n)
+
+fn wLeU(a: ptr, b: ptr, n: int) -> bool = wGeU(b, a, n)
+
+fn sfBias(eb: int) -> int = (1 << (eb - 1)) - 1
+
+fn cM(c: ptr) -> ptr = rtOffset(c, 64)
+
+fn cNew(l: int) -> ptr = rtAlloc(64 + l * 8)
+
+fn sfInf(dst: ptr, n: int, eb: int, mb: int, sign: int) {
+    const u = rtAlloc(n * 8)
+    wZero(u, n)
+    wPut(u, 0, (1 << eb) - 1)
+    rtWideShift(dst, u, mb, n, 0)
+    if sign == 1 { wSetBit(dst, eb + mb) }
+    rtFree(u)
+}
+
+fn sfZero(dst: ptr, n: int, eb: int, mb: int, sign: int) {
+    wZero(dst, n)
+    if sign == 1 { wSetBit(dst, eb + mb) }
+}
+
+fn sfNan(dst: ptr, n: int, eb: int, mb: int) {
+    sfInf(dst, n, eb, mb, 0)
+    wSetBit(dst, mb - 1)
+}
+
+/// Reads the float at `x` (`n` words) into the context `c`, which has room for `l` mantissa words (`l >= n`). A
+/// subnormal's mantissa is shifted up to full length so that every finite mantissa has exactly `mb + 1` bits.
+fn sfUnpack(c: ptr, x: ptr, n: int, eb: int, mb: int, l: int) {
+    wPut(c, 3, 0)
+    wPut(c, 4, l)
+    wPut(c, 5, 0)
+    const m = cM(c)
+    wZero(m, l)
+    wPut(c, 0, wBit(x, eb + mb))
+    const t = rtAlloc(n * 8)
+    rtWideShift(t, x, mb, n, 1)
+    const expf = wGet(t, 0) & ((1 << eb) - 1)
+    rtFree(t)
+    const fw = mb / 64
+    const fb = mb % 64
+    var i = 0
+    while i < n {
+        const w = wGet(x, i)
+        if i < fw {
+            wPut(m, i, w)
+        } else if i == fw {
+            wPut(m, i, w & ((1 << fb) -% 1))
+        }
+        i += 1
+    }
+    const bias = sfBias(eb)
+    if expf == 0 {
+        if wIsZero(m, l) {
+            wPut(c, 2, 0)
+        } else {
+            wPut(c, 2, 1)
+            var e = 1 - bias - mb
+            const sh = mb + 1 - wBitLen(m, l)
+            const tmp = rtAlloc(l * 8)
+            wShlTo(tmp, m, sh, l)
+            rtCopy(m, tmp, l * 8)
+            rtFree(tmp)
+            e -= sh
+            wPut(c, 1, e)
+            wPut(c, 5, sh)
+        }
+    } else if expf == (1 << eb) - 1 {
+        wPut(c, 2, if wIsZero(m, l) { 2 } else { 3 })
+    } else {
+        wPut(c, 2, 1)
+        wPut(c, 1, expf - bias - mb)
+        wSetBit(m, mb)
+    }
+}
+
+/// Writes the number in the context, rounded to nearest, ties to even, in the format (`n`, `eb`, `mb`).
+fn sfPack(dst: ptr, c: ptr, n: int, eb: int, mb: int) {
+    const l = wGet(c, 4)
+    const m = cM(c)
+    const sign = wGet(c, 0)
+    const b = wBitLen(m, l)
+    if b == 0 {
+        sfZero(dst, n, eb, mb, sign)
+        return
+    }
+    const bias = sfBias(eb)
+    const emin = 1 - bias
+    const e = wGet(c, 1)
+    const top = e + b - 1
+    if top > bias {
+        sfInf(dst, n, eb, mb, sign)
+        return
+    }
+    var shift = 0
+    var sub = false
+    if top >= emin {
+        shift = b - (mb + 1)
+    } else {
+        shift = emin - mb - e
+        sub = true
+    }
+    const t = rtAlloc(l * 8)
+    var gbit = 0
+    var sticky = wGet(c, 3)
+    if shift > 0 {
+        if shift > l * 64 {
+            wZero(t, l)
+            sticky = 1
+        } else {
+            gbit = wBit(m, shift - 1)
+            if wLowAny(m, l, shift - 1) { sticky = 1 }
+            wShrTo(t, m, shift, l)
+        }
+    } else {
+        wShlTo(t, m, 0 - shift, l)
+    }
+    if gbit == 1 && (sticky == 1 || (wGet(t, 0) & 1) == 1) { wInc(t, l) }
+    const u = rtAlloc(n * 8)
+    wZero(u, n)
+    var i = 0
+    while i < n && i < l {
+        wPut(u, i, wGet(t, i))
+        i += 1
+    }
+    if sub {
+        rtCopy(dst, u, n * 8)
+    } else {
+        const e0 = rtAlloc(n * 8)
+        wZero(e0, n)
+        wPut(e0, 0, top + bias - 1)
+        rtWideShift(dst, e0, mb, n, 0)
+        rtFree(e0)
+        wAddIn(dst, u, n)
+        const lim = rtAlloc(n * 8)
+        sfInf(lim, n, eb, mb, 0)
+        if wGeU(dst, lim, n) { rtCopy(dst, lim, n * 8) }
+        rtFree(lim)
+    }
+    if sign == 1 { wSetBit(dst, eb + mb) }
+    rtFree(u)
+    rtFree(t)
+}
+
+fn sfAdd(dst: ptr, ca: ptr, cb: ptr, n: int, eb: int, mb: int) {
+    const l = n * 2
+    const ka = wGet(ca, 2)
+    const kb = wGet(cb, 2)
+    const sa = wGet(ca, 0)
+    const sb = wGet(cb, 0)
+    if ka == 3 || kb == 3 {
+        sfNan(dst, n, eb, mb)
+        return
+    }
+    if ka == 2 && kb == 2 {
+        if sa == sb { sfInf(dst, n, eb, mb, sa) } else { sfNan(dst, n, eb, mb) }
+        return
+    }
+    if ka == 2 {
+        sfInf(dst, n, eb, mb, sa)
+        return
+    }
+    if kb == 2 {
+        sfInf(dst, n, eb, mb, sb)
+        return
+    }
+    if ka == 0 && kb == 0 {
+        sfZero(dst, n, eb, mb, if sa == sb { sa } else { 0 })
+        return
+    }
+    if ka == 0 {
+        sfPack(dst, cb, n, eb, mb)
+        return
+    }
+    if kb == 0 {
+        sfPack(dst, ca, n, eb, mb)
+        return
+    }
+    var hi = ca
+    var lo = cb
+    if wGet(ca, 1) < wGet(cb, 1) {
+        hi = cb
+        lo = ca
+    }
+    const d = wGet(hi, 1) - wGet(lo, 1)
+    if d > mb + 3 {
+        sfPack(dst, hi, n, eb, mb)
+        return
+    }
+    const cr = cNew(l)
+    wPut(cr, 3, 0)
+    wPut(cr, 4, l)
+    wPut(cr, 1, wGet(lo, 1))
+    const mr = cM(cr)
+    const big = rtAlloc(l * 8)
+    wShlTo(big, cM(hi), d, l)
+    rtCopy(mr, cM(lo), l * 8)
+    if wGet(hi, 0) == wGet(lo, 0) {
+        wAddIn(mr, big, l)
+        wPut(cr, 0, wGet(hi, 0))
+    } else if wGeU(big, mr, l) {
+        wSubIn(big, mr, l)
+        rtCopy(mr, big, l * 8)
+        wPut(cr, 0, wGet(hi, 0))
+    } else {
+        wSubIn(mr, big, l)
+        wPut(cr, 0, wGet(lo, 0))
+    }
+    if wIsZero(mr, l) { wPut(cr, 0, 0) }
+    sfPack(dst, cr, n, eb, mb)
+    rtFree(big)
+    rtFree(cr)
+}
+
+fn sfMul(dst: ptr, ca: ptr, cb: ptr, n: int, eb: int, mb: int) {
+    const l = n * 2
+    const ka = wGet(ca, 2)
+    const kb = wGet(cb, 2)
+    const s = (wGet(ca, 0) + wGet(cb, 0)) % 2
+    if ka == 3 || kb == 3 || (ka == 2 && kb == 0) || (ka == 0 && kb == 2) {
+        sfNan(dst, n, eb, mb)
+        return
+    }
+    if ka == 2 || kb == 2 {
+        sfInf(dst, n, eb, mb, s)
+        return
+    }
+    if ka == 0 || kb == 0 {
+        sfZero(dst, n, eb, mb, s)
+        return
+    }
+    const cr = cNew(l)
+    wPut(cr, 3, 0)
+    wPut(cr, 4, l)
+    wPut(cr, 0, s)
+    wPut(cr, 1, wGet(ca, 1) + wGet(cb, 1))
+    wMulFull(cM(cr), cM(ca), cM(cb), n)
+    sfPack(dst, cr, n, eb, mb)
+    rtFree(cr)
+}
+
+fn sfDiv(dst: ptr, ca: ptr, cb: ptr, n: int, eb: int, mb: int) {
+    const l = n * 2
+    const ka = wGet(ca, 2)
+    const kb = wGet(cb, 2)
+    const s = (wGet(ca, 0) + wGet(cb, 0)) % 2
+    if ka == 3 || kb == 3 || (ka == 2 && kb == 2) || (ka == 0 && kb == 0) {
+        sfNan(dst, n, eb, mb)
+        return
+    }
+    if ka == 2 || kb == 0 {
+        sfInf(dst, n, eb, mb, s)
+        return
+    }
+    if kb == 2 || ka == 0 {
+        sfZero(dst, n, eb, mb, s)
+        return
+    }
+    const num = rtAlloc(l * 8)
+    const q = rtAlloc(l * 8)
+    const r = rtAlloc(l * 8)
+    wShlTo(num, cM(ca), mb + 3, l)
+    rtWideDiv(q, r, num, cM(cb), l, false)
+    const cr = cNew(l)
+    wPut(cr, 0, s)
+    wPut(cr, 1, wGet(ca, 1) - wGet(cb, 1) - (mb + 3))
+    wPut(cr, 3, if wIsZero(r, l) { 0 } else { 1 })
+    wPut(cr, 4, l)
+    rtCopy(cM(cr), q, l * 8)
+    sfPack(dst, cr, n, eb, mb)
+    rtFree(num)
+    rtFree(q)
+    rtFree(r)
+    rtFree(cr)
+}
+
+/// `a % b` (the remainder of the division rounded towards zero, exact: it has the sign of `a`).
+fn sfRem(dst: ptr, ca: ptr, cb: ptr, n: int, eb: int, mb: int) {
+    const l = n * 2
+    const ka = wGet(ca, 2)
+    const kb = wGet(cb, 2)
+    if ka == 3 || kb == 3 || ka == 2 || kb == 0 {
+        sfNan(dst, n, eb, mb)
+        return
+    }
+    if kb == 2 || ka == 0 {
+        sfPack(dst, ca, n, eb, mb)
+        return
+    }
+    const ea = wGet(ca, 1)
+    const eb2 = wGet(cb, 1)
+    const q = rtAlloc(l * 8)
+    const r = rtAlloc(l * 8)
+    const dv = rtAlloc(l * 8)
+    rtCopy(dv, cM(cb), l * 8)
+    var e = eb2
+    var finished = false
+    if ea >= eb2 {
+        rtWideDiv(q, r, cM(ca), dv, l, false)
+        var i = 0
+        const d = ea - eb2
+        while i < d {
+            wShl1(r, l, 0)
+            if wGeU(r, dv, l) { wSubIn(r, dv, l) }
+            i += 1
+        }
+    } else {
+        const d = eb2 - ea
+        if d > mb + 2 {
+            sfPack(dst, ca, n, eb, mb)
+            finished = true
+        } else {
+            wShlTo(dv, cM(cb), d, l)
+            rtWideDiv(q, r, cM(ca), dv, l, false)
+            e = ea
+        }
+    }
+    if !finished {
+        const cr = cNew(l)
+        wPut(cr, 0, wGet(ca, 0))
+        wPut(cr, 1, e)
+        wPut(cr, 3, 0)
+        wPut(cr, 4, l)
+        rtCopy(cM(cr), r, l * 8)
+        sfPack(dst, cr, n, eb, mb)
+        rtFree(cr)
+    }
+    rtFree(q)
+    rtFree(r)
+    rtFree(dv)
+}
+
+//~ `dst = a op b` for floats of `n` words and format (`eb`, `mb`): `op` 0 add, 1 subtract, 2 multiply, 3 divide, 4 remainder.
+pub fn rtFloatBin(dst: ptr, a: ptr, b: ptr, n: int, eb: int, mb: int, op: int) {
+    const l = n * 2
+    const ca = cNew(l)
+    const cb = cNew(l)
+    sfUnpack(ca, a, n, eb, mb, l)
+    sfUnpack(cb, b, n, eb, mb, l)
+    const tmp = rtAlloc(n * 8)
+    if op <= 1 {
+        if op == 1 { wPut(cb, 0, 1 - wGet(cb, 0)) }
+        sfAdd(tmp, ca, cb, n, eb, mb)
+    } else if op == 2 {
+        sfMul(tmp, ca, cb, n, eb, mb)
+    } else if op == 3 {
+        sfDiv(tmp, ca, cb, n, eb, mb)
+    } else {
+        sfRem(tmp, ca, cb, n, eb, mb)
+    }
+    rtCopy(dst, tmp, n * 8)
+    rtFree(tmp)
+    rtFree(ca)
+    rtFree(cb)
+}
+
+//~ `dst = -a`.
+pub fn rtFloatNeg(dst: ptr, a: ptr, n: int, eb: int, mb: int) {
+    rtCopy(dst, a, n * 8)
+    const w = (eb + mb) / 64
+    wPut(dst, w, wGet(dst, w) ^ (1 << ((eb + mb) % 64)))
+}
+
+fn sfMagnitude(dst: ptr, a: ptr, n: int, eb: int, mb: int) {
+    rtCopy(dst, a, n * 8)
+    const w = (eb + mb) / 64
+    wPut(dst, w, wGet(dst, w) & ~(1 << ((eb + mb) % 64)))
+}
+
+//~ Compares two floats: -1, 0 or 1, and 2 when one of them is a NaN.
+pub fn rtFloatCmp(a: ptr, b: ptr, n: int, eb: int, mb: int) -> int {
+    const ma = rtAlloc(n * 8)
+    const mbv = rtAlloc(n * 8)
+    sfMagnitude(ma, a, n, eb, mb)
+    sfMagnitude(mbv, b, n, eb, mb)
+    const lim = rtAlloc(n * 8)
+    sfInf(lim, n, eb, mb, 0)
+    var res = 0
+    if !wGeU(lim, ma, n) || !wGeU(lim, mbv, n) {
+        res = 2
+    } else {
+        const sa = wBit(a, eb + mb)
+        const sb = wBit(b, eb + mb)
+        const za = wIsZero(ma, n)
+        const zb = wIsZero(mbv, n)
+        if za && zb {
+            res = 0
+        } else if sa != sb {
+            res = if sa == 1 { -1 } else { 1 }
+        } else {
+            var c = 0
+            if wGeU(ma, mbv, n) {
+                if wGeU(mbv, ma, n) { c = 0 } else { c = 1 }
+            } else {
+                c = -1
+            }
+            res = if sa == 1 { 0 - c } else { c }
+        }
+    }
+    rtFree(ma)
+    rtFree(mbv)
+    rtFree(lim)
+    return res
+}
+
+//~ A number for hashing a float: equal floats (`+0` and `-0` too) give equal numbers.
+pub fn rtFloatKey(a: ptr, n: int, eb: int, mb: int) -> int {
+    const m = rtAlloc(n * 8)
+    sfMagnitude(m, a, n, eb, mb)
+    var h = 0
+    if !wIsZero(m, n) {
+        h = wGet(a, 0)
+        var i = 1
+        while i < n {
+            h = h * 31 +% wGet(a, i)
+            i += 1
+        }
+        h = h | 1
+    }
+    rtFree(m)
+    return h
+}
+
+//~ A whole number of `ni` words (signed or not) as a float of the format (`n`, `eb`, `mb`), rounded to nearest.
+pub fn rtFloatFromInt(dst: ptr, a: ptr, ni: int, signed: bool, n: int, eb: int, mb: int) {
+    /// Room for the mantissa to be shifted up to the target's width.
+    const l = ni + n
+    const c = cNew(l)
+    const m = cM(c)
+    wZero(m, l)
+    rtCopy(m, a, ni * 8)
+    var neg = 0
+    if signed && wGet(a, ni - 1) < 0 {
+        neg = 1
+        wNeg(m, ni)
+    }
+    wPut(c, 0, neg)
+    wPut(c, 1, 0)
+    wPut(c, 3, 0)
+    wPut(c, 4, l)
+    sfPack(dst, c, n, eb, mb)
+    rtFree(c)
+}
+
+//~ A float of one format as a float of another: `dst` (`nd`, `ebd`, `mbd`) from `src` (`ns`, `ebs`, `mbs`), rounded to nearest.
+pub fn rtFloatConvert(dst: ptr, nd: int, ebd: int, mbd: int, src: ptr, ns: int, ebs: int, mbs: int) {
+    const l = ns + nd
+    const c = cNew(l)
+    sfUnpack(c, src, ns, ebs, mbs, l)
+    const k = wGet(c, 2)
+    const sign = wGet(c, 0)
+    if k == 0 {
+        sfZero(dst, nd, ebd, mbd, sign)
+    } else if k == 2 {
+        sfInf(dst, nd, ebd, mbd, sign)
+    } else if k == 3 {
+        sfNan(dst, nd, ebd, mbd)
+    } else {
+        sfPack(dst, c, nd, ebd, mbd)
+    }
+    rtFree(c)
+}
+
+fn bMulSmall(a: ptr, k: int, m: int) {
+    var carry = 0
+    var i = 0
+    while i < k {
+        const x = wGet(a, i)
+        const lo = x *% m
+        const hi = rtUMulHi(x, m)
+        const s = lo +% carry
+        const c = if rtULt(s, lo) { 1 } else { 0 }
+        wPut(a, i, s)
+        carry = hi + c
+        i += 1
+    }
+}
+
+fn bMulPow10(a: ptr, k: int, p: int) {
+    var left = p
+    while left >= 18 {
+        bMulSmall(a, k, 1000000000000000000)
+        left -= 18
+    }
+    if left > 0 {
+        var f = 1
+        var j = 0
+        while j < left {
+            f *= 10
+            j += 1
+        }
+        bMulSmall(a, k, f)
+    }
+}
+
+fn bShlIn(a: ptr, k: int, bits: int) {
+    const t = rtAlloc(k * 8)
+    wShlTo(t, a, bits, k)
+    rtCopy(a, t, k * 8)
+    rtFree(t)
+}
+
+fn sfPushDigit(out: ptr, d: int) {
+    rtPushByte(out, 48 + d)
+}
+
+//~ Appends the shortest decimal text that reads back as the float at `x`: `1.5`, `0.001`, `1e+30`, `-inf`, `nan`.
+pub fn rtFloatShow(out: ptr, x: ptr, n: int, eb: int, mb: int) {
+    const c = cNew(n)
+    sfUnpack(c, x, n, eb, mb, n)
+    const kind = wGet(c, 2)
+    if wGet(c, 0) == 1 && kind != 3 { rtPushByte(out, 45) }
+    if kind == 3 {
+        rtPushByte(out, 110)
+        rtPushByte(out, 97)
+        rtPushByte(out, 110)
+    } else if kind == 2 {
+        rtPushByte(out, 105)
+        rtPushByte(out, 110)
+        rtPushByte(out, 102)
+    } else if kind == 0 {
+        rtPushByte(out, 48)
+    } else {
+        const sh = wGet(c, 5)
+        const f = rtAlloc(n * 8)
+        wShrTo(f, cM(c), sh, n)
+        const e = wGet(c, 1) + sh
+        const bias = sfBias(eb)
+        const unequal = sh == 0 && wBitLen(f, n) == mb + 1 && isPow2(f, n) && e + bias + mb > 1
+        const even = (wGet(f, 0) & 1) == 0
+        const ae = if e < 0 { 0 - e } else { e }
+        const k = (ae + 2 * mb + 150) / 64 + 3
+        const r = rtAlloc(k * 8)
+        const s = rtAlloc(k * 8)
+        const mp = rtAlloc(k * 8)
+        const mm = rtAlloc(k * 8)
+        const t = rtAlloc(k * 8)
+        wZero(r, k)
+        wZero(s, k)
+        wZero(mp, k)
+        wZero(mm, k)
+        var i = 0
+        while i < n {
+            wPut(r, i, wGet(f, i))
+            i += 1
+        }
+        if e >= 0 {
+            if !unequal {
+                bShlIn(r, k, e + 1)
+                wPut(s, 0, 2)
+                wSetBit(mp, e)
+                wSetBit(mm, e)
+            } else {
+                bShlIn(r, k, e + 2)
+                wPut(s, 0, 4)
+                wSetBit(mp, e + 1)
+                wSetBit(mm, e)
+            }
+        } else {
+            if !unequal {
+                bShlIn(r, k, 1)
+                wSetBit(s, 1 - e)
+                wPut(mp, 0, 1)
+                wPut(mm, 0, 1)
+            } else {
+                bShlIn(r, k, 2)
+                wSetBit(s, 2 - e)
+                wPut(mp, 0, 2)
+                wPut(mm, 0, 1)
+            }
+        }
+        const bl = wBitLen(f, n)
+        var kk = ((bl - 1 + e) * 1292913986) >> 32
+        if kk >= 0 {
+            bMulPow10(s, k, kk)
+        } else {
+            bMulPow10(r, k, 0 - kk)
+            bMulPow10(mp, k, 0 - kk)
+            bMulPow10(mm, k, 0 - kk)
+        }
+        var fix = true
+        while fix {
+            rtCopy(t, r, k * 8)
+            wAddIn(t, mp, k)
+            const high = if even { wGeU(t, s, k) } else { wLtU(s, t, k) }
+            if high {
+                bMulSmall(s, k, 10)
+                kk += 1
+            } else {
+                fix = false
+            }
+        }
+        const dg = rtAlloc(160)
+        var nd = 0
+        var done = false
+        while !done {
+            bMulSmall(r, k, 10)
+            bMulSmall(mp, k, 10)
+            bMulSmall(mm, k, 10)
+            var d = 0
+            while wGeU(r, s, k) {
+                wSubIn(r, s, k)
+                d += 1
+            }
+            const low = if even { wLeU(r, mm, k) } else { wLtU(r, mm, k) }
+            rtCopy(t, r, k * 8)
+            wAddIn(t, mp, k)
+            const high = if even { wGeU(t, s, k) } else { wLtU(s, t, k) }
+            var digit = d
+            if low || high {
+                done = true
+                if high && !low {
+                    digit = d + 1
+                } else if low && high {
+                    rtCopy(t, r, k * 8)
+                    wShl1(t, k, 0)
+                    if !wLtU(t, s, k) { digit = d + 1 }
+                }
+            }
+            rtStoreByte(rtOffset(dg, nd), rtToByte(digit))
+            nd += 1
+            if nd >= 150 { done = true }
+        }
+        const x10 = kk - 1
+        if x10 >= 0 && x10 < 21 {
+            var j = 0
+            while j <= x10 {
+                sfPushDigit(out, if j < nd { rtLoadByte(rtOffset(dg, j)) to int } else { 0 })
+                j += 1
+            }
+            if nd > x10 + 1 {
+                rtPushByte(out, 46)
+                while j < nd {
+                    sfPushDigit(out, rtLoadByte(rtOffset(dg, j)) to int)
+                    j += 1
+                }
+            }
+        } else if x10 < 0 && x10 >= -5 {
+            rtPushByte(out, 48)
+            rtPushByte(out, 46)
+            var z = 0
+            while z < 0 - x10 - 1 {
+                rtPushByte(out, 48)
+                z += 1
+            }
+            var j = 0
+            while j < nd {
+                sfPushDigit(out, rtLoadByte(rtOffset(dg, j)) to int)
+                j += 1
+            }
+        } else {
+            sfPushDigit(out, rtLoadByte(dg) to int)
+            if nd > 1 {
+                rtPushByte(out, 46)
+                var j = 1
+                while j < nd {
+                    sfPushDigit(out, rtLoadByte(rtOffset(dg, j)) to int)
+                    j += 1
+                }
+            }
+            rtPushByte(out, 101)
+            if x10 >= 0 { rtPushByte(out, 43) }
+            rtShowInt(out, x10)
+        }
+        rtFree(dg)
+        rtFree(f)
+        rtFree(r)
+        rtFree(s)
+        rtFree(mp)
+        rtFree(mm)
+        rtFree(t)
+    }
+    rtFree(c)
+}
+
+/// Is the mantissa a power of two (exactly one bit set)?
+fn isPow2(f: ptr, n: int) -> bool {
+    const b = wBitLen(f, n)
+    var i = 0
+    var ones = 0
+    while i < b {
+        ones += wBit(f, i)
+        i += 1
+    }
+    return ones == 1
+}
+
+impl float128 {
+    //~ `self` as a `float`, rounded to the nearest (a value too large becomes infinity).
+    fn toFloat(self) -> float {
+        const dst = rtAlloc(8)
+        rtFloatConvert(dst, 1, 11, 52, rtAddrOf(self), 2, 15, 112)
+        const r = rtLoadFloat(dst)
+        rtFree(dst)
+        r
+    }
+}
+
+impl float256 {
+    //~ `self` as a `float`, rounded to the nearest (a value too large becomes infinity).
+    fn toFloat(self) -> float {
+        const dst = rtAlloc(8)
+        rtFloatConvert(dst, 1, 11, 52, rtAddrOf(self), 4, 19, 236)
+        const r = rtLoadFloat(dst)
+        rtFree(dst)
+        r
+    }
+}
+
+impl float16 {
+    //~ `self` as a `float` (every `float16` is exactly a `float`).
+    fn toFloat(self) -> float {
+        const src = rtAlloc(8)
+        wZero(src, 1)
+        rtCopy(src, rtAddrOf(self), 2)
+        const dst = rtAlloc(8)
+        rtFloatConvert(dst, 1, 11, 52, src, 1, 5, 10)
+        const r = rtLoadFloat(dst)
+        rtFree(dst)
+        rtFree(src)
+        r
+    }
+}

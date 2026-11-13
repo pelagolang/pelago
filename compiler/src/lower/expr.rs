@@ -94,6 +94,9 @@ impl<'a> Lowerer<'a> {
         match &e.kind {
             ExprKind::Int => self.int_literal(e),
             ExprKind::Float => {
+                if self.ty_of(e).is_some_and(|t| self.soft_of(t).is_some()) {
+                    return self.rvalue_expr(e);
+                }
                 let Some(ty) = self.scalar_ty_of(e) else {
                     return self.unsupported(e.span, "a float of this type");
                 };
@@ -397,11 +400,15 @@ impl<'a> Lowerer<'a> {
             ExprKind::Set(items) => self.set_lit(e, items, dst, t),
             ExprKind::Repeat { value, count } => self.repeat_lit(e, value, count, dst, t),
             ExprKind::Binary { .. } => self.binary_mem(e, dst, t),
-            ExprKind::Int => match self.wide_of(t) {
-                Some((n, _)) => self.wide_int_literal(e, dst, n),
-                None => self.unsupported(e.span, "an integer of this type"),
+            ExprKind::Int | ExprKind::Float => match (self.wide_of(t), self.soft_of(t)) {
+                (Some((n, _)), _) => self.wide_int_literal(e, dst, n),
+                (_, Some(k)) => self.soft_literal(e, dst, k),
+                _ => self.unsupported(e.span, "a number of this type"),
             },
-            ExprKind::Unary { op, operand } => self.wide_unary(e, *op, operand, dst, t),
+            ExprKind::Unary { op, operand } => match self.soft_of(t) {
+                Some(k) => self.soft_unary(e, *op, operand, dst, k),
+                None => self.wide_unary(e, *op, operand, dst, t),
+            },
             ExprKind::Range { .. } => self.range_value(e, dst, t),
             ExprKind::Guard { .. }
             | ExprKind::Return(_)
@@ -846,7 +853,10 @@ impl<'a> Lowerer<'a> {
         if let Some(r) = self.user_operator(e, e.span) {
             return r;
         }
-        if self.ty_of(e).is_some_and(|t| self.wide_of(t).is_some()) {
+        if self
+            .ty_of(e)
+            .is_some_and(|t| self.wide_of(t).is_some() || self.soft_of(t).is_some())
+        {
             return self.rvalue_expr(e);
         }
         let Some(ty) = self.scalar_ty_of(e) else {
@@ -929,6 +939,9 @@ impl<'a> Lowerer<'a> {
         if let ExprKind::Binary { op, lhs, rhs } = &e.kind {
             if self.wide_of(t).is_some() && self.call_target(e.span).is_none() {
                 return self.wide_binary(e, *op, lhs, rhs, dst, t);
+            }
+            if let (Some(k), true) = (self.soft_of(t), self.call_target(e.span).is_none()) {
+                return self.soft_binary(e, *op, lhs, rhs, dst, k);
             }
         }
         if let ExprKind::Binary {
@@ -1026,6 +1039,9 @@ impl<'a> Lowerer<'a> {
         };
         if self.wide_of(lt).is_some() && self.call_target(e.span).is_none() {
             return self.wide_compare(e, op, lhs, rhs, lt);
+        }
+        if let (Some(k), true) = (self.soft_of(lt), self.call_target(e.span).is_none()) {
+            return self.soft_compare(e, op, lhs, rhs, k);
         }
         if !self.is_scalar(lt) || matches!(self.kind(lt), TyKind::Box(_)) {
             return self.compare_mem(e, op, lhs, rhs, lt);
@@ -1218,7 +1234,7 @@ impl<'a> Lowerer<'a> {
             return Res::Unit;
         }
         // `a op= b`: numbers (and text for `+=`).
-        if self.wide_of(lt).is_some() {
+        if self.wide_of(lt).is_some() || self.soft_of(lt).is_some() {
             let base = match op {
                 Punct::PlusEq => Punct::Plus,
                 Punct::MinusEq => Punct::Minus,
@@ -1235,6 +1251,9 @@ impl<'a> Lowerer<'a> {
                 Punct::StarPercentEq => Punct::StarPercent,
                 _ => return self.unsupported(e.span, "this assignment operator"),
             };
+            if self.soft_of(lt).is_some() {
+                return self.soft_assign(e, base, p, lt, rhs);
+            }
             return self.wide_assign(e, base, p, lt, rhs);
         }
         let Repr::Scalar(ty) = self.repr(lt) else {
@@ -1403,6 +1422,15 @@ impl<'a> Lowerer<'a> {
         }
         if !self.is_scalar(to) {
             return self.rvalue_expr(e);
+        }
+        if let Some(fk) = self.soft_of(from) {
+            let Some(ti) = self.scalar_of(to) else {
+                return self.unsupported(e.span, "this conversion");
+            };
+            if ti.is_float() {
+                return self.soft_to_native(e, value, fk, ti);
+            }
+            return self.unsupported(e.span, "this conversion");
         }
         if self.wide_of(from).is_some() {
             let Some(ti) = self.scalar_of(to) else {

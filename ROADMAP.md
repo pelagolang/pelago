@@ -70,7 +70,7 @@ A serious, self-hosting systems language:
 | Functional | Closures, enums with pattern matching, higher-order functions | decided |
 | Functions | `fn` (chosen because `fnc` splits into two tokens in most tokenizers) | decided |
 | Variables | `var` (changeable) and `const` (truly immutable) | decided |
-| Types | Lowercase names; sized ints `int8` to `int64`, `uint8` to `uint64`, and wide ints `int128`, `uint128`, `int256`, `uint256` (memory values of 64-bit words, one lowering for any width: [wide-integers.md](docs/design/wide-integers.md)) | decided 2026-11-12 |
+| Types | Lowercase names; sized ints `int8` to `int64`, `uint8` to `uint64`, and wide ints `int128`, `uint128`, `int256`, `uint256` (memory values of 64-bit words, one lowering for any width: [wide-integers.md](docs/design/wide-integers.md)); soft floats `float16`, `float128`, `float256` ([soft-floats.md](docs/design/soft-floats.md)) | decided 2026-11-12 |
 | Narrowing | `to` only when nothing is lost; narrowing an `int` is `n.wrapToByte()` (wraps) or `n.toByteChecked()` (`option`), likewise `Int8`, `Int16`, `Uint16`, `Int32`, `Uint32`; `docs/design/basics.md` section 6 | decided |
 | Naming | The compiler accepts any identifier style; the standard library and formatter pick one | decided |
 | Comments | `/// line`, `///* block *///` (nests); documentation `//~ line`, `//~* block *~//`; `//` and `/* */` are errors with a hint (`docs/design/comments.md`) | decided |
