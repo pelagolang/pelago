@@ -1,0 +1,26 @@
+/// `std.legacy`: MD5 and SHA-1 against Python's `hashlib` (broken hashes, tested for compatibility only).
+import std.hash
+import std.legacy
+import { md5, sha1 } = std.legacy
+
+fn pattern(n: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * 7 + 3) & 255).wrapToByte()) }
+    out
+}
+
+fn main() {
+    for n of [0, 1, 3, 55, 56, 57, 63, 64, 65, 119, 120, 128, 200, 1000] {
+        const m = pattern(n)
+        print(n, hash.hex(hash.digest(md5.new(), m)), hash.hex(hash.digest(sha1.new(), m)))
+    }
+    var a = md5.new()
+    var b = sha1.new()
+    for i of 0..30 {
+        a.update!(pattern(33))
+        b.update!(pattern(33))
+    }
+    print(hash.hex(a.finish()), hash.hex(b.finish()))
+    print(hash.hex(hash.digestText(md5.new(), "The quick brown fox jumps over the lazy dog")))
+    print(hash.hex(hash.digestText(sha1.new(), "The quick brown fox jumps over the lazy dog")))
+}

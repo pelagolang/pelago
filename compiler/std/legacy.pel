@@ -1,0 +1,269 @@
+/// Legacy hashes: MD5 and SHA-1. **Broken: never use them to protect anything.**
+///
+/// ```
+/// import std.hash
+/// import std.legacy
+/// import { md5, sha1 } = std.legacy
+///
+/// fn main() {
+///     print(hash.hex(hash.digestText(md5.new(), "abc")))       /// 900150983cd24fb0d6963f7d28e17f72
+///     print(hash.hex(hash.digestText(sha1.new(), "abc")))      /// a9993e364706816aba3e25717850c26c9cd0d89d
+/// }
+/// ```
+///
+/// They are here because old file formats, git object ids, download checksums and some protocols still use them. Both
+/// have practical collision attacks (MD5 since 2004, SHA-1 since SHAttered in 2017): an attacker can make two
+/// different inputs with the same digest. Do not use them for signatures, certificates, password hashing or integrity
+/// against an attacker; use `std.sha2`, `std.sha3` (and soon `std.blake2` or `std.blake3`). As a MAC, HMAC-MD5 and
+/// HMAC-SHA1 are still unbroken, which is why they work with `std.mac`. Checked against Python's `hashlib`.
+/// Planned here too: MD4, MD2 (`docs/design/crypto.md`).
+
+import std.hash
+import { hasher } = std.hash
+
+const md5K: [uint32] = [
+    0xd76aa478, 0xe8c7b756, 0x242070db, 0xc1bdceee, 0xf57c0faf, 0x4787c62a, 0xa8304613, 0xfd469501,
+    0x698098d8, 0x8b44f7af, 0xffff5bb1, 0x895cd7be, 0x6b901122, 0xfd987193, 0xa679438e, 0x49b40821,
+    0xf61e2562, 0xc040b340, 0x265e5a51, 0xe9b6c7aa, 0xd62f105d, 0x02441453, 0xd8a1e681, 0xe7d3fbc8,
+    0x21e1cde6, 0xc33707d6, 0xf4d50d87, 0x455a14ed, 0xa9e3e905, 0xfcefa3f8, 0x676f02d9, 0x8d2a4c8a,
+    0xfffa3942, 0x8771f681, 0x6d9d6122, 0xfde5380c, 0xa4beea44, 0x4bdecfa9, 0xf6bb4b60, 0xbebfbc70,
+    0x289b7ec6, 0xeaa127fa, 0xd4ef3085, 0x04881d05, 0xd9d4d039, 0xe6db99e5, 0x1fa27cf8, 0xc4ac5665,
+    0xf4292244, 0x432aff97, 0xab9423a7, 0xfc93a039, 0x655b59c3, 0x8f0ccc92, 0xffeff47d, 0x85845dd1,
+    0x6fa87e4f, 0xfe2ce6e0, 0xa3014314, 0x4e0811a1, 0xf7537e82, 0xbd3af235, 0x2ad7d2bb, 0xeb86d391,
+]
+
+const md5S: [int] = [
+    7, 12, 17, 22, 7, 12, 17, 22,
+    7, 12, 17, 22, 7, 12, 17, 22,
+    5, 9, 14, 20, 5, 9, 14, 20,
+    5, 9, 14, 20, 5, 9, 14, 20,
+    4, 11, 16, 23, 4, 11, 16, 23,
+    4, 11, 16, 23, 4, 11, 16, 23,
+    6, 10, 15, 21, 6, 10, 15, 21,
+    6, 10, 15, 21, 6, 10, 15, 21,
+]
+
+fn rotl32(x: uint32, n: int) -> uint32 = (x << n) | (x >> (32 - n))
+
+/// MD5 (RFC 1321): 64-byte blocks, 32-bit little-endian words, digest 16 bytes. **Broken.**
+pub struct md5 {
+    state: [uint32]
+    buf: [byte]
+    total: int
+
+    //~ A new MD5 hasher.
+    fn new() -> md5 = md5 { state: md5Start(), buf: [], total: 0 }
+}
+
+fn md5Start() -> [uint32] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476]
+
+fn md5Block(inout state: [uint32], block: [byte], at: int) {
+    var m: [uint32] = []
+    for t of 0..16 {
+        const j = at + 4 * t
+        m.push!((block[j] to uint32) | ((block[j + 1] to uint32) << 8) | ((block[j + 2] to uint32) << 16) | ((block[j + 3] to uint32) << 24))
+    }
+    var a = state[0]
+    var b = state[1]
+    var c = state[2]
+    var d = state[3]
+    /// Four loops, one per round function, instead of one loop with a branch: the compiler turns such a branch into
+    /// a select that needs more registers than a small target has.
+    for i of 0..16 {
+        const f = d ^ (b & (c ^ d))
+        const sum = a +% f +% md5K[i] +% m[i]
+        const amount = md5S[i]
+        a = d
+        d = c
+        c = b
+        b = b +% rotl32(sum, amount)
+    }
+    for i of 16..32 {
+        const f = c ^ (d & (b ^ c))
+        const sum = a +% f +% md5K[i] +% m[(5 * i + 1) % 16]
+        const amount = md5S[i]
+        a = d
+        d = c
+        c = b
+        b = b +% rotl32(sum, amount)
+    }
+    for i of 32..48 {
+        const f = b ^ c ^ d
+        const sum = a +% f +% md5K[i] +% m[(3 * i + 5) % 16]
+        const amount = md5S[i]
+        a = d
+        d = c
+        c = b
+        b = b +% rotl32(sum, amount)
+    }
+    for i of 48..64 {
+        const f = c ^ (b | ~d)
+        const sum = a +% f +% md5K[i] +% m[(7 * i) % 16]
+        const amount = md5S[i]
+        a = d
+        d = c
+        c = b
+        b = b +% rotl32(sum, amount)
+    }
+    state[0] = state[0] +% a
+    state[1] = state[1] +% b
+    state[2] = state[2] +% c
+    state[3] = state[3] +% d
+}
+
+fn md5Absorb(inout h: md5, data: [byte]) {
+    h.total += data.len()
+    var i = 0
+    if h.buf.len() > 0 {
+        while i < data.len() && h.buf.len() < 64 {
+            h.buf.push!(data[i])
+            i += 1
+        }
+        if h.buf.len() < 64 { return }
+        md5Block(h.state!, h.buf, 0)
+        h.buf = []
+    }
+    while i + 64 <= data.len() {
+        md5Block(h.state!, data, i)
+        i += 64
+    }
+    while i < data.len() {
+        h.buf.push!(data[i])
+        i += 1
+    }
+}
+
+impl hasher for md5 {
+    fn update(inout self, data: [byte]) { md5Absorb(self!, data) }
+    fn finish(self) -> [byte] {
+        var c = copy self
+        const bits = self.total * 8
+        var pad: [byte] = [128]
+        while (self.total + pad.len()) % 64 != 56 { pad.push!(0) }
+        for i of 0..8 { pad.push!(((bits >> (8 * i)) & 255).wrapToByte()) }
+        md5Absorb(c!, pad)
+        var out: [byte] = []
+        for w of c.state {
+            for i of 0..4 { out.push!(((w >> (8 * i)) to int).wrapToByte()) }
+        }
+        out
+    }
+    fn reset(inout self) {
+        self.state = md5Start()
+        self.buf = []
+        self.total = 0
+    }
+    fn fresh(self) -> md5 = md5.new()
+    fn outputSize(self) -> int = 16
+    fn blockSize(self) -> int = 64
+}
+
+/// SHA-1 (FIPS 180-4): 64-byte blocks, 32-bit big-endian words, digest 20 bytes. **Broken.**
+pub struct sha1 {
+    state: [uint32]
+    buf: [byte]
+    total: int
+
+    //~ A new SHA-1 hasher.
+    fn new() -> sha1 = sha1 { state: sha1Start(), buf: [], total: 0 }
+}
+
+fn sha1Start() -> [uint32] = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0]
+
+fn sha1Block(inout state: [uint32], block: [byte], at: int) {
+    var w: [uint32] = []
+    for t of 0..16 {
+        const j = at + 4 * t
+        w.push!(((block[j] to uint32) << 24) | ((block[j + 1] to uint32) << 16) | ((block[j + 2] to uint32) << 8) | (block[j + 3] to uint32))
+    }
+    for t of 16..80 { w.push!(rotl32(w[t - 3] ^ w[t - 8] ^ w[t - 14] ^ w[t - 16], 1)) }
+    var a = state[0]
+    var b = state[1]
+    var c = state[2]
+    var d = state[3]
+    var e = state[4]
+    for t of 0..20 {
+        const tmp = rotl32(a, 5) +% (d ^ (b & (c ^ d))) +% e +% 0x5a827999 +% w[t]
+        e = d
+        d = c
+        c = rotl32(b, 30)
+        b = a
+        a = tmp
+    }
+    for t of 20..40 {
+        const tmp = rotl32(a, 5) +% (b ^ c ^ d) +% e +% 0x6ed9eba1 +% w[t]
+        e = d
+        d = c
+        c = rotl32(b, 30)
+        b = a
+        a = tmp
+    }
+    for t of 40..60 {
+        const tmp = rotl32(a, 5) +% ((b & c) | (b & d) | (c & d)) +% e +% 0x8f1bbcdc +% w[t]
+        e = d
+        d = c
+        c = rotl32(b, 30)
+        b = a
+        a = tmp
+    }
+    for t of 60..80 {
+        const tmp = rotl32(a, 5) +% (b ^ c ^ d) +% e +% 0xca62c1d6 +% w[t]
+        e = d
+        d = c
+        c = rotl32(b, 30)
+        b = a
+        a = tmp
+    }
+    state[0] = state[0] +% a
+    state[1] = state[1] +% b
+    state[2] = state[2] +% c
+    state[3] = state[3] +% d
+    state[4] = state[4] +% e
+}
+
+fn sha1Absorb(inout h: sha1, data: [byte]) {
+    h.total += data.len()
+    var i = 0
+    if h.buf.len() > 0 {
+        while i < data.len() && h.buf.len() < 64 {
+            h.buf.push!(data[i])
+            i += 1
+        }
+        if h.buf.len() < 64 { return }
+        sha1Block(h.state!, h.buf, 0)
+        h.buf = []
+    }
+    while i + 64 <= data.len() {
+        sha1Block(h.state!, data, i)
+        i += 64
+    }
+    while i < data.len() {
+        h.buf.push!(data[i])
+        i += 1
+    }
+}
+
+impl hasher for sha1 {
+    fn update(inout self, data: [byte]) { sha1Absorb(self!, data) }
+    fn finish(self) -> [byte] {
+        var c = copy self
+        const bits = self.total * 8
+        var pad: [byte] = [128]
+        while (self.total + pad.len()) % 64 != 56 { pad.push!(0) }
+        for i of 0..8 { pad.push!(((bits >> (56 - 8 * i)) & 255).wrapToByte()) }
+        sha1Absorb(c!, pad)
+        var out: [byte] = []
+        for w of c.state {
+            for i of 0..4 { out.push!(((w >> (24 - 8 * i)) to int).wrapToByte()) }
+        }
+        out
+    }
+    fn reset(inout self) {
+        self.state = sha1Start()
+        self.buf = []
+        self.total = 0
+    }
+    fn fresh(self) -> sha1 = sha1.new()
+    fn outputSize(self) -> int = 20
+    fn blockSize(self) -> int = 64
+}

@@ -1,0 +1,47 @@
+/// `std.sha3`: every variant against Python's `hashlib` and a small reference Keccak (see `gen_crypto.py`).
+import std.hash
+import std.sha3
+import { keccak } = std.sha3
+
+fn pattern(n: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * 7 + 3) & 255).wrapToByte()) }
+    out
+}
+
+fn main() {
+    for n of [0, 1, 71, 72, 73, 135, 136, 137, 200] {
+        const m = pattern(n)
+        print(n, hash.hex(hash.digest(keccak.sha3(224), m)))
+        print(n, hash.hex(hash.digest(keccak.sha3(256), m)))
+        print(n, hash.hex(hash.digest(keccak.sha3(384), m)))
+        print(n, hash.hex(hash.digest(keccak.sha3(512), m)))
+        print(n, hash.hex(hash.digest(keccak.original(256), m)))
+        print(n, hash.hex(hash.digest(keccak.original(512), m)))
+        print(n, hash.hex(hash.digest(keccak.shake(128, 32), m)))
+        print(n, hash.hex(hash.digest(keccak.shake(256, 64), m)))
+    }
+    /// Extendable output: lengths below, at and above the block size, and a prefix property.
+    var x = keccak.shake(128, 16)
+    x.update!(pattern(10))
+    print(hash.hex(x.squeeze(5)))
+    print(hash.hex(x.squeeze(200)))
+    /// Streaming: any chunking gives the same digest, and `finish` leaves the hasher usable.
+    const whole = pattern(300)
+    const want = hash.hex(hash.digest(keccak.sha3(256), whole))
+    var ok = true
+    for step of [1, 7, 136, 137] {
+        var h = keccak.sha3(256)
+        var i = 0
+        while i < whole.len() {
+            const end = i + step < whole.len() ? i + step : whole.len()
+            var part: [byte] = []
+            for j of i..end { part.push!(whole[j]) }
+            h.update!(part)
+            i = end
+        }
+        if hash.hex(h.finish()) != want { ok = false }
+        if hash.hex(h.finish()) != want { ok = false }
+    }
+    print(ok)
+}
