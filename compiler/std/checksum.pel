@@ -1,0 +1,176 @@
+/// Checksums for catching accidents, **not attackers**: CRC (any width that is a whole number of bytes, from 8 to 64
+/// bits, by the usual parameters) and Adler-32. They are `hasher`s like the cryptographic ones, but anyone can make
+/// data with a chosen checksum, so never use them to check that data was not tampered with.
+///
+/// ```
+/// import std.checksum
+/// import std.hash
+/// import { crc } = std.checksum
+///
+/// fn main() {
+///     var c = crc.crc32()
+///     c.update!("123456789".bytes().toList())
+///     print(hash.hex(c.finish()), c.value())     /// cbf43926 3421780262
+/// }
+/// ```
+///
+/// A `crc` is built from the Rocksoft model parameters (width, polynomial, start value, reflection, final xor), so any
+/// CRC in the catalogue can be had with `crc.custom(...)`; the common ones are ready: `crc.crc32()` (zip, PNG, gzip),
+/// `crc.crc32c()` (Castagnoli: iSCSI, ext4, SSE4.2), `crc.crc64xz()` (xz), `crc.crc64ecma()` (ECMA-182), `crc.crc16arc()`,
+/// `crc.crc16ccitt()` (CCITT-FALSE), `crc.crc16xmodem()`, `crc.crc8()`. The digest is the checksum in big-endian
+/// bytes; `value()` is the number. Table-driven, one lookup per byte: fine because nothing here is secret.
+/// Checked against Python's `zlib` and an independent bit-by-bit implementation (`gen_crypto.py`). Not yet here:
+/// Fletcher, CRC widths that are not whole bytes (CRC-5, CRC-12, CRC-24 ...).
+
+import std.hash
+import { hasher } = std.hash
+
+/// A CRC in the Rocksoft model. `table` is built from the parameters by `crc.custom`.
+pub struct crc {
+    width: int
+    poly: uint64
+    start: uint64
+    reflect: bool
+    finalXor: uint64
+    table: [uint64]
+    reg: uint64
+
+    //~ A CRC from the standard parameters: `width` (8, 16, 24, 32, 40, 48, 56 or 64), generator `poly` (normal form,
+    //~ top bit left out), register `start`, `reflect` (input and output bit-reversed together) and `finalXor`.
+    fn custom(width: int, poly: uint64, start: uint64, reflect: bool, finalXor: uint64) -> crc {
+        assert(width >= 8 && width <= 64 && width % 8 == 0)
+        var t: [uint64] = []
+        const top: uint64 = (1 to uint64) << (width - 1)
+        const mask = widthMask(width)
+        for i of 0..256 {
+            var c: uint64 = 0
+            if reflect {
+                c = i to uint64
+                const rp = reverseBits(poly, width)
+                for k of 0..8 { c = (c & 1) == 1 ? (c >> 1) ^ rp : c >> 1 }
+            } else {
+                c = (i to uint64) << (width - 8)
+                for k of 0..8 { c = (c & top) != 0 ? ((c << 1) ^ poly) & mask : (c << 1) & mask }
+            }
+            t.push!(c)
+        }
+        const first = reflect ? reverseBits(start, width) : start
+        crc { width: width, poly: poly, start: start, reflect: reflect, finalXor: finalXor, table: t, reg: first }
+    }
+    //~ CRC-32 (IEEE 802.3, zip, PNG, gzip). Check value of "123456789": `cbf43926`.
+    fn crc32() -> crc = crc.custom(32, 0x04c11db7, 0xffffffff, true, 0xffffffff)
+    //~ CRC-32C (Castagnoli). Check: `e3069283`.
+    fn crc32c() -> crc = crc.custom(32, 0x1edc6f41, 0xffffffff, true, 0xffffffff)
+    //~ CRC-64/XZ. Check: `995dc9bbdf1939fa`.
+    fn crc64xz() -> crc = crc.custom(
+        64,
+        0x42f0e1eba9ea3693,
+        0xffffffffffffffff,
+        true,
+        0xffffffffffffffff,
+    )
+    //~ CRC-64/ECMA-182. Check: `6c40df5f0b497347`.
+    fn crc64ecma() -> crc = crc.custom(64, 0x42f0e1eba9ea3693, 0, false, 0)
+    //~ CRC-16/ARC. Check: `bb3d`.
+    fn crc16arc() -> crc = crc.custom(16, 0x8005, 0, true, 0)
+    //~ CRC-16/CCITT-FALSE. Check: `29b1`.
+    fn crc16ccitt() -> crc = crc.custom(16, 0x1021, 0xffff, false, 0)
+    //~ CRC-16/XMODEM. Check: `31c3`.
+    fn crc16xmodem() -> crc = crc.custom(16, 0x1021, 0, false, 0)
+    //~ CRC-8 (poly 0x07). Check: `f4`.
+    fn crc8() -> crc = crc.custom(8, 0x07, 0, false, 0)
+}
+
+fn widthMask(width: int) -> uint64 {
+    if width == 64 { return 0xffffffffffffffff }
+    ((1 to uint64) << width) - 1
+}
+
+fn reverseBits(x: uint64, width: int) -> uint64 {
+    var r: uint64 = 0
+    var v = x
+    for i of 0..width {
+        r = (r << 1) | (v & 1)
+        v = v >> 1
+    }
+    r
+}
+
+impl hasher for crc {
+    fn update(inout self, data: [byte]) {
+        var r = self.reg
+        if self.reflect {
+            for b of data { r = self.table[rtCast<uint64, int>((r ^ (b to uint64)) & 255)] ^ (r >> 8) }
+        } else {
+            const shift = self.width - 8
+            const mask = widthMask(self.width)
+            for b of data {
+                const idx = rtCast<uint64, int>(((r >> shift) ^ (b to uint64)) & 255)
+                r = (self.table[idx] ^ (r << 8)) & mask
+            }
+        }
+        self.reg = r
+    }
+    fn finish(self) -> [byte] {
+        const v = self.value()
+        var out: [byte] = []
+        for i of 0..(self.width / 8) { out.push!(rtCast<uint64, int>(v >> (8 * (self.width / 8 - 1 - i))).wrapToByte()) }
+        out
+    }
+    fn reset(inout self) {
+        self.reg = self.reflect ? reverseBits(self.start, self.width) : self.start
+    }
+    fn fresh(self) -> crc = crc.custom(
+        self.width,
+        self.poly,
+        self.start,
+        self.reflect,
+        self.finalXor,
+    )
+    fn outputSize(self) -> int = self.width / 8
+    fn blockSize(self) -> int = 1
+}
+
+impl crc {
+    //~ The checksum as a number.
+    fn value(self) -> uint64 = (self.reg ^ self.finalXor) & widthMask(self.width)
+}
+
+/// Adler-32 (zlib): two sums modulo 65521; faster than CRC-32 and weaker.
+pub struct adler32 {
+    a: int
+    b: int
+
+    //~ A new Adler-32.
+    fn new() -> adler32 = adler32 { a: 1, b: 0 }
+}
+
+impl hasher for adler32 {
+    fn update(inout self, data: [byte]) {
+        for x of data {
+            self.a = (self.a + (x to int)) % 65521
+            self.b = (self.b + self.a) % 65521
+        }
+    }
+    fn finish(self) -> [byte] {
+        const v = (self.b << 16) | self.a
+        [
+            ((v >> 24) & 255).wrapToByte(),
+            ((v >> 16) & 255).wrapToByte(),
+            ((v >> 8) & 255).wrapToByte(),
+            (v & 255).wrapToByte(),
+        ]
+    }
+    fn reset(inout self) {
+        self.a = 1
+        self.b = 0
+    }
+    fn fresh(self) -> adler32 = adler32.new()
+    fn outputSize(self) -> int = 4
+    fn blockSize(self) -> int = 1
+}
+
+impl adler32 {
+    //~ The checksum as a number.
+    fn value(self) -> int = (self.b << 16) | self.a
+}

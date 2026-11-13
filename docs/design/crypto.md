@@ -60,10 +60,10 @@ Status: **built**, **next** (batch number), or **later**.
 |---|---|---|---|
 | SHA-224, SHA-256 | `std.sha2` | built | |
 | SHA-384, SHA-512, SHA-512/224, SHA-512/256 | `std.sha2` | built | uses `uint64`; on a 32-bit target costs about twice |
-| SHA3-224/256/384/512 | `std.sha3` | batch 2 | Keccak-f[1600] |
-| Keccak-256 / 512 (pre-NIST padding) | `std.sha3` | batch 2 | Ethereum |
-| SHAKE128, SHAKE256 (XOF) | `std.sha3` | batch 2 | |
-| cSHAKE, KMAC, TupleHash, ParallelHash (SP 800-185) | `std.sha3` | batch 2 | |
+| SHA3-224/256/384/512 | `std.sha3` | built (batch 2a) | Keccak-f[1600]; the type is `keccak` (`keccak.sha3(256)`) so module and type names do not clash |
+| Keccak-256 / 512 (pre-NIST padding) | `std.sha3` | built (batch 2a) | Ethereum; `keccak.original(256)` |
+| SHAKE128, SHAKE256 (XOF) | `std.sha3` | built (batch 2a) | `keccak.shake(128, 32)`, `squeeze(n)` for any length |
+| cSHAKE, KMAC, TupleHash, ParallelHash (SP 800-185) | `std.sha3` | batch 2b | |
 | BLAKE2b, BLAKE2s (plain, keyed, salt, personal; BLAKE2X) | `std.blake2` | batch 2 | needed by Argon2 |
 | BLAKE3 (hash, keyed, derive_key, XOF) | `std.blake3` | batch 2 | Islet's hash; no official 32-bit-only limitation |
 | TurboSHAKE, KangarooTwelve | `std.kangaroo` | batch 4 | Keccak with 12 rounds, tree mode |
@@ -79,8 +79,8 @@ Status: **built**, **next** (batch number), or **later**.
 
 | Algorithm | Why it is here | Status |
 |---|---|---|
-| MD5 | collisions are trivial; checksums of old downloads, some protocols | batch 2 |
-| SHA-1 | practical collisions (SHAttered); git object ids, old signatures | batch 2 |
+| MD5 | collisions are trivial; checksums of old downloads, some protocols | built (batch 2a) |
+| SHA-1 | practical collisions (SHAttered); git object ids, old signatures | built (batch 2a) |
 | MD4 | broken; NTLM, rsync history | batch 4 |
 | MD2 | broken; old PKI | batch 4 |
 | HAVAL, RIPEMD (the original 128-bit) | broken / obsolete | later |
@@ -92,8 +92,9 @@ Question 2 proposes that importing `std.legacy` gives a compiler warning unless 
 
 | Algorithm | Module | Status |
 |---|---|---|
-| CRC-32 (IEEE), CRC-32C (Castagnoli), CRC-64 (ECMA, XZ), CRC-16 (several), CRC-8, any CRC by parameters (Rocksoft model) | `std.checksum` | batch 2 |
-| Adler-32, Fletcher-16/32/64 | `std.checksum` | batch 2 |
+| CRC-32 (IEEE), CRC-32C (Castagnoli), CRC-64 (ECMA, XZ), CRC-16 (several), CRC-8, any CRC by parameters (Rocksoft model) | `std.checksum` | built (batch 2a); any CRC of whole-byte width 8 to 64 by Rocksoft parameters, eight common ones ready |
+| Adler-32 | `std.checksum` | built (batch 2a) |
+| Fletcher-16/32/64 | `std.checksum` | batch 4 |
 | xxHash32, xxHash64, XXH3-64, XXH3-128 | `std.fasthash` | batch 2 |
 | FNV-1, FNV-1a (32, 64, 128) | `std.fasthash` | batch 2 |
 | SipHash-2-4, SipHash-1-3, SipHash-128 | `std.fasthash` | batch 2 (a keyed PRF: safe against hash flooding, not a collision-resistant hash) |
@@ -125,8 +126,8 @@ work. Constant-time big arithmetic for those is its own design.
 
 1. **Batch 1 (this PR, built):** `std.hash`, `std.sha2` (all six), `std.mac` (HMAC), `std.kdf` (HKDF, PBKDF2),
    constant-time compare, hex.
-2. **Batch 2:** `std.sha3`, `std.blake2`, `std.blake3`, `std.legacy` (MD5, SHA-1), `std.checksum`, `std.fasthash`
-   (the most-used of everything left).
+2. **Batch 2a (built):** `std.sha3` (SHA-3, Keccak, SHAKE), `std.legacy` (MD5, SHA-1), `std.checksum` (CRC, Adler-32).
+   **Batch 2b:** `std.blake2`, `std.blake3`, `std.fasthash` (xxHash, FNV, SipHash), cSHAKE and KMAC.
 3. **Batch 3:** ChaCha20, Poly1305, AEAD, CSPRNG, scrypt, Argon2, bcrypt, PHC strings.
 4. **Batch 4:** the rest of the hash catalogue (RIPEMD, SM3, Streebog, Whirlpool, Tiger, K12, MD4, MD2, the rest of
    `std.fasthash`).
