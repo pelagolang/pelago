@@ -31,6 +31,8 @@ Pelago's own: one routine set generic over (words, exponent bits, significand bi
 
 The routines were compared with exact rational arithmetic: 750 random cases for binary128 (add, sub, mul, div, rem, bit exact), 400 for binary16 and 12 for binary256, plus literals at all three formats. `compiler/core/tests/soft_floats.pel` keeps a small set.
 
+`sqrt` (correctly rounded: the digit-by-digit integer root of the significand, one rounding), `floor`, `ceil`, `trunc`, `round` (halves away from zero, like `float`), `abs`, `min` and `max` are methods. They were checked bit for bit against exact rational arithmetic (300 random `float16`, 120 `float128`, 12 `float256` patterns, with subnormals, zeros, infinities and NaN). The wide integers have `abs` (signed), `min`, `max` and `pow`.
+
 ## Not built
 
-`sqrt`, `floor` and the other math functions, `switch` patterns and `for` ranges on soft floats, JSON, a fused multiply add. `%` with a huge exponent gap is slow. Everything is plain loops, correct first; the speed list is in [wide-integers.md](wide-integers.md).
+`pow` with a float exponent, `exp`, `log` and the trigonometric functions, a fused multiply add, `switch` patterns and `for` ranges on soft floats (see the switch PR), JSON (see the JSON PR). `%` with a huge exponent gap is slow. Everything is plain loops, correct first; the speed list is in [wide-integers.md](wide-integers.md).
