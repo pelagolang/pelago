@@ -48,7 +48,9 @@ const deriveMaterialFlag = 64
 
 fn rotr32(x: uint32, n: int) -> uint32 = (x >> n) | (x << (32 - n))
 
-fn g(inout v: [uint32], a: int, b: int, c: int, d: int, x: uint32, y: uint32) {
+fn g(inout v: [uint32], m: [uint32], a: int, b: int, c: int, d: int, at: int) {
+    const x = m[at]
+    const y = m[at + 1]
     v[a] = v[a] +% v[b] +% x
     v[d] = rotr32(v[d] ^ v[a], 16)
     v[c] = v[c] +% v[d]
@@ -71,14 +73,14 @@ fn compress(cv: [uint32], block: [uint32], counter: int, blockLen: int, flags: i
     v.push!(blockLen.wrapToUint32())
     v.push!(flags.wrapToUint32())
     for r of 0..7 {
-        g(v!, 0, 4, 8, 12, m[0], m[1])
-        g(v!, 1, 5, 9, 13, m[2], m[3])
-        g(v!, 2, 6, 10, 14, m[4], m[5])
-        g(v!, 3, 7, 11, 15, m[6], m[7])
-        g(v!, 0, 5, 10, 15, m[8], m[9])
-        g(v!, 1, 6, 11, 12, m[10], m[11])
-        g(v!, 2, 7, 8, 13, m[12], m[13])
-        g(v!, 3, 4, 9, 14, m[14], m[15])
+        g(v!, m, 0, 4, 8, 12, 0)
+        g(v!, m, 1, 5, 9, 13, 2)
+        g(v!, m, 2, 6, 10, 14, 4)
+        g(v!, m, 3, 7, 11, 15, 6)
+        g(v!, m, 0, 5, 10, 15, 8)
+        g(v!, m, 1, 6, 11, 12, 10)
+        g(v!, m, 2, 7, 8, 13, 12)
+        g(v!, m, 3, 4, 9, 14, 14)
         if r < 6 {
             var n: [uint32] = []
             for i of 0..16 { n.push!(m[perm[i]]) }

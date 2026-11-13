@@ -109,7 +109,9 @@ pub struct blake2b {
     }
 }
 
-fn mix64(inout v: [uint64], a: int, b: int, c: int, d: int, x: uint64, y: uint64) {
+fn mix64(inout v: [uint64], m: [uint64], a: int, b: int, c: int, d: int, at: int) {
+    const x = m[sigma[at]]
+    const y = m[sigma[at + 1]]
     v[a] = v[a] +% v[b] +% x
     v[d] = rotr64(v[d] ^ v[a], 32)
     v[c] = v[c] +% v[d]
@@ -130,14 +132,14 @@ fn compress64(inout h: [uint64], block: [byte], t: int, last: bool) {
     if last { v[14] = ~v[14] }
     for r of 0..12 {
         const s = (r % 10) * 16
-        mix64(v!, 0, 4, 8, 12, m[sigma[s]], m[sigma[s + 1]])
-        mix64(v!, 1, 5, 9, 13, m[sigma[s + 2]], m[sigma[s + 3]])
-        mix64(v!, 2, 6, 10, 14, m[sigma[s + 4]], m[sigma[s + 5]])
-        mix64(v!, 3, 7, 11, 15, m[sigma[s + 6]], m[sigma[s + 7]])
-        mix64(v!, 0, 5, 10, 15, m[sigma[s + 8]], m[sigma[s + 9]])
-        mix64(v!, 1, 6, 11, 12, m[sigma[s + 10]], m[sigma[s + 11]])
-        mix64(v!, 2, 7, 8, 13, m[sigma[s + 12]], m[sigma[s + 13]])
-        mix64(v!, 3, 4, 9, 14, m[sigma[s + 14]], m[sigma[s + 15]])
+        mix64(v!, m, 0, 4, 8, 12, s + 0)
+        mix64(v!, m, 1, 5, 9, 13, s + 2)
+        mix64(v!, m, 2, 6, 10, 14, s + 4)
+        mix64(v!, m, 3, 7, 11, 15, s + 6)
+        mix64(v!, m, 0, 5, 10, 15, s + 8)
+        mix64(v!, m, 1, 6, 11, 12, s + 10)
+        mix64(v!, m, 2, 7, 8, 13, s + 12)
+        mix64(v!, m, 3, 4, 9, 14, s + 14)
     }
     for i of 0..8 { h[i] = h[i] ^ v[i] ^ v[i + 8] }
 }
@@ -221,7 +223,9 @@ pub struct blake2s {
     }
 }
 
-fn mix32(inout v: [uint32], a: int, b: int, c: int, d: int, x: uint32, y: uint32) {
+fn mix32(inout v: [uint32], m: [uint32], a: int, b: int, c: int, d: int, at: int) {
+    const x = m[sigma[at]]
+    const y = m[sigma[at + 1]]
     v[a] = v[a] +% v[b] +% x
     v[d] = rotr32(v[d] ^ v[a], 16)
     v[c] = v[c] +% v[d]
@@ -243,14 +247,14 @@ fn compress32(inout h: [uint32], block: [byte], t: int, last: bool) {
     if last { v[14] = ~v[14] }
     for r of 0..10 {
         const s = r * 16
-        mix32(v!, 0, 4, 8, 12, m[sigma[s]], m[sigma[s + 1]])
-        mix32(v!, 1, 5, 9, 13, m[sigma[s + 2]], m[sigma[s + 3]])
-        mix32(v!, 2, 6, 10, 14, m[sigma[s + 4]], m[sigma[s + 5]])
-        mix32(v!, 3, 7, 11, 15, m[sigma[s + 6]], m[sigma[s + 7]])
-        mix32(v!, 0, 5, 10, 15, m[sigma[s + 8]], m[sigma[s + 9]])
-        mix32(v!, 1, 6, 11, 12, m[sigma[s + 10]], m[sigma[s + 11]])
-        mix32(v!, 2, 7, 8, 13, m[sigma[s + 12]], m[sigma[s + 13]])
-        mix32(v!, 3, 4, 9, 14, m[sigma[s + 14]], m[sigma[s + 15]])
+        mix32(v!, m, 0, 4, 8, 12, s + 0)
+        mix32(v!, m, 1, 5, 9, 13, s + 2)
+        mix32(v!, m, 2, 6, 10, 14, s + 4)
+        mix32(v!, m, 3, 7, 11, 15, s + 6)
+        mix32(v!, m, 0, 5, 10, 15, s + 8)
+        mix32(v!, m, 1, 6, 11, 12, s + 10)
+        mix32(v!, m, 2, 7, 8, 13, s + 12)
+        mix32(v!, m, 3, 4, 9, 14, s + 14)
     }
     for i of 0..8 { h[i] = h[i] ^ v[i] ^ v[i + 8] }
 }
