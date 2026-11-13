@@ -67,27 +67,43 @@ fn md5Block(inout state: [uint32], block: [byte], at: int) {
     var b = state[1]
     var c = state[2]
     var d = state[3]
-    for i of 0..64 {
-        var f: uint32 = 0
-        var g = 0
-        if i < 16 {
-            f = (b & c) | (~b & d)
-            g = i
-        } else if i < 32 {
-            f = (d & b) | (~d & c)
-            g = (5 * i + 1) % 16
-        } else if i < 48 {
-            f = b ^ c ^ d
-            g = (3 * i + 5) % 16
-        } else {
-            f = c ^ (b | ~d)
-            g = (7 * i) % 16
-        }
-        const t = d
+    /// Four loops, one per round function, instead of one loop with a branch: the compiler turns such a branch into
+    /// a select that needs more registers than a small target has.
+    for i of 0..16 {
+        const f = d ^ (b & (c ^ d))
+        const sum = a +% f +% md5K[i] +% m[i]
+        const amount = md5S[i]
+        a = d
         d = c
         c = b
-        b = b +% rotl32(a +% f +% md5K[i] +% m[g], md5S[i])
-        a = t
+        b = b +% rotl32(sum, amount)
+    }
+    for i of 16..32 {
+        const f = c ^ (d & (b ^ c))
+        const sum = a +% f +% md5K[i] +% m[(5 * i + 1) % 16]
+        const amount = md5S[i]
+        a = d
+        d = c
+        c = b
+        b = b +% rotl32(sum, amount)
+    }
+    for i of 32..48 {
+        const f = b ^ c ^ d
+        const sum = a +% f +% md5K[i] +% m[(3 * i + 5) % 16]
+        const amount = md5S[i]
+        a = d
+        d = c
+        c = b
+        b = b +% rotl32(sum, amount)
+    }
+    for i of 48..64 {
+        const f = c ^ (b | ~d)
+        const sum = a +% f +% md5K[i] +% m[(7 * i) % 16]
+        const amount = md5S[i]
+        a = d
+        d = c
+        c = b
+        b = b +% rotl32(sum, amount)
     }
     state[0] = state[0] +% a
     state[1] = state[1] +% b
@@ -166,23 +182,32 @@ fn sha1Block(inout state: [uint32], block: [byte], at: int) {
     var c = state[2]
     var d = state[3]
     var e = state[4]
-    for t of 0..80 {
-        var f: uint32 = 0
-        var k: uint32 = 0
-        if t < 20 {
-            f = (b & c) | (~b & d)
-            k = 0x5a827999
-        } else if t < 40 {
-            f = b ^ c ^ d
-            k = 0x6ed9eba1
-        } else if t < 60 {
-            f = (b & c) | (b & d) | (c & d)
-            k = 0x8f1bbcdc
-        } else {
-            f = b ^ c ^ d
-            k = 0xca62c1d6
-        }
-        const tmp = rotl32(a, 5) +% f +% e +% k +% w[t]
+    for t of 0..20 {
+        const tmp = rotl32(a, 5) +% (d ^ (b & (c ^ d))) +% e +% 0x5a827999 +% w[t]
+        e = d
+        d = c
+        c = rotl32(b, 30)
+        b = a
+        a = tmp
+    }
+    for t of 20..40 {
+        const tmp = rotl32(a, 5) +% (b ^ c ^ d) +% e +% 0x6ed9eba1 +% w[t]
+        e = d
+        d = c
+        c = rotl32(b, 30)
+        b = a
+        a = tmp
+    }
+    for t of 40..60 {
+        const tmp = rotl32(a, 5) +% ((b & c) | (b & d) | (c & d)) +% e +% 0x8f1bbcdc +% w[t]
+        e = d
+        d = c
+        c = rotl32(b, 30)
+        b = a
+        a = tmp
+    }
+    for t of 60..80 {
+        const tmp = rotl32(a, 5) +% (b ^ c ^ d) +% e +% 0xca62c1d6 +% w[t]
         e = d
         d = c
         c = rotl32(b, 30)
