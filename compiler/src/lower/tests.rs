@@ -1684,6 +1684,25 @@ fn native_clock_on_macos() {
     assert_eq!((r.out, r.code), (o.output, 0), "{}", r.err);
 }
 
+/// Sleeping on macOS (AArch64 only, so it runs on the macOS CI job): the system call waits, the clock sees it.
+#[test]
+fn native_sleep_on_macos() {
+    use crate::native::{exec, gen, Arch, Os};
+    if !exec::can_run_a64_on(Os::MacOs) {
+        return;
+    }
+    let src = "import std.time\n\nfn main() -> void ! io_error {\n    const t0 = time.now()?\n    time.sleep(time.millis(30))\n    print((t0.elapsed()?).asMillis() >= 30)\n}";
+    let l = lowered(src);
+    let opts = gen::Options {
+        leak_check: false,
+        target: Os::MacOs,
+        symbols: false,
+    };
+    let image = crate::native::gen_a64::compile(&l.module, "main", &opts).unwrap();
+    let r = exec::run_image_arch(Arch::Aarch64, Os::MacOs, &image).unwrap();
+    assert_eq!((r.out.as_str(), r.code), ("true\n", 0), "{}", r.err);
+}
+
 /// A native stop message without its place (`file:line: `) and the `stopped: ` before the message.
 fn unplaced(err: &str) -> &str {
     let said = err.rsplit_once(": stopped: ").map_or(err, |(_, m)| m);
@@ -1839,6 +1858,7 @@ fn native_file_system_calls() {
         (Arch::Aarch64, Os::Linux, "a64"),
         (Arch::X86_64, Os::Windows, "x86w"),
         (Arch::Aarch64, Os::Windows, "a64w"),
+        (Arch::Aarch64, Os::MacOs, "a64m"),
     ];
     for (arch, os, tag) in all {
         let a64 = arch == Arch::Aarch64;

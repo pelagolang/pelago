@@ -81,6 +81,8 @@ enum Sys {
     Renameat,
     Fstatat,
     Getdents64,
+    Rmdir,
+    Select,
 }
 
 /// The call numbers: the generic Linux ones, and the BSD ones of macOS (`mremap` and `madvise`
@@ -108,12 +110,16 @@ fn number(os: Os, call: Sys) -> i64 {
         // `getrandom` on Linux, `getentropy` on macOS (the buffer and at most 256 bytes).
         Sys::Getrandom => (278, 500),
         // The file-system calls are Linux only here (`OsKind::Fs` and `Dents` answer -3 on the others).
-        Sys::Faccessat => (48, 0),
-        Sys::Unlinkat => (35, 0),
-        Sys::Mkdirat => (34, 0),
-        Sys::Renameat => (38, 0),
-        Sys::Fstatat => (79, 0),
-        Sys::Getdents64 => (61, 0),
+        // macOS has no `*at` forms in use here: the plain `access`, `unlink`, `mkdir`, `rename`, `stat64`, and
+        // `getdirentries64`, `rmdir`, and `select` (a sleep with a timeout and no descriptors).
+        Sys::Faccessat => (48, 33),
+        Sys::Unlinkat => (35, 10),
+        Sys::Mkdirat => (34, 136),
+        Sys::Renameat => (38, 128),
+        Sys::Fstatat => (79, 338),
+        Sys::Getdents64 => (61, 344),
+        Sys::Rmdir => (0, 137),
+        Sys::Select => (0, 93),
     };
     if os == Os::MacOs {
         mac
@@ -2198,13 +2204,25 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
     }
     // sleep(seconds, nanoseconds): `nanosleep` on Linux, from a timespec on the stack; -3 on Windows and macOS.
     start(a, rt.os[15]);
-    if win || os == Os::MacOs {
+    if win {
         a.mov_ri(X0, -3);
-        if win {
-            finish(a);
-        } else {
-            a.ret();
-        }
+        finish(a);
+    } else if os == Os::MacOs {
+        // `select(0, 0, 0, 0, &timeval)`: no descriptors, so it only waits. Microseconds (nanoseconds / 1000, cut
+        // short by under a microsecond; the caller looks at the clock again); an early return is not an error.
+        a.sub_ri(SP, SP, 16);
+        a.mov_ri(X9, 1000);
+        a.udiv(X1, X1, X9);
+        a.stp(X0, X1, SP, 0);
+        a.mov_ri(X0, 0);
+        a.mov_ri(X1, 0);
+        a.mov_ri(X2, 0);
+        a.mov_ri(X3, 0);
+        a.mov_from_sp(X4);
+        sys(a, os, Sys::Select);
+        a.add_ri(SP, SP, 16);
+        a.mov_ri(X0, 0);
+        a.ret();
     } else {
         a.sub_ri(SP, SP, 16);
         a.stp(X0, X1, SP, 0);
@@ -2375,9 +2393,6 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         a.bind(bad_op);
         a.mov_ri(X23, -2);
         a.b(freeing);
-    } else if mac {
-        a.mov_ri(X0, -3);
-        finish(a);
     } else {
         let (acc, unl, rmd, mkd, ren, sta, go) = (
             a.new_label(),
@@ -2396,45 +2411,81 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         }
         a.mov_ri(X0, -2);
         a.ret();
-        // Every call starts with `dirfd = AT_FDCWD` and the path in `x1`.
+        // Linux: every call starts with `dirfd = AT_FDCWD` and the path in `x1`. macOS: the plain calls, the path
+        // moved to `x0` (the system call overwrites `x1`, so the operation's other argument is set after).
         a.bind(acc);
-        a.mov_ri(X0, -100);
-        a.mov_ri(X2, 0); // F_OK
-        a.mov_ri(X3, 0);
+        if mac {
+            a.mov_rr(X0, X1);
+            a.mov_ri(X1, 0); // F_OK
+        } else {
+            a.mov_ri(X0, -100);
+            a.mov_ri(X2, 0); // F_OK
+            a.mov_ri(X3, 0);
+        }
         sys(a, os, Sys::Faccessat);
         a.b(res);
         a.bind(unl);
-        a.mov_ri(X0, -100);
-        a.mov_ri(X2, 0);
+        if mac {
+            a.mov_rr(X0, X1);
+        } else {
+            a.mov_ri(X0, -100);
+            a.mov_ri(X2, 0);
+        }
         a.b(go);
         a.bind(rmd);
-        a.mov_ri(X0, -100);
-        a.mov_ri(X2, 0x200); // AT_REMOVEDIR
+        if mac {
+            a.mov_rr(X0, X1);
+            sys(a, os, Sys::Rmdir);
+            a.b(res);
+        } else {
+            a.mov_ri(X0, -100);
+            a.mov_ri(X2, 0x200); // AT_REMOVEDIR
+        }
         a.bind(go);
         sys(a, os, Sys::Unlinkat);
         a.b(res);
         a.bind(mkd);
-        a.mov_ri(X0, -100);
-        a.mov_ri(X2, 0o777); // before the umask
+        if mac {
+            a.mov_rr(X0, X1);
+            a.mov_ri(X1, 0o777);
+        } else {
+            a.mov_ri(X0, -100);
+            a.mov_ri(X2, 0o777); // before the umask
+        }
         sys(a, os, Sys::Mkdirat);
         a.b(res);
         a.bind(ren);
-        a.mov_ri(X0, -100);
-        a.mov_ri(X2, -100);
-        a.mov_rr(X3, X10);
+        if mac {
+            a.mov_rr(X0, X1);
+            a.mov_rr(X1, X10);
+        } else {
+            a.mov_ri(X0, -100);
+            a.mov_ri(X2, -100);
+            a.mov_rr(X3, X10);
+        }
         sys(a, os, Sys::Renameat);
         a.b(res);
-        // stat: the kernel's 128-byte record on the stack; `st_mode` is at 16 and `st_size` at 48.
+        // stat: the kernel's record on the stack (Linux: 128 bytes, `st_mode` at 16 and `st_size` at 48; macOS:
+        // 144 bytes, a 16-bit `st_mode` at 4 and `st_size` at 96).
         a.bind(sta);
         a.sub_ri(SP, SP, 144);
-        a.mov_ri(X0, -100);
-        a.add_ri(X2, SP, 0);
-        a.mov_ri(X3, 0);
+        if mac {
+            a.mov_rr(X0, X1);
+            a.mov_from_sp(X1);
+        } else {
+            a.mov_ri(X0, -100);
+            a.add_ri(X2, SP, 0);
+            a.mov_ri(X3, 0);
+        }
         sys(a, os, Sys::Fstatat);
         let (failed, is_file, is_dir, put) =
             (a.new_label(), a.new_label(), a.new_label(), a.new_label());
         a.cbnz(X0, failed);
-        a.ldr(X11, SP, 16, 4);
+        if mac {
+            a.ldr(X11, SP, 4, 2);
+        } else {
+            a.ldr(X11, SP, 16, 4);
+        }
         assert!(a.and_ri(X11, X11, 0xF000));
         a.mov_ri(X12, 3);
         a.mov_ri(X13, 0x8000);
@@ -2450,7 +2501,7 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         a.bind(is_dir);
         a.mov_ri(X12, 2);
         a.bind(put);
-        a.ldr(X11, SP, 48, 8);
+        a.ldr(X11, SP, if mac { 96 } else { 48 }, 8);
         a.str(X11, X10, 0, 8);
         a.str(X12, X10, 8, 8);
         a.add_ri(SP, SP, 144);
@@ -2566,8 +2617,50 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         a.add_ri(SP, SP, 2064);
         finish(a);
     } else if mac {
-        a.mov_ri(X0, -3);
-        finish(a);
+        // `getdirentries64(fd, buffer, count, &base)`: records of `d_ino`, `d_seekoff`, a 16-bit `d_reclen` at 16, a
+        // 16-bit `d_namlen`, `d_type` at 20 and the name from 21. They are rewritten here to Linux's shape (type at
+        // 18, name from 19) so `readDir` in `std.fs` is the same on every target. An entry with no inode (removed)
+        // becomes `.`, which `readDir` skips.
+        let (lp, cp, live, next) = (a.new_label(), a.new_label(), a.new_label(), a.new_label());
+        a.sub_ri(SP, SP, 16);
+        a.mov_rr(X10, X1);
+        a.mov_from_sp(X3);
+        sys(a, os, Sys::Getdents64);
+        a.add_ri(SP, SP, 16);
+        a.cmp_ri(X0, 0);
+        a.b_cond(Cond::Le, res);
+        a.mov_rr(X13, X0);
+        a.mov_rr(X11, X10);
+        a.add_rr(X12, X10, X0);
+        a.bind(lp);
+        a.ldr(X14, X11, 0, 8);
+        a.ldr(X9, X11, 16, 2); // d_reclen
+        a.cbnz(X14, live);
+        a.mov_ri(X15, 0x2E); // "."
+        a.str(X15, X11, 19, 1);
+        a.str(XZR, X11, 20, 1);
+        a.mov_ri(X15, 8);
+        a.str(X15, X11, 18, 1);
+        a.b(next);
+        a.bind(live);
+        a.ldr(X14, X11, 18, 2); // d_namlen
+        a.add_ri(X14, X14, 1); // with the zero
+        a.ldr(X15, X11, 20, 1); // d_type
+        a.str(X15, X11, 18, 1);
+        a.mov_ri(X2, 0);
+        a.bind(cp);
+        a.add_rr(X3, X11, X2);
+        a.ldr(X15, X3, 21, 1);
+        a.str(X15, X3, 19, 1);
+        a.add_ri(X2, X2, 1);
+        a.cmp_rr(X2, X14);
+        a.b_cond(Cond::Lo, cp);
+        a.bind(next);
+        a.add_rr(X11, X11, X9);
+        a.cmp_rr(X11, X12);
+        a.b_cond(Cond::Lo, lp);
+        a.mov_rr(X0, X13);
+        a.ret();
     } else {
         sys(a, os, Sys::Getdents64);
         a.b(res);
