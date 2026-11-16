@@ -1,0 +1,196 @@
+/// SHA-3 (FIPS 202): SHA3-224/256/384/512, the SHAKE128 and SHAKE256 extendable-output functions, and the original
+/// Keccak-256 / Keccak-512 (the padding Ethereum uses), all as `hasher`s.
+///
+/// ```
+/// import std.hash
+/// import std.sha3
+/// import { keccak } = std.sha3
+///
+/// fn main() {
+///     print(hash.hex(hash.digestText(keccak.sha3(256), "abc")))
+///     /// 3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532
+///     var x = keccak.shake(128, 32)
+///     x.update!("abc".bytes().toList())
+///     print(hash.hex(x.squeeze(64)))              /// any length, not just the default 32
+/// }
+/// ```
+///
+/// Conventional: Keccak-f[1600] and the sponge, as in the standard. Pelago's part: the state is a plain value, so
+/// `finish` and `squeeze` work on a copy and the hasher stays usable. Only `^`, `&`, `~` and rotations touch the data
+/// (no table lookups, no data-dependent branches). Checked against Python's `hashlib` (`compiler/std/tests/sha3.pel`).
+/// Not yet here: cSHAKE, KMAC, TupleHash, ParallelHash (SP 800-185) and KangarooTwelve (see `docs/design/crypto.md`).
+
+import std.hash
+import { hasher } = std.hash
+
+const roundConstants: [uint64] = [
+    0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000,
+    0x000000000000808b, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
+    0x000000000000008a, 0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
+    0x000000008000808b, 0x800000000000008b, 0x8000000000008089, 0x8000000000008003,
+    0x8000000000008002, 0x8000000000000080, 0x000000000000800a, 0x800000008000000a,
+    0x8000000080008081, 0x8000000000008080, 0x0000000080000001, 0x8000000080008008,
+]
+
+/// Rotation offsets, indexed `x + 5 * y`.
+const rotations: [int] = [
+    0, 1, 62, 28, 27,
+    36, 44, 6, 55, 20,
+    3, 10, 43, 25, 39,
+    41, 45, 15, 21, 8,
+    18, 2, 61, 56, 14,
+]
+
+fn rotl(x: uint64, n: int) -> uint64 {
+    if n == 0 { return x }
+    (x << n) | (x >> (64 - n))
+}
+
+fn keccakF(inout a: [uint64]) {
+    for round of 0..24 {
+        var c: [uint64] = [0, 0, 0, 0, 0]
+        for x of 0..5 { c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20] }
+        for x of 0..5 {
+            const d = c[(x + 4) % 5] ^ rotl(c[(x + 1) % 5], 1)
+            for y of 0..5 { a[x + 5 * y] = a[x + 5 * y] ^ d }
+        }
+        var b: [uint64] = [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        ]
+        for x of 0..5 {
+            for y of 0..5 { b[y + 5 * ((2 * x + 3 * y) % 5)] = rotl(a[x + 5 * y], rotations[x + 5 * y]) }
+        }
+        for y of 0..5 {
+            for x of 0..5 {
+                a[x + 5 * y] = b[x + 5 * y] ^ (~b[(x + 1) % 5 + 5 * y] & b[(x + 2) % 5 + 5 * y])
+            }
+        }
+        a[0] = a[0] ^ roundConstants[round]
+    }
+}
+
+fn zeros() -> [uint64] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+/// A sponge over Keccak-f[1600]. `rate` is the block size in bytes, `size` the default digest length, `suffix` the
+/// domain-separation byte (0x06 SHA-3, 0x1f SHAKE, 0x01 original Keccak). Build one with `keccak.sha3(256)`,
+/// `keccak.original(256)` or `keccak.shake(128, 32)`.
+pub struct keccak {
+    state: [uint64]
+    buf: [byte]
+    rate: int
+    size: int
+    suffix: int
+
+    //~ SHA-3 with a digest of `bits` bits: 224, 256, 384 or 512 (stops the program otherwise).
+    fn sha3(bits: int) -> keccak {
+        assert(bits == 224 || bits == 256 || bits == 384 || bits == 512)
+        keccak { state: zeros(), buf: [], rate: 200 - bits / 4, size: bits / 8, suffix: 6 }
+    }
+    //~ The original Keccak (padding byte 0x01, not SHA-3's 0x06; the digests differ): `bits` is 224, 256, 384 or
+    //~ 512. Keccak-256 is the hash Ethereum calls "keccak256".
+    fn original(bits: int) -> keccak {
+        assert(bits == 224 || bits == 256 || bits == 384 || bits == 512)
+        keccak { state: zeros(), buf: [], rate: 200 - bits / 4, size: bits / 8, suffix: 1 }
+    }
+    //~ SHAKE with security `strength` 128 or 256 and a default output of `size` bytes (`squeeze` gives any length).
+    fn shake(strength: int, size: int) -> keccak {
+        assert(strength == 128 || strength == 256)
+        keccak { state: zeros(), buf: [], rate: 200 - strength / 4, size: size, suffix: 31 }
+    }
+}
+
+/// XORs one full block (`rate` bytes at `at`) into the state, then permutes.
+fn absorbBlock(inout h: keccak, block: [byte], at: int) {
+    var lane = 0
+    while lane * 8 < h.rate {
+        var w: uint64 = 0
+        for i of 0..8 { w = w | ((block[at + lane * 8 + 7 - i] to uint64) << (8 * (7 - i))) }
+        h.state[lane] = h.state[lane] ^ w
+        lane += 1
+    }
+    keccakF(h.state!)
+}
+
+fn absorb(inout h: keccak, data: [byte]) {
+    var i = 0
+    if h.buf.len() > 0 {
+        while i < data.len() && h.buf.len() < h.rate {
+            h.buf.push!(data[i])
+            i += 1
+        }
+        if h.buf.len() < h.rate { return }
+        const block = copy h.buf
+        absorbBlock(h!, block, 0)
+        h.buf = []
+    }
+    while i + h.rate <= data.len() {
+        absorbBlock(h!, data, i)
+        i += h.rate
+    }
+    while i < data.len() {
+        h.buf.push!(data[i])
+        i += 1
+    }
+}
+
+impl hasher for keccak {
+    fn update(inout self, data: [byte]) { absorb(self!, data) }
+    fn finish(self) -> [byte] = self.squeeze(self.size)
+    fn reset(inout self) {
+        self.state = zeros()
+        self.buf = []
+    }
+    fn fresh(self) -> keccak = keccak { state: zeros(), buf: [], rate: self.rate, size: self.size, suffix: self.suffix }
+    fn outputSize(self) -> int = self.size
+    fn blockSize(self) -> int = self.rate
+}
+
+impl keccak {
+    //~ The first `n` bytes of output (for SHAKE any `n`; for SHA-3 `n` up to the digest size is the digest cut short).
+    //~ Works on a copy.
+    fn squeeze(self, n: int) -> [byte] {
+        var c = copy self
+        var pad: [byte] = [self.suffix.wrapToByte()]
+        while (self.buf.len() + pad.len()) % self.rate != 0 { pad.push!(0) }
+        pad[pad.len() - 1] = (((pad[pad.len() - 1] to int) | 128)).wrapToByte()
+        absorb(c!, pad)
+        var out: [byte] = []
+        while true {
+            var lane = 0
+            while lane * 8 < self.rate && out.len() < n {
+                const w = c.state[lane]
+                for i of 0..8 {
+                    if out.len() < n { out.push!(rtCast<uint64, int>(w >> (8 * i)).wrapToByte()) }
+                }
+                lane += 1
+            }
+            if out.len() >= n { return out }
+            keccakF(c.state!)
+        }
+        out
+    }
+}
