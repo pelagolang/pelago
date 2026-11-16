@@ -37,7 +37,7 @@ const STACK_WIN: i64 = 1 << 28;
 const COMMIT_WIN: i64 = 512 * 1024;
 
 /// The kernel32 functions the Windows image imports, in the order of its import table.
-pub const IMPORTS: [&str; 26] = [
+pub const IMPORTS: [&str; 27] = [
     "GetStdHandle",
     "WriteFile",
     "ExitProcess",
@@ -63,6 +63,7 @@ pub const IMPORTS: [&str; 26] = [
     "CreateDirectoryW",
     "MoveFileExW",
     "GetFileInformationByHandleEx",
+    "Sleep",
     // From advapi32.dll (the last import; see `pe.rs`).
     "SystemFunction036",
 ];
@@ -78,7 +79,8 @@ pub(super) const IMP_REMOVE_DIRECTORY: usize = 21;
 pub(super) const IMP_CREATE_DIRECTORY: usize = 22;
 pub(super) const IMP_MOVE_FILE: usize = 23;
 pub(super) const IMP_FILE_INFO_BY_HANDLE: usize = 24;
-pub(super) const IMP_RTL_GEN_RANDOM: usize = 25;
+pub(super) const IMP_SLEEP: usize = 25;
+pub(super) const IMP_RTL_GEN_RANDOM: usize = 26;
 pub(super) const IMP_GET_STD_HANDLE: usize = 0;
 pub(super) const IMP_WRITE_FILE: usize = 1;
 pub(super) const IMP_EXIT_PROCESS: usize = 2;
@@ -2255,9 +2257,29 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.bind(cbad);
         a.mov_ri(RAX, -2);
         a.ret();
-        // sleep: no sleep call on Windows yet.
+        // sleep(seconds = rdi, nanoseconds = rsi): `Sleep` in whole milliseconds, rounded up and held to 2^31 - 1 (about
+        // 24 days; the caller looks at the clock again). An early return is not an error.
+        let (sl_clamp, sl_go) = (a.new_label(), a.new_label());
         a.bind(rt.os[15]);
-        a.mov_ri(RAX, -3);
+        a.alu_ri(Alu::Cmp, RDI, 2_000_000, 8);
+        a.jcc(Cc::A, sl_clamp);
+        a.mov_rr(RAX, RDI, 8);
+        a.mov_ri(RCX, 1000);
+        a.mul(RCX, 8);
+        a.mov_rr(R9, RAX, 8);
+        a.lea(RAX, mem(RSI, 999_999));
+        a.alu_rr(Alu::Xor, RDX, RDX, 4);
+        a.mov_ri(RCX, 1_000_000);
+        a.div(RCX, 8);
+        a.alu_rr(Alu::Add, RAX, R9, 8);
+        a.alu_ri(Alu::Cmp, RAX, 0x7FFF_FFFF, 8);
+        a.jcc(Cc::Be, sl_go);
+        a.bind(sl_clamp);
+        a.mov_ri(RAX, 0x7FFF_FFFF);
+        a.bind(sl_go);
+        a.mov_rr(RCX, RAX, 8);
+        win_call(a, IMP_SLEEP, |_| {});
+        a.alu_rr(Alu::Xor, RAX, RAX, 4);
         a.ret();
         // fs(op = rdi, path = rsi, aux = rdx): the path calls of `OsKind::Fs` through kernel32, the path (and for
         // `rename` the second one, `aux`) converted to UTF-16 first. 0, a size and kind written at `aux` for `stat`,
