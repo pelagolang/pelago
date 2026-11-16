@@ -465,6 +465,21 @@ impl<'a> Lowerer<'a> {
         let Some(pb) = self.wide_operand(rhs, t) else {
             return Res::Never;
         };
+        match self.wide_cmp_ptrs(op, pa, pb, n, signed) {
+            Some(v) => Res::Val(v),
+            None => Res::Never,
+        }
+    }
+
+    /// The comparison `op` on the wide integers at `pa` and `pb`: a Bool.
+    pub(crate) fn wide_cmp_ptrs(
+        &mut self,
+        op: Punct,
+        pa: Value,
+        pb: Value,
+        n: u32,
+        signed: bool,
+    ) -> Option<Value> {
         let a = self.wload(pa, n);
         let b = self.wload(pb, n);
         if matches!(op, Punct::EqEq | Punct::NotEq) {
@@ -479,7 +494,7 @@ impl<'a> Lowerer<'a> {
             } else {
                 CmpOp::Ne
             };
-            return self.wrap(Op::Cmp(c, acc, z), IrTy::Bool, e.span);
+            return self.emit(Op::Cmp(c, acc, z), Some(IrTy::Bool), SP);
         }
         // `x < y` is the borrow out of `x - y`; a signed compare flips the top bit of both first.
         let (first, second, negate) = match op {
@@ -492,7 +507,30 @@ impl<'a> Lowerer<'a> {
         let lt = self.wide_less(signed, &x, &y);
         let z = self.i64c(0);
         let c = if negate { CmpOp::Eq } else { CmpOp::Ne };
-        self.wrap(Op::Cmp(c, lt, z), IrTy::Bool, e.span)
+        self.emit(Op::Cmp(c, lt, z), Some(IrTy::Bool), SP)
+    }
+
+    /// `cur += step` in place, stopping on overflow; without a step, `cur += 1`.
+    pub(crate) fn wide_step(&mut self, cur: Value, step: Option<Value>, n: u32, signed: bool) {
+        let a = self.wload(cur, n);
+        let b = match step {
+            Some(sp) => self.wload(sp, n),
+            None => {
+                let z = self.i64c(0);
+                let mut b = vec![z; n as usize];
+                b[0] = self.i64c(1);
+                b
+            }
+        };
+        let r = self.wide_addsub(false, signed, true, &a, &b);
+        self.wstore(cur, &r);
+    }
+
+    /// True when the signed wide integer at `p` is below zero.
+    pub(crate) fn wide_is_neg(&mut self, p: Value, n: u32) -> Option<Value> {
+        let top = self.wload(p, n)[n as usize - 1];
+        let z = self.i64c(0);
+        self.emit(Op::Cmp(CmpOp::Lt, top, z), Some(IrTy::Bool), SP)
     }
 
     /// 1 when `a < b`, else 0.
