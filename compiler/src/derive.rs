@@ -106,6 +106,13 @@ impl<'a> Gen<'a> {
                 let body = match name {
                     "int" => "v.toInt(at)".to_string(),
                     "float" => "v.toFloat(at)".to_string(),
+                    "float16" => "v.toFloat16(at)".to_string(),
+                    "float128" => "v.toFloat128(at)".to_string(),
+                    "float256" => "v.toFloat256(at)".to_string(),
+                    "int128" => "v.toInt128(at)".to_string(),
+                    "uint128" => "v.toUint128(at)".to_string(),
+                    "int256" => "v.toInt256(at)".to_string(),
+                    "uint256" => "v.toUint256(at)".to_string(),
                     "bool" => "v.toBool(at)".to_string(),
                     "string" => "v.toText(at)".to_string(),
                     _ => {
@@ -321,6 +328,9 @@ impl<'a> Gen<'a> {
                 let body = match name {
                     "int" => "json.value.integer(x)".to_string(),
                     "float" => "json.value.number(x)".to_string(),
+                    // Too wide for a JSON number that other readers keep exact: written as text (digits, or the shortest text that reads back).
+                    "int128" | "uint128" | "int256" | "uint256" | "float16" | "float128"
+                    | "float256" => "json.value.text(\"#x\")".to_string(),
                     "bool" => "json.value.flag(x)".to_string(),
                     "string" => "json.value.text(copy x)".to_string(),
                     _ if WHOLE.iter().any(|w| w.0 == name) => {

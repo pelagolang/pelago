@@ -71,6 +71,14 @@ stop: the data is not the program's bug), with the range in the message; `1.0` a
 narrow types check their range like `int`. *Conventional:* strict range checks (serde does the same). *Pelago's:* the same rule as `+`:
 an out-of-range number is never silently changed.
 
+**D2a. The wide numbers are written as text (2026-11-13).** `int128`, `uint128`, `int256`, `uint256`, `float16`, `float128` and `float256` are written by
+`@derive(toJson)` as JSON *text*: digits for the integers (`"170141183460469231731687303715884105727"`), the shortest text that reads back for the floats
+(`"0.3333333333333333333333333333333333"`, also `"inf"`, `"-inf"` and `"nan"`, which a JSON number cannot be). A JSON number would be read as a double by many other
+programs and lose digits; text is the convention for big integers (and what protobuf's JSON does for 64-bit ones). `fromJson` reads that text, and
+also a JSON integer (that fits `int`) or, for the floats, a JSON number. A wide integer outside its range is an error, never a wrap; a float is rounded once, correctly
+(`str.parseFloat128()` and friends read decimal text exactly, with big integers). A huge exponent (`1e-100000`) costs time, never accuracy. *Conventional:* text for big
+numbers. *Pelago's:* the same range rule as the narrow integers.
+
 **D3. Errors carry a path and, from the text, a position.** `json.error` has `message`, `path` (`$.servers[2].port`), `line` and `column`.
 The tree has no offsets (they would cost memory on every successful decode). When a decode fails, `T.decode(text)` finds the position
 *afterwards*: it walks the text along the path (the text is known to be valid JSON, so skipping a value reuses the parser) and counts

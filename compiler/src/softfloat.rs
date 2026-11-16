@@ -313,7 +313,9 @@ pub fn parse(text: &str, f: Format) -> Option<Vec<u64>> {
         // Scale the numerator so the quotient has p + 3 bits or more.
         let s = (p + 3 + bit_len(&d)).saturating_sub(bit_len(&n)) as u64;
         let num = shl(&n, s);
-        let (q, sticky) = div_bits(&num, &d, p + 4);
+        // The quotient has `p + 4` bits when the numerator was scaled up; a long digit string is already larger.
+        let qbits = (p + 4).max((bit_len(&num) + 1).saturating_sub(bit_len(&d)));
+        let (q, sticky) = div_bits(&num, &d, qbits);
         Some(pack(false, -(s as i64), &q, sticky, f))
     }
 }
@@ -332,6 +334,18 @@ mod tests {
             out[i] = u64::from_str_radix(&s, 16).unwrap();
         }
         out
+    }
+
+    #[test]
+    fn a_long_digit_string_is_not_cut_short() {
+        // 59 digits with a fraction: the quotient is far longer than the format's significand.
+        // Expected value computed independently with exact rational arithmetic.
+        let got = parse(
+            "589351201404482111405296861187477616363576688419074327694529.0",
+            Format::F128,
+        )
+        .unwrap();
+        assert_eq!(got, words("0x40c5778e6693db7b60d226b21086f734", 2));
     }
 
     #[test]
