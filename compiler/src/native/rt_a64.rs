@@ -2212,7 +2212,8 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         a.b_cond(Cond::Hi, clamp);
         a.mov_ri(X9, 1000);
         a.mul(X0, X0, X9);
-        a.add_ri(X1, X1, 999_999);
+        a.mov_ri(X9, 999_999);
+        a.add_rr(X1, X1, X9);
         a.mov_ri(X9, 1_000_000);
         a.udiv(X1, X1, X9);
         a.add_rr(X0, X0, X1);
