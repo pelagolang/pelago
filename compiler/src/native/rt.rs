@@ -37,7 +37,7 @@ const STACK_WIN: i64 = 1 << 28;
 const COMMIT_WIN: i64 = 512 * 1024;
 
 /// The kernel32 functions the Windows image imports, in the order of its import table.
-pub const IMPORTS: [&str; 25] = [
+pub const IMPORTS: [&str; 26] = [
     "GetStdHandle",
     "WriteFile",
     "ExitProcess",
@@ -62,6 +62,7 @@ pub const IMPORTS: [&str; 25] = [
     "RemoveDirectoryW",
     "CreateDirectoryW",
     "MoveFileExW",
+    "GetFileInformationByHandleEx",
     // From advapi32.dll (the last import; see `pe.rs`).
     "SystemFunction036",
 ];
@@ -76,7 +77,8 @@ pub(super) const IMP_DELETE_FILE: usize = 20;
 pub(super) const IMP_REMOVE_DIRECTORY: usize = 21;
 pub(super) const IMP_CREATE_DIRECTORY: usize = 22;
 pub(super) const IMP_MOVE_FILE: usize = 23;
-pub(super) const IMP_RTL_GEN_RANDOM: usize = 24;
+pub(super) const IMP_FILE_INFO_BY_HANDLE: usize = 24;
+pub(super) const IMP_RTL_GEN_RANDOM: usize = 25;
 pub(super) const IMP_GET_STD_HANDLE: usize = 0;
 pub(super) const IMP_WRITE_FILE: usize = 1;
 pub(super) const IMP_EXIT_PROCESS: usize = 2;
@@ -2163,7 +2165,7 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
             a.alu_rr(Alu::Xor, R9, R9, 4);
             win_call7(a, IMP_CREATE_FILE, |a| {
                 a.store(mem(RSP, 32), R12, 8);
-                a.store_imm(mem(RSP, 40), 0x80, 8); // FILE_ATTRIBUTE_NORMAL
+                a.store_imm(mem(RSP, 40), 0x0200_0080, 8); // FILE_ATTRIBUTE_NORMAL, and BACKUP_SEMANTICS so a directory opens
                 a.store_imm(mem(RSP, 48), 0, 8);
             });
             a.mov_rr(RBX, RAX, 8);
@@ -2430,9 +2432,107 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
             a.mov_ri(R12, -2);
             a.jmp(freeing);
         }
-        a.bind(rt.os[13]);
-        a.mov_ri(RAX, -3);
-        a.ret();
+        // dents(fd = rdi, buffer = rsi, count = rdx): the directory handle's next batch from
+        // `GetFileInformationByHandleEx` (`FileIdBothDirectoryInfo`, 2 KiB at a time), written to the buffer in the
+        // shape Linux's `getdents64` has (a 19-byte header with the record length at 16, then the UTF-8 name and
+        // its zero), so `readDir` in `std.fs` is the same everywhere. 0 at the end, or the errors of `fs`. The
+        // output of one batch is under 3 KiB, well inside the 8 KiB the caller gives.
+        {
+            let (lp, fin, err, exit, zero, nf, den, isdir, oth) = (
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+                a.new_label(),
+            );
+            a.bind(rt.os[13]);
+            a.push(RBX);
+            a.push(R12);
+            a.push(R13);
+            a.push(R14);
+            a.alu_ri(Alu::Sub, RSP, 2064, 8);
+            a.lea(R13, mem(RSP, 15));
+            a.alu_ri(Alu::And, R13, -16, 8);
+            a.mov_rr(RBX, RSI, 8);
+            a.mov_rr(R12, RSI, 8);
+            a.mov_rr(RCX, RDI, 8);
+            a.mov_ri(RDX, 10); // FileIdBothDirectoryInfo
+            a.mov_rr(R8, R13, 8);
+            a.mov_ri(R9, 2048);
+            win_call(a, IMP_FILE_INFO_BY_HANDLE, |_| {});
+            a.test_rr(RAX, RAX, 4);
+            a.jcc(Cc::E, err);
+            a.mov_rr(R14, R13, 8);
+            a.bind(lp);
+            a.mov_ri(RCX, 65001); // CP_UTF8
+            a.alu_rr(Alu::Xor, RDX, RDX, 4);
+            a.lea(R8, mem(R14, 104));
+            a.load_ext(R9, mem(R14, 60), 4, false, true);
+            a.shift_imm(Shift::Shr, R9, 1, 8);
+            win_call7(a, IMP_WIDE_CHAR, |a| {
+                a.lea(RAX, mem(R12, 19));
+                a.store(mem(RSP, 32), RAX, 8);
+                a.store_imm(mem(RSP, 40), 1024, 8);
+                a.store_imm(mem(RSP, 48), 0, 8);
+                a.store_imm(mem(RSP, 56), 0, 8);
+            });
+            a.mov_rr(RDX, RAX, 4);
+            a.store_imm(mem_idx(R12, RDX, 1, 19), 0, 1);
+            a.lea(RCX, mem(RDX, 27));
+            a.alu_ri(Alu::And, RCX, -8, 8);
+            a.store(mem(R12, 16), RCX, 2);
+            a.load_ext(RAX, mem(R14, 56), 4, false, true);
+            a.mov_ri(RDX, 8); // a file
+            a.alu_ri(Alu::And, RAX, 0x10, 4);
+            a.jcc(Cc::E, isdir);
+            a.mov_ri(RDX, 4); // a directory
+            a.bind(isdir);
+            a.store(mem(R12, 18), RDX, 1);
+            a.store_imm(mem(R12, 0), 0, 8);
+            a.store_imm(mem(R12, 8), 0, 8);
+            a.alu_rr(Alu::Add, R12, RCX, 8);
+            a.load_ext(RAX, mem(R14, 0), 4, false, true);
+            a.test_rr(RAX, RAX, 8);
+            a.jcc(Cc::E, fin);
+            a.alu_rr(Alu::Add, R14, RAX, 8);
+            a.jmp(lp);
+            a.bind(fin);
+            a.mov_rr(RAX, R12, 8);
+            a.alu_rr(Alu::Sub, RAX, RBX, 8);
+            a.jmp(exit);
+            a.bind(err);
+            win_call(a, IMP_GET_LAST_ERROR, |_| {});
+            a.alu_ri(Alu::Cmp, RAX, 18, 4); // ERROR_NO_MORE_FILES
+            a.jcc(Cc::E, zero);
+            a.alu_ri(Alu::Cmp, RAX, 2, 4);
+            a.jcc(Cc::E, nf);
+            a.alu_ri(Alu::Cmp, RAX, 3, 4);
+            a.jcc(Cc::E, nf);
+            a.alu_ri(Alu::Cmp, RAX, 5, 4);
+            a.jcc(Cc::E, den);
+            a.mov_ri(RAX, -3);
+            a.jmp(oth);
+            a.bind(zero);
+            a.alu_rr(Alu::Xor, RAX, RAX, 4);
+            a.jmp(oth);
+            a.bind(nf);
+            a.mov_ri(RAX, -4);
+            a.jmp(oth);
+            a.bind(den);
+            a.mov_ri(RAX, -5);
+            a.bind(oth);
+            a.bind(exit);
+            a.alu_ri(Alu::Add, RSP, 2064, 8);
+            a.pop(R14);
+            a.pop(R13);
+            a.pop(R12);
+            a.pop(RBX);
+            a.ret();
+        }
         // random(buffer = rdi, count = rsi): `RtlGenRandom` (`SystemFunction036`), 1 to 256 bytes.
         let (wbad, wfail) = (a.new_label(), a.new_label());
         a.bind(rt.os[14]);

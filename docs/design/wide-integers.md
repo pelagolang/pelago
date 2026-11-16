@@ -41,10 +41,10 @@ Correct first, as agreed. Where the time goes, in the order to attack it:
 
 ## Limits
 
-- Pattern literals (`switch x { 5 -> ... }`) and `for a..b` ranges over wide integers are not built.
+- `switch` literal and range patterns (`case 5:`, `case 1..10:`) and `for a..b` / `a..=b` / `step` ranges work on wide integers and soft floats (`lower/memnum.rs`): the counter is a slot stepped in place, the body sees its own copy, and an inclusive range stops at its last value without adding, so `..=` the largest number does not overflow.
 - `float` printing stops at the 64-bit range (a separate, older limit).
 - Wide integers are not yet in `@derive(toJson)` and `fromJson`.
 
 ## Floats
 
-`float128` (software IEEE binary128) and `float16` are the next step; see the card in `docs/plans/`.
+See [soft-floats.md](soft-floats.md): `float16`, `float128` and `float256` are built on these words.

@@ -94,6 +94,9 @@ impl<'a> Lowerer<'a> {
         let Some(from) = self.ty_of(v) else {
             return self.unsupported(e.span, "this conversion");
         };
+        if let Some(k) = self.soft_of(t) {
+            return self.soft_convert(e, v, from, dst, k);
+        }
         if self.wide_of(t).is_some() && !matches!(self.kind(from), TyKind::String) {
             return self.wide_convert(e, v, from, t, dst);
         }

@@ -84,6 +84,15 @@ impl<'a> Lowerer<'a> {
             }
             return true;
         }
+        if let Some(k) = self.soft_of(ty) {
+            if let Some(r) = self.soft_cmp_glue(a, b, k) {
+                let z = self.i64c(0);
+                if let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, r, z), Some(IrTy::Bool), sp) {
+                    self.require_true(c, fail);
+                }
+            }
+            return true;
+        }
         match self.kind(ty) {
             TyKind::Int(_) | TyKind::Float(_) | TyKind::Bool | TyKind::Char | TyKind::Ptr => {
                 let s = self.scalar_of(ty).unwrap_or(IrTy::I64);
@@ -226,6 +235,12 @@ impl<'a> Lowerer<'a> {
         if let Some((n, signed)) = self.wide_of(ty) {
             let r = self.wide_cmp_glue(a, b, n, signed);
             self.return_if_nonzero(r);
+            return true;
+        }
+        if let Some(k) = self.soft_of(ty) {
+            if let Some(r) = self.soft_cmp_glue(a, b, k) {
+                self.return_if_nonzero(r);
+            }
             return true;
         }
         match self.kind(ty) {
@@ -392,6 +407,12 @@ impl<'a> Lowerer<'a> {
         if let Some((n, _)) = self.wide_of(ty) {
             for w in self.wide_words(a, n) {
                 self.mix(acc, w);
+            }
+            return true;
+        }
+        if let Some(k) = self.soft_of(ty) {
+            if let Some(h) = self.soft_key_glue(a, k) {
+                self.mix(acc, h);
             }
             return true;
         }

@@ -254,6 +254,9 @@ impl<'a> Lowerer<'a> {
         if let Some((n, signed)) = self.wide_of(t) {
             return self.wide_show(p, n, signed, out);
         }
+        if let Some(k) = self.soft_of(t) {
+            return self.soft_show(p, k, out);
+        }
         match self.kind(t) {
             TyKind::String | TyKind::Str => {
                 if quoted {

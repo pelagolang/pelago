@@ -500,7 +500,7 @@ impl<'m> Sel<'m> {
             // A select reads its condition once; `uses` counts every read.
             // A fused compare-and-move names four registers (result, true value and both compared values); with
             // fewer than four registers to spare it is written as a compare into a register and a test-and-move.
-            let too_many = super::gen::reg_limit() < 4 && self.imms[y.0 as usize].is_none();
+            let too_many = super::gen::reg_limit() <= 4 && self.imms[y.0 as usize].is_none();
             if selects > 0 && selects == self.uses[r.0 as usize] as usize && !too_many {
                 self.deferred.insert(r, (*op, *x, *y));
             }

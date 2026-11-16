@@ -256,6 +256,7 @@ Decided: lowercase, and sized integers from 8 to 256 bits. `int` is always 64 bi
 | `int8` `int16` `int32` `int64` | Signed whole numbers of an exact size | 2 |
 | `uint` `uint8` `uint16` `uint32` `uint64` | Unsigned whole numbers | 2 |
 | `int128` `uint128` `int256` `uint256` | Wide whole numbers (two and four 64-bit words; [wide-integers.md](wide-integers.md)) | 2 |
+| `float16` `float128` `float256` | IEEE half, quad and octuple precision decimals, in software ([soft-floats.md](soft-floats.md)) | 2 |
 | `byte` | Another name for `uint8`, for raw data | 2 |
 | `float` | Decimal number, 64-bit | 1 |
 | `float32` `float64` | Decimal numbers of an exact size | 2 |

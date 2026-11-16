@@ -97,8 +97,52 @@ impl IntKind {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum FloatKind {
+    F16,
     F32,
     F64,
+    F128,
+    F256,
+}
+
+impl FloatKind {
+    pub const fn bits(self) -> u32 {
+        match self {
+            FloatKind::F16 => 16,
+            FloatKind::F32 => 32,
+            FloatKind::F64 => 64,
+            FloatKind::F128 => 128,
+            FloatKind::F256 => 256,
+        }
+    }
+
+    /// Floats the machine has no instructions for: they are done in software (`softfloat.pel`).
+    pub const fn soft(self) -> bool {
+        matches!(self, FloatKind::F16 | FloatKind::F128 | FloatKind::F256)
+    }
+
+    /// `(exponent bits, fraction bits)` of the IEEE 754 binary format.
+    pub const fn format(self) -> (u32, u32) {
+        match self {
+            FloatKind::F16 => (5, 10),
+            FloatKind::F32 => (8, 23),
+            FloatKind::F64 => (11, 52),
+            FloatKind::F128 => (15, 112),
+            FloatKind::F256 => (19, 236),
+        }
+    }
+
+    /// Bytes in memory, and 64-bit words in the working copy.
+    pub const fn bytes(self) -> u32 {
+        self.bits() / 8
+    }
+
+    pub const fn words(self) -> u32 {
+        if self.bits() <= 64 {
+            1
+        } else {
+            self.bits() / 64
+        }
+    }
 }
 
 /// The length of a fixed array: known, a `meta` parameter, or not worked out.
@@ -698,6 +742,9 @@ impl TypeTable {
             TyKind::Int(k) => k.name().to_string(),
             TyKind::Float(FloatKind::F32) => "float32".to_string(),
             TyKind::Float(FloatKind::F64) => "float".to_string(),
+            TyKind::Float(FloatKind::F16) => "float16".to_string(),
+            TyKind::Float(FloatKind::F128) => "float128".to_string(),
+            TyKind::Float(FloatKind::F256) => "float256".to_string(),
             TyKind::Bool => "bool".to_string(),
             TyKind::Char => "char".to_string(),
             TyKind::String => "string".to_string(),

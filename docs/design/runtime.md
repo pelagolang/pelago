@@ -138,13 +138,21 @@ In dependency order; each can be one PR.
 - **File system on Windows (2026-11-12):** `OsKind::Fs` on x86-64 and ARM64 turns the UTF-8 path into UTF-16 with a small
   runtime helper (heap block from the runtime's own allocator, freed after the call) and uses `GetFileAttributesExW`,
   `DeleteFileW`, `RemoveDirectoryW`, `CreateDirectoryW` and `MoveFileExW` (replace existing). `GetLastError` 2 and 3 become
-  not-found, 5 permission denied. No `FindFirstFile` yet, so `Dents` (`readDir`) is still "other" there.
+  not-found, 5 permission denied. `Dents` (`readDir`) opens the directory with
+  `CreateFileW` (backup semantics) and reads it 2 KiB at a time with `GetFileInformationByHandleEx`; the runtime turns each
+  UTF-16 name into UTF-8 and writes it as a `getdents64`-shaped record, so `std.fs`'s `readDir` is the same code on every
+  target and the conversion lives in one place.
 - **macOS clock and arguments (2026-11-12):** `dyld` calls the entry like `main(argc, argv, envp)`, so `_start` writes the
   count one slot before `argv` and uses that as the start block (the environment follows `argv`'s zero, as on Linux); the
   `main(args)` refusal at build time is gone. Wall clock: the `gettimeofday` system call; monotonic: the virtual counter
   (`CNTVCT_EL0`, readable from user code) at the fixed 24 MHz of Apple chips, split into seconds and nanoseconds.
   Checked on the macOS CI job only (nothing here runs macOS).
-- **Not yet:** `Dents` on Windows; file-system calls on macOS;
+- **File system and sleep on macOS (2026-11-13):** the plain BSD calls (`access`, `unlink`, `rmdir`, `mkdir`, `rename`,
+  `stat64`, `getdirentries64`) with the path moved to `x0`; the stat record has a 16-bit `st_mode` at 4 and `st_size` at 96.
+  macOS's directory records differ from Linux's (name at 21, type at 20), so the runtime rewrites each batch to the
+  Linux shape and `readDir` stays one piece of Pelago code. Sleep is `select` with no descriptors and a timeout. Checked
+  on the macOS CI job only.
+- **Not yet:** Windows sleep;
   OS threads and atomics (`concurrency-runtime.md`).
 
 ## Related work already on the board

@@ -1677,7 +1677,7 @@ impl<'p> Checker<'p> {
             (TyKind::Var(_), TyKind::Int(_)) => self.is_integer(vt),
             (TyKind::Var(_), TyKind::Float(_)) => self.is_numeric(vt),
             (TyKind::Int(_), TyKind::Float(_)) => true,
-            (TyKind::Float(FloatKind::F32), TyKind::Float(FloatKind::F64)) => true,
+            (TyKind::Float(a), TyKind::Float(b)) => a.bits() <= b.bits(),
             (TyKind::Char, TyKind::Int(b)) => b.bits() >= 32,
             (TyKind::Bool, TyKind::Int(_)) => true,
             (TyKind::Str, TyKind::String) | (TyKind::String, TyKind::Str) => true,

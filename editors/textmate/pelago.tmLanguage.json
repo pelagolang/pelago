@@ -435,7 +435,7 @@
       "patterns": [
         {
           "name": "support.type.pelago",
-          "match": "(?<![.\\w])(?:int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|int128|uint128|int256|uint256|byte|float|float32|float64|bool|char|string|str|map|set|range|option|result|box|soa|rc|ptr|void|never|error|list|iter|task|chan|sender|receiver|shared|lock|fn)\\b"
+          "match": "(?<![.\\w])(?:int|int8|int16|int32|int64|uint|uint8|uint16|uint32|uint64|int128|uint128|int256|uint256|byte|float|float16|float32|float64|float128|float256|bool|char|string|str|map|set|range|option|result|box|soa|rc|ptr|void|never|error|list|iter|task|chan|sender|receiver|shared|lock|fn)\\b"
         },
         {
           "match": "(->)\\s*([A-Za-z_][A-Za-z0-9_]*)",

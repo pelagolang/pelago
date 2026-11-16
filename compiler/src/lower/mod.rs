@@ -25,6 +25,7 @@ mod expr;
 mod func;
 mod glue;
 mod intr;
+mod memnum;
 mod meta;
 mod obj;
 mod ops;
@@ -32,6 +33,7 @@ mod pat;
 mod select;
 mod seq;
 mod soa;
+mod softf;
 mod ty;
 mod wide;
 

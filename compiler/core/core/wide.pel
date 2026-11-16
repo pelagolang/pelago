@@ -8,13 +8,13 @@
 /// get faster. The routines that can overflow give back a `bool` and the caller stops the program, so the
 /// stop is reported at the line of the arithmetic and not inside the library.
 
-fn wGet(p: ptr, i: int) -> int = rtLoadInt(rtOffset(p, i * 8))
+pub fn wGet(p: ptr, i: int) -> int = rtLoadInt(rtOffset(p, i * 8))
 
-fn wPut(p: ptr, i: int, v: int) {
+pub fn wPut(p: ptr, i: int, v: int) {
     rtStoreInt(rtOffset(p, i * 8), v)
 }
 
-fn wZero(p: ptr, n: int) {
+pub fn wZero(p: ptr, n: int) {
     var i = 0
     while i < n {
         wPut(p, i, 0)
@@ -23,7 +23,7 @@ fn wZero(p: ptr, n: int) {
 }
 
 /// Two's complement negation in place.
-fn wNeg(a: ptr, n: int) {
+pub fn wNeg(a: ptr, n: int) {
     var carry = 1
     var i = 0
     while i < n {
@@ -35,7 +35,7 @@ fn wNeg(a: ptr, n: int) {
 }
 
 /// `a -= b` over `n` words (unsigned).
-fn wSubIn(a: ptr, b: ptr, n: int) {
+pub fn wSubIn(a: ptr, b: ptr, n: int) {
     var borrow = 0
     var i = 0
     while i < n {
@@ -52,7 +52,7 @@ fn wSubIn(a: ptr, b: ptr, n: int) {
 }
 
 /// `a >= b`, both unsigned.
-fn wGeU(a: ptr, b: ptr, n: int) -> bool {
+pub fn wGeU(a: ptr, b: ptr, n: int) -> bool {
     var i = n - 1
     while i >= 0 {
         const x = wGet(a, i)
@@ -64,7 +64,7 @@ fn wGeU(a: ptr, b: ptr, n: int) -> bool {
 }
 
 /// `a = a << 1 | bit`.
-fn wShl1(a: ptr, n: int, bit: int) {
+pub fn wShl1(a: ptr, n: int, bit: int) {
     var carry = bit
     var i = 0
     while i < n {
@@ -75,34 +75,19 @@ fn wShl1(a: ptr, n: int, bit: int) {
     }
 }
 
-fn wBit(a: ptr, bit: int) -> int = rtUShr(wGet(a, bit / 64), bit % 64) & 1
+pub fn wBit(a: ptr, bit: int) -> int = rtUShr(wGet(a, bit / 64), bit % 64) & 1
 
 /// Words above the top read as `fill`, words below the bottom as 0.
-fn wSrc(a: ptr, i: int, n: int, fill: int) -> int {
+pub fn wSrc(a: ptr, i: int, n: int, fill: int) -> int {
     if i < 0 { return 0 }
     if i >= n { return fill }
     return wGet(a, i)
 }
 
-fn wLowestBit() -> int = 1 << 63
+pub fn wLowestBit() -> int = 1 << 63
 
-//~ `dst = a * b` over `n` words. With `wrap` the product is cut to the width and the answer is always `false`;
-//~ otherwise the answer is `true` when the exact product does not fit (the caller stops the program).
-pub fn rtWideMul(dst: ptr, a: ptr, b: ptr, n: int, signed: bool, wrap: bool) -> bool {
-    const bytes = n * 8
-    const ma = rtAlloc(bytes)
-    const mb = rtAlloc(bytes)
-    const prod = rtAlloc(bytes * 2)
-    rtCopy(ma, a, bytes)
-    rtCopy(mb, b, bytes)
-    var negA = false
-    var negB = false
-    if signed && !wrap {
-        negA = wGet(a, n - 1) < 0
-        negB = wGet(b, n - 1) < 0
-        if negA { wNeg(ma, n) }
-        if negB { wNeg(mb, n) }
-    }
+//~ `dst = a * b` as an unsigned number of `2n` words (`dst` has room for them), `a` and `b` of `n` words.
+pub fn wMulFull(prod: ptr, ma: ptr, mb: ptr, n: int) {
     wZero(prod, n * 2)
     var i = 0
     while i < n {
@@ -125,6 +110,26 @@ pub fn rtWideMul(dst: ptr, a: ptr, b: ptr, n: int, signed: bool, wrap: bool) -> 
         wPut(prod, i + n, carry)
         i += 1
     }
+}
+
+//~ `dst = a * b` over `n` words. With `wrap` the product is cut to the width and the answer is always `false`;
+//~ otherwise the answer is `true` when the exact product does not fit (the caller stops the program).
+pub fn rtWideMul(dst: ptr, a: ptr, b: ptr, n: int, signed: bool, wrap: bool) -> bool {
+    const bytes = n * 8
+    const ma = rtAlloc(bytes)
+    const mb = rtAlloc(bytes)
+    const prod = rtAlloc(bytes * 2)
+    rtCopy(ma, a, bytes)
+    rtCopy(mb, b, bytes)
+    var negA = false
+    var negB = false
+    if signed && !wrap {
+        negA = wGet(a, n - 1) < 0
+        negB = wGet(b, n - 1) < 0
+        if negA { wNeg(ma, n) }
+        if negB { wNeg(mb, n) }
+    }
+    wMulFull(prod, ma, mb, n)
     var overflow = false
     if !wrap {
         var k = n

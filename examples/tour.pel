@@ -325,7 +325,7 @@ pub import { read } = std.io
 use std.io
 
 type id = int64
-type wide = int128      /// also uint128, int256, uint256
+type wide = int128      /// also uint128, int256, uint256, float16, float128, float256
 type pair<A, B> = (A, B)
 
 @derive(eq, order, hash, show)

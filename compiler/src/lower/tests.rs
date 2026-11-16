@@ -1684,6 +1684,25 @@ fn native_clock_on_macos() {
     assert_eq!((r.out, r.code), (o.output, 0), "{}", r.err);
 }
 
+/// Sleeping on macOS (AArch64 only, so it runs on the macOS CI job): the system call waits, the clock sees it.
+#[test]
+fn native_sleep_on_macos() {
+    use crate::native::{exec, gen, Arch, Os};
+    if !exec::can_run_a64_on(Os::MacOs) {
+        return;
+    }
+    let src = "import std.time\n\nfn main() -> void ! io_error {\n    const t0 = time.now()?\n    time.sleep(time.millis(30))\n    print((t0.elapsed()?).asMillis() >= 30)\n}";
+    let l = lowered(src);
+    let opts = gen::Options {
+        leak_check: false,
+        target: Os::MacOs,
+        symbols: false,
+    };
+    let image = crate::native::gen_a64::compile(&l.module, "main", &opts).unwrap();
+    let r = exec::run_image_arch(Arch::Aarch64, Os::MacOs, &image).unwrap();
+    assert_eq!((r.out.as_str(), r.code), ("true\n", 0), "{}", r.err);
+}
+
 /// A native stop message without its place (`file:line: `) and the `stopped: ` before the message.
 fn unplaced(err: &str) -> &str {
     let said = err.rsplit_once(": stopped: ").map_or(err, |(_, m)| m);
@@ -1833,36 +1852,26 @@ fn native_args_and_environment() {
 #[test]
 fn native_file_system_calls() {
     use crate::native::{exec, gen, Arch, Os};
-    let listing = "b.txt\nc.txt\nsub\n";
+    let listing = "b.txt\nc.txt\nsub\n\u{e9}.txt\n";
     let all = [
         (Arch::X86_64, Os::Linux, "x86"),
         (Arch::Aarch64, Os::Linux, "a64"),
         (Arch::X86_64, Os::Windows, "x86w"),
         (Arch::Aarch64, Os::Windows, "a64w"),
+        (Arch::Aarch64, Os::MacOs, "a64m"),
     ];
     for (arch, os, tag) in all {
         let a64 = arch == Arch::Aarch64;
         if (a64 && !exec::can_run_a64_on(os)) || (!a64 && !exec::can_run(os)) {
             continue;
         }
-        // Reading a directory is not built on Windows yet, so that line and its output drop out there.
-        let win = os == Os::Windows;
-        let want = if win {
-            "true\ntrue 5\ntrue\nfalse\ntrue\ntrue\n".to_string()
-        } else {
-            format!("true\ntrue 5\ntrue\n{listing}false\ntrue\ntrue\n")
-        };
+        let want = format!("true\ntrue 5\ntrue\n{listing}false\ntrue\ntrue\n");
         let dir = std::env::temp_dir().join(format!("pelago-fs-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let d = dir.display().to_string().replace('\\', "/");
         let src = format!(
-            "import std.fs\nimport std.io\n\nfn main() -> void ! io_error {{\n    const root = \"{d}\"\n    fs.createDirs(\"#(root)/sub/inner\")?\n    fs.writeText(\"#(root)/a.txt\", \"hello\")?\n    print(fs.exists(\"#(root)/a.txt\"))\n    const m = fs.metadata(\"#(root)/a.txt\")?\n    print(m.kind == fs.file_kind.file, m.size)\n    const sd = fs.metadata(\"#(root)/sub\")?\n    print(sd.kind == fs.file_kind.dir)\n    fs.rename(\"#(root)/a.txt\", \"#(root)/b.txt\")?\n    fs.writeText(\"#(root)/c.txt\", \"x\")?\n    fs.removeDir(\"#(root)/sub/inner\")?\n    for n of fs.readDir(root)? {{ print(n) }}\n    fs.removeFile(\"#(root)/b.txt\")?\n    fs.removeFile(\"#(root)/c.txt\")?\n    fs.removeDir(\"#(root)/sub\")?\n    print(fs.exists(\"#(root)/b.txt\"))\n    const e = fs.metadata(\"#(root)/b.txt\")\n    switch e {{\n        case ok(_): print(\"found\")\n        case err(x): print(x.kind == io_kind.notFound)\n    }}\n    fs.removeDir(root)?\n    print(!fs.exists(root))\n}}"
+            "import std.fs\nimport std.io\n\nfn main() -> void ! io_error {{\n    const root = \"{d}\"\n    fs.createDirs(\"#(root)/sub/inner\")?\n    fs.writeText(\"#(root)/a.txt\", \"hello\")?\n    print(fs.exists(\"#(root)/a.txt\"))\n    const m = fs.metadata(\"#(root)/a.txt\")?\n    print(m.kind == fs.file_kind.file, m.size)\n    const sd = fs.metadata(\"#(root)/sub\")?\n    print(sd.kind == fs.file_kind.dir)\n    fs.rename(\"#(root)/a.txt\", \"#(root)/b.txt\")?\n    fs.writeText(\"#(root)/c.txt\", \"x\")?\n    fs.writeText(\"#(root)/\u{e9}.txt\", \"y\")?\n    fs.removeDir(\"#(root)/sub/inner\")?\n    for n of fs.readDir(root)? {{ print(n) }}\n    fs.removeFile(\"#(root)/b.txt\")?\n    fs.removeFile(\"#(root)/c.txt\")?\n    fs.removeFile(\"#(root)/\u{e9}.txt\")?\n    fs.removeDir(\"#(root)/sub\")?\n    print(fs.exists(\"#(root)/b.txt\"))\n    const e = fs.metadata(\"#(root)/b.txt\")\n    switch e {{\n        case ok(_): print(\"found\")\n        case err(x): print(x.kind == io_kind.notFound)\n    }}\n    fs.removeDir(root)?\n    print(!fs.exists(root))\n}}"
         );
-        let src = if win {
-            src.replace("    for n of fs.readDir(root)? { print(n) }\n", "")
-        } else {
-            src
-        };
         let l = lowered(&src);
         let opts = gen::Options {
             leak_check: false,
