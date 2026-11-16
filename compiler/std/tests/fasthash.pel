@@ -1,0 +1,63 @@
+/// `std.fasthash`: FNV, xxHash32/64 and SipHash against the published values and Python ports of the
+/// specifications (`fast_ref.py`).
+import std.fasthash
+import std.hash
+import { fnv, siphash, xxh32, xxh64 } = std.fasthash
+
+fn pattern(n: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * 7 + 3) & 255).wrapToByte()) }
+    out
+}
+
+fn text(s: str) -> [byte] = s.bytes().toList()
+
+fn main() {
+    for n of [0, 1, 3, 4, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 100, 1000] {
+        const m = pattern(n)
+        print(n, hash.hex(hash.digest(fnv.fnv1a32(), m)), hash.hex(hash.digest(fnv.fnv1a64(), m)),
+            hash.hex(hash.digest(fnv.fnv132(), m)), hash.hex(hash.digest(fnv.fnv164(), m)))
+        print(n, hash.hex(hash.digest(xxh32.new(0), m)), hash.hex(hash.digest(xxh32.new(12345), m)),
+            hash.hex(hash.digest(xxh64.new(0), m)), hash.hex(hash.digest(xxh64.new(12345), m)))
+    }
+    /// The published values.
+    const spam = text("Nobody inspects the spammish repetition")
+    print(hash.hex(hash.digest(xxh32.new(0), spam)), hash.hex(hash.digest(xxh64.new(0), spam)))
+    print(hash.hex(hash.digest(xxh32.new(0), [])), hash.hex(hash.digest(xxh64.new(0), [])))
+    /// SipHash: the reference key 00 01 ... 0f, inputs 00 01 ... (n-1).
+    var key: [byte] = []
+    for i of 0..16 { key.push!(i.wrapToByte()) }
+    for n of [0, 1, 7, 8, 9, 15, 16, 17, 40] {
+        var m: [byte] = []
+        for i of 0..n { m.push!(i.wrapToByte()) }
+        print(
+            n,
+            hash.hex(hash.digest(siphash.new24(key), m)),
+            hash.hex(hash.digest(siphash.new13(key), m)),
+        )
+    }
+    /// Streaming in odd chunks, and `value` / `finish` leave the hasher usable.
+    const whole = pattern(300)
+    const want = hash.hex(hash.digest(xxh64.new(7), whole)) +
+        hash.hex(hash.digest(xxh32.new(7), whole)) +
+        hash.hex(hash.digest(siphash.new24(key), whole))
+    var ok = true
+    for step of [1, 5, 8, 16, 31, 32, 33] {
+        var a = xxh64.new(7)
+        var b = xxh32.new(7)
+        var c = siphash.new24(key)
+        var i = 0
+        while i < whole.len() {
+            const end = i + step < whole.len() ? i + step : whole.len()
+            var part: [byte] = []
+            for j of i..end { part.push!(whole[j]) }
+            a.update!(part)
+            b.update!(part)
+            c.update!(part)
+            i = end
+        }
+        if hash.hex(a.finish()) + hash.hex(b.finish()) + hash.hex(c.finish()) != want { ok = false }
+        if hash.hex(a.finish()) != hash.hex(hash.digest(xxh64.new(7), whole)) { ok = false }
+    }
+    print(ok)
+}

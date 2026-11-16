@@ -1,0 +1,73 @@
+/// `std.blake3`: the plain, keyed and derive-key modes and extendable output, against a Python port of the
+/// specification (`blake3_ref.py`) and the published values for "", one byte and "abc".
+import std.blake3
+import std.hash
+import { blake3hash } = std.blake3
+
+fn pattern(n: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!((i % 251).wrapToByte()) }
+    out
+}
+
+fn main() {
+    /// The input is `i % 251` as in the reference test vectors; lengths around block and chunk edges.
+    for n of [
+        0,
+        1,
+        2,
+        3,
+        63,
+        64,
+        65,
+        127,
+        128,
+        129,
+        1023,
+        1024,
+        1025,
+        2048,
+        2049,
+        3072,
+        3073,
+        4096,
+        4097,
+    ] {
+        print(n, hash.hex(hash.digest(blake3hash.new(), pattern(n))))
+    }
+    const key = pattern(32)
+    for n of [0, 1, 64, 1024, 1025, 3073] {
+        print(n, hash.hex(hash.digest(blake3hash.keyed(key), pattern(n))))
+    }
+    for n of [0, 5, 1025] {
+        var d = blake3hash.deriveKey("blake3 2019-12-27 16:29:52 test vectors context")
+        d.update!(pattern(n))
+        print(n, hash.hex(d.finish()))
+    }
+    /// Extendable output: the digest is the start of the longer output, over several blocks and chunks.
+    var x = blake3hash.new()
+    x.update!(pattern(1500))
+    print(hash.hex(x.squeeze(32)))
+    print(hash.hex(x.squeeze(200)))
+    var k = blake3hash.keyed(key)
+    k.update!(pattern(70))
+    print(hash.hex(k.squeeze(100)))
+    /// Streaming in odd chunks, and `finish` leaves the hasher usable.
+    const whole = pattern(3500)
+    const want = hash.hex(hash.digest(blake3hash.new(), whole))
+    var ok = true
+    for step of [1, 63, 64, 65, 1024, 1025] {
+        var h = blake3hash.new()
+        var i = 0
+        while i < whole.len() {
+            const end = i + step < whole.len() ? i + step : whole.len()
+            var part: [byte] = []
+            for j of i..end { part.push!(whole[j]) }
+            h.update!(part)
+            i = end
+        }
+        if hash.hex(h.finish()) != want { ok = false }
+        if hash.hex(h.finish()) != want { ok = false }
+    }
+    print(ok)
+}

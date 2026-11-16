@@ -119,6 +119,35 @@ def sha3():
         out.append(f"{n} {hashlib.shake_256(m).hexdigest(64)}")
     out.append(hashlib.shake_128(pattern(10)).hexdigest(5))
     out.append(hashlib.shake_128(pattern(10)).hexdigest(200))
+    # SP 800-185, from the text of the standard (independent of the Pelago code)
+    def enc(x, left):
+        b = x.to_bytes(max(1, (x.bit_length() + 7) // 8), "big")
+        return bytes([len(b)]) + b if left else b + bytes([len(b)])
+    es = lambda s: enc(len(s) * 8, True) + s
+    def bytepad(x, w):
+        z = enc(w, True) + x
+        return z + bytes(-len(z) % w)
+    def cshake(strength, data, n, name, custom):
+        rate = 200 - strength // 4
+        if not name and not custom:
+            return sponge(data, rate, 31, n)
+        return sponge(bytepad(es(name) + es(custom), rate) + data, rate, 4, n)
+    def kmac(strength, key, data, n, custom, xof=False):
+        rate = 200 - strength // 4
+        msg = bytepad(es(key), rate) + data + enc(0 if xof else n * 8, False)
+        return cshake(strength, msg, n, b"KMAC", custom)
+    email = b"Email Signature"
+    assert cshake(128, bytes([0, 1, 2, 3]), 32, b"", email).hex() == "c1c36925b6409a04f1b504fcbca9d82b4017277cb5ed2b2065fc1d3814d5aaf5"
+    key = bytes(range(0x40, 0x60))
+    assert kmac(128, key, bytes([0, 1, 2, 3]), 32, b"").hex() == "e5780b0d3ea6f7d3a429c5706aa43a00fadbd7d49628839e3187243f456ee14e"
+    out.append(cshake(128, pattern(4), 32, b"", email).hex())
+    out.append(cshake(256, pattern(200), 64, b"name", email).hex())
+    out.append(cshake(128, pattern(7), 16, b"", b"").hex())
+    out.append(kmac(128, key, bytes([0, 1, 2, 3]), 32, b"").hex())
+    out.append(kmac(256, key, pattern(300), 64, email).hex())
+    out.append(kmac(128, b"", pattern(10), 48, b"").hex())
+    out.append(kmac(256, key, pattern(33), 16, email, True).hex())
+    out.append(kmac(256, key, pattern(33), 150, email, True).hex())
     out.append("true")
     return out
 
@@ -173,7 +202,66 @@ def checksum():
     out.append(str(zlib.adler32(b"Wikipedia")))
     return out
 
-TESTS = {"sha2": sha2, "mac": mac, "sha3": sha3, "legacy": legacy, "checksum": checksum}
+def blake2():
+    out = []
+    for n in [0, 1, 63, 64, 65, 127, 128, 129, 255, 256, 257, 300]:
+        m = pattern(n)
+        out.append(f"{n} {hashlib.blake2b(m).hexdigest()} {hashlib.blake2s(m).hexdigest()}")
+    for size in [1, 20, 32, 48]:
+        m = pattern(100)
+        out.append(f"{size} {hashlib.blake2b(m, digest_size=size).hexdigest()} {hashlib.blake2s(m, digest_size=min(size, 32)).hexdigest()}")
+    for kl in [1, 7, 32]:
+        for n in [0, 5, 64, 128, 129]:
+            m, k = pattern(n), pattern(kl)
+            out.append(f"{kl} {n} {hashlib.blake2b(m, digest_size=32, key=k).hexdigest()} {hashlib.blake2s(m, digest_size=32, key=k).hexdigest()}")
+    out.append(hashlib.blake2b(pattern(200), digest_size=64, key=pattern(64)).hexdigest())
+    out.append(hashlib.blake2b(pattern(77), digest_size=40, key=pattern(9), salt=pattern(16), person=pattern(16)).hexdigest())
+    out.append(hashlib.blake2s(pattern(77), digest_size=24, key=pattern(9), salt=pattern(8), person=pattern(8)).hexdigest())
+    out.append("true")
+    return out
+
+def blake3():
+    import blake3_ref as b3ref
+    pat = lambda n: bytes(i % 251 for i in range(n))
+    assert b3ref.blake3(b"").hex() == "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+    assert b3ref.blake3(b"\0").hex() == "2d3adedff11b61f14c886e35afa036736dcd87a74d27b5c1510225d0f592e213"
+    assert b3ref.blake3(b"abc").hex() == "6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85"
+    out = []
+    for n in [0, 1, 2, 3, 63, 64, 65, 127, 128, 129, 1023, 1024, 1025, 2048, 2049, 3072, 3073, 4096, 4097]:
+        out.append(f"{n} {b3ref.blake3(pat(n)).hex()}")
+    for n in [0, 1, 64, 1024, 1025, 3073]:
+        out.append(f"{n} {b3ref.keyed(pat(32), pat(n)).hex()}")
+    for n in [0, 5, 1025]:
+        out.append(f"{n} {b3ref.derive_key(b'blake3 2019-12-27 16:29:52 test vectors context', pat(n)).hex()}")
+    out.append(b3ref.blake3(pat(1500), outlen=32).hex())
+    out.append(b3ref.blake3(pat(1500), outlen=200).hex())
+    out.append(b3ref.keyed(pat(32), pat(70), 100).hex())
+    out.append("true")
+    return out
+
+def fasthash():
+    import fast_ref as f
+    out = []
+    pat = lambda n: pattern(n)
+    for n in [0, 1, 3, 4, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 100, 1000]:
+        m = pat(n)
+        out.append(f"{n} {f.fnv(m, 32, True):08x} {f.fnv(m, 64, True):016x} {f.fnv(m, 32, False):08x} {f.fnv(m, 64, False):016x}")
+        out.append(f"{n} {f.xxh32(m, 0):08x} {f.xxh32(m, 12345):08x} {f.xxh64(m, 0):016x} {f.xxh64(m, 12345):016x}")
+    spam = b"Nobody inspects the spammish repetition"
+    assert f.xxh32(spam) == 0xe2293b2f and f.xxh64(spam) == 0xfbcea83c8a378bf1
+    assert f.xxh32(b"") == 0x02cc5d05 and f.xxh64(b"") == 0xef46db3751d8e999
+    out.append(f"{f.xxh32(spam):08x} {f.xxh64(spam):016x}")
+    out.append(f"{f.xxh32(b''):08x} {f.xxh64(b''):016x}")
+    key = bytes(range(16))
+    assert f.siphash(key, bytes(range(15))) == 0xa129ca6149be45e5 and f.siphash(key, b"") == 0x726fdb47dd0e0e31
+    sip = lambda k, m, c, d: f.siphash(k, m, c, d).to_bytes(8, "little").hex()
+    for n in [0, 1, 7, 8, 9, 15, 16, 17, 40]:
+        m = bytes(range(n))
+        out.append(f"{n} {sip(key, m, 2, 4)} {sip(key, m, 1, 3)}")
+    out.append("true")
+    return out
+
+TESTS = {"fasthash": fasthash, "blake3": blake3, "blake2": blake2, "sha2": sha2, "mac": mac, "sha3": sha3, "legacy": legacy, "checksum": checksum}
 
 if __name__ == "__main__":
     for name, f in TESTS.items():

@@ -26,6 +26,22 @@ fn main() {
     x.update!(pattern(10))
     print(hash.hex(x.squeeze(5)))
     print(hash.hex(x.squeeze(200)))
+    /// cSHAKE and KMAC (SP 800-185), including the NIST samples (cSHAKE128 "Email Signature"; KMAC128 sample 1).
+    const email = "Email Signature".bytes().toList()
+    print(hash.hex(hash.digest(keccak.cshake(128, 32, [], email), pattern(4))))
+    print(hash.hex(hash.digest(keccak.cshake(256, 64, "name".bytes().toList(), email), pattern(200))))
+    print(hash.hex(hash.digest(keccak.cshake(128, 16, [], []), pattern(7))))
+    var key: [byte] = []
+    for i of 0x40..0x60 { key.push!(i.wrapToByte()) }
+    var kk = keccak.kmac(128, 32, key, [])
+    kk.update!([0, 1, 2, 3])
+    print(hash.hex(kk.finish()))
+    print(hash.hex(hash.digest(keccak.kmac(256, 64, key, email), pattern(300))))
+    print(hash.hex(hash.digest(keccak.kmac(128, 48, [], []), pattern(10))))
+    var kx = keccak.kmacXof(256, 16, key, email)
+    kx.update!(pattern(33))
+    print(hash.hex(kx.squeeze(16)))
+    print(hash.hex(kx.squeeze(150)))
     /// Streaming: any chunking gives the same digest, and `finish` leaves the hasher usable.
     const whole = pattern(300)
     const want = hash.hex(hash.digest(keccak.sha3(256), whole))
