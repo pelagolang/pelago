@@ -33,6 +33,10 @@ The routines were compared with exact rational arithmetic: 750 random cases for 
 
 `switch` literal and range patterns and `for` ranges (with `step`) work, as for the wide integers.
 
+`sqrt` (correctly rounded: the digit-by-digit integer root of the significand, one rounding), `floor`, `ceil`, `trunc`, `round` (halves away from zero, like `float`), `abs`, `min` and `max` are methods. They were checked bit for bit against exact rational arithmetic (300 random `float16`, 120 `float128`, 12 `float256` patterns, with subnormals, zeros, infinities and NaN). The wide integers have `abs` (signed), `min`, `max` and `pow`.
+
+Written in JSON as text and read back exactly (`str.parseFloat128()` and friends): [json.md](json.md), D2a.
+
 ## Not built
 
-`sqrt`, `floor` and the other math functions, JSON, a fused multiply add. `%` with a huge exponent gap is slow. Everything is plain loops, correct first; the speed list is in [wide-integers.md](wide-integers.md).
+`pow` with a float exponent, `exp`, `log` and the trigonometric functions, a fused multiply add. `%` with a huge exponent gap is slow. Everything is plain loops, correct first; the speed list is in [wide-integers.md](wide-integers.md).
