@@ -1,0 +1,41 @@
+/// `std.csprng`: the ChaCha20 fast-key-erasure stream from a fixed key against an independent reference, that
+/// chunking does not change the stream, and that `between` stays in range.
+import std.csprng
+import std.hash
+import { csrng } = std.csprng
+
+fn key32(k: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..32 { out.push!(((i * k + 5) & 255).wrapToByte()) }
+    out
+}
+
+fn main() {
+    for kk of [1, 2] {
+        var g = csrng.fromKey(key32(kk))
+        print(hash.hex(g.bytes!(200)))
+    }
+    var a = csrng.fromKey(key32(1))
+    var b = csrng.fromKey(key32(1))
+    var pieces: [byte] = []
+    for n of [1, 31, 32, 33, 100, 3] { for x of a.bytes!(n) { pieces.push!(x) } }
+    const whole = b.bytes!(200)
+    var same = true
+    for i of 0..200 { if pieces[i] != whole[i] { same = false } }
+    print(same)
+    var g = csrng.fromKey(key32(3))
+    var ok = true
+    var seen = [0, 0, 0, 0, 0, 0]
+    for i of 0..600 {
+        const d = g.between!(1, 6)
+        if d < 1 || d > 6 { ok = false }
+        seen[d - 1] = seen[d - 1] + 1
+    }
+    var all = true
+    for c of seen { if c < 50 { all = false } }
+    print(ok, all)
+    const w = g.word!()
+    print(w >= 0)
+    const sys = csrng.fromSystem()
+    print(sys.isOk())
+}

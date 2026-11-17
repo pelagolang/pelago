@@ -261,7 +261,107 @@ def fasthash():
     out.append("true")
     return out
 
-TESTS = {"fasthash": fasthash, "blake3": blake3, "blake2": blake2, "sha2": sha2, "mac": mac, "sha3": sha3, "legacy": legacy, "checksum": checksum}
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms
+from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+from cryptography.hazmat.primitives import poly1305 as _poly
+
+def cc_xor(key, nonce, counter, data):
+    n16 = counter.to_bytes(4, "little") + nonce
+    return Cipher(algorithms.ChaCha20(key, n16), mode=None).encryptor().update(data)
+
+def cc_block(key, nonce, counter):
+    return cc_xor(key, nonce, counter, bytes(64))
+
+def rotl(x, n): return ((x << n) | (x >> (32 - n))) & 0xffffffff
+
+def hchacha(key, n16):
+    import struct
+    x = list(struct.unpack("<4I", b"expand 32-byte k")) + list(struct.unpack("<8I", key)) + list(struct.unpack("<4I", n16))
+    def qr(a, b, c, d):
+        x[a] = (x[a] + x[b]) & 0xffffffff; x[d] = rotl(x[d] ^ x[a], 16)
+        x[c] = (x[c] + x[d]) & 0xffffffff; x[b] = rotl(x[b] ^ x[c], 12)
+        x[a] = (x[a] + x[b]) & 0xffffffff; x[d] = rotl(x[d] ^ x[a], 8)
+        x[c] = (x[c] + x[d]) & 0xffffffff; x[b] = rotl(x[b] ^ x[c], 7)
+    for _ in range(10):
+        qr(0, 4, 8, 12); qr(1, 5, 9, 13); qr(2, 6, 10, 14); qr(3, 7, 11, 15)
+        qr(0, 5, 10, 15); qr(1, 6, 11, 12); qr(2, 7, 8, 13); qr(3, 4, 9, 14)
+    return struct.pack("<8I", *(x[0:4] + x[12:16]))
+
+import struct
+# the draft's published HChaCha20 vector guards the reference above
+assert hchacha(bytes(range(32)), bytes.fromhex("000000090000004a0000000031415927")).hex() == \
+    "82413b4227b27bfed30e42508a877d73a0f9e4d58a74a853c12ec41326d3ecdc"
+
+def key32(k): return bytes((i * k + 5) & 255 for i in range(32))
+
+def chacha():
+    out = []
+    for kk in [1, 3, 9]:
+        key = key32(kk)
+        for nn in [0, 7]:
+            nonce = bytes((i * 11 + nn) & 255 for i in range(12))
+            for ctr in [0, 1, 255, 4294967295]:
+                out.append(f"{kk} {nn} {ctr} {cc_block(key, nonce, ctr).hex()}")
+    key = key32(2); nonce = bytes(range(12))
+    for n in [0, 1, 63, 64, 65, 127, 128, 129, 300]:
+        m = pattern(n)
+        out.append(f"{n} {cc_xor(key, nonce, 1, m).hex()}")
+    out.append("true")
+    n24 = bytes(range(24))
+    for n in [0, 5, 64, 100]:
+        m = pattern(n)
+        sub = hchacha(key, n24[:16])
+        out.append(f"{n} {cc_xor(sub, bytes(4) + n24[16:], 1, m).hex()}")
+    out.append(hchacha(bytes(range(32)), bytes.fromhex("000000090000004a0000000031415927")).hex())
+    return out
+
+def poly1305():
+    out = []
+    for kk in [1, 7, 13]:
+        key = key32(kk)
+        for n in list(range(0, 36)) + [47, 48, 49, 100, 255, 256, 1000]:
+            m = pattern(n)
+            out.append(f"{kk} {n} {_poly.Poly1305.generate_tag(key, m).hex()}")
+    # edge keys: r clamps, all-ones accumulator patterns
+    for key in [bytes([255] * 32), bytes(32), bytes([0xff] * 16 + [0] * 16)]:
+        for m in [b"", b"\xff" * 16, b"\xff" * 17, b"\xff" * 100, bytes(16)]:
+            out.append(f"{key[0]} {len(m)} {_poly.Poly1305.generate_tag(key, m).hex()}")
+    out.append(_poly.Poly1305.generate_tag(bytes.fromhex("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b"), b"Cryptographic Forum Research Group").hex())
+    out.append(out[-1])
+    out.append("true false")
+    return out
+
+def aead():
+    out = []
+    for kk in [1, 5]:
+        key = key32(kk)
+        nonce = bytes((i * 3 + kk) & 255 for i in range(12))
+        for n in [0, 1, 15, 16, 17, 63, 64, 65, 130]:
+            for al in [0, 1, 16, 20]:
+                m, a = pattern(n), pat(al, 9)
+                out.append(f"{kk} {n} {al} {ChaCha20Poly1305(key).encrypt(nonce, m, a or None).hex()}")
+    key = key32(4); n24 = bytes((i * 5 + 1) & 255 for i in range(24))
+    sub = hchacha(key, n24[:16]); n12 = bytes(4) + n24[16:]
+    for n in [0, 1, 17, 100]:
+        for al in [0, 12]:
+            m, a = pattern(n), pat(al, 9)
+            out.append(f"{n} {al} {ChaCha20Poly1305(sub).encrypt(n12, m, a or None).hex()}")
+    out += ["true"] + ["true"] * 7 + ["16 true"]
+    return out
+
+def csprng():
+    out = []
+    for kk in [1, 2]:
+        key = key32(kk); count = 0; buf = b""; stream = b""
+        while len(stream) < 200:
+            b = cc_block(key, bytes(12), count); count += 1
+            key, buf = b[:32], b[32:]
+            stream += buf
+        out.append(stream[:200].hex())
+    out += ["true", "true true", "true", "true"]
+    return out
+
+TESTS = {"chacha": chacha, "poly1305": poly1305, "aead": aead, "csprng": csprng, "fasthash": fasthash, "blake3": blake3, "blake2": blake2, "sha2": sha2, "mac": mac, "sha3": sha3, "legacy": legacy, "checksum": checksum}
 
 if __name__ == "__main__":
     for name, f in TESTS.items():

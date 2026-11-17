@@ -1,0 +1,63 @@
+/// `std.aead`: ChaCha20-Poly1305 against `cryptography`, XChaCha20-Poly1305 against an independent reference, and
+/// that `open` rejects every kind of tampering.
+import std.aead
+import std.hash
+
+fn pattern(n: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * 7 + 3) & 255).wrapToByte()) }
+    out
+}
+
+fn bytesOf(n: int, k: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * k + 11) & 255).wrapToByte()) }
+    out
+}
+
+fn key32(k: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..32 { out.push!(((i * k + 5) & 255).wrapToByte()) }
+    out
+}
+
+fn main() {
+    for kk of [1, 5] {
+        var nonce: [byte] = []
+        for i of 0..12 { nonce.push!(((i * 3 + kk) & 255).wrapToByte()) }
+        for n of [0, 1, 15, 16, 17, 63, 64, 65, 130] {
+            for al of [0, 1, 16, 20] {
+                print(kk, n, al, hash.hex(aead.seal(key32(kk), nonce, pattern(n), bytesOf(al, 9))))
+            }
+        }
+    }
+    var n24: [byte] = []
+    for i of 0..24 { n24.push!(((i * 5 + 1) & 255).wrapToByte()) }
+    for n of [0, 1, 17, 100] {
+        for al of [0, 12] {
+            print(n, al, hash.hex(aead.sealExtended(key32(4), n24, pattern(n), bytesOf(al, 9))))
+        }
+    }
+    /// Round trips and tampering.
+    const key = key32(4)
+    const aad = bytesOf(12, 9)
+    const sealed = aead.sealExtended(key, n24, pattern(50), aad)
+    print((aead.openExtended(key, n24, sealed, aad) ?? []) == pattern(50))
+    var flipped: [byte] = copy sealed
+    flipped[3] = flipped[3] ^ 1
+    print(aead.openExtended(key, n24, flipped, aad).isNone())
+    var badTag: [byte] = copy sealed
+    badTag[badTag.len() - 1] = badTag[badTag.len() - 1] ^ 128
+    print(aead.openExtended(key, n24, badTag, aad).isNone())
+    print(aead.openExtended(key, n24, sealed, bytesOf(12, 8)).isNone())
+    print(aead.openExtended(key32(5), n24, sealed, aad).isNone())
+    var other: [byte] = copy n24
+    other[0] = other[0] ^ 1
+    print(aead.openExtended(key, other, sealed, aad).isNone())
+    print(aead.openExtended(key, n24, [1, 2, 3], aad).isNone())
+    print(aead.openExtended(key, n24, [], aad).isNone())
+    var n12: [byte] = []
+    for i of 0..12 { n12.push!(i.wrapToByte()) }
+    const small = aead.seal(key, n12, [], [])
+    print(small.len(), aead.open(key, n12, small, []).isSome())
+}
