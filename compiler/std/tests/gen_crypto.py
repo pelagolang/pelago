@@ -3,7 +3,8 @@
 
     python3 compiler/std/tests/gen_crypto.py
 """
-import hashlib, os
+import hashlib, os, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 here = os.path.dirname(os.path.abspath(__file__))
 
@@ -429,7 +430,41 @@ def password_phc():
     sc = "$scrypt$ln=4,r=1,p=1$" + phc_b64(b"NaCl") + "$" + phc_b64(sk)
     return [a, sc, "true false", "true false", "true", "false false false"]
 
-TESTS = {"password_phc": password_phc, "bcrypt": bcrypt, "bcrypt_check": bcrypt_check, "password": password, "password_more": password_more, "chacha": chacha, "poly1305": poly1305, "aead": aead, "csprng": csprng, "fasthash": fasthash, "blake3": blake3, "blake2": blake2, "sha2": sha2, "mac": mac, "sha3": sha3, "legacy": legacy, "checksum": checksum}
+import ripemd_ref
+
+def ripemd():
+    out = []
+    for n in [0, 1, 3, 55, 56, 57, 63, 64, 65, 120, 200]:
+        m = pattern(n)
+        out.append(f"{n} {hashlib.new('ripemd160', m).hexdigest()} {ripemd_ref.rmd(m, 128).hex()}")
+        out.append(f"{n} {ripemd_ref.rmd(m, 256).hex()} {ripemd_ref.rmd(m, 320).hex()}")
+    for bits in (160, 128, 256, 320):
+        out.append(ripemd_ref.rmd(b"abc", bits).hex())
+    out.append(f"{hashlib.new('ripemd160', pattern(37) * 9).hexdigest()} 20 64")
+    return out
+
+import subprocess
+def md4_of(m):
+    r = subprocess.run(["openssl", "dgst", "-md4", "-provider", "legacy", "-provider", "default", "-r"], input=m, capture_output=True, check=True)
+    return r.stdout.decode().split()[0]
+
+def sm3():
+    out = []
+    for n in [0, 1, 3, 55, 56, 57, 63, 64, 65, 119, 120, 128, 200, 1000]:
+        out.append(f"{n} {hashlib.new('sm3', pattern(n)).hexdigest()}")
+    out.append(hashlib.new("sm3", b"abc").hexdigest())
+    out.append(f"{hashlib.new('sm3', pattern(33) * 20).hexdigest()} 32 64")
+    return out
+
+def md4():
+    out = []
+    for n in [0, 1, 3, 55, 56, 57, 63, 64, 65, 119, 120, 128, 200, 1000]:
+        out.append(f"{n} {md4_of(pattern(n))}")
+    out.append(md4_of(b"abc"))
+    out.append(f"{md4_of(pattern(33) * 20)} 16 64")
+    return out
+
+TESTS = {"sm3": sm3, "md4": md4, "ripemd": ripemd, "password_phc": password_phc, "bcrypt": bcrypt, "bcrypt_check": bcrypt_check, "password": password, "password_more": password_more, "chacha": chacha, "poly1305": poly1305, "aead": aead, "csprng": csprng, "fasthash": fasthash, "blake3": blake3, "blake2": blake2, "sha2": sha2, "mac": mac, "sha3": sha3, "legacy": legacy, "checksum": checksum}
 
 if __name__ == "__main__":
     for name, f in TESTS.items():

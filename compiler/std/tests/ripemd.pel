@@ -1,0 +1,26 @@
+/// `std.ripemd`: RIPEMD-160 against `hashlib`, RIPEMD-128 / 256 / 320 against an independent reference that
+/// reproduces the published values for "abc".
+import std.hash
+import std.ripemd
+import { rmd } = std.ripemd
+
+fn pattern(n: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * 7 + 3) & 255).wrapToByte()) }
+    out
+}
+
+fn main() {
+    for n of [0, 1, 3, 55, 56, 57, 63, 64, 65, 120, 200] {
+        const m = pattern(n)
+        print(n, hash.hex(hash.digest(rmd.r160(), m)), hash.hex(hash.digest(rmd.r128(), m)))
+        print(n, hash.hex(hash.digest(rmd.r256(), m)), hash.hex(hash.digest(rmd.r320(), m)))
+    }
+    print(hash.hex(hash.digestText(rmd.r160(), "abc")))
+    print(hash.hex(hash.digestText(rmd.r128(), "abc")))
+    print(hash.hex(hash.digestText(rmd.r256(), "abc")))
+    print(hash.hex(hash.digestText(rmd.r320(), "abc")))
+    var h = rmd.r160()
+    for i of 0..9 { h.update!(pattern(37)) }
+    print(hash.hex(h.finish()), h.outputSize(), h.blockSize())
+}

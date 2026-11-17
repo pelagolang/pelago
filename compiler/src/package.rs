@@ -57,6 +57,8 @@ pub const STD_MODULES: &[(&str, &str)] = &[
     ("blake2", include_str!("../std/blake2.pel")),
     ("blake3", include_str!("../std/blake3.pel")),
     ("fasthash", include_str!("../std/fasthash.pel")),
+    ("ripemd", include_str!("../std/ripemd.pel")),
+    ("sm3", include_str!("../std/sm3.pel")),
     ("chacha", include_str!("../std/chacha.pel")),
     ("poly1305", include_str!("../std/poly1305.pel")),
     ("aead", include_str!("../std/aead.pel")),
@@ -80,7 +82,8 @@ pub const STD_GROUPS: &[(&str, &str, &str, &[&str])] = &[
         "Hashes and checksums",
         "cryptographic hashes, checksums, fast hashes, the legacy ones",
         &[
-            "hash", "sha2", "sha3", "blake2", "blake3", "fasthash", "legacy", "checksum",
+            "hash", "sha2", "sha3", "blake2", "blake3", "ripemd", "sm3", "fasthash", "legacy",
+            "checksum",
         ],
     ),
     (
@@ -101,7 +104,12 @@ pub const STD_GROUPS: &[(&str, &str, &str, &[&str])] = &[
         "standard streams, files, paths",
         &["io", "fs", "path"],
     ),
-    ("time", "Time", "clocks and durations", &["time"]),
+    (
+        "time",
+        "Time",
+        "clocks, durations and calendar dates",
+        &["time", "calendar"],
+    ),
     (
         "random",
         "Random numbers",
