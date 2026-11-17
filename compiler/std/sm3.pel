@@ -1,0 +1,149 @@
+/// SM3 (GB/T 32905-2016, ISO/IEC 10118-3:2018), the Chinese national standard hash: 32-byte digest, a design close to
+/// SHA-256 with a different message expansion.
+///
+/// ```
+/// import std.hash
+/// import std.sm3
+/// import { sm3hash } = std.sm3
+///
+/// fn main() {
+///     print(hash.hex(hash.digestText(sm3hash.new(), "abc")))    /// 66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0
+/// }
+/// ```
+///
+/// Use it where a Chinese standard or a protocol (TLS 1.3 `sm3`, GmSSL) asks for it; otherwise `std.sha2` or
+/// `std.sha3`. The type is `sm3hash` because a module and its type must have different names. Constant time. Checked
+/// against Python's `hashlib.new("sm3")` (`compiler/std/tests/sm3.pel`). Conventional: the standard algorithm.
+
+import std.hash
+import { hasher } = std.hash
+
+fn rotl(x: uint32, n: int) -> uint32 {
+    const k = n % 32
+    if k == 0 { return x }
+    (x << k) | (x >> (32 - k))
+}
+
+fn p0(x: uint32) -> uint32 = x ^ rotl(x, 9) ^ rotl(x, 17)
+fn p1(x: uint32) -> uint32 = x ^ rotl(x, 15) ^ rotl(x, 23)
+
+fn expand(block: [byte], at: int) -> [uint32] {
+    var w: [uint32] = []
+    for t of 0..16 {
+        const j = at + 4 * t
+        w.push!(((block[j] to uint32) << 24) | ((block[j + 1] to uint32) << 16) | ((block[j + 2] to uint32) << 8) | (block[j + 3] to uint32))
+    }
+    for j of 16..68 {
+        w.push!(p1(w[j - 16] ^ w[j - 9] ^ rotl(w[j - 3], 15)) ^ rotl(w[j - 13], 7) ^ w[j - 6])
+    }
+    w
+}
+
+fn compress(inout v: [uint32], block: [byte], at: int) {
+    const w = expand(block, at)
+    var a = v[0]
+    var b = v[1]
+    var c = v[2]
+    var d = v[3]
+    var e = v[4]
+    var f = v[5]
+    var g = v[6]
+    var h = v[7]
+    for j of 0..16 {
+        const a12 = rotl(a, 12)
+        const ss1 = rotl(a12 +% e +% rotl(0x79cc4519, j), 7)
+        const ss2 = ss1 ^ a12
+        const tt1 = (a ^ b ^ c) +% d +% ss2 +% (w[j] ^ w[j + 4])
+        const tt2 = (e ^ f ^ g) +% h +% ss1 +% w[j]
+        d = c
+        c = rotl(b, 9)
+        b = a
+        a = tt1
+        h = g
+        g = rotl(f, 19)
+        f = e
+        e = p0(tt2)
+    }
+    for j of 16..64 {
+        const a12 = rotl(a, 12)
+        const ss1 = rotl(a12 +% e +% rotl(0x7a879d8a, j), 7)
+        const ss2 = ss1 ^ a12
+        const tt1 = ((a & b) | (a & c) | (b & c)) +% d +% ss2 +% (w[j] ^ w[j + 4])
+        const tt2 = ((e & f) | (~e & g)) +% h +% ss1 +% w[j]
+        d = c
+        c = rotl(b, 9)
+        b = a
+        a = tt1
+        h = g
+        g = rotl(f, 19)
+        f = e
+        e = p0(tt2)
+    }
+    v[0] = v[0] ^ a
+    v[1] = v[1] ^ b
+    v[2] = v[2] ^ c
+    v[3] = v[3] ^ d
+    v[4] = v[4] ^ e
+    v[5] = v[5] ^ f
+    v[6] = v[6] ^ g
+    v[7] = v[7] ^ h
+}
+
+fn start() -> [uint32] = [0x7380166f, 0x4914b2b9, 0x172442d7, 0xda8a0600, 0xa96f30bc, 0x163138aa, 0xe38dee4d, 0xb0fb0e4e]
+
+/// An SM3 hasher.
+pub struct sm3hash {
+    state: [uint32]
+    buf: [byte]
+    total: int
+
+    //~ A new SM3 hasher.
+    fn new() -> sm3hash = sm3hash { state: start(), buf: [], total: 0 }
+}
+
+fn absorb(inout h: sm3hash, data: [byte]) {
+    h.total += data.len()
+    var i = 0
+    if h.buf.len() > 0 {
+        while i < data.len() && h.buf.len() < 64 {
+            h.buf.push!(data[i])
+            i += 1
+        }
+        if h.buf.len() < 64 { return }
+        compress(h.state!, h.buf, 0)
+        h.buf = []
+    }
+    while i + 64 <= data.len() {
+        compress(h.state!, data, i)
+        i += 64
+    }
+    while i < data.len() {
+        h.buf.push!(data[i])
+        i += 1
+    }
+}
+
+impl hasher for sm3hash {
+    fn update(inout self, data: [byte]) { absorb(self!, data) }
+    fn finish(self) -> [byte] {
+        var c = copy self
+        const bits = self.total * 8
+        var pad: [byte] = [128]
+        while (self.total + pad.len()) % 64 != 56 { pad.push!(0) }
+        for i of 0..8 { pad.push!(((bits >> (56 - 8 * i)) & 255).wrapToByte()) }
+        absorb(c!, pad)
+        var out: [byte] = []
+        for w of c.state {
+            for i of 0..4 { out.push!(((w >> (24 - 8 * i)) to int).wrapToByte()) }
+        }
+        out
+    }
+    fn reset(inout self) {
+        self.state = start()
+        self.buf = []
+        self.total = 0
+    }
+    fn fresh(self) -> sm3hash = sm3hash.new()
+    fn outputSize(self) -> int = 32
+    fn blockSize(self) -> int = 64
+}

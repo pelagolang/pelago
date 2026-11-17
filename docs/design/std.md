@@ -22,11 +22,13 @@ Two packages ship with the compiler.
 | `std.mac` | HMAC over any `hasher`: `mac.sign(h, key, msg)`, `mac.verify` (constant time), streaming `mac.start(h, key)` (`update!`, `finish`). |
 | `std.kdf` | `kdf.hkdf`, `hkdfExtract`, `hkdfExpand` (RFC 5869) and `kdf.pbkdf2(h, password, salt, iterations, length)` (RFC 8018), over any `hasher`. |
 | `std.sha3` | SHA3-224/256/384/512 (`keccak.sha3(256)`), original Keccak (`keccak.original(256)`, Ethereum's), SHAKE128/256 (`keccak.shake(128, 32)`, `squeeze(n)` for any length), cSHAKE and KMAC/KMACXOF (`keccak.cshake(...)`, `keccak.kmac(...)`). Constant time. |
-| `std.legacy` | **Broken hashes, for compatibility only:** `md5.new()`, `sha1.new()`. |
+| `std.legacy` | **Broken hashes, for compatibility only:** `md5.new()`, `sha1.new()`, `md4.new()`. |
 | `std.checksum` | Not cryptographic: CRC by parameters (`crc.custom(...)`; ready: `crc32`, `crc32c`, `crc64xz`, `crc64ecma`, `crc16arc`, `crc16ccitt`, `crc16xmodem`, `crc8`) and `adler32`; `value()` gives the number. |
 | `std.blake2` | BLAKE2b (`blake2b.new(64)`, `keyed(size, key)`, `custom(size, key, salt, personal)`) and BLAKE2s, as `hasher`s; keyed mode is a MAC. |
 | `std.blake3` | BLAKE3 (`blake3hash.new()`, `keyed(key)`, `deriveKey(context)`), `squeeze(n)` for any output length. Serial for now. |
 | `std.fasthash` | Not for security: FNV-1/1a (32, 64), `xxh32.new(seed)`, `xxh64.new(seed)`, SipHash-2-4 / 1-3 (`siphash.new24(key)`, the keyed one that resists hash flooding); `value()` gives the number. |
+| `std.ripemd` | RIPEMD-160 (`rmd.r160()`), and RIPEMD-128, 256, 320 (`r128()`, `r256()`, `r320()`), as `hasher`s. |
+| `std.sm3` | SM3, the Chinese standard hash: `sm3hash.new()`. |
 | `std.chacha` | ChaCha20 (`chacha.xor(key, nonce, counter, data)`, `chacha.block`) and XChaCha20 (`xorExtended`, 24-byte nonces). Constant time. |
 | `std.poly1305` | Poly1305 one-time MAC: `poly1305.sign(key, msg)`, `verify` (constant time), streaming `poly.new(key)`. |
 | `std.aead` | ChaCha20-Poly1305 and XChaCha20-Poly1305: `aead.seal(key, nonce, plain, aad)` returns ciphertext plus tag, `aead.open(...)` returns the plain bytes or `none`; `sealExtended` / `openExtended` take 24-byte nonces. |
