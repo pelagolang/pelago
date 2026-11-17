@@ -1,0 +1,7 @@
+ok s scores=2 a=some(1) spots=1 notes=0
+ok s scores=0 a=none spots=0 notes=1
+error 1:31: $.scores.a: expected a whole number, found text
+error 1:25: $.scores: expected an object, found an array
+error 1:44: $.spots.p: missing field "y"
+{"name":"t","scores":{"z":26,"a":1},"spots":{"home":{"x":3,"y":4}},"notes":{}}
+ok t scores=2 a=some(1) spots=1 notes=0

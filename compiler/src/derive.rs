@@ -114,6 +114,22 @@ impl<'a> Gen<'a> {
         name.to_string()
     }
 
+    /// The value type of a `map<string, V>` (JSON object keys are text, so no other key type is read or written).
+    fn map_value<'t>(&self, ty: &'t Type) -> Option<&'t Type> {
+        let TypeKind::Path { path, args } = &ty.kind else {
+            return None;
+        };
+        if path.segments.len() != 1 || path.segments[0].text(self.src) != "map" || args.len() != 2 {
+            return None;
+        }
+        match (&args[0], &args[1]) {
+            (GenericArg::Type(k), GenericArg::Type(v)) if self.text(k.span).trim() == "string" => {
+                Some(v)
+            }
+            _ => None,
+        }
+    }
+
     fn fail(&mut self, at: Span, message: &str) {
         self.errors.push((at, message.to_string()));
     }
@@ -164,6 +180,28 @@ impl<'a> Gen<'a> {
                     "{module}{}FromJson",
                     path.segments[last].text(self.src)
                 ))
+            }
+            TypeKind::Path { .. } if self.map_value(ty).is_some() => {
+                let value = self.map_value(ty)?;
+                let inner = self.decoder(value, &format!("{base}_value"))?;
+                let _ = write!(
+                    self.out,
+                    "\nfn {base}(v: json.value, inout at: [int]) -> {ret} ! {ERR} {{
+    switch v {{
+        case .fields(keys, values):
+            var out: {ret} = {{:}}
+            for i in 0..keys.len() {{
+                at.push!(i)
+                const x = {inner}(values[i], inout at)?
+                at.pop!()
+                const old = out.insert!(copy keys[i], sink x)
+            }}
+            ok(out)
+        case _: err(v.mismatch(\"an object\", at))
+    }}
+}}\n"
+                );
+                Some(base.to_string())
             }
             TypeKind::List(elem) => {
                 let inner = self.decoder(elem, &format!("{base}_item"))?;
@@ -386,6 +424,25 @@ impl<'a> Gen<'a> {
                     "{module}{}ToJson",
                     path.segments[last].text(self.src)
                 ))
+            }
+            TypeKind::Path { .. } if self.map_value(ty).is_some() => {
+                let value = self.map_value(ty)?;
+                let inner = self.encoder(value, &format!("{base}_value"))?;
+                let _ = write!(
+                    self.out,
+                    "{head} {{
+    const ks = x.keys().toList()
+    const vs = x.values().toList()
+    var keys: [string] = []
+    var values: [json.value] = []
+    for i in 0..ks.len() {{
+        keys.push!(copy ks[i])
+        values.push!({inner}(vs[i]))
+    }}
+    json.value.fields(keys, values)
+}}\n"
+                );
+                Some(base.to_string())
             }
             TypeKind::List(elem) | TypeKind::Array(elem, _) => {
                 let inner = self.encoder(elem, &format!("{base}_item"))?;
@@ -762,14 +819,22 @@ mod tests {
     }
 
     #[test]
+    fn string_keyed_maps_are_read_and_written() {
+        let e = expansion("@derive(fromJson, toJson)\nstruct p { m: map<string, int> }");
+        assert!(e.errors.is_empty());
+        assert!(e.text.contains("out.insert!(copy keys[i], sink x)"));
+        assert!(e.text.contains("x.keys().toList()"));
+    }
+
+    #[test]
     fn a_field_it_cannot_read_is_an_error_at_the_field() {
-        let src = "@derive(fromJson)\nstruct p { m: map<string, int> }";
+        let src = "@derive(fromJson)\nstruct p { m: map<int, int> }";
         let e = expansion(src);
         assert_eq!(e.errors.len(), 1);
         let (span, message) = &e.errors[0];
         assert_eq!(
             &src[span.start as usize..span.end as usize],
-            "map<string, int>"
+            "map<int, int>"
         );
         assert!(message.contains("cannot read a field"));
     }
