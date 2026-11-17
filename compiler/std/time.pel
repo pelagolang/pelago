@@ -13,9 +13,15 @@
 /// }
 /// ```
 ///
-/// A clock can fail (`io_error`) where the system has no clock call yet; that is Windows and macOS today. A
-/// `duration` is whole nanoseconds in an `int` (about 292 years either way), and arithmetic on it stops the
-/// program on overflow like any other integer arithmetic.
+/// Three kinds of value, never mixed by accident: a `duration` (a length), an `instant` (a point on the monotonic
+/// clock, only differences mean anything) and a `moment` (a point on the UTC timeline, from the wall clock). The
+/// calendar (`date`, `date_time`) is `std.calendar`, zones are `std.zone`, text forms are `std.timefmt`; the plan is
+/// `docs/design/time.md`.
+///
+/// A clock can fail (`io_error`) where the system refuses. A `duration` is whole nanoseconds in an `int` (about 292
+/// years either way), and arithmetic on it stops the program on overflow like any other integer arithmetic; where
+/// a caller can run out of range there are `checked...` (an `option`) and `saturating...` forms. A `moment` is
+/// seconds and nanoseconds, so it reaches billions of years either way.
 
 /// A length of time, possibly negative. Make one with `time.seconds`, `time.millis`, `time.micros` or
 /// `time.nanos`.
@@ -28,6 +34,45 @@ pub struct instant {
     at: duration
 }
 
+/// A point on the UTC timeline, as read from the wall clock: whole seconds since 1970-01-01 00:00:00 UTC (negative
+/// before it) plus `nanos` in `0..1000000000`, always normalised so two moments compare by their fields. The wall
+/// clock can be set back, so use `instant` to measure and `moment` to say when.
+pub struct moment {
+    secs: int,
+    nanos: int
+}
+
+/// What went wrong in a time operation (a value out of range, text that is not a date, a zone that does not exist).
+pub enum time_kind {
+    range,
+    invalid,
+    parse,
+    zone,
+    other
+}
+
+/// The error of the time modules: a `kind` to branch on and a `message` for people.
+pub struct time_error {
+    kind: time_kind,
+    message: string
+}
+
+/// A `time_error` of kind `kind`.
+pub fn timeError(
+    kind: time_kind,
+    sink message: string,
+) -> time_error = time_error { kind: kind, message: message }
+
+//~ A duration of `n` days of exactly 24 hours (calendar days, which can be 23 or 25 hours long in a zone, are
+//~ `std.calendar`'s and `std.zone`'s).
+pub fn days(n: int) -> duration = duration { nanos: n * 86400000000000 }
+
+//~ A duration of `n` hours.
+pub fn hours(n: int) -> duration = duration { nanos: n * 3600000000000 }
+
+//~ A duration of `n` minutes.
+pub fn minutes(n: int) -> duration = duration { nanos: n * 60000000000 }
+
 //~ A duration of `n` seconds.
 pub fn seconds(n: int) -> duration = duration { nanos: n * 1000000000 }
 
@@ -39,6 +84,37 @@ pub fn micros(n: int) -> duration = duration { nanos: n * 1000 }
 
 //~ A duration of `n` nanoseconds.
 pub fn nanos(n: int) -> duration = duration { nanos: n }
+
+//~ The zero duration.
+//~ (A function, not a constant: a `const` of a struct type is not lowered yet.)
+pub fn zero() -> duration = duration { nanos: 0 }
+
+//~ The longest duration (about 292 years).
+pub fn longest() -> duration = duration { nanos: 9223372036854775807 }
+
+//~ The most negative duration.
+pub fn shortest() -> duration = duration { nanos: -9223372036854775808 }
+
+//~ A duration of `s` seconds with a fraction; `time_error` for NaN, infinity or more than the range holds.
+pub fn fromSeconds(s: float) -> duration ! time_error {
+    if s != s || s >= 9223372036.0 || s <= -9223372036.0 {
+        return err(timeError(time_kind.range, "a duration of #(s) seconds does not fit"))
+    }
+    ok(duration { nanos: (s * 1000000000.0).truncInt() })
+}
+
+/// `a` modulo `b` in `0..b` (`b` positive); unlike `a - floorDiv(a, b) * b` it cannot overflow.
+fn floorMod(a: int, b: int) -> int {
+    const r = a % b
+    r < 0 ? r + b : r
+}
+
+/// `a` divided by `b`, rounded toward minus infinity (`b` positive).
+fn floorDiv(a: int, b: int) -> int {
+    const q = a / b
+    if a % b < 0 { return q - 1 }
+    q
+}
 
 /// Reads clock `which` (0 wall, 1 monotonic).
 fn read(which: int) -> duration ! io_error {
@@ -78,6 +154,78 @@ impl duration {
     fn asSecondsFloat(self) -> float = (self.nanos to float) / 1000000000.0
 
     fn abs(self) -> duration = duration { nanos: self.nanos.abs() }
+
+    //~ -1, 0 or 1 by the sign.
+    fn signum(self) -> int = self.nanos < 0 ? -1 : (self.nanos > 0 ? 1 : 0)
+
+    fn isZero(self) -> bool = self.nanos == 0
+
+    fn isNegative(self) -> bool = self.nanos < 0
+
+    //~ The nanoseconds left after the whole seconds (same sign as the duration), in `-999999999..999999999`.
+    fn subsecNanos(self) -> int = self.nanos % 1000000000
+
+    //~ The longer of the two.
+    fn max(self, other: duration) -> duration = self.nanos >= other.nanos ? self : other
+
+    //~ The shorter of the two.
+    fn min(self, other: duration) -> duration = self.nanos <= other.nanos ? self : other
+
+    //~ `self` held between `lo` and `hi`.
+    fn clamp(self, lo: duration, hi: duration) -> duration = self.max(lo).min(hi)
+
+    //~ `self + other`, or `none` when it does not fit.
+    fn checkedAdd(self, other: duration) -> duration? {
+        const r = self.nanos.checkedAdd(other.nanos)
+        if r == none { return none }
+        duration { nanos: r ?? 0 }
+    }
+
+    //~ `self - other`, or `none` when it does not fit.
+    fn checkedSub(self, other: duration) -> duration? {
+        const r = self.nanos.checkedSub(other.nanos)
+        if r == none { return none }
+        duration { nanos: r ?? 0 }
+    }
+
+    //~ `self` made `n` times as long, or `none` when it does not fit.
+    fn checkedMul(self, n: int) -> duration? {
+        const r = self.nanos.checkedMul(n)
+        if r == none { return none }
+        duration { nanos: r ?? 0 }
+    }
+
+    //~ `self + other`, held at `longest` or `shortest` instead of overflowing.
+    fn saturatingAdd(
+        self,
+        other: duration,
+    ) -> duration = duration { nanos: self.nanos.saturatingAdd(other.nanos) }
+
+    //~ `self - other`, held at `longest` or `shortest` instead of overflowing.
+    fn saturatingSub(
+        self,
+        other: duration,
+    ) -> duration = duration { nanos: self.nanos.saturatingSub(other.nanos) }
+
+    //~ `self` made `n` times as long (stops on overflow; `checkedMul` and `saturatingMul` do not).
+    fn times(self, n: int) -> duration = duration { nanos: self.nanos * n }
+
+    //~ `self` made `n` times as long, held at `longest` or `shortest`.
+    fn saturatingMul(self, n: int) -> duration {
+        const r = self.nanos.checkedMul(n)
+        if r != none { return duration { nanos: r ?? 0 } }
+        const negative = (self.nanos < 0) != (n < 0)
+        negative ? duration { nanos: -9223372036854775808 } : duration { nanos: 9223372036854775807 }
+    }
+
+    //~ `self` cut into `n` equal parts (whole nanoseconds, cut toward zero); stops when `n` is 0.
+    fn divInt(self, n: int) -> duration = duration { nanos: self.nanos / n }
+
+    //~ How many whole `other`s fit in `self` (cut toward zero); stops when `other` is zero.
+    fn ratio(self, other: duration) -> int = self.nanos / other.nanos
+
+    //~ What is left of `self` after whole `other`s, with the sign of `self`; stops when `other` is zero.
+    fn remainder(self, other: duration) -> duration = duration { nanos: self.nanos % other.nanos }
 }
 
 impl instant {
@@ -89,6 +237,158 @@ impl instant {
 
     //~ The instant `d` later.
     fn plus(self, d: duration) -> instant = instant { at: self.at + d }
+
+    //~ The instant `d` earlier.
+    fn minus(self, d: duration) -> instant = instant { at: self.at - d }
+
+    //~ The instant `d` later, or `none` when it does not fit.
+    fn checkedPlus(self, d: duration) -> instant? {
+        const r = self.at.checkedAdd(d)
+        if r == none { return none }
+        instant { at: r ?? zero() }
+    }
+}
+
+impl eq for instant {
+    fn eq(self, other: instant) -> bool = self.at == other.at
+}
+
+impl order for instant {
+    fn cmp(self, other: instant) -> int = self.at.cmp(other.at)
+}
+
+impl moment {
+    //~ Whole seconds since 1970-01-01 00:00:00 UTC, cut toward minus infinity (so 0.9 s before the epoch is -1).
+    fn unixSeconds(self) -> int = self.secs
+
+    //~ Whole milliseconds since the epoch, cut toward minus infinity; stops if that does not fit an `int`.
+    fn unixMillis(self) -> int = self.secs * 1000 + self.nanos / 1000000
+
+    //~ The nanoseconds after the whole second, `0..999999999`.
+    fn subsecNanos(self) -> int = self.nanos
+
+    //~ The moment `d` later, or `none` when the seconds do not fit.
+    fn checkedPlus(self, d: duration) -> moment? {
+        const whole = floorDiv(d.nanos, 1000000000)
+        const rest = floorMod(d.nanos, 1000000000)
+        var n = self.nanos + rest
+        var carry = 0
+        if n >= 1000000000 {
+            n -= 1000000000
+            carry = 1
+        }
+        const a = self.secs.checkedAdd(whole)
+        if a == none { return none }
+        const b = (a ?? 0).checkedAdd(carry)
+        if b == none { return none }
+        moment { secs: b ?? 0, nanos: n }
+    }
+
+    //~ The moment `d` later; stops when the seconds do not fit.
+    fn plus(self, d: duration) -> moment {
+        const r = self.checkedPlus(d)
+        if r == none { panic("moment.plus: out of range") }
+        r ?? self
+    }
+
+    //~ The moment `d` earlier, or `none` when it does not fit (`shortest` cannot be negated).
+    fn checkedMinus(self, d: duration) -> moment? {
+        if d.nanos == -9223372036854775808 {
+            const half = self.checkedPlus(duration { nanos: 9223372036854775807 })
+            if half == none { return none }
+            return (half ?? self).checkedPlus(duration { nanos: 1 })
+        }
+        self.checkedPlus(duration { nanos: 0 - d.nanos })
+    }
+
+    //~ The moment `d` earlier; stops when the seconds do not fit.
+    fn minus(self, d: duration) -> moment {
+        const r = self.checkedMinus(d)
+        if r == none { panic("moment.minus: out of range") }
+        r ?? self
+    }
+
+    //~ How long after `earlier` this moment is (negative when it is before), or `none` when the two are further
+    //~ apart than a `duration` holds (about 292 years).
+    fn checkedSince(self, earlier: moment) -> duration? {
+        const s = self.secs.checkedSub(earlier.secs)
+        if s == none { return none }
+        const ns = (s ?? 0).checkedMul(1000000000)
+        if ns == none { return none }
+        const total = (ns ?? 0).checkedAdd(self.nanos - earlier.nanos)
+        if total == none { return none }
+        duration { nanos: total ?? 0 }
+    }
+
+    //~ How long after `earlier` this moment is; stops when the two are more than about 292 years apart.
+    fn since(self, earlier: moment) -> duration {
+        const r = self.checkedSince(earlier)
+        if r == none { panic("moment.since: the moments are too far apart for a duration") }
+        r ?? zero()
+    }
+
+    //~ How long ago this moment was on the wall clock (negative when it is ahead).
+    fn elapsed(self) -> duration ! io_error = ok((wallNow()?).since(self))
+}
+
+impl eq for moment {
+    fn eq(self, other: moment) -> bool = self.secs == other.secs && self.nanos == other.nanos
+}
+
+impl order for moment {
+    fn cmp(self, other: moment) -> int {
+        if self.secs != other.secs { return self.secs < other.secs ? -1 : 1 }
+        self.nanos < other.nanos ? -1 : (self.nanos > other.nanos ? 1 : 0)
+    }
+}
+
+impl show for moment {
+    //~ Seconds since the epoch with nine decimals: `1700000000.500000000`. (Calendar text is `std.timefmt`.)
+    fn show(self) -> string {
+        var s = self.secs
+        var n = self.nanos
+        var sign = ""
+        if s < 0 {
+            sign = "-"
+            if n > 0 {
+                s = -(s + 1)
+                n = 1000000000 - n
+            } else {
+                s = 0 - s
+            }
+        }
+        var frac = "#(n)"
+        while frac.len() < 9 { frac = "0" + frac }
+        "#(sign)#(s).#(frac)"
+    }
+}
+
+//~ The moment `s` seconds after the epoch (before it when negative).
+pub fn fromUnix(s: int) -> moment = moment { secs: s, nanos: 0 }
+
+//~ The moment `ms` milliseconds after the epoch (before it when negative).
+pub fn fromUnixMillis(ms: int) -> moment {
+    const s = floorDiv(ms, 1000)
+    moment { secs: s, nanos: floorMod(ms, 1000) * 1000000 }
+}
+
+//~ The moment `s` seconds and `n` nanoseconds after the epoch; `n` may be any `int` and carries into the seconds.
+//~ `none` when the seconds do not fit.
+pub fn momentOf(s: int, n: int) -> moment? {
+    const whole = floorDiv(n, 1000000000)
+    const t = s.checkedAdd(whole)
+    if t == none { return none }
+    moment { secs: t ?? 0, nanos: floorMod(n, 1000000000) }
+}
+
+//~ The wall clock now. It can jump when the date is set; use `now()` to measure.
+pub fn wallNow() -> moment ! io_error {
+    const buf = [0, 0]
+    const r = rtOsClock(0, rtHdrData(rtAddrOf(buf)))
+    if r < 0 {
+        return err(io_error { kind: io_kind.other, message: "reading the clock: not supported on this target" })
+    }
+    ok(moment { secs: buf[0], nanos: buf[1] })
 }
 
 impl add for duration {
@@ -124,4 +424,9 @@ impl show for duration {
         if a >= 1000 { return "#(n / 1000)us" }
         "#(n)ns"
     }
+}
+
+impl rem for duration {
+    //~ `d % other`: what is left after whole `other`s.
+    fn rem(self, other: duration) -> duration = duration { nanos: self.nanos % other.nanos }
 }
