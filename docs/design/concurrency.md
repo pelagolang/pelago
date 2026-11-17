@@ -42,6 +42,10 @@ const total = h.join!!()                       // waits; consumes the handle; gi
   recover into. Expected failures are returned as a `result` like in any function.
 - Dropping a `task` without `join` detaches the thread. Use `@must_use`
   on `spawn` so forgetting is a warning.
+- A closure handed to `spawn` outlives the function that makes it, so it may not use a variable in place
+  (decided 2026-11-17, after two tickers shared one period). Write `[sink x]` to move `x` in; the compiler
+  says so. Plain `const` scalars are copied in. We refuse instead of copying silently because a copy would
+  hide writes to a `var` and could not work for single-owner values. Scope tasks (`s.spawn`) still borrow.
 - `spawn` is a normal prelude function, not syntax. (`spawn` stays a soft keyword so it can also be a name.)
 
 ## 3. Scopes: threads that borrow
