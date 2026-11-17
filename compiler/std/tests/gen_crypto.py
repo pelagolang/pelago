@@ -361,7 +361,34 @@ def csprng():
     out += ["true", "true true", "true", "true"]
     return out
 
-TESTS = {"chacha": chacha, "poly1305": poly1305, "aead": aead, "csprng": csprng, "fasthash": fasthash, "blake3": blake3, "blake2": blake2, "sha2": sha2, "mac": mac, "sha3": sha3, "legacy": legacy, "checksum": checksum}
+from cryptography.hazmat.primitives.kdf.argon2 import Argon2d, Argon2i, Argon2id
+
+def password():
+    out = []
+    out.append(hashlib.scrypt(b"password", salt=b"NaCl", n=16, r=1, p=1, dklen=64).hex())
+    out.append(hashlib.scrypt(b"", salt=b"", n=16, r=1, p=1, dklen=64).hex())
+    out.append(hashlib.scrypt(b"pleaseletmein", salt=b"SodiumChloride", n=64, r=2, p=1, dklen=32).hex())
+    out.append(hashlib.scrypt(b"pw", salt=b"salt", n=8, r=1, p=2, dklen=20).hex())
+    cls = [Argon2d, Argon2i, Argon2id]
+    def a(k, pw, salt, t, m, l, n, secret=None, ad=None):
+        return cls[k](salt=salt, length=n, iterations=t, lanes=l, memory_cost=m, secret=secret, ad=ad).derive(pw).hex()
+    for k in range(3):
+        out.append(f"{k} {a(k, b'password', b'saltsalt', 2, 16, 2, 32)}")
+        out.append(f"{k} {a(k, b'password', b'saltsalt', 1, 8, 1, 16)}")
+    return out
+
+def password_more():
+    out = []
+    cls = [Argon2d, Argon2i, Argon2id]
+    def a(k, pw, salt, t, m, l, n, secret=None, ad=None):
+        return cls[k](salt=salt, length=n, iterations=t, lanes=l, memory_cost=m, secret=secret, ad=ad).derive(pw).hex()
+    out.append(a(2, b"password", b"saltsalt", 2, 16, 2, 32, b"sec", b"ad"))
+    out.append(a(2, b"pw", b"somesalt", 1, 16, 2, 100))
+    for k in (2, 1, 0):
+        out.append(a(k, b"password", b"saltsalt", 1, 16, 1, 40))
+    return out
+
+TESTS = {"password": password, "password_more": password_more, "chacha": chacha, "poly1305": poly1305, "aead": aead, "csprng": csprng, "fasthash": fasthash, "blake3": blake3, "blake2": blake2, "sha2": sha2, "mac": mac, "sha3": sha3, "legacy": legacy, "checksum": checksum}
 
 if __name__ == "__main__":
     for name, f in TESTS.items():

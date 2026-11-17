@@ -114,11 +114,11 @@ Question 2 proposes that importing `std.legacy` gives a compiler warning unless 
 | KMAC128/256 | `std.sha3` | built (batch 2b) |
 | Poly1305 | `std.poly1305` | built (batch 3a) | five 26-bit limbs, no 128-bit type needed |
 | CMAC (AES), GMAC | `std.mac` | batch 5 |
-| scrypt | `std.password` | batch 3 |
-| Argon2d / 2i / 2id (RFC 9106) | `std.password` | batch 3 (after BLAKE2b) |
-| bcrypt | `std.password` | batch 3 |
+| scrypt | `std.password` | built (batch 3b) | checked against `hashlib.scrypt` |
+| Argon2d / 2i / 2id (RFC 9106) | `std.password` | built (batch 3b) | checked against `cryptography`; lanes run one after the other |
+| bcrypt | `std.password` | batch 3c |
 | Balloon, yescrypt | `std.password` | later |
-| PHC string format (`$argon2id$v=19$...`) read and write | `std.password` | batch 3 |
+| PHC string format (`$argon2id$v=19$...`) read and write | `std.password` | batch 3c |
 
 ### Beyond hashes (the order Dennis's coordinator proposed)
 
@@ -142,7 +142,8 @@ work. Constant-time big arithmetic for those is its own design.
 3. **Batch 3a (built):** ChaCha20, XChaCha20, Poly1305, ChaCha20-Poly1305, XChaCha20-Poly1305, CSPRNG. Expected values
    come from `cryptography` (ChaCha20, Poly1305, ChaCha20Poly1305) and, for the XChaCha forms, an independent Python
    reference that reproduces the draft's published HChaCha20 vector.
-   **Batch 3b:** scrypt, Argon2, bcrypt, PHC strings.
+   **Batch 3b (built):** scrypt and Argon2d/i/id in `std.password` (tests use tiny costs: the interpreter has a step
+   limit). **Batch 3c:** bcrypt, PHC strings.
 4. **Batch 4:** the rest of the hash catalogue (RIPEMD, SM3, Streebog, Whirlpool, Tiger, K12, MD4, MD2, the rest of
    `std.fasthash`).
 5. **Batch 5:** X25519, Ed25519, AES and its modes.
