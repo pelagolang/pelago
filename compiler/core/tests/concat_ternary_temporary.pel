@@ -1,0 +1,31 @@
+//~ A ternary or `if` arm that builds a `string` where a `str` view is wanted: the text must live
+//~ as long as the view, not as long as the arm.
+fn tail(n: int) -> string {
+    var s = "A"
+    s = s + "T" + "#(0)" + (n == 0 ? "" : "." + "5") + "S"
+    return s
+}
+
+fn pick(n: int) -> string {
+    return "[" + (n == 1 ? "." + "5" : "") + "]"
+}
+
+fn viaIf(n: int) -> string {
+    return "<" + (if n == 2 { "" } else { "x" + "y" }) + ">"
+}
+
+fn main() {
+    print(tail(0))
+    print(tail(1))
+    print(pick(1))
+    print(pick(2))
+    print(viaIf(2))
+    print(viaIf(3))
+    var i = 0
+    var all = ""
+    while i < 3 {
+        all = all + "-" + (i == 1 ? "a" + "b" : "c") + "-"
+        i += 1
+    }
+    print(all)
+}

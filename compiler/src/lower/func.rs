@@ -74,6 +74,14 @@ pub(crate) struct FnState<'a> {
     pub subst: HashMap<DefId, Ty>,
     pub locals: HashMap<DefId, Local>,
     pub scopes: Vec<Vec<ScopeItem<'a>>>,
+    /// Index of the scope that must own a `string` made for a `str` view inside a conditional arm:
+    /// the view outlives the arm, so the temporary has to as well.
+    pub hoist: Option<usize>,
+    /// The closure argument being lowered for a `sink` parameter of a free function: it outlives the
+    /// caller's frame, so it may not point into it (`spawn`).
+    pub no_borrow: Option<(u32, u32)>,
+    /// The call being lowered is of a function without a receiver.
+    pub free_call: bool,
     pub loops: Vec<LoopCtx>,
     /// One block per message and place, so a stop says where it was (the place is the line of the expression).
     pub stops: HashMap<(String, Span), BlockId>,
@@ -105,6 +113,9 @@ impl<'a> FnState<'a> {
             subst: HashMap::new(),
             locals: HashMap::new(),
             scopes: Vec::new(),
+            hoist: None,
+            no_borrow: None,
+            free_call: false,
             loops: Vec::new(),
             stops: HashMap::new(),
             loc: Span::default(),

@@ -3335,6 +3335,34 @@ fn library_test_suites() {
     assert!(ran > 0);
 }
 
+/// A closure moved into `spawn` outlives the creating function's frame, so a variable it uses in place
+/// is refused at lowering with a message that says how to fix it; `[sink x]` moves it in.
+#[test]
+fn spawn_refuses_a_closure_that_borrows_the_frame() {
+    let bad = "fn start(n: int) -> task<int> {
+        var m = n
+        m = m + 1
+        return spawn(() ~> m)
+    }
+    fn main() { print(start(1).join!!()) }";
+    let mut program = Program::with_core();
+    program.add_package("app", &[("main", bad)]);
+    let res = resolve(&program);
+    let typed = check(&program, &res);
+    assert!(typed.diagnostics.iter().all(|d| d.warning), "checks");
+    let l = lower(&program, &res, &typed);
+    let errs: Vec<&str> = l
+        .diagnostics
+        .iter()
+        .filter(|d| !d.warning)
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].contains("`[sink m]`"), "{}", errs[0]);
+    let good = bad.replace("spawn(() ~> m)", "spawn([sink m] () ~> m)");
+    assert_eq!(output_of(&good), "2\n");
+}
+
 /// Index tests settled by a guard in front of the loop: what the program prints and where it stops
 /// are what they were, whether the guard passes (the loop without tests runs) or fails (the loop as
 /// written runs, and stops at the same pass after the same output).

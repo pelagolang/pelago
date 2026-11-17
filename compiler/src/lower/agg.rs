@@ -34,6 +34,19 @@ impl<'a> Lowerer<'a> {
                 let Res::Val(h) = self.expr(e) else {
                     return Some(Res::Never);
                 };
+                // Inside a ternary or `if` arm the temporary owning the text must outlive the arm.
+                if let Some(idx) = self.f.hoist {
+                    if idx + 1 < self.f.scopes.len() {
+                        let last = self.f.scopes.len() - 1;
+                        let at = self.f.scopes[last]
+                            .iter()
+                            .position(|it| matches!(it, ScopeItem::Drop { ptr, .. } if *ptr == h));
+                        if let Some(at) = at {
+                            let item = self.f.scopes[last].remove(at);
+                            self.f.scopes[idx].push(item);
+                        }
+                    }
+                }
                 let p = self.load_at(h, 0, IrTy::Ptr);
                 let n = self.load_at(h, 8, IrTy::I64);
                 self.store_at(dst, 0, p);

@@ -1,0 +1,17 @@
+//~ A closure given to `spawn` outlives the function that makes it, so what it uses is moved in with
+//~ `[sink x]`. Two tasks made by one function must not share anything.
+fn ticker(period: int, label: string) -> task<string> {
+    var count = period
+    count = count + 1
+    var name = copy label
+    return spawn([sink count, sink name] () ~> name + "#(count)")
+}
+
+fn main() {
+    const a = ticker(1, "a")
+    const b = ticker(5, "b")
+    const c = ticker(9, "c")
+    print(a.join!!())
+    print(b.join!!())
+    print(c.join!!())
+}
