@@ -104,7 +104,9 @@ Built as listed with these changes from the plan: months are plain numbers 1 to 
 - `date_time` (naive): `date` + `time_of_day`, `plus(duration)`, `since(date_time) -> duration`, `show` (RFC 3339 without offset).
 - Exact for years -9999 to 9999 against Python's `datetime` in the test; the algorithms are exact over the whole `int` range of years that fits.
 
-### T3: `std.zone`
+### T3: `std.zone` (built)
+
+Built as listed with these changes from the plan: the type is `time_zone` (a type called `zone` clashes with the module `zone` for the importer); `moment.inZone` is `zone.zoned(moment)` (an `impl` cannot add methods to another module's type); `zoned` holds its zone, so `plusDays` and `plusMonths` need no zone argument; `local_result` has `kind` (`one`, `twice`, `never`) and `earliest()`, `latest()` (`none` in a gap) and `forward()`. Also built: `zone.parseRule("CET-1CEST,M3.5.0,M10.5.0/3")` (POSIX TZ strings: works without a database, so Windows has real rules for zones the program names itself) and `zone.local()` (`TZ`, then `/etc/localtime`, then UTC). TZif versions 1 to 4 and the footer rule are read; the zone database comes from `$TZDIR` and the usual directories only (question 2 recommendation: a bundled copy for Windows is still to do, as T3b). Checked against Python's `zoneinfo`: 8,500 lookups over ten zones (including Lord Howe's 30-minute DST, Kathmandu's +05:45, Sydney, São Paulo and years past the file's explicit transitions) and every gap and repeated hour around the 2026 transitions of five zones (`system/zone_db.pel`, run by `run_cli.rs` where the system has the files).
 
 - `offset` (whole seconds east of UTC, `-86399..86399`), `zone.utc`, `zone.fixed(offset)`, `zone.named("Europe/Paris") -> zone ! time_error`,
   `zone.local() -> zone ! time_error`.

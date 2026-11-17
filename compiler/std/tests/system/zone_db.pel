@@ -1,0 +1,108 @@
+/// `std.zone` against the system's tz database (run by `run_cli.rs`, which skips it where there is none): offsets, abbreviations and daylight flags at generated moments, and local times that are missing or
+/// happen twice, are checked against Python's `zoneinfo` (`zone_ref.py` prints the same lines). Needs the system's
+/// tz database (`/usr/share/zoneinfo`); the fixed cases at the end do not.
+import std.time
+import std.calendar
+import std.zone
+import { time_error } = std.time
+import { local_kind, time_zone } = std.zone
+
+fn zones() -> [string] = [
+    "Europe/Paris",
+    "America/New_York",
+    "Australia/Sydney",
+    "Asia/Kolkata",
+    "Asia/Kathmandu",
+    "Asia/Tokyo",
+    "Australia/Lord_Howe",
+    "Europe/London",
+    "Pacific/Auckland",
+    "America/Sao_Paulo"
+]
+
+fn probe(name: str, t: int, z: time_zone) {
+    const i = z.infoAt(time.fromUnix(t))
+    print(name, t, i.offset, i.abbreviation, i.isDst ? 1 : 0)
+}
+
+fn moments() -> void ! time_error {
+    for name of zones() {
+        const z = zone.named(name)?
+        for i of 0..250 { probe(name, (i * 2654435761) % 6000000000 - 1500000000, z) }
+        for k of 0..600 { probe(name, 1798761600 + k * 40000000 / 600, z) }
+    }
+}
+
+fn locals() -> void ! time_error {
+    const dates = [(3, 8), (3, 29), (4, 5), (9, 27), (10, 4), (10, 25), (11, 1)]
+    for name of [
+        "Europe/Paris",
+        "America/New_York",
+        "Australia/Sydney",
+        "Australia/Lord_Howe",
+        "America/Sao_Paulo",
+    ] {
+        const z = zone.named(name)?
+        var ones = 0
+        for (m, d) of dates {
+            const w = (calendar.dateOf(2026, m, d)?).days() * 86400 - 86400
+            for k of 0..192 {
+                const L = w + k * 900
+                const dt = calendar.fromMoment(time.fromUnix(L))
+                const r = z.resolve(dt)
+                if r.kind == local_kind.one {
+                    ones += 1
+                } else {
+                    print(name, L, r.kind, r.first.unixSeconds(), r.second.unixSeconds())
+                }
+            }
+        }
+        print(name, "ones", ones)
+    }
+}
+
+fn paris() -> void ! time_error {
+    const paris = zone.named("Europe/Paris")?
+    const z = paris.zoned(time.fromUnix(1700000000))
+    print(z, z.abbreviation(), z.offsetSeconds(), z.isDst(), z.dateTime(), z.moment())
+    const s = paris.zoned(time.fromUnix(1750000000))
+    print(s, s.abbreviation(), s.isDst(), s < z, s == s)
+    print(
+        paris.name(),
+        zone.named("Nowhere/Land").isErr(),
+        zone.named("../etc/passwd").isErr(),
+        zone.named("").isErr(),
+    )
+    const gap = calendar.dateTimeOf(calendar.dateOf(2026, 3, 29)?, calendar.timeOf(2, 30, 0, 0)?)
+    const r = paris.resolve(gap)
+    print(r.kind, r.forward(), r.earliest() == none, r.latest() == none)
+    const twice = calendar.dateTimeOf(calendar.dateOf(2026, 10, 25)?, calendar.timeOf(2, 30, 0, 0)?)
+    const t = paris.resolve(twice)
+    print(
+        t.kind,
+        t.earliest() ?? time.fromUnix(0),
+        t.latest() ?? time.fromUnix(0),
+        paris.zoned(t.forward()),
+    )
+    const plain = paris.resolve(calendar.dateTimeOf(calendar.dateOf(2026, 7, 1)?, calendar.timeOf(12, 0, 0, 0)?))
+    print(plain.kind, paris.zoned(plain.forward()))
+    /// Calendar days keep the wall-clock time across a change; exact durations do not.
+    const eve = paris.zoned(plain.forward()).plusDays(-100)
+    print(eve, eve.plusDays(100), eve.plus(time.days(100)))
+    const jan = (paris.resolve(calendar.dateTimeOf(calendar.dateOf(2026, 1, 31)?, calendar.timeOf(9, 0, 0, 0)?))).forward()
+    print(
+        paris.zoned(jan).plusMonths(1),
+        paris.zoned(jan).plusMonths(2),
+        paris.zoned(jan).plusMonths(6),
+    )
+}
+
+fn failing() -> void ! time_error {
+    moments()?
+    locals()?
+    paris()?
+}
+
+fn main() {
+    print(failing().isOk())
+}

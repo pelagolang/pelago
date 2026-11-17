@@ -1,0 +1,70 @@
+/// `std.zone` without a database: fixed offsets, POSIX rules and error cases (the tz database is checked in
+/// `system/zone_db.pel`, which needs the system's files).
+import std.time
+import std.calendar
+import std.zone
+import { time_error } = std.time
+import { local_kind } = std.zone
+
+fn fixedCases() -> void ! time_error {
+    print(
+        zone.utc().name(),
+        zone.utc().zoned(time.fromUnix(0)),
+        (zone.fixed(19800)?).zoned(time.fromUnix(0)),
+    )
+    print(
+        (zone.fixed(-12600)?).zoned(time.fromUnix(0)),
+        (zone.fixed(-12600)?).name(),
+        (zone.fixed(3661)?).name(),
+    )
+    print(
+        zone.fixed(86400).isErr(),
+        zone.fixed(-86400).isErr(),
+        zone.named("Nowhere/Land").isErr(),
+        zone.named("../etc/passwd").isErr(),
+        zone.named("").isErr(),
+    )
+    print((zone.named("UTC")?).zoned(time.fromUnix(5)))
+    /// POSIX rules stand in for a database where there is none.
+    const ny = zone.parseRule("EST5EDT,M3.2.0,M11.1.0")?
+    print(
+        ny.zoned(time.fromUnix(1700000000)),
+        ny.zoned(time.fromUnix(1750000000)),
+        ny.zoned(time.fromUnix(1750000000)).abbreviation(),
+    )
+    const sy = zone.parseRule("AEST-10AEDT,M10.1.0,M4.1.0/3")?
+    print(
+        sy.zoned(time.fromUnix(1700000000)),
+        sy.zoned(time.fromUnix(1750000000)),
+        sy.zoned(time.fromUnix(1750000000)).isDst(),
+    )
+    const odd = zone.parseRule("<+0330>-3:30")?
+    print(odd.zoned(time.fromUnix(0)), odd.zoned(time.fromUnix(0)).abbreviation())
+    print(
+        zone.parseRule("garbage").isErr(),
+        zone.parseRule("EST5EDT").isErr(),
+        zone.parseRule("EST5EDT,M13.1.0,M11.1.0").isErr(),
+    )
+}
+
+fn gaps() -> void ! time_error {
+    /// A rule is enough to find gaps and repeated hours.
+    const paris = zone.parseRule("CET-1CEST,M3.5.0,M10.5.0/3")?
+    const gap = paris.resolve(calendar.dateTimeOf(calendar.dateOf(2026, 3, 29)?, calendar.timeOf(2, 30, 0, 0)?))
+    print(gap.kind, gap.forward(), gap.earliest() == none)
+    const twice = paris.resolve(calendar.dateTimeOf(calendar.dateOf(2026, 10, 25)?, calendar.timeOf(2, 30, 0, 0)?))
+    print(twice.kind, twice.earliest() ?? time.fromUnix(0), twice.latest() ?? time.fromUnix(0))
+    const day = paris.resolve(calendar.dateTimeOf(calendar.dateOf(2026, 7, 1)?, calendar.timeOf(12, 0, 0, 0)?))
+    print(day.kind, paris.zoned(day.forward()), paris.zoned(day.forward()).abbreviation())
+    const eve = paris.zoned(day.forward()).plusDays(-100)
+    print(eve, eve.plusDays(100), eve.plus(time.days(100)))
+}
+
+fn failing() -> void ! time_error {
+    fixedCases()?
+    gaps()?
+}
+
+fn main() {
+    print(failing().isOk())
+}
