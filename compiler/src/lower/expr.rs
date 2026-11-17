@@ -1687,6 +1687,7 @@ impl<'a> Lowerer<'a> {
         let repr = self.arm_ty(rt);
         let then_b = self.new_block(&[]);
         let else_b = self.new_block(&[]);
+        let outer = self.f.scopes.len().checked_sub(1);
         self.push_scope();
         if unless {
             self.cond_branch(&i.cond, else_b, then_b);
@@ -1711,10 +1712,12 @@ impl<'a> Lowerer<'a> {
         );
         reached |= self.finish_arm(r, join, repr);
         self.start(else_b);
+        let saved_hoist = std::mem::replace(&mut self.f.hoist, outer);
         let r = match &i.else_ {
             Some(el) => self.arm_expr(el, repr, dst, want),
             None => Res::Unit,
         };
+        self.f.hoist = saved_hoist;
         reached |= self.finish_arm(r, join, repr);
         // The condition's temporaries end where the arms join.
         if !reached {
@@ -1789,6 +1792,7 @@ impl<'a> Lowerer<'a> {
         let repr = self.arm_ty(rt);
         let then_b = self.new_block(&[]);
         let else_b = self.new_block(&[]);
+        let outer = self.f.scopes.len().checked_sub(1);
         self.push_scope();
         self.cond_branch(cond, then_b, else_b);
         let params: Vec<IrTy> = match repr {
@@ -1797,12 +1801,14 @@ impl<'a> Lowerer<'a> {
         };
         let join = self.new_block(&params);
         let mut reached = false;
+        let saved_hoist = std::mem::replace(&mut self.f.hoist, outer);
         self.start(then_b);
         let r = self.arm_expr(then, repr, dst, want);
         reached |= self.finish_arm(r, join, repr);
         self.start(else_b);
         let r = self.arm_expr(else_, repr, dst, want);
         reached |= self.finish_arm(r, join, repr);
+        self.f.hoist = saved_hoist;
         if !reached {
             self.f.scopes.pop();
             self.f.cur = None;
