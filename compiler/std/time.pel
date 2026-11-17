@@ -53,8 +53,8 @@ pub enum time_kind {
 
 /// The error of the time modules: a `kind` to branch on and a `message` for people.
 pub struct time_error {
-    kind: time_kind,
-    message: string
+    pub kind: time_kind,
+    pub message: string
 }
 
 /// A `time_error` of kind `kind`.
