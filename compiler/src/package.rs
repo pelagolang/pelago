@@ -33,6 +33,7 @@ pub const CORE_MODULES: &[(&str, &str)] = &[
     ("core.columns", include_str!("../core/core/columns.pel")),
     ("core.objects", include_str!("../core/core/objects.pel")),
     ("core.braid", include_str!("../core/core/braid.pel")),
+    ("core.math", include_str!("../core/core/math.pel")),
 ];
 
 /// The modules of the `std` package: `(module name, source)`. The files live in `compiler/std/`.
@@ -67,41 +68,65 @@ pub const STD_MODULES: &[(&str, &str)] = &[
     ("regexunicode", include_str!("../std/regexunicode.pel")),
 ];
 
-/// How the `std` modules are grouped for people: `(group, what it holds, module paths)`. This is the one
-/// list the website's foldable "std" tree and `pelago std` print. Every path in `STD_MODULES` must be in
-/// exactly one group (a test checks it), so a new module cannot be forgotten. A module path may be nested
-/// (`collections.deque` is `import std.collections.deque`); the older modules keep their flat names.
-pub const STD_GROUPS: &[(&str, &str, &[&str])] = &[
+/// How the `std` modules are grouped for people: `(group id, title, what it holds, module paths)`, in the
+/// order the website's foldable "std" tree shows them. This is the one list the sidebar and `pelago std`
+/// print. Every path in `STD_MODULES` must be in exactly one group (a test checks it), so a new module
+/// cannot be forgotten. A module path may be nested (`collections.deque` is `import std.collections.deque`);
+/// the older modules keep their flat names.
+pub const STD_GROUPS: &[(&str, &str, &str, &[&str])] = &[
+    (
+        "hashes",
+        "Hashes and checksums",
+        "cryptographic hashes, checksums, fast hashes, the legacy ones",
+        &[
+            "hash", "sha2", "sha3", "blake2", "blake3", "fasthash", "legacy", "checksum",
+        ],
+    ),
+    (
+        "crypto",
+        "Keys, MACs and passwords",
+        "message authentication, key derivation, password hashing",
+        &["mac", "poly1305", "kdf", "password", "bcrypt"],
+    ),
+    (
+        "ciphers",
+        "Ciphers and AEAD",
+        "stream ciphers and authenticated encryption",
+        &["chacha", "aead"],
+    ),
+    (
+        "io",
+        "Input, output and files",
+        "standard streams, files, paths",
+        &["io", "fs", "path"],
+    ),
+    ("time", "Time", "clocks and durations", &["time"]),
+    (
+        "random",
+        "Random numbers",
+        "seeded generators and the secure random generator",
+        &["random", "csprng"],
+    ),
     (
         "system",
-        "files, paths, the environment, the process, the clock",
-        &["io", "fs", "path", "env", "os", "time"],
+        "System",
+        "the process and its environment",
+        &["os", "env"],
     ),
     (
         "data",
-        "text formats and patterns",
+        "Text and data formats",
+        "JSON and regular expressions",
         &["json", "regex", "regexunicode"],
     ),
-    (
-        "numbers",
-        "big numbers and random numbers",
-        &["big", "random"],
-    ),
-    (
-        "hashing",
-        "hashes, checksums, MACs and key derivation",
-        &[
-            "hash", "sha2", "sha3", "blake2", "blake3", "mac", "kdf", "legacy", "checksum",
-            "fasthash",
-        ],
-    ),
+    ("math", "Math", "numbers beyond the machine's", &["big"]),
 ];
 
 /// The `std` tree as text: each group with its modules, one per line.
 pub fn std_tree_text() -> String {
     let mut out = String::new();
-    for (group, about, mods) in STD_GROUPS {
-        out.push_str(&format!("{group}: {about}\n"));
+    for (id, title, about, mods) in STD_GROUPS {
+        out.push_str(&format!("{id}: {title} ({about})\n"));
         for m in *mods {
             out.push_str(&format!("  std.{m}\n"));
         }
@@ -109,14 +134,14 @@ pub fn std_tree_text() -> String {
     out
 }
 
-/// The `std` tree as JSON: `[{"group":..,"about":..,"modules":["std.io",..]},..]`.
+/// The `std` tree as JSON: `[{"group":..,"title":..,"about":..,"modules":["std.io",..]},..]`.
 pub fn std_tree_json() -> String {
     let groups: Vec<String> = STD_GROUPS
         .iter()
-        .map(|(g, a, mods)| {
+        .map(|(id, title, about, mods)| {
             let list: Vec<String> = mods.iter().map(|m| format!("\"std.{m}\"")).collect();
             format!(
-                "{{\"group\":\"{g}\",\"about\":\"{a}\",\"modules\":[{}]}}",
+                "{{\"group\":\"{id}\",\"title\":\"{title}\",\"about\":\"{about}\",\"modules\":[{}]}}",
                 list.join(",")
             )
         })
