@@ -69,10 +69,10 @@ Status: **built**, **next** (batch number), or **later**.
 | BLAKE2X (XOF), BLAKE2bp / BLAKE2sp (parallel) | `std.blake2` | batch 4 | |
 | BLAKE3 (hash, keyed, derive_key, XOF) | `std.blake3` | built (batch 2b) | Islet's hash; the type is `blake3hash`; serial, no SIMD yet |
 | TurboSHAKE, KangarooTwelve | `std.kangaroo` | batch 4 | Keccak with 12 rounds, tree mode |
-| SM3 (China GB/T 32905) | `std.sm3` | batch 4 | |
+| SM3 (China GB/T 32905) | `std.sm3` | built (batch 4a) | type `sm3hash`; checked against `hashlib` |
 | Streebog-256/512 (GOST R 34.11-2012) | `std.streebog` | batch 4 | |
 | Whirlpool | `std.whirlpool` | batch 4 | ISO/IEC 10118-3 |
-| RIPEMD-128/160/256/320 | `std.ripemd` | batch 4 | RIPEMD-160 is still used (Bitcoin addresses); not broken |
+| RIPEMD-128/160/256/320 | `std.ripemd` | built (batch 4a) | type `rmd`; 160 checked against `hashlib`, the others against an independent reference and the published "abc" values |
 | Tiger, Tiger2 | `std.tiger` | batch 4 | rare; kept for completeness |
 | Skein, Grøstl, JH (SHA-3 finalists) | `std.finalists` | later | only if asked |
 | GOST R 34.11-94 | `std.legacy` | later | obsolete |
@@ -83,7 +83,7 @@ Status: **built**, **next** (batch number), or **later**.
 |---|---|---|
 | MD5 | collisions are trivial; checksums of old downloads, some protocols | built (batch 2a) |
 | SHA-1 | practical collisions (SHAttered); git object ids, old signatures | built (batch 2a) |
-| MD4 | broken; NTLM, rsync history | batch 4 |
+| MD4 | broken; NTLM, rsync history | built in `std.legacy` (batch 4a); checked against OpenSSL's legacy MD4 |
 | MD2 | broken; old PKI | batch 4 |
 | HAVAL, RIPEMD (the original 128-bit) | broken / obsolete | later |
 
@@ -144,8 +144,9 @@ work. Constant-time big arithmetic for those is its own design.
    reference that reproduces the draft's published HChaCha20 vector.
    **Batch 3b (built):** scrypt and Argon2d/i/id in `std.password` (tests use tiny costs: the interpreter has a step
    limit). **Batch 3c (built):** `std.bcrypt`, PHC strings and the all-format `password.verify`.
-4. **Batch 4:** the rest of the hash catalogue (RIPEMD, SM3, Streebog, Whirlpool, Tiger, K12, MD4, MD2, the rest of
-   `std.fasthash`).
+4. **Batch 4a (built):** RIPEMD family, SM3, MD4.
+   **Batch 4b and later:** the rest of the hash catalogue (Streebog, Whirlpool and Tiger need large constant tables and
+   published vectors to check against: they come when the vectors are in hand), K12 / TurboSHAKE, MD2, the rest of `std.fasthash`.
 5. **Batch 5:** X25519, Ed25519, AES and its modes.
 
 Each batch is one PR, tested, and followed by a website update checked on the live site.

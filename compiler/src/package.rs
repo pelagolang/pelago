@@ -55,6 +55,8 @@ pub const STD_MODULES: &[(&str, &str)] = &[
     ("blake2", include_str!("../std/blake2.pel")),
     ("blake3", include_str!("../std/blake3.pel")),
     ("fasthash", include_str!("../std/fasthash.pel")),
+    ("ripemd", include_str!("../std/ripemd.pel")),
+    ("sm3", include_str!("../std/sm3.pel")),
     ("chacha", include_str!("../std/chacha.pel")),
     ("poly1305", include_str!("../std/poly1305.pel")),
     ("aead", include_str!("../std/aead.pel")),
