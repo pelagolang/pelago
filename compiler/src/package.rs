@@ -89,11 +89,11 @@ pub const STD_GROUPS: &[(&str, &str, &[&str])] = &[
         &["big", "random"],
     ),
     (
-        "hashing",
-        "hashes, checksums, MACs and key derivation",
+        "crypto",
+        "hashes, checksums, MACs, key derivation, ciphers, passwords and secure randomness",
         &[
             "hash", "sha2", "sha3", "blake2", "blake3", "mac", "kdf", "legacy", "checksum",
-            "fasthash",
+            "fasthash", "chacha", "poly1305", "aead", "csprng", "password", "bcrypt",
         ],
     ),
 ];
