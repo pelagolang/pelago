@@ -45,6 +45,7 @@ pub const STD_MODULES: &[(&str, &str)] = &[
     ("os", include_str!("../std/os.pel")),
     ("env", include_str!("../std/env.pel")),
     ("time", include_str!("../std/time.pel")),
+    ("calendar", include_str!("../std/calendar.pel")),
     ("random", include_str!("../std/random.pel")),
     ("hash", include_str!("../std/hash.pel")),
     ("sha2", include_str!("../std/sha2.pel")),

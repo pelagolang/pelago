@@ -1,0 +1,125 @@
+/// `std.calendar`: the generated dates (days since 1970 from -700000 to 2800000) are checked against Python's
+/// `datetime` (`calendar_ref.py` prints the same lines); the rest are fixed cases.
+import std.calendar
+import { time_error } = std.time
+import std.time
+
+fn generated() {
+    for i of 0..300 {
+        const n = (i * 104729) % 3500000 - 700000
+        const d = calendar.fromDays(n)
+        const w = d.isoWeek()
+        const far = d.year() < 9000
+        const p = far ? d.plusMonths(13) : d
+        const q = far ? d.plusDays(1000) : d
+        print(n, d, d.weekday().isoNumber(), d.ordinal(), w.year, w.week, p, q)
+    }
+}
+
+fn fixed() -> void ! time_error {
+    print(
+        calendar.isLeap(2000),
+        calendar.isLeap(1900),
+        calendar.isLeap(2024),
+        calendar.isLeap(2026),
+        calendar.isLeap(-4),
+        calendar.isLeap(-1),
+    )
+    print(
+        calendar.daysInMonth(2024, 2),
+        calendar.daysInMonth(2026, 2),
+        calendar.daysInMonth(2026, 4),
+        calendar.daysInMonth(2026, 12),
+    )
+    const d = calendar.dateOf(2026, 11, 17)?
+    print(d, d.weekday(), d.days(), d.ordinal(), d.year(), d.month(), d.day())
+    print(
+        (calendar.dateOf(2024, 1, 31)?).plusMonths(1),
+        (calendar.dateOf(2025, 1, 31)?).plusMonths(1),
+        (calendar.dateOf(2024, 2, 29)?).plusYears(1),
+    )
+    print(
+        (calendar.dateOf(2024, 3, 31)?).plusMonths(-1),
+        (calendar.dateOf(2026, 1, 15)?).plusMonths(-13),
+        (calendar.dateOf(2026, 11, 17)?).plusDays(-322),
+    )
+    print(
+        (calendar.dateOf(2026, 12, 31)?).isoWeek().year,
+        (calendar.dateOf(2026, 12, 31)?).isoWeek().week,
+        (calendar.dateOf(2027, 1, 1)?).isoWeek().week,
+    )
+    print(
+        (calendar.dateOf(2025, 12, 29)?).isoWeek().year,
+        (calendar.dateOf(2025, 12, 29)?).isoWeek().week,
+        (calendar.dateOf(2021, 1, 3)?).isoWeek().year,
+    )
+    print(
+        calendar.dateOrdinal(2024, 366)?,
+        calendar.dateOrdinal(2026, 1)?,
+        calendar.dateOrdinal(2026, 365)?,
+    )
+    print(
+        calendar.dateOrdinal(2026, 366).isErr(),
+        calendar.dateOf(2026, 2, 29).isErr(),
+        calendar.dateOf(2026, 13, 1).isErr(),
+        calendar.dateOf(2026, 0, 1).isErr(),
+        calendar.dateOf(2026, 4, 31).isErr(),
+    )
+    print(calendar.dateOf(-1, 3, 1)?, calendar.dateOf(12345, 6, 7)?, calendar.dateOf(0, 2, 29)?)
+    print(d < calendar.dateOf(2026, 11, 18)?, d == calendar.dateOf(2026, 11, 17)?, d.since(calendar.dateOf(2026, 1, 1)?))
+    print(
+        d.weekday().next(),
+        calendar.fromDays(3).weekday().prev(),
+        calendar.fromDays(3).weekday().next().next().next().next(),
+    )
+}
+
+fn times() -> void ! time_error {
+    const t = calendar.timeOf(9, 47, 23, 0)?
+    print(
+        t,
+        calendar.timeOf(0, 0, 0, 0)?,
+        calendar.timeOf(23, 59, 59, 999999999)?,
+        calendar.timeOf(1, 2, 3, 40000000)?,
+    )
+    print(
+        calendar.timeOf(24, 0, 0, 0).isErr(),
+        calendar.timeOf(0, 60, 0, 0).isErr(),
+        calendar.timeOf(0, 0, 61, 0).isErr(),
+        calendar.timeOf(0, 0, 0, 1000000000).isErr(),
+    )
+    print(calendar.timeOf(23, 59, 60, 0)?)
+    const late = calendar.timeOf(23, 0, 0, 0)?
+    const a = late.plus(time.hours(2))
+    print(a.time, a.days)
+    const b = late.plus(time.hours(-25))
+    print(b.time, b.days)
+    const c = late.plus(time.days(3))
+    print(c.time, c.days)
+    print(t < late, t == t, t.cmp(late))
+    const dt = calendar.dateTimeOf(calendar.dateOf(2026, 11, 17)?, t)
+    print(dt, dt.atUtc(), calendar.fromMoment(dt.atUtc()))
+    print(dt.plus(time.hours(15)), dt.plus(time.days(-1000)), dt.plus(time.millis(1500)))
+    print(dt.plus(time.hours(15)).since(dt), dt.since(dt.plus(time.hours(15))))
+    print(
+        calendar.fromMoment(time.fromUnix(0)),
+        calendar.fromMoment(time.fromUnix(-1)),
+        calendar.fromMoment(time.fromUnixMillis(951782400500)),
+    )
+    print(
+        calendar.fromMoment(time.fromUnix(-62135596800)),
+        calendar.fromMoment(time.fromUnix(253402300799)),
+        calendar.fromMoment(time.fromUnix(253402300800)),
+    )
+    print(calendar.fromMoment(time.fromUnix(1700000000)).atUtc() == time.fromUnix(1700000000))
+}
+
+fn failing() -> void ! time_error {
+    generated()
+    fixed()?
+    times()?
+}
+
+fn main() {
+    print(failing().isOk())
+}
