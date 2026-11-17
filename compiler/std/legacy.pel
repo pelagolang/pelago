@@ -1,9 +1,9 @@
-/// Legacy hashes: MD5 and SHA-1. **Broken: never use them to protect anything.**
+/// Legacy hashes: MD5, SHA-1 and MD4. **Broken: never use them to protect anything.**
 ///
 /// ```
 /// import std.hash
 /// import std.legacy
-/// import { md5, sha1 } = std.legacy
+/// import { md5, sha1, md4 } = std.legacy
 ///
 /// fn main() {
 ///     print(hash.hex(hash.digestText(md5.new(), "abc")))       /// 900150983cd24fb0d6963f7d28e17f72
@@ -16,7 +16,7 @@
 /// different inputs with the same digest. Do not use them for signatures, certificates, password hashing or integrity
 /// against an attacker; use `std.sha2`, `std.sha3` (and soon `std.blake2` or `std.blake3`). As a MAC, HMAC-MD5 and
 /// HMAC-SHA1 are still unbroken, which is why they work with `std.mac`. Checked against Python's `hashlib`.
-/// Planned here too: MD4, MD2 (`docs/design/crypto.md`).
+/// Planned here too: MD2 (`docs/design/crypto.md`).
 
 import std.hash
 import { hasher } = std.hash
@@ -265,5 +265,106 @@ impl hasher for sha1 {
     }
     fn fresh(self) -> sha1 = sha1.new()
     fn outputSize(self) -> int = 20
+    fn blockSize(self) -> int = 64
+}
+
+/// MD4 (RFC 1320): 64-byte blocks, 32-bit little-endian words, digest 16 bytes. **Broken since 1996** (collisions in a
+/// blink); here for NTLM-era formats and old protocols (rsync's old checksums, eDonkey).
+pub struct md4 {
+    state: [uint32]
+    buf: [byte]
+    total: int
+
+    //~ A new MD4 hasher.
+    fn new() -> md4 = md4 { state: md5Start(), buf: [], total: 0 }
+}
+
+const md4Order2: [int] = [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14, 3, 7, 11, 15]
+const md4Order3: [int] = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
+const md4Shift1: [int] = [3, 7, 11, 19]
+const md4Shift2: [int] = [3, 5, 9, 13]
+const md4Shift3: [int] = [3, 9, 11, 15]
+
+fn md4Block(inout state: [uint32], block: [byte], at: int) {
+    var m: [uint32] = []
+    for t of 0..16 {
+        const j = at + 4 * t
+        m.push!((block[j] to uint32) | ((block[j + 1] to uint32) << 8) | ((block[j + 2] to uint32) << 16) | ((block[j + 3] to uint32) << 24))
+    }
+    var a = state[0]
+    var b = state[1]
+    var c = state[2]
+    var d = state[3]
+    for i of 0..16 {
+        const t = rotl32(a +% ((b & c) | (~b & d)) +% m[i], md4Shift1[i % 4])
+        a = d
+        d = c
+        c = b
+        b = t
+    }
+    for i of 0..16 {
+        const t = rotl32(a +% ((b & c) | (b & d) | (c & d)) +% m[md4Order2[i]] +% 0x5a827999, md4Shift2[i % 4])
+        a = d
+        d = c
+        c = b
+        b = t
+    }
+    for i of 0..16 {
+        const t = rotl32(a +% (b ^ c ^ d) +% m[md4Order3[i]] +% 0x6ed9eba1, md4Shift3[i % 4])
+        a = d
+        d = c
+        c = b
+        b = t
+    }
+    state[0] = state[0] +% a
+    state[1] = state[1] +% b
+    state[2] = state[2] +% c
+    state[3] = state[3] +% d
+}
+
+fn md4Absorb(inout h: md4, data: [byte]) {
+    h.total += data.len()
+    var i = 0
+    if h.buf.len() > 0 {
+        while i < data.len() && h.buf.len() < 64 {
+            h.buf.push!(data[i])
+            i += 1
+        }
+        if h.buf.len() < 64 { return }
+        md4Block(h.state!, h.buf, 0)
+        h.buf = []
+    }
+    while i + 64 <= data.len() {
+        md4Block(h.state!, data, i)
+        i += 64
+    }
+    while i < data.len() {
+        h.buf.push!(data[i])
+        i += 1
+    }
+}
+
+impl hasher for md4 {
+    fn update(inout self, data: [byte]) { md4Absorb(self!, data) }
+    fn finish(self) -> [byte] {
+        var c = copy self
+        const bits = self.total * 8
+        var pad: [byte] = [128]
+        while (self.total + pad.len()) % 64 != 56 { pad.push!(0) }
+        for i of 0..8 { pad.push!(((bits >> (8 * i)) & 255).wrapToByte()) }
+        md4Absorb(c!, pad)
+        var out: [byte] = []
+        for w of c.state {
+            for i of 0..4 { out.push!(((w >> (8 * i)) to int).wrapToByte()) }
+        }
+        out
+    }
+    fn reset(inout self) {
+        self.state = md5Start()
+        self.buf = []
+        self.total = 0
+    }
+    fn fresh(self) -> md4 = md4.new()
+    fn outputSize(self) -> int = 16
     fn blockSize(self) -> int = 64
 }
