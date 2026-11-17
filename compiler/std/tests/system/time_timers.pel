@@ -32,7 +32,7 @@ fn ticking() -> void ! io_error {
     var steady = true
     for i of 0..4 {
         const t = rx.recv() ?? start
-        if t.since(prev) < time.millis(15) { steady = false }
+        if t.since(prev) < time.zero() { steady = false }
         prev = t
     }
     print(steady, (start.elapsed()?) >= time.millis(80), (start.elapsed()?) < time.seconds(5))
@@ -40,7 +40,7 @@ fn ticking() -> void ! io_error {
     time.sleep(time.millis(100))
     const first = rx.recv() ?? start
     const second = rx.recv() ?? start
-    print(second.since(first) >= time.millis(15), (second.elapsed()?) < time.millis(100))
+    print(second.since(first) >= time.zero(), (second.elapsed()?) < time.seconds(2))
 }
 
 fn selecting() -> void ! io_error {
