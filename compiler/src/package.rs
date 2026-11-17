@@ -108,7 +108,7 @@ pub const STD_GROUPS: &[(&str, &str, &str, &[&str])] = &[
         "time",
         "Time",
         "clocks, durations, calendar dates, time zones and formatting",
-        &["time", "calendar", "zone", "timefmt"],
+        &["time", "calendar", "zone", "timefmt", "tzdata"],
     ),
     (
         "random",
