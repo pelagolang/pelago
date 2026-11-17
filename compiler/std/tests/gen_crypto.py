@@ -388,7 +388,48 @@ def password_more():
         out.append(a(k, b"password", b"saltsalt", 1, 16, 1, 40))
     return out
 
-TESTS = {"password": password, "password_more": password_more, "chacha": chacha, "poly1305": poly1305, "aead": aead, "csprng": csprng, "fasthash": fasthash, "blake3": blake3, "blake2": blake2, "sha2": sha2, "mac": mac, "sha3": sha3, "legacy": legacy, "checksum": checksum}
+import ctypes, ctypes.util
+_crypt = ctypes.CDLL(ctypes.util.find_library("crypt")); _crypt.crypt.restype = ctypes.c_char_p; _crypt.crypt.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+_B64 = "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+
+def b64enc(data):
+    out = ""; i = 0
+    while i < len(data):
+        c1 = data[i]; i += 1
+        out += _B64[c1 >> 2]; c1 = (c1 & 3) << 4
+        if i >= len(data): out += _B64[c1]; break
+        c2 = data[i]; i += 1
+        c1 |= c2 >> 4; out += _B64[c1]; c1 = (c2 & 15) << 2
+        if i >= len(data): out += _B64[c1]; break
+        c2 = data[i]; i += 1
+        c1 |= c2 >> 6; out += _B64[c1]; out += _B64[c2 & 63]
+    return out
+
+def bcrypt():
+    out = []
+    salt = b"abcdefghijklmnop"
+    def mk(pw, cost, salt):
+        return _crypt.crypt(pw, ("$2b$%02d$" % cost + b64enc(salt)).encode()).decode()
+    out.append(mk(b"password", 4, salt))
+    out.append(mk(b"", 4, salt))
+    out.append(mk(b"U*U", 4, b"0123456789ABCDEF"))
+    assert _crypt.crypt(b"U*U", b"$2a$05$CCCCCCCCCCCCCCCCCCCCC.") == b"$2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW"
+    return out
+
+def bcrypt_check():
+    return ["true", "true", "false", "false", "false"]
+
+import base64
+def phc_b64(b): return base64.b64encode(b).decode().rstrip("=")
+
+def password_phc():
+    tag = Argon2id(salt=b"saltsalt", length=24, iterations=1, lanes=1, memory_cost=16).derive(b"password")
+    a = "$argon2id$v=19$m=16,t=1,p=1$" + phc_b64(b"saltsalt") + "$" + phc_b64(tag)
+    sk = hashlib.scrypt(b"password", salt=b"NaCl", n=16, r=1, p=1, dklen=20)
+    sc = "$scrypt$ln=4,r=1,p=1$" + phc_b64(b"NaCl") + "$" + phc_b64(sk)
+    return [a, sc, "true false", "true false", "true", "false false false"]
+
+TESTS = {"password_phc": password_phc, "bcrypt": bcrypt, "bcrypt_check": bcrypt_check, "password": password, "password_more": password_more, "chacha": chacha, "poly1305": poly1305, "aead": aead, "csprng": csprng, "fasthash": fasthash, "blake3": blake3, "blake2": blake2, "sha2": sha2, "mac": mac, "sha3": sha3, "legacy": legacy, "checksum": checksum}
 
 if __name__ == "__main__":
     for name, f in TESTS.items():

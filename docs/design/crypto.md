@@ -116,9 +116,9 @@ Question 2 proposes that importing `std.legacy` gives a compiler warning unless 
 | CMAC (AES), GMAC | `std.mac` | batch 5 |
 | scrypt | `std.password` | built (batch 3b) | checked against `hashlib.scrypt` |
 | Argon2d / 2i / 2id (RFC 9106) | `std.password` | built (batch 3b) | checked against `cryptography`; lanes run one after the other |
-| bcrypt | `std.password` | batch 3c |
+| bcrypt | `std.bcrypt` | built (batch 3c) | `$2a$ $2b$ $2y$`; checked against the C library's `crypt`; reads 72 bytes of password |
 | Balloon, yescrypt | `std.password` | later |
-| PHC string format (`$argon2id$v=19$...`) read and write | `std.password` | batch 3c |
+| PHC string format (`$argon2id$v=19$...`, `$scrypt$...`) write and read | `std.password` | built (batch 3c) | `password.verify(pw, stored)` takes Argon2, scrypt and bcrypt strings |
 
 ### Beyond hashes (the order Dennis's coordinator proposed)
 
@@ -143,7 +143,7 @@ work. Constant-time big arithmetic for those is its own design.
    come from `cryptography` (ChaCha20, Poly1305, ChaCha20Poly1305) and, for the XChaCha forms, an independent Python
    reference that reproduces the draft's published HChaCha20 vector.
    **Batch 3b (built):** scrypt and Argon2d/i/id in `std.password` (tests use tiny costs: the interpreter has a step
-   limit). **Batch 3c:** bcrypt, PHC strings.
+   limit). **Batch 3c (built):** `std.bcrypt`, PHC strings and the all-format `password.verify`.
 4. **Batch 4:** the rest of the hash catalogue (RIPEMD, SM3, Streebog, Whirlpool, Tiger, K12, MD4, MD2, the rest of
    `std.fasthash`).
 5. **Batch 5:** X25519, Ed25519, AES and its modes.
@@ -177,7 +177,10 @@ Each batch is one PR, tested, and followed by a website update checked on the li
   and then frees twice at runtime (a read-only parameter of a concrete type is correctly rejected); an associated
   function of a generic struct (`hmac<H>.new(h, key)`) fails to unify `H` with itself, so the constructor is a free
   function; `uint64` values with the top bit set print as negative numbers; `uint64` has no `wrapToByte`
-  (we narrow through `rtCast<uint64, int>`).
+  (we narrow through `rtCast<uint64, int>`); the signed `int` multiply with overflow check needs scratch registers
+  that the 4-register AArch64 mode does not have in a large inlined function (Argon2's segment filler failed to
+  build until its index arithmetic used `*%`); a `??` used several times on one option in a function
+  (`(x ?? []).len()` and `x ?? []`) read freed memory, so `password.verify` unwraps each option once.
 
 ## Questions for Dennis
 

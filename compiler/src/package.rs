@@ -60,6 +60,7 @@ pub const STD_MODULES: &[(&str, &str)] = &[
     ("aead", include_str!("../std/aead.pel")),
     ("csprng", include_str!("../std/csprng.pel")),
     ("password", include_str!("../std/password.pel")),
+    ("bcrypt", include_str!("../std/bcrypt.pel")),
     ("path", include_str!("../std/path.pel")),
     ("json", include_str!("../std/json.pel")),
     ("regex", include_str!("../std/regex.pel")),
