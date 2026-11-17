@@ -388,6 +388,11 @@ impl<'p> Resolver<'p> {
         for (n, d) in names {
             self.prelude.insert(n, d);
         }
+        // `math` is a namespace too, in scope everywhere: `math.sqrt(x)`, `math.pi`.
+        if let Some(&m) = self.scopes[index].children.get("math") {
+            let def = self.scopes[m].def;
+            self.prelude.insert("math".to_string(), def);
+        }
     }
 
     fn error(&mut self, span: Span, message: impl Into<String>) {

@@ -91,7 +91,9 @@ Built as listed with these changes from the plan: `time.zero`, `longest` and `sh
   comparisons. `sinceEpoch()` stays for compatibility and is `wallNow().sinceUnix()`.
 - A test file `compiler/std/tests/time.pel` with expected output (there is none today), plus overflow stop tests.
 
-### T2: `std.calendar`
+### T2: `std.calendar` (built)
+
+Built as listed with these changes from the plan: months are plain numbers 1 to 12 (a `month` enum added a conversion at every call for no checking `dateOf` does not already do); `weekday` is an enum with `isoNumber`, `next`, `prev`; constructors are `dateOf`, `timeOf`, `dateTimeOf` (a function cannot share the name of its struct); fields are private with accessors so a `date` is always a real day; `date_time` also has `atUtc()` and `calendar.fromMoment(moment)`. The generated dates (300 from year 53 to 7650) are checked line by line against Python (`calendar_ref.py`).
 
 - `date { year: int, month: month, day: int }` is built only through `calendar.date(y, m, d) -> date ! time_error`
   (validates) or `calendar.dateOrdinal(y, n)`, `fromDays(n)`; `days()` (days since 1970-01-01), `weekday()`,
