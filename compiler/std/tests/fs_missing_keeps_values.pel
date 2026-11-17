@@ -1,0 +1,40 @@
+/// A failed `fs.exists` (a path that is not there) must leave the caller's values alone. On Windows ARM64 the
+/// routine behind it used a callee-saved register without saving it, so a value held in it across the call
+/// came back as the error number (-4), and freeing it crashed.
+import std.fs
+
+fn spread(n: int) -> int {
+    var a = n + 1
+    var b = n * 2
+    var c = n + 3
+    var d = n * 4
+    var e = n + 5
+    var f = n * 6
+    var g = n + 7
+    var h = n * 8
+    var i = n + 9
+    var j = n * 10
+    var k = n + 11
+    var l = n * 12
+    var seen = 0
+    for p of ["no/such/file", "no/such/dir/at/all", "nowhere"] {
+        if fs.exists(p) { seen += 1 }
+        a += 1
+        b += 2
+        c += 3
+        d += 4
+        e += 5
+        f += 6
+        g += 7
+        h += 8
+        i += 9
+        j += 10
+        k += 11
+        l += 12
+    }
+    a + b + c + d + e + f + g + h + i + j + k + l + seen
+}
+
+fn main() {
+    print(spread(1), spread(5))
+}
