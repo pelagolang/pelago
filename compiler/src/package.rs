@@ -67,6 +67,63 @@ pub const STD_MODULES: &[(&str, &str)] = &[
     ("regexunicode", include_str!("../std/regexunicode.pel")),
 ];
 
+/// How the `std` modules are grouped for people: `(group, what it holds, module paths)`. This is the one
+/// list the website's foldable "std" tree and `pelago std` print. Every path in `STD_MODULES` must be in
+/// exactly one group (a test checks it), so a new module cannot be forgotten. A module path may be nested
+/// (`collections.deque` is `import std.collections.deque`); the older modules keep their flat names.
+pub const STD_GROUPS: &[(&str, &str, &[&str])] = &[
+    (
+        "system",
+        "files, paths, the environment, the process, the clock",
+        &["io", "fs", "path", "env", "os", "time"],
+    ),
+    (
+        "data",
+        "text formats and patterns",
+        &["json", "regex", "regexunicode"],
+    ),
+    (
+        "numbers",
+        "big numbers and random numbers",
+        &["big", "random"],
+    ),
+    (
+        "hashing",
+        "hashes, checksums, MACs and key derivation",
+        &[
+            "hash", "sha2", "sha3", "blake2", "blake3", "mac", "kdf", "legacy", "checksum",
+            "fasthash",
+        ],
+    ),
+];
+
+/// The `std` tree as text: each group with its modules, one per line.
+pub fn std_tree_text() -> String {
+    let mut out = String::new();
+    for (group, about, mods) in STD_GROUPS {
+        out.push_str(&format!("{group}: {about}\n"));
+        for m in *mods {
+            out.push_str(&format!("  std.{m}\n"));
+        }
+    }
+    out
+}
+
+/// The `std` tree as JSON: `[{"group":..,"about":..,"modules":["std.io",..]},..]`.
+pub fn std_tree_json() -> String {
+    let groups: Vec<String> = STD_GROUPS
+        .iter()
+        .map(|(g, a, mods)| {
+            let list: Vec<String> = mods.iter().map(|m| format!("\"std.{m}\"")).collect();
+            format!(
+                "{{\"group\":\"{g}\",\"about\":\"{a}\",\"modules\":[{}]}}",
+                list.join(",")
+            )
+        })
+        .collect();
+    format!("[{}]", groups.join(","))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleId(pub u32);
 

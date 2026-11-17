@@ -1,6 +1,6 @@
 # Standard library gap plan (modelled on Rust's `std`)
 
-Status: draft for the owner. Card: [S-15](cards/S-15-std-library.md). Requested by Dennis (2026-11-17): "a proper std lib like Rust", grouped by area, not a flat list.
+Status: accepted (owner said go to all five recommendations, 2026-11-17). Card: [S-15](cards/S-15-std-library.md). Requested by Dennis (2026-11-17): "a proper std lib like Rust", grouped by area, not a flat list.
 
 Out of scope here (other threads own them): the time library (`std.time`), crypto and hashing (`std.sha2`, `blake*`, `mac`, `kdf`, ...), the website sidebar.
 
@@ -55,7 +55,7 @@ std.net.{ip, tcp, udp}                    std.hash.* and crypto (crypto thread)
 std.json  std.regex  std.big  std.random  std.time
 ```
 
-Today a module is a flat name in `STD_MODULES` (`import std.json`). **Step 0** is loader support for nested names (a directory per group in `compiler/std/`, `std/collections/deque.pel` is `import std.collections.deque`), keeping the current flat imports working as aliases so nothing breaks. The website thread then builds the foldable "std" tree from the same list (one source of truth: `STD_MODULES` gets a `group` field and `pelago std --json` prints the tree).
+Today a module is a flat name in `STD_MODULES` (`import std.json`). **Step 0 (built)**: the loader already took dotted module paths (a nested name is a directory in `compiler/std/`, checked end to end with a throwaway `std.collections.probe`), so the work was the group list: `STD_GROUPS` in `package.rs`, `pelago std [--json]`, and a test that every module is in exactly one group. It was thought to need loader support for nested names (a directory per group in `compiler/std/`, `std/collections/deque.pel` is `import std.collections.deque`), keeping the current flat imports working as aliases so nothing breaks. The website thread then builds the foldable "std" tree from the same list (one source of truth: `STD_MODULES` gets a `group` field and `pelago std --json` prints the tree).
 
 ## 4. Batches (one PR each, tests as `.pel` + `.out` in `std/tests`)
 
@@ -76,7 +76,7 @@ Each merged module: ask the coordinator to get it documented on the website and 
 
 Conventional (follow Rust): module split and names, the `collections` family, `Option`/`Result`/`Iterator` method names, `io` reader/writer split, `process.Command` shape. Own: overflow traps with explicit `wrapping`/`checked` opt-outs, insertion-ordered hash maps, `ordering` as an enum, format specs inside string interpolation, `inout`-closure locks instead of guards, owned `child`/`file` values closed by `deinit`, no `Rc`/`RefCell`/`Pin` family, no unwinding.
 
-## 6. Questions for Dennis
+## 6. Questions for Dennis (all five answered: recommended option)
 
 1. Nested module paths (`std.collections.deque`) with flat aliases kept: yes? (recommended)
 2. `ordering` enum next to the int-returning `cmp`: add it, keep `cmp` as is? (recommended)

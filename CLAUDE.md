@@ -17,6 +17,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 cargo run -- keywords            # list keywords (hard and soft)
 cargo run -- tokens              # list operators
+cargo run -- std [--json]        # list the std modules by group (the tree the website shows)
 cargo run -- lex <file>          # print tokens, report lexer errors (`-` reads stdin)
 cargo run -- lex-bench <file>    # time the lexer alone
 cargo run -- parse <file>        # print the syntax tree, report errors
