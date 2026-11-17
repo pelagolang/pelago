@@ -1,0 +1,51 @@
+/// Four threads allocate, fill, check and free blocks of many sizes at the same time: the heap is shared, so this
+/// only works if `alloc` and `free` run under the lock. Where there are no threads the same work runs on one.
+fn work() {
+    const bad = rtDataWord(0)
+    var i = 0
+    while i < 1500 {
+        const n = 16 + (i * 37) % 600
+        const p = rtAlloc(n)
+        var j = 0
+        while j < n {
+            rtStoreByte(rtOffset(p, j), rtToByte(i % 251))
+            j += 1
+        }
+        j = 0
+        while j < n {
+            if rtLoadByte(rtOffset(p, j)) != rtToByte(i % 251) {
+                rtAtomicAdd(bad, 1)
+            }
+            j += 8
+        }
+        rtFree(p)
+        i += 1
+    }
+}
+
+fn main() {
+    var stacks: [int] = []
+    var k = 0
+    while k < 4 {
+        const stack = rtAlloc(65536)
+        stacks.push!(rtAddrInt(stack))
+        if rtThreadStart(rtFnAddr(work), 0, rtAddrInt(rtOffset(stack, 65536))) < 0 {
+            work()
+            rtStoreInt(rtOffset(stack, 65536 - 8), 0)
+        }
+        k += 1
+    }
+    k = 0
+    while k < 4 {
+        const stack = rtCast<int, ptr>(stacks[k])
+        const word = rtOffset(stack, 65536 - 8)
+        while true {
+            const seen = rtAtomicAdd(word, 0)
+            if seen == 0 { break }
+            rtFutexWait(word, seen, 1000000000)
+        }
+        rtFree(stack)
+        k += 1
+    }
+    print(rtAtomicAdd(rtDataWord(0), 0))
+}

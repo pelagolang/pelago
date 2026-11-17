@@ -629,15 +629,15 @@ impl Em<'_, '_> {
             op::CALLRT => {
                 let rt = self.env.rt;
                 let l = match imm(&ops[0]) {
-                    op::RT_ALLOC => rt.alloc,
-                    op::RT_FREE => rt.free,
-                    op::RT_REALLOC => rt.realloc,
+                    op::RT_ALLOC => rt.alloc_x,
+                    op::RT_FREE => rt.free_x,
+                    op::RT_REALLOC => rt.realloc_x,
                     op::RT_CTX_INIT => rt.ctx_init,
                     op::RT_CTX_SWITCH => rt.ctx_switch,
                     k if (op::RT_OS..op::RT_OS + 22).contains(&k) => {
                         rt.os[(k - op::RT_OS) as usize]
                     }
-                    _ => rt.print,
+                    _ => rt.print_x,
                 };
                 self.env.a.call(l);
             }
