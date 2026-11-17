@@ -17,8 +17,8 @@
 ///
 /// A `zone` is a plain value you can keep and copy. Its data comes from TZif files (RFC 8536, versions 1 to 4:
 /// the transition list and the POSIX rule that carries on after the last transition) read from `$TZDIR` or the
-/// usual directories (`/usr/share/zoneinfo` and the like); where a system has none (Windows today) only `utc()`,
-/// `fixed(...)` and `parseRule(...)` work and `named` returns a `time_error`. `local()` reads `TZ`, then
+/// usual directories (`/usr/share/zoneinfo` and the like), and from the copy bundled in `std.tzdata` where a system
+/// has none (Windows); `bundled(name)` asks for the bundled copy on any machine. `local()` reads `TZ`, then
 /// `/etc/localtime`, and falls back to UTC. A day has 86400 seconds: there are no leap seconds.
 ///
 /// A local time can be missing (the clocks jump forward) or happen twice (they go back), so `resolve` returns a
@@ -28,6 +28,7 @@ import std.time
 import std.calendar
 import std.fs
 import std.env
+import std.tzdata
 import { duration, moment, time_error, time_kind } = std.time
 import { date_time } = std.calendar
 
@@ -279,7 +280,7 @@ fn readEdge(inout c: cur) -> tz_edge? {
 }
 
 /// Reads a POSIX TZ string such as `CET-1CEST,M3.5.0,M10.5.0/3`.
-fn readRule(text: str) -> tz_rule? {
+fn readRuleSlow(text: str) -> tz_rule? {
     var c = cur { b: text.bytes().toList(), i: 0 }
     var r = emptyRule()
     const n1 = readName(c!)
@@ -343,7 +344,7 @@ fn ruleAt(r: tz_rule, t: int) -> zone_info {
 //~ A zone from a POSIX TZ string, e.g. `CET-1CEST,M3.5.0,M10.5.0/3` or `EST5EDT,M3.2.0,M11.1.0` (names, the offset
 //~ west of UTC as POSIX writes it, and the rules for daylight time). A `time_error` when the text is not one.
 pub fn parseRule(text: str) -> time_zone ! time_error {
-    const r = readRule(text)
+    const r = readRuleSlow(text)
     if r == none { return err(zoneError("not a POSIX time zone rule: #(text)")) }
     var z = emptyZone("#(text)")
     z.hasRule = true
@@ -370,7 +371,7 @@ fn isTzif(b: [byte], at: int) -> bool {
 }
 
 /// Reads a TZif file (any version) into a zone named `name`.
-fn readTzif(b: [byte], name: str) -> time_zone ! time_error {
+fn readTzifSlow(b: [byte], name: str) -> time_zone ! time_error {
     if !isTzif(b, 0) { return err(zoneError("#(name): not a TZif file")) }
     const version = b[4] to int
     var at = 0
@@ -438,7 +439,7 @@ fn readTzif(b: [byte], name: str) -> time_zone ! time_error {
             k += 1
         }
         if foot.len() > 0 {
-            const r = readRule(foot)
+            const r = readRuleSlow(foot)
             if r != none {
                 z.hasRule = true
                 z.rule = r ?? emptyRule()
@@ -489,12 +490,120 @@ pub fn named(name: str) -> time_zone ! time_error {
             found = true
             const bytes = fs.readBytes(path)
             if bytes.isOk() {
-                const z = readTzif(bytes.or([]), name)
+                const z = readTzifSlow(bytes.or([]), name)
                 if z.isOk() { return z }
             }
         }
     }
+    if !found {
+        const b = bundled(name)
+        if b.isOk() { return b }
+    }
     err(zoneError(found ? "unreadable time zone file: #(name)" : "unknown time zone: #(name)"))
+}
+
+/// The value of one base64 character, or -1.
+fn b64(c: int) -> int {
+    if c >= 65 && c <= 90 { return c - 65 }
+    if c >= 97 && c <= 122 { return c - 71 }
+    if c >= 48 && c <= 57 { return c + 4 }
+    if c == 43 { return 62 }
+    if c == 47 { return 63 }
+    -1
+}
+
+/// Unzigzags a decoded number.
+fn unzig(n: int) -> int = (n & 1) == 0 ? n >> 1 : 0 - ((n + 1) >> 1)
+
+/// The varintsSlow in `raw`, as a list of numbers (one loop, so the code that reads a zone stays small).
+fn varintsSlow(raw: [byte]) -> [int] {
+    var out: [int] = []
+    var n = 0
+    var shift = 0
+    for b of raw {
+        const x = b to int
+        n = n | ((x & 127) << shift)
+        if x < 128 {
+            out.push!(n)
+            n = 0
+            shift = 0
+        } else {
+            shift += 7
+        }
+    }
+    out
+}
+
+//~ The zone called `name` from the database bundled with the library (`std.tzdata`, generated from the IANA release
+//~ named in that file), whatever the system has. `named` uses it when the system has no file of that name; call this
+//~ to get the same answer on every machine. A `time_error` for a name that is not in it.
+pub fn bundled(name: str) -> time_zone ! time_error = bundledSlow(name)
+
+/// Named `...Slow` so the optimiser keeps it a call: a big function copied into every caller made compiling a program
+/// that uses zones several times slower.
+fn bundledSlow(name: str) -> time_zone ! time_error {
+    if name == "UTC" || name == "Z" { return ok(utc()) }
+    if !safeName(name) { return err(zoneError("unknown time zone: #(name)")) }
+    const index = "\n" + tzdata.index()
+    const hit = index.find("\n#(name) ")
+    if hit == none { return err(zoneError("unknown time zone: #(name)")) }
+    /// The line is `name offset length`.
+    var p = (hit ?? 0) + 1 + name.len() + 1
+    var at = 0
+    var len = 0
+    while index.byteAt(p) != 32 {
+        at = at * 10 + (index.byteAt(p) to int) - 48
+        p += 1
+    }
+    p += 1
+    while p < index.len() && index.byteAt(p) != 10 {
+        len = len * 10 + (index.byteAt(p) to int) - 48
+        p += 1
+    }
+    /// Decode `len` bytes of base64 starting at character `at`.
+    const text = tzdata.data()
+    var raw: [byte] = []
+    var k = at
+    while raw.len() < len {
+        const v = (b64(text.byteAt(k) to int) << 18) | (b64(text.byteAt(k + 1) to int) << 12) | (b64(text.byteAt(k + 2) to int) << 6) | b64(text.byteAt(k + 3) to int)
+        raw.push!((v >> 16 & 255).wrapToByte())
+        raw.push!((v >> 8 & 255).wrapToByte())
+        raw.push!((v & 255).wrapToByte())
+        k += 4
+    }
+    const v = varintsSlow(raw)
+    var z = emptyZone("#(name)")
+    var i = 0
+    const ntypes = v[i]
+    i += 1
+    for t of 0..ntypes {
+        z.offs.push!(unzig(v[i]))
+        z.isdst.push!(v[i + 1])
+        i += 2
+        var ab = ""
+        for q of 0..v[i] { ab.pushByte!(v[i + 1 + q].wrapToByte()) }
+        i += 1 + v[i]
+        z.abbrs.push!(sink ab)
+    }
+    const ntrans = v[i]
+    i += 1
+    var prev = 0
+    for t of 0..ntrans {
+        prev += unzig(v[i])
+        z.trans.push!(prev)
+        z.kinds.push!(v[i + 1])
+        i += 2
+    }
+    if v[i] > 0 {
+        var foot = ""
+        for q of 0..v[i] { foot.pushByte!(v[i + 1 + q].wrapToByte()) }
+        const rule = readRuleSlow(foot)
+        if rule != none {
+            z.hasRule = true
+            z.rule = rule ?? emptyRule()
+        }
+    }
+    ok(z)
 }
 
 //~ The system's local zone: `TZ` (a zone name or a POSIX rule), else `/etc/localtime`, else UTC.
@@ -511,7 +620,7 @@ pub fn local() -> time_zone {
     }
     const bytes = fs.readBytes("/etc/localtime")
     if bytes.isOk() {
-        const z = readTzif(bytes.or([]), "Local")
+        const z = readTzifSlow(bytes.or([]), "Local")
         if z.isOk() { return z.or(utc()) }
     }
     utc()

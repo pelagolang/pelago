@@ -2,6 +2,11 @@
 Run: python3 compiler/std/tests/zone_ref.py > compiler/std/tests/zone.expected   (zone.out is that plus fixed cases)"""
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+import sys
+
+# `bundled` prints the smaller sample that zone_bundled.pel checks (it runs on every CI machine, so it is kept short)
+SMALL = len(sys.argv) > 1 and sys.argv[1] == "bundled"
+N_RANDOM, N_FAR = (30, 40) if SMALL else (250, 600)
 
 ZONES = ["Europe/Paris", "America/New_York", "Australia/Sydney", "Asia/Kolkata", "Asia/Kathmandu",
          "Asia/Tokyo", "Australia/Lord_Howe", "Europe/London", "Pacific/Auckland", "America/Sao_Paulo"]
@@ -14,12 +19,12 @@ def at(name, t):
     return off, d.tzname(), 1 if d.dst() else 0
 
 for name in ZONES:
-    for i in range(250):
+    for i in range(N_RANDOM):
         t = (i * 2654435761) % 6000000000 - 1500000000
         off, ab, dst = at(name, t)
         print(name, t, off, ab, dst)
-    for k in range(600):
-        t = 1798761600 + k * 40000000 // 600       # 2027 .. 2028 .. well past the file's explicit transitions
+    for k in range(N_FAR):
+        t = 1798761600 + k * 40000000 // N_FAR       # 2027 .. 2028 .. well past the file's explicit transitions
         off, ab, dst = at(name, t)
         print(name, t, off, ab, dst)
 
@@ -41,9 +46,9 @@ def local(name, L):
         return "twice", min(t0, t1), max(t0, t1)
     return "never", t0, t1
 
-for name in ["Europe/Paris", "America/New_York", "Australia/Sydney", "Australia/Lord_Howe", "America/Sao_Paulo"]:
+for name in (["Europe/Paris", "Australia/Lord_Howe"] if SMALL else ["Europe/Paris", "America/New_York", "Australia/Sydney", "Australia/Lord_Howe", "America/Sao_Paulo"]):
     ones = 0
-    for w in WINDOWS:
+    for w in (WINDOWS[1:2] + WINDOWS[5:6] if SMALL else WINDOWS):
         for k in range(192):
             L = w + k * 900
             kind, a, b = local(name, L)
