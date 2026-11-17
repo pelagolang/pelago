@@ -122,7 +122,9 @@ Built as listed with these changes from the plan: the type is `time_zone` (a typ
   zones, including a southern-hemisphere one, a half-hour one (Asia/Kolkata), a 45-minute one (Asia/Kathmandu) and
   one with no DST (Asia/Tokyo).
 
-### T4: `std.timefmt`
+### T4: `std.timefmt` (built)
+
+Built as listed. Changes from the plan: the zone-aware functions are `formatZoned`/`parseZoned` (a `date_time` has no zone, so `format`/`parse` reject `x`, `X`, `z` and `VV`); ISO 8601 durations are days, hours, minutes and seconds (years, months and weeks are not a fixed length: a `time_error` saying so); parsing is strict about widths and checks the weekday when the text has one. Also: `parseDate`, `parseTime`, `parseDateTime`, `rfc2822`, `parseRfc2822`, `httpDate`, `parseHttpDate`. Checked against Python's `datetime` for 300 generated moments in eight offsets (RFC 3339, RFC 2822, HTTP date, a long pattern, and the round trip through every parser), plus every error path. Not done: reading zone names and abbreviations in a pattern (they are ambiguous), ISO week dates (`2026-W47-2`) and locale names.
 
 - `timefmt.rfc3339(zoned) -> string`, `timefmt.parseRfc3339(text) -> zoned ! time_error` (fractional seconds of 1 to 9
   digits, `Z` and `+hh:mm`, lower-case `t`/`z` accepted on parse as RFC 3339 allows).

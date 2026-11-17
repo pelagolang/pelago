@@ -1,0 +1,217 @@
+/// `std.timefmt`: the generated moments (every RFC 3339, RFC 2822, HTTP and pattern text, and the round trip back
+/// through the parsers) are checked against Python's `datetime` (`timefmt_ref.py` prints the same lines); the rest
+/// are fixed cases, including every error path.
+import std.time
+import std.calendar
+import std.zone
+import std.timefmt
+import { time_error } = std.time
+
+fn generated() -> void ! time_error {
+    const offsets = [0, 3600, -18000, 19800, -12600, 20700, 43200, -39600]
+    for i of 0..300 {
+        const ms = (i * 2654435761) % 5000000000000 - 1500000000000
+        const o = offsets[i % 8]
+        const m = time.fromUnixMillis(ms)
+        const zn = zone.fixed(o)?
+        const z = zn.zoned(m)
+        const rfc = timefmt.rfc3339(z)
+        const full = timefmt.formatZoned(z, "EEEE d MMMM yyyy, hh:mm:ss.SSS a xxx")?
+        const back = timefmt.parseRfc3339(rfc)?
+        const back2 = timefmt.parseRfc2822(timefmt.rfc2822(z))?
+        const back3 = timefmt.parseZoned(full, "EEEE d MMMM yyyy, hh:mm:ss.SSS a xxx")?
+        const sec = m.unixSeconds()
+        const same = back.moment() == m &&
+            back2.moment().unixSeconds() == sec &&
+            back3.moment() == m
+        print(ms, rfc, "|", timefmt.rfc2822(z), "|", timefmt.httpDate(m), "|", full, "|", same)
+    }
+}
+
+fn fixed() -> void ! time_error {
+    const z = timefmt.parseRfc3339("2026-11-17T09:47:23.123456789+01:00")?
+    print(z, z.moment(), z.offsetSeconds())
+    print(
+        timefmt.parseRfc3339("2026-11-17t09:47:23z")?,
+        timefmt.parseRfc3339("2026-11-17 09:47:23-00:30")?,
+    )
+    print(
+        (timefmt.parseRfc3339("2026-11-17T09:47:23.5Z")?).moment(),
+        (timefmt.parseRfc3339("1969-12-31T23:59:59Z")?).moment(),
+    )
+    print(
+        timefmt.parseRfc3339("2026-11-17T09:47:23").isErr(),
+        timefmt.parseRfc3339("2026-02-30T09:47:23Z").isErr(),
+        timefmt.parseRfc3339("2026-11-17T24:00:00Z").isErr(),
+    )
+    print(
+        timefmt.parseRfc3339("2026-11-17T09:47:23.Z").isErr(),
+        timefmt.parseRfc3339("2026-11-17T09:47:23.1234567891Z").isErr(),
+        timefmt.parseRfc3339("2026-11-17T09:47:23Z ").isErr(),
+    )
+    print(
+        timefmt.parseRfc3339("26-11-17T09:47:23Z").isErr(),
+        timefmt.parseRfc3339("2026-11-17T09:47:23+25:00").isErr(),
+        timefmt.parseRfc3339("").isErr(),
+    )
+    print(
+        timefmt.parseDate("2026-11-17")?,
+        timefmt.parseDate("2026-13-17").isErr(),
+        timefmt.parseDate("2026-11-1").isErr(),
+    )
+    print(
+        timefmt.parseTime("09:47")?,
+        timefmt.parseTime("09:47:23")?,
+        timefmt.parseTime("09:47:23.25")?,
+        timefmt.parseTime("9:47").isErr(),
+        timefmt.parseTime("09:47:23.").isErr(),
+    )
+    print(
+        timefmt.parseDateTime("2026-11-17T09:47:23.5")?,
+        timefmt.parseDateTime("2026-11-17 09:47")?,
+        timefmt.parseDateTime("2026-11-17").isErr(),
+    )
+    print(
+        timefmt.parseHttpDate("Tue, 17 Nov 2026 09:47:23 GMT")?,
+        timefmt.parseHttpDate("Wed, 17 Nov 2026 09:47:23 GMT").isErr(),
+    )
+    print(
+        timefmt.parseRfc2822("17 Nov 2026 09:47 +0100")?,
+        timefmt.parseRfc2822("Tue, 17 Nov 2026 09:47:23 UT")?,
+        timefmt.parseRfc2822("Tue, 17 Nov 2026 09:47:23 +0100x").isErr(),
+    )
+}
+
+fn patterns() -> void ! time_error {
+    const dt = calendar.dateTimeOf(
+        calendar.dateOf(2026, 3, 7)?,
+        calendar.timeOf(0, 5, 9, 70000000)?,
+    )
+    print(
+        timefmt.format(dt, "yyyy-MM-dd HH:mm:ss.SSS")?,
+        timefmt.format(dt, "y/M/d H:m:s")?,
+        timefmt.format(dt, "yy MMM MMMM EEE EEEE")?,
+    )
+    print(
+        timefmt.format(dt, "h:mm a 'on' d MMM, 'it''s'")?,
+        timefmt.format(dt, "SSSSSSSSS S SS")?,
+        timefmt.format(dt, "yyyyMMddHHmmss")?,
+    )
+    const noon = calendar.dateTimeOf(calendar.dateOf(2026, 3, 7)?, calendar.timeOf(12, 0, 0, 0)?)
+    print(
+        timefmt.format(noon, "h a")?,
+        timefmt.format(dt, "hh a")?,
+        timefmt.format(
+            calendar.dateTimeOf(calendar.dateOf(-5, 1, 1)?, calendar.timeOf(0, 0, 0, 0)?),
+            "yyyy",
+        )?,
+    )
+    print(
+        timefmt.format(dt, "x").isErr(),
+        timefmt.format(dt, "z").isErr(),
+        timefmt.format(dt, "q").isErr(),
+        timefmt.format(dt, "'open").isErr(),
+        timefmt.format(dt, "MMMMM").isErr(),
+    )
+    print(
+        timefmt.parse("2026-03-07 00:05:09.070", "yyyy-MM-dd HH:mm:ss.SSS")?,
+        timefmt.parse("20260307000509", "yyyyMMddHHmmss")?,
+    )
+    print(
+        timefmt.parse("7 Mar 2026", "d MMM yyyy")?,
+        timefmt.parse("MARCH 7, 2026", "MMMM d, yyyy")?,
+        timefmt.parse("Sat 7 Mar 26", "EEE d MMM yy")?,
+    )
+    print(
+        timefmt.parse("12:00 AM", "hh:mm a")?,
+        timefmt.parse("12:30 pm", "hh:mm a")?,
+        timefmt.parse("11:59 PM", "h:mm a")?,
+    )
+    print(
+        timefmt.parse("Sun 7 Mar 2026", "EEE d MMM yyyy").isErr(),
+        timefmt.parse("13:00 PM", "hh:mm a").isErr(),
+        timefmt.parse("10:00", "hh:mm a").isErr(),
+    )
+    print(
+        timefmt.parse("2026-02-30", "yyyy-MM-dd").isErr(),
+        timefmt.parse("2026-3-07", "yyyy-MM-dd").isErr(),
+        timefmt.parse("2026-03-07x", "yyyy-MM-dd").isErr(),
+    )
+    print(
+        timefmt.parse("2026-03-07 +01:00", "yyyy-MM-dd xxx").isErr(),
+        timefmt.parseZoned("2026-03-07", "yyyy-MM-dd").isErr(),
+        timefmt.parse("Europe", "VV").isErr(),
+    )
+    print(
+        timefmt.parseZoned("2026-03-07 08:00 Z", "yyyy-MM-dd HH:mm X")?,
+        timefmt.parseZoned("2026-03-07 08:00 +0530", "yyyy-MM-dd HH:mm xx")?,
+        timefmt.parseZoned("2026-03-07 08:00 -08", "yyyy-MM-dd HH:mm x")?,
+    )
+    const z = (zone.fixed(19800)?).zoned(time.fromUnix(0))
+    print(
+        timefmt.formatZoned(z, "X XX XXX x xx xxx")?,
+        timefmt.formatZoned(zone.utc().zoned(time.fromUnix(0)), "X XXX x z VV")?,
+    )
+}
+
+fn durations() -> void ! time_error {
+    print(
+        timefmt.formatDuration(time.minutes(90)),
+        timefmt.formatDuration(time.hours(36)),
+        timefmt.formatDuration(time.millis(500)),
+        timefmt.formatDuration(time.zero()),
+        timefmt.formatDuration(time.seconds(-5)),
+    )
+    print(
+        timefmt.formatDuration(time.days(1) + time.nanos(1)),
+        timefmt.formatDuration(time.seconds(3661)),
+        timefmt.formatDuration(time.shortest()),
+    )
+    print(
+        timefmt.parseDuration("PT1H30M")?,
+        timefmt.parseDuration("P1DT12H")?,
+        timefmt.parseDuration("PT0.25S")?,
+        timefmt.parseDuration("-PT5S")?,
+        timefmt.parseDuration("P2D")?,
+    )
+    print(
+        timefmt.parseDuration("PT90M")?,
+        timefmt.parseDuration("PT1.5S")?,
+        timefmt.parseDuration("+PT1S")?,
+        timefmt.parseDuration("PT0S")?,
+    )
+    print(
+        timefmt.parseDuration("P1Y").isErr(),
+        timefmt.parseDuration("P1M").isErr(),
+        timefmt.parseDuration("P1W").isErr(),
+        timefmt.parseDuration("PT").isErr(),
+        timefmt.parseDuration("P").isErr(),
+    )
+    print(
+        timefmt.parseDuration("1H").isErr(),
+        timefmt.parseDuration("PT1").isErr(),
+        timefmt.parseDuration("PT1.5H").isErr(),
+        timefmt.parseDuration("P1H").isErr(),
+        timefmt.parseDuration("PT99999999999S").isErr(),
+    )
+    for d of [
+        time.minutes(90),
+        time.millis(1),
+        time.nanos(123456789),
+        time.days(3),
+        time.seconds(-86399),
+    ] {
+        print(timefmt.parseDuration(timefmt.formatDuration(d))? == d)
+    }
+}
+
+fn failing() -> void ! time_error {
+    generated()?
+    fixed()?
+    patterns()?
+    durations()?
+}
+
+fn main() {
+    print(failing().isOk())
+}
