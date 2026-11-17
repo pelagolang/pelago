@@ -1,0 +1,69 @@
+/// `std.time` timers: `sleepUntil`, `deadline`, `stopwatch` and `ticker`. Times are checked by what must hold (at least
+/// as long as asked, and not wildly longer), never by exact values.
+import std.time
+
+fn sleeping() -> void ! io_error {
+    const a = time.now()?
+    const d = time.deadline(time.millis(30))?
+    print(d.hasPassed()?, d.since(a) >= time.millis(29))
+    time.sleepUntil(d)?
+    print(d.hasPassed()?, (a.elapsed()?) >= time.millis(30), (a.elapsed()?) < time.seconds(5))
+    /// A deadline in the past returns at once.
+    const before = time.now()?
+    time.sleepUntil(a)?
+    print((before.elapsed()?) < time.seconds(1))
+}
+
+fn watch() -> void ! io_error {
+    var w = time.startStopwatch()?
+    time.sleep(time.millis(25))
+    const l1 = w.lap!()?
+    time.sleep(time.millis(25))
+    const l2 = w.lap!()?
+    print(l1 >= time.millis(25), l2 >= time.millis(25), (w.elapsed()?) >= time.millis(50), l1 < time.seconds(5))
+    w.restart!()?
+    print((w.elapsed()?) < time.seconds(1))
+}
+
+fn ticking() -> void ! io_error {
+    const start = time.now()?
+    const rx = time.ticker(time.millis(20))?
+    var prev = start
+    var steady = true
+    for i of 0..4 {
+        const t = rx.recv() ?? start
+        if t.since(prev) < time.millis(15) { steady = false }
+        prev = t
+    }
+    print(steady, (start.elapsed()?) >= time.millis(80), (start.elapsed()?) < time.seconds(5))
+    /// A slow receiver misses ticks; they are skipped, not queued.
+    time.sleep(time.millis(100))
+    const first = rx.recv() ?? start
+    const second = rx.recv() ?? start
+    print(second.since(first) >= time.millis(15), (second.elapsed()?) < time.millis(100))
+}
+
+fn selecting() -> void ! io_error {
+    const rx = time.ticker(time.millis(15))?
+    var ticks = 0
+    var timeouts = 0
+    while ticks < 2 {
+        select {
+            case t = rx.recv() { ticks += 1 }
+            case timeout(time.millis(500)) { timeouts += 1 }
+        }
+    }
+    print(ticks, timeouts)
+    const quiet = time.ticker(time.seconds(10))?
+    select {
+        case t = quiet.recv() { print("tick") }
+        case timeout(time.millis(20)) { print("timed out") }
+    }
+}
+
+fn main() {
+    print(sleeping().isOk())
+    print(watch().isOk())
+    print(ticking().isOk())
+    print(selecting().isOk())
+}
