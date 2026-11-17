@@ -786,12 +786,7 @@ impl<'a> Lowerer<'a> {
             (_, fail) => {
                 let (span, msg) =
                     fail.unwrap_or((decl.name.span, "an internal problem".to_string()));
-                self.diags.push(Diagnostic {
-                    module: file,
-                    span,
-                    message: format!("not lowered yet: {msg} (in `{name}`)"),
-                    warning: true,
-                });
+                self.diags.push(fail_diag(file, span, &msg, &name));
             }
         }
     }
@@ -1026,5 +1021,24 @@ impl<'a> Lowerer<'a> {
                 }
             }
         }
+    }
+}
+
+/// The diagnostic for a function that could not be lowered. A message that starts with `error: ` is a
+/// mistake in the program (it stops the build); any other is a feature not built yet (a note).
+pub(crate) fn fail_diag(module: ModuleId, span: Span, msg: &str, name: &str) -> Diagnostic {
+    match msg.strip_prefix("error: ") {
+        Some(rest) => Diagnostic {
+            module,
+            span,
+            message: rest.to_string(),
+            warning: false,
+        },
+        None => Diagnostic {
+            module,
+            span,
+            message: format!("not lowered yet: {msg} (in `{name}`)"),
+            warning: true,
+        },
     }
 }

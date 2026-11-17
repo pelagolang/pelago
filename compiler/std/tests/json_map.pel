@@ -1,0 +1,49 @@
+/// `map<string, V>` fields: an object whose members all have the type `V`, read and written in insertion order.
+import std.json
+import { json_error } = std.json
+
+@derive(fromJson, toJson)
+struct point { x: int, y: int }
+
+@derive(fromJson, toJson)
+struct scene {
+    name: string
+    scores: map<string, int>
+    spots: map<string, point>
+}
+
+@derive(fromJson, toJson)
+struct notebook { notes: map<string, [string]> }
+
+fn first(s: scene) -> int? = s.scores.get("a")
+
+fn show(r: scene ! json_error) -> string {
+    switch r {
+        case ok(s): "ok #(s.name) scores=#(s.scores.len()) a=#(first(s)) spots=#(s.spots.len())"
+        case err(e): "error #e"
+    }
+}
+
+fn showNotes(r: notebook ! json_error) -> string {
+    switch r {
+        case ok(n): notebookEncode(n)
+        case err(e): "error #e"
+    }
+}
+
+fn main() {
+    print(show(sceneDecode("{\"name\": \"s\", \"scores\": {\"a\": 1, \"b\": 2}, \"spots\": {\"home\": {\"x\": 1, \"y\": 2}}}")))
+    print(show(sceneDecode("{\"name\": \"s\", \"scores\": {}, \"spots\": {}}")))
+    print(showNotes(notebookDecode("{\"notes\": {\"k\": [\"p\", \"q\"], \"j\": []}}")))
+    print(show(sceneDecode("{\"name\": \"s\", \"scores\": {\"a\": \"one\"}, \"spots\": {}}")))
+    print(show(sceneDecode("{\"name\": \"s\", \"scores\": [1], \"spots\": {}}")))
+    print(show(sceneDecode("{\"name\": \"s\", \"scores\": {}, \"spots\": {\"p\": {\"x\": 1}}}")))
+    var scores: map<string, int> = {:}
+    const o1 = scores.insert!("z", 26)
+    const o2 = scores.insert!("a", 1)
+    var spots: map<string, point> = {:}
+    const o3 = spots.insert!("home", point { x: 3, y: 4 })
+    const text = sceneEncode(scene { name: "t", scores: scores, spots: spots })
+    print(text)
+    print(show(sceneDecode(text)))
+}
