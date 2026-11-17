@@ -1,6 +1,6 @@
 # Time: clocks, calendar, zones, formatting and timers (draft 1)
 
-Status: plan, 2026-11-17. T1 to T5 below are built in that order, one PR each. Requested by the owner: "finish out the
+Status: plan, 2026-11-17. T1 to T5 below are built in that order, one PR each (T1 built: see section 5). Requested by the owner: "finish out the
 time lib into a full fledged system". Card: [S-16](../plans/cards/S-16-time.md).
 
 ## 1. What exists today (audit)
@@ -75,7 +75,9 @@ Splitting keeps the cost down: a program that only times a loop imports `std.tim
 
 ## 5. Surface by batch
 
-### T1: `std.time` finished (the clocks and `duration`)
+### T1: `std.time` finished (the clocks and `duration`) (built)
+
+Built as listed with these changes from the plan: `time.zero`, `longest` and `shortest` are functions (`time.zero()`), because a module `const` of a struct type is not lowered yet; `d * int`, `d / int` and `instant + duration` are the methods `times`, `divInt` and `plus`/`minus`, because an operator interface takes two operands of the same type (a language rule, not changed here); `moment.since` and `plus` stop on overflow with `checked...` forms beside them.
 
 - `duration`: `time.minutes(n)`, `hours(n)`, `days(n)` (a `days` is exactly 24 hours: calendar days live in `std.calendar`);
   `d * int`, `d / int`, `d % duration`, `d.div(other) -> int`; `checkedAdd/Sub/Mul` (option), `saturatingAdd/Sub/Mul`;
