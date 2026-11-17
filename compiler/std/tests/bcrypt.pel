@@ -1,0 +1,11 @@
+/// `std.bcrypt` against the C library's `crypt` (cost 4, the cheapest, so the interpreter finishes).
+import std.bcrypt
+
+fn text(s: str) -> [byte] = s.bytes().toList()
+
+fn main() {
+    const salt = text("abcdefghijklmnop")
+    print(bcrypt.make(text("password"), 4, salt))
+    print(bcrypt.make(text(""), 4, salt))
+    print(bcrypt.make(text("U*U"), 4, text("0123456789ABCDEF")))
+}

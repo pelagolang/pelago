@@ -1,0 +1,10 @@
+/// `std.bcrypt.check`: a published hash with a `$2a$` prefix, a wrong password, and malformed strings.
+import std.bcrypt
+
+fn main() {
+    print(bcrypt.check("U*U", "$2a$05$CCCCCCCCCCCCCCCCCCCCC.E5YPO9kmyuRGyh0XouQYb4YMJKvyOeW"))
+    print(bcrypt.check("password", "$2b$04$WUHhXETkX0fnYkrqZU3ta.zcmUrocmI6GiV1XHHkfwFuAlE9bajm6"))
+    print(bcrypt.check("passwore", "$2b$04$WUHhXETkX0fnYkrqZU3ta.zcmUrocmI6GiV1XHHkfwFuAlE9bajm6"))
+    print(bcrypt.check("x", "not a hash"))
+    print(bcrypt.check("x", "$2b$99$WUHhXETkX0fnYkrqZU3ta.zcmUrocmI6GiV1XHHkfwFuAlE9bajm6"))
+}
