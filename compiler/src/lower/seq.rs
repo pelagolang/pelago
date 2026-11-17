@@ -214,7 +214,8 @@ impl<'a> Lowerer<'a> {
             TyKind::Int(k) => {
                 let signed = k.signed();
                 let w = self.resize(v, IrTy::I64, signed, Span::new(0, 0));
-                self.call_core("rtShowInt", vec![out, w]);
+                let f = if signed { "rtShowInt" } else { "rtShowUInt" };
+                self.call_core(f, vec![out, w]);
                 true
             }
             TyKind::Float(_) => {
@@ -385,7 +386,12 @@ impl<'a> Lowerer<'a> {
         };
         let w = self.resize(v, IrTy::I64, k.signed(), Span::new(0, 0));
         let buf = self.slot_bytes(INT_LINE, 8);
-        let at = self.call_core("rtFmtIntLine", vec![buf, w])?;
+        let f = if k.signed() {
+            "rtFmtIntLine"
+        } else {
+            "rtFmtUIntLine"
+        };
+        let at = self.call_core(f, vec![buf, w])?;
         let d = self
             .emit(Op::PtrAdd(buf, at), Some(IrTy::Ptr), e.span)
             .unwrap_or(buf);

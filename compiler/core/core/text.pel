@@ -137,6 +137,35 @@ pub fn rtFmtIntLine(buf: ptr, n: int) -> int {
     at
 }
 
+//~ `rtShowInt` for an unsigned 64-bit value (`uint`, `uint64`): the bits are read as unsigned.
+pub fn rtShowUInt(out: ptr, n: int) {
+    if n >= 0 {
+        rtShowInt(out, n)
+        return
+    }
+    /// At or above 2^63: split off the last digit with unsigned division.
+    const q = rtUDiv(n, 10)
+    rtShowInt(out, q)
+    rtPushByte(out, 48 + rtURem(n, 10))
+}
+
+//~ `rtFmtIntLine` for an unsigned 64-bit value.
+pub fn rtFmtUIntLine(buf: ptr, n: int) -> int {
+    if n >= 0 {
+        return rtFmtIntLine(buf, n)
+    }
+    var at = 31
+    rtStoreByte(rtOffset(buf, at), rtToByte(10))
+    var m = n
+    while m != 0 {
+        const q = rtUDiv(m, 10)
+        at -= 1
+        rtStoreByte(rtOffset(buf, at), rtToByte(48 + rtURem(m, 10)))
+        m = q
+    }
+    at
+}
+
 pub fn rtShowBool(out: ptr, b: bool) {
     if b {
         rtPushChar(out, 't')
