@@ -1,0 +1,94 @@
+/// `std.time`: durations, instants and moments. Clock values are checked by what must hold, not by their values.
+import std.time
+
+fn units() {
+    print(
+        time.days(1),
+        time.hours(2),
+        time.minutes(90),
+        time.seconds(3),
+        time.millis(250),
+        time.micros(42),
+        time.nanos(7),
+    )
+    print(time.days(1).asSeconds(), time.hours(1).asMillis(), time.minutes(1).asSeconds())
+    print(time.zero(), time.zero().isZero(), -time.seconds(2), (-time.seconds(2)).isNegative())
+    print(time.seconds(-3).signum(), time.zero().signum(), time.seconds(3).signum())
+    print(time.millis(1500).subsecNanos(), time.millis(-1500).subsecNanos())
+    print(
+        time.seconds(-5).abs(),
+        time.seconds(1).max(time.seconds(2)),
+        time.seconds(1).min(time.seconds(2)),
+    )
+    print(
+        time.seconds(9).clamp(time.seconds(1), time.seconds(5)),
+        time.seconds(-9).clamp(time.seconds(1), time.seconds(5)),
+    )
+}
+
+fn arithmetic() {
+    const a = time.seconds(10)
+    print(a.times(3), a.divInt(4), a % time.seconds(3), a.times(2), a.divInt(8))
+    print(a.ratio(time.seconds(3)), a.remainder(time.seconds(3)), (-a).remainder(time.seconds(3)))
+    print(a + time.millis(1), a - time.seconds(11), a == time.seconds(10), a < time.seconds(11))
+}
+
+fn limits() {
+    const big = time.longest()
+    print(big.checkedAdd(time.nanos(1)) == none, big.checkedAdd(time.nanos(0)) == none)
+    print(time.shortest().checkedSub(time.nanos(1)) == none)
+    print(time.seconds(1).checkedAdd(time.seconds(2)) ?? time.zero())
+    print(big.checkedMul(2) == none, time.seconds(2).checkedMul(3) ?? time.zero())
+    print(
+        big.saturatingAdd(time.seconds(1)) == time.longest(),
+        time.shortest().saturatingSub(time.seconds(1)) == time.shortest(),
+    )
+    print(
+        time.days(10000).saturatingMul(1000000) == time.longest(),
+        time.days(10000).saturatingMul(-1000000) == time.shortest(),
+    )
+    print(time.seconds(2).saturatingMul(3))
+}
+
+fn floats() {
+    print(time.fromSeconds(1.5).or(time.zero()), time.fromSeconds(-0.25).or(time.zero()))
+    print(time.fromSeconds(1e12).isErr(), time.fromSeconds(0.0 / 0.0).isErr())
+    print(time.fromSeconds(1.0 / 0.0).isErr())
+}
+
+fn moments() {
+    const m = time.fromUnix(1700000000)
+    print(m, m.unixSeconds(), m.unixMillis(), m.subsecNanos())
+    const h = time.fromUnixMillis(1700000000500)
+    print(h, h.unixMillis(), h.since(m), m.since(h))
+    const before = time.fromUnixMillis(-1500)
+    print(before, before.unixSeconds(), before.subsecNanos(), before.unixMillis())
+    print(m.plus(time.millis(750)), m.minus(time.millis(750)), m.plus(time.seconds(-1700000000)))
+    print(h.plus(time.millis(500)), h.minus(time.millis(500)), h.minus(time.millis(501)))
+    print((time.momentOf(5, 2500000000) ?? m), (time.momentOf(5, -1) ?? m))
+    print(m < h, h < m, m == time.fromUnix(1700000000), m.cmp(h), h.cmp(m), m.cmp(m))
+    print(time.fromUnix(9223372036854775000).checkedPlus(time.days(10000)) == none)
+    print(time.fromUnix(9000000000000000000).checkedSince(time.fromUnix(0)) == none)
+    print(time.fromUnix(100).checkedMinus(time.shortest()) ?? m)
+    print(time.fromUnix(-9223372036854775000).checkedMinus(time.longest()) == none)
+}
+
+fn clocks() -> void ! io_error {
+    const a = time.now()?
+    const b = time.now()?
+    print(b >= a, b.since(a) >= time.zero(), a.plus(time.seconds(1)) > a, a.minus(time.seconds(1)) < a)
+    print(a.plus(time.seconds(2)).minus(time.seconds(2)) == a, a.checkedPlus(time.nanos(1)) != none)
+    const w = time.wallNow()?
+    print(w.unixSeconds() > 1700000000, w.subsecNanos() >= 0, w.subsecNanos() < 1000000000)
+    print(w.unixSeconds() == (time.sinceEpoch()?).asSeconds() || w.unixSeconds() + 1 == (time.sinceEpoch()?).asSeconds())
+    print((w.elapsed()?) >= time.seconds(-1))
+}
+
+fn main() {
+    units()
+    arithmetic()
+    limits()
+    floats()
+    moments()
+    print(clocks().isOk())
+}
