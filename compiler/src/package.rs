@@ -101,7 +101,12 @@ pub const STD_GROUPS: &[(&str, &str, &str, &[&str])] = &[
         "standard streams, files, paths",
         &["io", "fs", "path"],
     ),
-    ("time", "Time", "clocks and durations", &["time"]),
+    (
+        "time",
+        "Time",
+        "clocks, durations and calendar dates",
+        &["time", "calendar"],
+    ),
     (
         "random",
         "Random numbers",
