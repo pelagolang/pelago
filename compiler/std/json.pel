@@ -599,6 +599,121 @@ pub fn document(text: str) -> value ! json_error {
 }
 
 
+/// The byte offset of the first byte that is not valid UTF-8 (no overlong forms, no surrogates, nothing past
+/// U+10FFFF), or -1 when the whole text is valid.
+fn badUtf8(s: str) -> int {
+    var i = 0
+    while i < s.len() {
+        const b = s.byteAt(i) to int
+        var need = 0
+        var low = 128
+        var high = 191
+        if b < 128 {
+            i += 1
+            continue
+        } else if b >= 194 && b <= 223 {
+            need = 1
+        } else if b >= 224 && b <= 239 {
+            need = 2
+            if b == 224 { low = 160 }
+            if b == 237 { high = 159 }
+        } else if b >= 240 && b <= 244 {
+            need = 3
+            if b == 240 { low = 144 }
+            if b == 244 { high = 143 }
+        } else {
+            return i
+        }
+        if i + need >= s.len() { return i }
+        var k = 1
+        while k <= need {
+            const c = s.byteAt(i + k) to int
+            if c < low || c > high { return i }
+            low = 128
+            high = 191
+            k += 1
+        }
+        i += need + 1
+    }
+    -1
+}
+
+/// Fails at the second member of an object that repeats a key; the trail is left at that member.
+fn noDuplicates(v: value, inout at: [int]) -> bool ! json_error {
+    switch v {
+        case .fields(keys, values):
+            var i = 0
+            while i < keys.len() {
+                at.push!(i)
+                var j = 0
+                while j < i {
+                    if keys[j] == keys[i] { return err(problem("duplicate field \"#(keys[i])\"", at)) }
+                    j += 1
+                }
+                const inner = noDuplicates(values[i], inout at)?
+                at.pop!()
+                i += 1
+            }
+            ok(true)
+        case .items(values):
+            var i = 0
+            while i < values.len() {
+                at.push!(i)
+                const inner = noDuplicates(values[i], inout at)?
+                at.pop!()
+                i += 1
+            }
+            ok(true)
+        case _: ok(true)
+    }
+}
+
+//~ Reads a document like `document`, and also refuses text that is not valid UTF-8 and objects that repeat a
+//~ key (`document` keeps both and `indexOf` finds the first).
+pub fn documentStrict(text: str) -> value ! json_error {
+    const bad = badUtf8(text)
+    if bad >= 0 {
+        var line = 1
+        var column = 1
+        lineColumn(text, bad, inout line, inout column)
+        return err(json_error { message: "the text is not valid UTF-8", trail: [], path: "$", line: line, column: column })
+    }
+    const root = document(text)?
+    var at: [int] = []
+    const r = noDuplicates(root, inout at)
+    if r.isErr() {
+        switch r {
+            case err(e): return err(located(text, root, e))
+            case ok(_):
+        }
+    }
+    ok(root)
+}
+
+//~ Fails when the object `v` has a member that is not in `known`; the error names it. Used by `@json(strict)`.
+pub fn rejectUnknown(v: value, known: [string], inout at: [int]) -> bool ! json_error {
+    switch v {
+        case .fields(keys, _):
+            var i = 0
+            while i < keys.len() {
+                var found = false
+                var j = 0
+                while j < known.len() {
+                    if known[j] == keys[i] { found = true }
+                    j += 1
+                }
+                if !found {
+                    at.push!(i)
+                    return err(problem("unknown field \"#(keys[i])\"", at))
+                }
+                i += 1
+            }
+            ok(true)
+        case _: ok(true)
+    }
+}
+
+
 /// The whole number in `s` (digits, an optional leading `-`) as an `int128`, or `none` when it is not one or does not fit.
 fn parseInt128(s: str) -> int128? {
     var p = 0

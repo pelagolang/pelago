@@ -39,15 +39,14 @@ nothing. A hand-written decoder is `std/tests/json_decode.pel`; `@derive(fromJso
 section 3 is still a promise), so the derive writes free functions named after the type: `serverFromJson(value, inout at)` and
 `serverDecode(text)`; a hand-written decoder for your own type follows the same naming and a derived struct can have it as a field. (b) File
 and standard input came from another thread first (card for `std.fs`, `docs/design/input.md`, PR 227: `fs.readText`, `io_error`, `os_open` and
-`os_close` on every target), so step 2 below was dropped. (c) Tuples, braids and `[T; N]` are read from a flat array, so a braid `(int, string; 4)` is `[1, "a", 2, "b"]` and `[(A, B); N]` is an array of two-element arrays (see [alternating.md](alternating.md) section 10); the decoder uses `list.asArray<N>()`. Writing has only `json.braidItems` so far. Not built yet: `map<string, V>` fields, generic types, `@json(name: ...)`
-renaming and a strict mode. The derive reports a field type it cannot read as an error at the field.
+`os_close` on every target), so step 2 below was dropped. (c) Tuples, braids and `[T; N]` are read from a flat array, so a braid `(int, string; 4)` is `[1, "a", 2, "b"]` and `[(A, B); N]` is an array of two-element arrays (see [alternating.md](alternating.md) section 10); the decoder uses `list.asArray<N>()`. Writing has only `json.braidItems` so far. Renaming (`@json("user_id")` on a field) and strict mode (`@json(strict)` on a type) are built (see "Renaming and strict mode"). Not built yet: `map<string, V>` fields, generic types. The derive reports a field type it cannot read as an error at the field.
 
 ## 1c. Writing (2026-11-10)
 
 `@derive(toJson)` is the other direction: for a type `server` it writes `serverToJson(x) -> json.value` and `serverEncode(x) -> string`. It writes
 the same shapes the decoder reads: numbers, `bool`, `string`, lists, arrays, tuples and braids (one flat array), options (`none` is `null`), structs
 (an object) and enums (a unit case is its name as text, other cases are a one-member object). A value written by `Encode` is read back by
-`Decode` (tested in `compiler/std/tests/json_encode.pel`). Not built: `map<string, V>` fields, renaming, pretty printing.
+`Decode` (tested in `compiler/std/tests/json_encode.pel`). Not built: `map<string, V>` fields, pretty printing. `toJson` honours `@json("key")`.
 
 ## 2. The decisions, with the trade-offs
 
@@ -88,7 +87,7 @@ so its errors have a path and no position (`line` and `column` are 0).
 
 **D4. Struct mapping.** Each field is read by its name. Missing field: the field's default when it has one (`tls: bool = false`),
 `none` for an `option` type, otherwise the error `missing field "port"`. Unknown keys are ignored (documents grow); a strict mode
-(`@json(strict)`) is a follow-up. Renaming a field (`@json(name: "user_id")`) needs attributes on fields, which the parser does not have
+(`@json(strict)`) refuses them. Renaming a field is `@json("user_id")`; fields already carry attributes
 yet: question 2. A field type may be a number type, `bool`, `string`, a list `[T]`, an `option` (`T?`, and `null` gives `none`), a
 map with `string` keys, a tuple, or another struct or enum with `fromJson`. A type without it is a compile error at the derive
 ("`point` needs `@derive(fromJson)` to be a field of `line`"), not a runtime one.
@@ -125,3 +124,9 @@ Built and specified in [`input.md`](input.md) (2026-11-08): `std.fs` (`fs.readTe
 2. Field attributes (`@json(name: "user_id")`) need a small parser change; do it in step 4, or leave renaming to hand-written decoders for now? Default: leave out, add later.
 3. Should a later step add zero-copy `str` fields (D6)? Default: not in version 1.
 4. Strict mode (unknown keys are errors) as an attribute, later? Default: yes, after step 4.
+
+## Renaming and strict mode
+
+- `@json("user_id")` on a field: the document key is `user_id`, the field keeps its name. It applies to reading and writing. Variant labels cannot be renamed yet.
+- `@json(strict)` on a struct or enum: unknown keys are an error (`unknown field "x"`, with path, line and column), and `<type>Decode` reads with `json.documentStrict`, which also refuses repeated keys (`duplicate field "k"`) and text that is not valid UTF-8. Without it, repeated keys keep the first, unknown keys are ignored, and bytes are not checked. *Conventional:* the same defaults as Go's `encoding/json/v2` strict options. *Pelago's:* checking is per type, so a nested type is strict only if it says so; the duplicate and UTF-8 checks cover the whole document.
+- Tests: `compiler/std/tests/json_strict.pel`.
