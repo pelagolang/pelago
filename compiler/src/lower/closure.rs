@@ -163,6 +163,16 @@ impl<'a> Lowerer<'a> {
                 }
                 None => continue,
             };
+            if matches!(kind, CapKind::Ref) && self.f.no_borrow == Some((e.span.start, e.span.end))
+            {
+                let name = self.res.def(*d).name.clone();
+                return self.unsupported(
+                    e.span,
+                    &format!(
+                        "error: this closure outlives the function that makes it, but uses `{name}` in place; write `[sink {name}]` to move it in"
+                    ),
+                );
+            }
             tys.push(field_ty);
             caps.push(CapInfo {
                 def: *d,
@@ -447,12 +457,7 @@ impl<'a> Lowerer<'a> {
                 func.compact();
                 self.module.funcs[job.id.0 as usize] = func;
             }
-            Some((span, msg)) => self.diags.push(Diagnostic {
-                module: job.file,
-                span,
-                message: format!("not lowered yet: {msg} (in `{name}`)"),
-                warning: true,
-            }),
+            Some((span, msg)) => self.diags.push(fail_diag(job.file, span, &msg, &name)),
         }
     }
 

@@ -298,7 +298,9 @@ impl<'a> Lowerer<'a> {
             ir_args.push(d);
         }
         for ((pass, ty, mode), src) in sig.params.iter().zip(sources) {
+            let saved_free = std::mem::replace(&mut self.f.free_call, !info.has_self);
             let v = self.lower_arg(*pass, *ty, *mode, src, e.span);
+            self.f.free_call = saved_free;
             match (pass, v) {
                 (Pass::Skip, _) => {}
                 (_, Some(v)) => ir_args.push(v),
@@ -374,10 +376,12 @@ impl<'a> Lowerer<'a> {
     ) -> Option<Value> {
         let arg = match src {
             ArgSource::Expr(arg) => {
-                if mode != Some(Mode::Sink) {
-                    if let ExprKind::Closure(_) = &strip_parens(arg).kind {
-                        let sp = strip_parens(arg).span;
+                if let ExprKind::Closure(_) = &strip_parens(arg).kind {
+                    let sp = strip_parens(arg).span;
+                    if mode != Some(Mode::Sink) {
                         self.f.stack_env = Some((sp.start, sp.end));
+                    } else if self.f.free_call {
+                        self.f.no_borrow = Some((sp.start, sp.end));
                     }
                 }
                 arg
