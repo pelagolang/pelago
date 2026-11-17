@@ -1007,7 +1007,9 @@ pub fn emit_for(
             a.b_cond(Cond::Lo, overflow);
             a.b(pass);
             a.bind(check);
+            a.ldr(X25, X0, 8, 8); // TEMP debug: the context
             a.ldr(X9, X9, 0x28, 8);
+            a.mov_rr(X24, X9);
         } else {
             // siginfo: the faulting address is at +16 (Linux) or +24 (macOS).
             a.ldr(X9, X1, if mac { 24 } else { 16 }, 8);
@@ -1022,6 +1024,34 @@ pub fn emit_for(
         a.b_cond(Cond::Lo, overflow);
         a.bind(invalid);
         if win {
+            // TEMP debug: fault address, pc, lr, sp, x0-x3 of the context
+            for off in [
+                -1i32,
+                0x118,
+                0x108,
+                0x110,
+                8 + 0 * 8,
+                8 + 1 * 8,
+                8 + 2 * 8,
+                8 + 3 * 8,
+                8 + 8 * 8,
+                8 + 9 * 8,
+                8 + 19 * 8,
+                8 + 20 * 8,
+                8 + 21 * 8,
+            ] {
+                if off < 0 {
+                    a.mov_rr(X1, X24);
+                } else {
+                    a.ldr(X1, X25, off as i32, 8);
+                }
+                a.mov_ri(X0, 2);
+                a.bl(rt.write_u64);
+                a.mov_ri(X0, 2);
+                a.lea_sect(X1, Sect::Rodata, msg_colon);
+                a.mov_ri(X2, 1);
+                a.bl(rt.write_fd);
+            }
             // The fault may have come from the end of our stack: leave it.
             let keep = a.new_label();
             state(a, X10, 152);
