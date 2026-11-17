@@ -1,0 +1,145 @@
+/// Poly1305 (RFC 8439), a one-time message authentication code.
+///
+/// ```
+/// import std.poly1305
+/// import std.hash
+///
+/// fn main() {
+///     const key: [byte] = [1; 32]          /// a NEW key for every message; never reuse one
+///     print(hash.hex(poly1305.sign(key, "hello".bytes().toList())))
+/// }
+/// ```
+///
+/// The 32-byte key must be used for one message only (it is normally taken from a ChaCha20 block; `std.aead` does
+/// that). `poly1305.sign` gives the 16-byte tag, `verify` compares in constant time, and the streaming type `poly`
+/// (`poly.new(key)`, `update!`, `finish`) takes the message in pieces. Conventional: the standard algorithm with five
+/// 26-bit limbs; constant time (no branch or index depends on the data). Checked against `cryptography`'s Poly1305.
+
+import std.hash
+
+fn le32(data: [byte], at: int) -> uint64 {
+    var w: uint64 = 0
+    for i of 0..4 { w = w | ((data[at + i] to uint64) << (8 * i)) }
+    w
+}
+
+const mask26: uint64 = 0x3ffffff
+
+/// One block of 16 bytes (`hibit` is 1 for a full block, 0 for the padded last one) added to the accumulator `h`.
+fn blockStep(inout h: [uint64], r: [uint64], m: [byte], hibit: uint64) {
+    h[0] = h[0] +% (le32(m, 0) & mask26)
+    h[1] = h[1] +% ((le32(m, 3) >> 2) & mask26)
+    h[2] = h[2] +% ((le32(m, 6) >> 4) & mask26)
+    h[3] = h[3] +% ((le32(m, 9) >> 6) & mask26)
+    h[4] = h[4] +% ((le32(m, 12) >> 8) | (hibit << 24))
+    var d: [uint64] = []
+    for k of 0..5 {
+        var sum: uint64 = 0
+        for i of 0..5 {
+            const j = (k + 5 - i) % 5
+            /// h[i] * r[k-i]; indexes that wrap past 4 are multiplied by 5 (2^130 = 5 mod p)
+            const f = i > k ? r[j] *% 5 : r[j]
+            sum = sum +% (h[i] *% f)
+        }
+        d.push!(sum)
+    }
+    var c: uint64 = 0
+    for k of 0..5 {
+        const t = d[k] +% c
+        h[k] = t & mask26
+        c = t >> 26
+    }
+    h[0] = h[0] +% (c *% 5)
+    const c2 = h[0] >> 26
+    h[0] = h[0] & mask26
+    h[1] = h[1] +% c2
+}
+
+/// A Poly1305 tag being computed with a one-time key.
+pub struct poly {
+    r: [uint64]
+    pad: [uint64]
+    h: [uint64]
+    buf: [byte]
+
+    //~ Starts a tag with a 32-byte one-time `key`.
+    fn new(key: [byte]) -> poly {
+        assert(key.len() == 32)
+        var r: [uint64] = []
+        r.push!(le32(key, 0) & 0x3ffffff)
+        r.push!((le32(key, 3) >> 2) & 0x3ffff03)
+        r.push!((le32(key, 6) >> 4) & 0x3ffc0ff)
+        r.push!((le32(key, 9) >> 6) & 0x3f03fff)
+        r.push!((le32(key, 12) >> 8) & 0x00fffff)
+        var pad: [uint64] = []
+        for i of 0..4 { pad.push!(le32(key, 16 + 4 * i)) }
+        poly { r: r, pad: pad, h: [0, 0, 0, 0, 0], buf: [] }
+    }
+
+    //~ Feeds `data` into the message.
+    fn update(inout self, data: [byte]) {
+        for b of data {
+            self.buf.push!(b)
+            if self.buf.len() == 16 {
+                blockStep(self.h!, self.r, self.buf, 1)
+                self.buf = []
+            }
+        }
+    }
+
+    //~ The 16-byte tag of everything fed so far; the state is not changed.
+    fn finish(self) -> [byte] {
+        var h: [uint64] = copy self.h
+        if self.buf.len() > 0 {
+            var m: [byte] = copy self.buf
+            m.push!(1)
+            while m.len() < 16 { m.push!(0) }
+            blockStep(h!, self.r, m, 0)
+        }
+        var c = h[1] >> 26
+        h[1] = h[1] & mask26
+        for k of 2..5 {
+            h[k] = h[k] +% c
+            c = h[k] >> 26
+            h[k] = h[k] & mask26
+        }
+        h[0] = h[0] +% (c *% 5)
+        c = h[0] >> 26
+        h[0] = h[0] & mask26
+        h[1] = h[1] +% c
+        /// g = h + 5 - 2^130; keep it when h >= p (no borrow out of the top limb)
+        var g: [uint64] = []
+        c = 5
+        for k of 0..5 {
+            const t = h[k] +% c
+            g.push!(t & mask26)
+            c = t >> 26
+        }
+        g[4] = g[4] -% (1 << 26)
+        const keep = (g[4] >> 63) -% 1
+        for k of 0..5 { h[k] = (h[k] & ~keep) | (g[k] & keep) }
+        var w: [uint64] = []
+        w.push!((h[0] | (h[1] << 26)) & 0xffffffff)
+        w.push!(((h[1] >> 6) | (h[2] << 20)) & 0xffffffff)
+        w.push!(((h[2] >> 12) | (h[3] << 14)) & 0xffffffff)
+        w.push!(((h[3] >> 18) | (h[4] << 8)) & 0xffffffff)
+        var out: [byte] = []
+        var carry: uint64 = 0
+        for k of 0..4 {
+            const f = w[k] +% self.pad[k] +% carry
+            for j of 0..4 { out.push!(rtCast<uint64, int>(f >> (8 * j)).wrapToByte()) }
+            carry = (f >> 32) & 1
+        }
+        out
+    }
+}
+
+//~ The 16-byte Poly1305 tag of `msg` under the one-time `key` (32 bytes).
+pub fn sign(key: [byte], msg: [byte]) -> [byte] {
+    var p = poly.new(key)
+    p.update!(msg)
+    p.finish()
+}
+
+//~ True when `tag` is the Poly1305 tag of `msg` under `key`; compares in constant time.
+pub fn verify(key: [byte], msg: [byte], tag: [byte]) -> bool = hash.equalConstTime(sign(key, msg), tag)

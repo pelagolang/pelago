@@ -1,0 +1,86 @@
+/// Authenticated encryption: ChaCha20-Poly1305 (RFC 8439) and XChaCha20-Poly1305.
+///
+/// ```
+/// import std.aead
+/// import std.random
+///
+/// fn main() -> void ! io_error {
+///     const key = random.bytes(32)?
+///     const nonce = random.bytes(24)?                 /// XChaCha: 24 random bytes are safe for every message
+///     const sealed = aead.sealExtended(key, nonce, "meet at noon".bytes().toList(), "header".bytes().toList())
+///     print(aead.openExtended(key, nonce, sealed, "header".bytes().toList()).len())    /// some(...) when untouched
+///     /// `open` gives `none` for ANY change to the nonce, the associated data or the sealed bytes
+/// }
+/// ```
+///
+/// `seal(key, nonce, plain, aad)` returns the ciphertext followed by a 16-byte tag; `open` returns the plain bytes,
+/// or `none` when the tag does not match (checked in constant time, and nothing is decrypted before it matches).
+/// `aad` is extra data that is authenticated but not hidden (headers, ids); pass `[]` for none. The key is 32 bytes;
+/// the nonce is 12 bytes for `seal` and `open`, 24 for `sealExtended` and `openExtended`. NEVER seal two messages with
+/// the same key and nonce: with 12-byte nonces count them or use a counter, with 24-byte nonces pick them at random.
+/// Conventional: the RFC 8439 construction; XChaCha20 as in draft-irtf-cfrg-xchacha. Checked against
+/// `cryptography`'s ChaCha20Poly1305 and an independent reference (`compiler/std/tests/aead.pel`).
+
+import std.chacha
+import std.hash
+import std.poly1305
+
+fn pad16(inout m: [byte], n: int) {
+    var k = n % 16
+    if k != 0 {
+        while k < 16 {
+            m.push!(0)
+            k = k + 1
+        }
+    }
+}
+
+fn le64(inout m: [byte], n: int) {
+    for i of 0..8 { m.push!(((n >> (8 * i)) & 255).wrapToByte()) }
+}
+
+/// The Poly1305 tag over aad, ciphertext and their lengths, with the key from block 0.
+fn tag(key: [byte], nonce: [byte], aad: [byte], cipher: [byte]) -> [byte] {
+    const first = chacha.block(key, 0, nonce)
+    var otk: [byte] = []
+    for i of 0..32 { otk.push!(first[i]) }
+    var m: [byte] = copy aad
+    pad16(m!, aad.len())
+    for b of cipher { m.push!(b) }
+    pad16(m!, cipher.len())
+    le64(m!, aad.len())
+    le64(m!, cipher.len())
+    poly1305.sign(otk, m)
+}
+
+//~ Encrypts and authenticates `plain` (`key` 32 bytes, `nonce` 12 bytes); returns the ciphertext and a 16-byte tag.
+pub fn seal(key: [byte], nonce: [byte], plain: [byte], aad: [byte]) -> [byte] {
+    var out = chacha.xor(key, nonce, 1, plain)
+    const t = tag(key, nonce, aad, out)
+    for b of t { out.push!(b) }
+    out
+}
+
+//~ Checks and decrypts what `seal` made. `none` when the tag is wrong or `sealed` is shorter than a tag.
+pub fn open(key: [byte], nonce: [byte], sealed: [byte], aad: [byte]) -> [byte]? {
+    if sealed.len() < 16 { return none }
+    const n = sealed.len() - 16
+    var cipher: [byte] = []
+    var given: [byte] = []
+    for i of 0..n { cipher.push!(sealed[i]) }
+    for i of n..sealed.len() { given.push!(sealed[i]) }
+    if !hash.equalConstTime(tag(key, nonce, aad, cipher), given) { return none }
+    chacha.xor(key, nonce, 1, cipher)
+}
+
+//~ Like `seal` with a 24-byte `nonce` (XChaCha20-Poly1305).
+pub fn sealExtended(key: [byte], nonce: [byte], plain: [byte], aad: [byte]) -> [byte] {
+    const k = chacha.extend(key, nonce)
+    seal(k.0, k.1, plain, aad)
+}
+
+//~ Like `open` with a 24-byte `nonce` (XChaCha20-Poly1305).
+pub fn openExtended(key: [byte], nonce: [byte], sealed: [byte], aad: [byte]) -> [byte]? {
+    const k = chacha.extend(key, nonce)
+    open(k.0, k.1, sealed, aad)
+}

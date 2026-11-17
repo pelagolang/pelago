@@ -1,0 +1,85 @@
+/// A cryptographically secure random generator: ChaCha20 with fast key erasure, seeded from the system.
+///
+/// ```
+/// import std.csprng
+///
+/// fn main() -> void ! io_error {
+///     var g = csrng.fromSystem()?          /// one system call to seed it, then no more
+///     print(g.between!(1, 6))              /// a die nobody can predict
+///     const key = g.bytes!(32)             /// a secret key
+/// }
+/// ```
+///
+/// Use this, not `std.random`'s `rng` (splitmix64, replayable, not for secrets), whenever the numbers protect
+/// something: keys, nonces, tokens, salts. `std.random.bytes` is the system's generator itself; `csrng` is the same
+/// quality but cheap to call many times. Design (the one OpenBSD's arc4random and Go's runtime use): the state is a
+/// 32-byte key; each refill makes a 64-byte ChaCha20 block, the first half replaces the key at once (so a later leak
+/// of the state cannot reveal earlier output) and the second half is served. `fromKey` is for tests and for deriving
+/// repeatable streams from a secret; it gives the same bytes on every target. `between` is unbiased. A `csrng` is a
+/// value: copy it and both copies produce the same numbers, so do not copy one that must stay secret.
+
+import std.chacha
+import std.random
+
+pub struct csrng {
+    key: [byte]
+    buf: [byte]
+    at: int
+    count: int
+
+    //~ A generator seeded from the system's generator (can fail like `random.bytes`).
+    fn fromSystem() -> csrng ! io_error {
+        const k = random.bytes(32)?
+        ok(csrng.fromKey(k))
+    }
+
+    //~ A generator from a 32-byte `key`: the same key always gives the same stream.
+    fn fromKey(key: [byte]) -> csrng {
+        assert(key.len() == 32)
+        csrng { key: copy key, buf: [], at: 0, count: 0 }
+    }
+
+    fn refill(inout self) {
+        const b = chacha.block(self.key, self.count, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        self.count = self.count + 1
+        var k: [byte] = []
+        for i of 0..32 { k.push!(b[i]) }
+        var rest: [byte] = []
+        for i of 32..64 { rest.push!(b[i]) }
+        self.key = k
+        self.buf = rest
+        self.at = 0
+    }
+
+    //~ `n` random bytes.
+    fn bytes(inout self, n: int) -> [byte] {
+        var out: [byte] = []
+        while out.len() < n {
+            if self.at >= self.buf.len() { self.refill!() }
+            out.push!(self.buf[self.at])
+            self.at = self.at + 1
+        }
+        out
+    }
+
+    //~ A random 63-bit non-negative `int`.
+    fn word(inout self) -> int {
+        const b = self.bytes!(8)
+        var x = 0
+        for i of 0..8 { x = (x << 8) | (b[i] to int) }
+        x & 9223372036854775807
+    }
+
+    //~ A number from `lo` to `hi`, both included, with no bias. Stops the program when `lo` is above `hi` or the range
+    //~ is 2^63 or more wide.
+    fn between(inout self, lo: int, hi: int) -> int {
+        assert(lo <= hi)
+        const n = hi -% lo +% 1
+        assert(n > 0)
+        const top = 9223372036854775807
+        const extra = (top % n + 1) % n
+        var x = self.word!()
+        while x > top - extra { x = self.word!() }
+        lo + x % n
+    }
+}

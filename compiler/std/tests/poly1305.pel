@@ -1,0 +1,46 @@
+/// `std.poly1305`: Poly1305 tags against `cryptography` for many lengths and keys, edge keys, RFC 8439's vector, and
+/// streaming in odd chunks.
+import std.hash
+import std.poly1305
+
+fn pattern(n: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * 7 + 3) & 255).wrapToByte()) }
+    out
+}
+
+fn key32(k: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..32 { out.push!(((i * k + 5) & 255).wrapToByte()) }
+    out
+}
+
+fn filled(n: int, b: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(b.wrapToByte()) }
+    out
+}
+
+fn main() {
+    for kk of [1, 7, 13] {
+        for n of [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+            27, 28, 29, 30, 31, 32, 33, 34, 35, 47, 48, 49, 100, 255, 256, 1000] {
+            print(kk, n, hash.hex(poly1305.sign(key32(kk), pattern(n))))
+        }
+    }
+    var k3: [byte] = filled(16, 255)
+    for i of 0..16 { k3.push!(0) }
+    const all = [filled(32, 255), filled(32, 0), k3]
+    for key of all {
+        for m of [[], filled(16, 255), filled(17, 255), filled(100, 255), filled(16, 0)] {
+            print(key[0], m.len(), hash.hex(poly1305.sign(key, m)))
+        }
+    }
+    const rfc = hash.fromHex("85d6be7857556d337f4452fe42d506a80103808afb0db2fd4abff6af4149f51b") ?? []
+    print(hash.hex(poly1305.sign(rfc, "Cryptographic Forum Research Group".bytes().toList())))
+    var p = poly1305.poly.new(rfc)
+    const text = "Cryptographic Forum Research Group".bytes().toList()
+    for i of 0..text.len() { p.update!([text[i]]) }
+    print(hash.hex(p.finish()))
+    print(poly1305.verify(rfc, text, p.finish()), poly1305.verify(rfc, text, filled(16, 0)))
+}

@@ -112,7 +112,8 @@ Question 2 proposes that importing `std.legacy` gives a compiler warning unless 
 | HMAC (any hasher) | `std.mac` | built |
 | HKDF, PBKDF2-HMAC | `std.kdf` | built |
 | KMAC128/256 | `std.sha3` | built (batch 2b) |
-| Poly1305, CMAC (AES), GMAC | `std.mac` | batch 3 (Poly1305), batch 5 |
+| Poly1305 | `std.poly1305` | built (batch 3a) | five 26-bit limbs, no 128-bit type needed |
+| CMAC (AES), GMAC | `std.mac` | batch 5 |
 | scrypt | `std.password` | batch 3 |
 | Argon2d / 2i / 2id (RFC 9106) | `std.password` | batch 3 (after BLAKE2b) |
 | bcrypt | `std.password` | batch 3 |
@@ -121,8 +122,9 @@ Question 2 proposes that importing `std.legacy` gives a compiler warning unless 
 
 ### Beyond hashes (the order Dennis's coordinator proposed)
 
-ChaCha20, XChaCha20, Poly1305, ChaCha20-Poly1305 and XChaCha20-Poly1305 (batch 3); a ChaCha20 CSPRNG seeded from the
-system with automatic reseeding (batch 3); X25519 and Ed25519 (batch 5; the field arithmetic can use 25.5-bit limbs in
+ChaCha20, XChaCha20 (`std.chacha`), Poly1305 (`std.poly1305`), ChaCha20-Poly1305 and XChaCha20-Poly1305 (`std.aead`) and a
+ChaCha20 CSPRNG with fast key erasure seeded from the system (`std.csprng`, type `csrng`) are built (batch 3a; no
+automatic reseeding yet: make a new `csrng.fromSystem()` for that); X25519 and Ed25519 (batch 5; the field arithmetic can use 25.5-bit limbs in
 `int`, so it does not wait for `int128`); AES with a constant-time bitsliced core (no lookup tables, so no cache-timing
 leak), AES-GCM, AES-GCM-SIV (batch 5); P-256 / P-384, RSA, secp256k1 would need `uint256` and wait for the 128-bit
 work. Constant-time big arithmetic for those is its own design.
@@ -137,7 +139,10 @@ work. Constant-time big arithmetic for those is its own design.
    expectations come from an independent Python port of the specification, which reproduces the published values for
    "", one byte and "abc" (`compiler/std/tests/blake3_ref.py`); the same method is used for FNV, xxHash and SipHash
    (`fast_ref.py`). Running the official test vectors from the BLAKE3 repository is a good follow-up.
-3. **Batch 3:** ChaCha20, Poly1305, AEAD, CSPRNG, scrypt, Argon2, bcrypt, PHC strings.
+3. **Batch 3a (built):** ChaCha20, XChaCha20, Poly1305, ChaCha20-Poly1305, XChaCha20-Poly1305, CSPRNG. Expected values
+   come from `cryptography` (ChaCha20, Poly1305, ChaCha20Poly1305) and, for the XChaCha forms, an independent Python
+   reference that reproduces the draft's published HChaCha20 vector.
+   **Batch 3b:** scrypt, Argon2, bcrypt, PHC strings.
 4. **Batch 4:** the rest of the hash catalogue (RIPEMD, SM3, Streebog, Whirlpool, Tiger, K12, MD4, MD2, the rest of
    `std.fasthash`).
 5. **Batch 5:** X25519, Ed25519, AES and its modes.
