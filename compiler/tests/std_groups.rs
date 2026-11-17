@@ -8,14 +8,14 @@ fn every_std_module_is_in_exactly_one_group() {
     for (path, _) in STD_MODULES {
         let n = STD_GROUPS
             .iter()
-            .filter(|(_, _, mods)| mods.contains(path))
+            .filter(|(_, _, _, mods)| mods.contains(path))
             .count();
         assert_eq!(
             n, 1,
             "std.{path} must be in exactly one group of STD_GROUPS"
         );
     }
-    for (group, _, mods) in STD_GROUPS {
+    for (group, _, _, mods) in STD_GROUPS {
         for m in *mods {
             assert!(
                 STD_MODULES.iter().any(|(p, _)| p == m),
@@ -28,6 +28,6 @@ fn every_std_module_is_in_exactly_one_group() {
 #[test]
 fn the_tree_prints_as_json() {
     let j = std_tree_json();
-    assert!(j.starts_with("[{\"group\":\"system\""));
+    assert!(j.starts_with("[{\"group\":\"hashes\""));
     assert!(j.contains("\"std.json\""));
 }

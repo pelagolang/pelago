@@ -1,0 +1,135 @@
+/// Math: the numeric functions in one place, as the namespace `math` (always in scope, no import):
+/// `math.sqrt(x)`, `math.min(a, b)`, `math.pi`. The same operations stay available as methods
+/// (`x.sqrt()`, `a.min(b)`), which call the same code, so older programs keep working.
+///
+/// ```
+/// fn main() {
+///     print(math.sqrt(2.0), math.round(2.5), math.min(3, 7), math.clamp(15, 0, 10))
+///     print(math.gcd(12, 18), math.hypot(3.0, 4.0))
+/// }
+/// ```
+///
+/// Rules: whole-number arithmetic here stops the program on overflow like `+` does (the `checked`,
+/// `wrapping` and `saturating` forms are methods on the integers); the float functions follow IEEE 754
+/// (a NaN or infinity goes in, a NaN or infinity comes out); `sqrt`, `floor`, `ceil`, `fma` are exact
+/// (correctly rounded) on every target and in the interpreter; no `libc`, everything is Pelago.
+
+//~ Types with a distance from zero: `int`, `float` and the wide numbers use `math.abs` and `math.signum`.
+pub interface signed {
+    fn absValue(self) -> Self
+    fn signValue(self) -> Self
+}
+
+impl signed for int {
+    fn absValue(self) -> int = self.abs()
+    fn signValue(self) -> int = self < 0 ? -1 : (self > 0 ? 1 : 0)
+}
+
+impl signed for float {
+    fn absValue(self) -> float = self.abs()
+    fn signValue(self) -> float = self < 0.0 ? -1.0 : (self > 0.0 ? 1.0 : self)
+}
+
+/// Archimedes' constant, the ratio of a circle's circumference to its diameter.
+pub const pi: float = 3.141592653589793
+/// The full turn, `2 * pi`.
+pub const tau: float = 6.283185307179586
+/// Euler's number.
+pub const e: float = 2.718281828459045
+
+//~ The smaller of two values of any ordered type (`int`, `float`, the wide numbers, ...). A NaN is not
+//~ special-cased for floats: the comparison decides.
+pub fn min<T: order>(a: T, b: T) -> T = b < a ? b : a
+
+//~ The larger of two values of any ordered type.
+pub fn max<T: order>(a: T, b: T) -> T = b > a ? b : a
+
+//~ `x` held between `lo` and `hi`. Stops the program when `lo > hi`.
+pub fn clamp<T: order>(x: T, lo: T, hi: T) -> T {
+    if lo > hi { panic("clamp: lo is above hi") }
+    return x < lo ? lo : (x > hi ? hi : x)
+}
+
+//~ The absolute value of an `int` or a `float`. Stops on `int`'s lowest value, which has no positive twin.
+pub fn abs<T: signed>(x: T) -> T = x.absValue()
+
+//~ -1, 0 or 1 by the sign (a float zero or NaN comes back as it is).
+pub fn signum<T: signed>(x: T) -> T = x.signValue()
+
+//~ The square root, correctly rounded. A negative number gives NaN.
+pub fn sqrt(x: float) -> float = x.sqrt()
+
+//~ The largest whole number not above `x`.
+pub fn floor(x: float) -> float = x.floor()
+
+//~ The smallest whole number not below `x`.
+pub fn ceil(x: float) -> float = x.ceil()
+
+//~ The nearest whole number; a half goes away from zero.
+pub fn round(x: float) -> float = x.round()
+
+//~ The whole part of `x`, toward zero.
+pub fn trunc(x: float) -> float = x < 0.0 ? x.ceil() : x.floor()
+
+//~ The part of `x` after the point: `x - trunc(x)`, with the sign of `x`.
+pub fn fract(x: float) -> float = x - trunc(x)
+
+//~ `a * b + c` rounded once.
+pub fn fma(a: float, b: float, c: float) -> float = a.fma(b, c)
+
+//~ `x` to a whole-number power (a float exponent must be a whole number).
+pub fn pow(x: float, exponent: float) -> float = x.pow(exponent)
+
+//~ `x` to the power `n` for whole numbers; stops on overflow. `n` below zero stops: there is no whole answer.
+pub fn powInt(x: int, n: int) -> int {
+    if n < 0 { panic("powInt: negative exponent") }
+    return x.pow(n)
+}
+
+//~ The length of the hypotenuse, `sqrt(x * x + y * y)`, scaled so a large `x` or `y` does not overflow early.
+pub fn hypot(x: float, y: float) -> float {
+    const a = x.abs()
+    const b = y.abs()
+    const big = a > b ? a : b
+    const small = a > b ? b : a
+    if big == 0.0 { return 0.0 }
+    const r = small / big
+    return big * (1.0 + r * r).sqrt()
+}
+
+//~ Whether `x` is NaN (not a number).
+pub fn isNan(x: float) -> bool = x != x
+
+//~ Whether `x` is neither NaN nor an infinity.
+pub fn isFinite(x: float) -> bool = x - x == 0.0
+
+//~ Whether `x` is an infinity.
+pub fn isInfinite(x: float) -> bool = x == x && x - x != 0.0
+
+//~ The greatest common divisor, never negative; `gcd(0, 0)` is 0.
+pub fn gcd(a: int, b: int) -> int {
+    var x = a.abs()
+    var y = b.abs()
+    while y != 0 {
+        const t = x % y
+        x = y
+        y = t
+    }
+    return x
+}
+
+//~ The least common multiple, never negative; stops on overflow; `lcm(0, n)` is 0.
+pub fn lcm(a: int, b: int) -> int {
+    if a == 0 || b == 0 { return 0 }
+    return (a / gcd(a, b)).abs() * b.abs()
+}
+
+//~ The whole part of the square root of `n`. Stops when `n` is negative.
+pub fn isqrt(n: int) -> int {
+    if n < 0 { panic("isqrt: negative number") }
+    if n < 2 { return n }
+    var r = (n to float).sqrt().floorInt()
+    while r > 3037000499 || r * r > n { r -= 1 }
+    while (r + 1) <= 3037000499 && (r + 1) * (r + 1) <= n { r += 1 }
+    return r
+}
