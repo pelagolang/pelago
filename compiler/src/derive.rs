@@ -48,8 +48,8 @@ pub fn expand(src: &str, file: &File) -> Expansion {
             match &item.kind {
                 ItemKind::Struct(d) if to => g.encode_structure(d, item.span),
                 ItemKind::Enum(d) if to => g.encode_enumeration(d, item.span),
-                ItemKind::Struct(d) => g.structure(d, item.span),
-                ItemKind::Enum(d) => g.enumeration(d, item.span),
+                ItemKind::Struct(d) => g.structure(d, item.span, &item.attrs),
+                ItemKind::Enum(d) => g.enumeration(d, item.span, &item.attrs),
                 _ => g.errors.push((
                     item.span,
                     format!("`{word}` can be derived for a struct or an enum"),
@@ -80,8 +80,10 @@ struct Gen<'a> {
 
 /// One field of an object being read.
 struct Slot {
-    /// The key in the document and the field's name in the struct (or the label in a variant).
+    /// The field's name in the struct (or the label in a variant).
     name: String,
+    /// The key in the document: the name, or the text of `@json("key")` on the field.
+    key: String,
     ty: Type,
     default: Option<String>,
 }
@@ -89,6 +91,27 @@ struct Slot {
 impl<'a> Gen<'a> {
     fn text(&self, s: Span) -> &'a str {
         &self.src[s.start as usize..s.end as usize]
+    }
+
+    /// `@json(strict)` on a type: unknown keys, duplicate keys and invalid UTF-8 are errors.
+    fn strict(&self, attrs: &[Attr]) -> bool {
+        attrs.iter().any(|a| {
+            a.name.text(self.src) == "json"
+                && a.args.iter().any(|e| self.text(e.span).trim() == "strict")
+        })
+    }
+
+    /// The key of a field in the document: the text of `@json("key")`, or the field's own name.
+    fn json_key(&self, attrs: &[Attr], name: &str) -> String {
+        for a in attrs.iter().filter(|a| a.name.text(self.src) == "json") {
+            for e in &a.args {
+                let t = self.text(e.span).trim();
+                if t.len() >= 2 && t.starts_with('"') && t.ends_with('"') {
+                    return t[1..t.len() - 1].to_string();
+                }
+            }
+        }
+        name.to_string()
     }
 
     fn fail(&mut self, at: Span, message: &str) {
@@ -282,7 +305,13 @@ impl<'a> Gen<'a> {
     }
 
     /// The statements that read `slots` out of the object `v` and make the value with `ctor`.
-    fn object_body(&mut self, owner: &str, slots: &[Slot], ctor: &str) -> Option<String> {
+    fn object_body(
+        &mut self,
+        owner: &str,
+        slots: &[Slot],
+        ctor: &str,
+        strict: bool,
+    ) -> Option<String> {
         let mut b = String::new();
         let mut args = Vec::new();
         for (i, s) in slots.iter().enumerate() {
@@ -303,12 +332,20 @@ impl<'a> Gen<'a> {
                 let _ = write!(
                     b,
                     "            const i{i} = v.indexOf(\"{}\")\n            if i{i} < 0 {{ return err(v.missing(\"{}\", at)) }}\n            at.push!(i{i})\n            const f{i} = {dec}(values[i{i}], inout at)?\n            at.pop!()\n",
-                    s.name, s.name
+                    s.key, s.key
                 );
             }
             args.push(format!("{}: f{i}", s.name));
         }
         let made = ctor.replace("$", &args.join(", "));
+        if strict {
+            let known: Vec<String> = slots.iter().map(|s| format!("\"{}\"", s.key)).collect();
+            let _ = writeln!(
+                b,
+                "            const known = json.rejectUnknown(v, [{}], inout at)?",
+                known.join(", ")
+            );
+        }
         Some(format!(
             "    switch v {{\n        case .fields(_, values):\n{b}            ok({made})\n        case _: err(v.mismatch(\"an object\", at))\n    }}\n"
         ))
@@ -433,7 +470,7 @@ impl<'a> Gen<'a> {
         let mut values = Vec::new();
         for s in slots {
             let enc = self.encoder(&s.ty, &format!("jsonEncode_{owner}_{}", s.name))?;
-            keys.push(format!("\"{}\"", s.name));
+            keys.push(format!("\"{}\"", s.key));
             values.push(format!("{enc}({access}{})", s.name));
         }
         Some(format!(
@@ -465,6 +502,7 @@ pub fn {name}Encode(x: {name}) -> string = {name}ToJson(x).encode()
             .filter_map(|m| match m {
                 Member::Field(f) => Some(Slot {
                     name: f.name.text(self.src).to_string(),
+                    key: self.json_key(&f.attrs, f.name.text(self.src)),
                     ty: f.ty.clone(),
                     default: None,
                 }),
@@ -515,6 +553,7 @@ pub fn {name}Encode(x: {name}) -> string = {name}ToJson(x).encode()
                     .zip(labels.iter())
                     .map(|(f, l)| Slot {
                         name: l.clone(),
+                        key: l.clone(),
                         ty: f.ty.clone(),
                         default: None,
                     })
@@ -551,13 +590,14 @@ pub fn {name}Encode(x: {name}) -> string = {name}ToJson(x).encode()
         self.encode_entry(&name);
     }
 
-    fn decode_entry(&mut self, name: &str) {
+    fn decode_entry(&mut self, name: &str, strict: bool) {
+        let read = if strict { "documentStrict" } else { "document" };
         let _ = write!(
             self.out,
             "
 //~ Reads a `{name}` from JSON text; an error has a path, a line and a column.
 pub fn {name}Decode(text: str) -> {name} ! {ERR} {{
-    const root = json.document(text)?
+    const root = json.{read}(text)?
     var at: [int] = []
     const r = {name}FromJson(root, inout at)
     if r.isErr() {{
@@ -572,7 +612,7 @@ pub fn {name}Decode(text: str) -> {name} ! {ERR} {{
         );
     }
 
-    fn structure(&mut self, d: &TypeDecl, span: Span) {
+    fn structure(&mut self, d: &TypeDecl, span: Span, attrs: &[Attr]) {
         if !d.generics.params.is_empty() {
             self.fail(span, "`fromJson` cannot be derived for a generic type yet");
             return;
@@ -584,6 +624,7 @@ pub fn {name}Decode(text: str) -> {name} ! {ERR} {{
             .filter_map(|m| match m {
                 Member::Field(f) => Some(Slot {
                     name: f.name.text(self.src).to_string(),
+                    key: self.json_key(&f.attrs, f.name.text(self.src)),
                     ty: f.ty.clone(),
                     default: f.default.as_ref().map(|e| self.text(e.span).to_string()),
                 }),
@@ -591,7 +632,8 @@ pub fn {name}Decode(text: str) -> {name} ! {ERR} {{
             })
             .collect();
         let mark = self.out.len();
-        let Some(body) = self.object_body(&name, &slots, &format!("{name} {{ $ }}")) else {
+        let strict = self.strict(attrs);
+        let Some(body) = self.object_body(&name, &slots, &format!("{name} {{ $ }}"), strict) else {
             self.out.truncate(mark);
             return;
         };
@@ -599,10 +641,11 @@ pub fn {name}Decode(text: str) -> {name} ! {ERR} {{
             self.out,
             "\n//~ Reads a `{name}` from a parsed document; `at` is the place being read.\npub fn {name}FromJson(v: json.value, inout at: [int]) -> {name} ! {ERR} {{\n{body}}}\n"
         );
-        self.decode_entry(&name);
+        self.decode_entry(&name, strict);
     }
 
-    fn enumeration(&mut self, d: &EnumDecl, span: Span) {
+    fn enumeration(&mut self, d: &EnumDecl, span: Span, attrs: &[Attr]) {
+        let strict = self.strict(attrs);
         if !d.generics.params.is_empty() {
             self.fail(span, "`fromJson` cannot be derived for a generic type yet");
             return;
@@ -625,21 +668,26 @@ pub fn {name}Decode(text: str) -> {name} ! {ERR} {{
                 let slots: Vec<Slot> = v
                     .fields
                     .iter()
-                    .map(|f| Slot {
-                        name: f
+                    .map(|f| {
+                        let label = f
                             .label
                             .as_ref()
                             .map(|l| l.text(self.src))
                             .unwrap_or("")
-                            .to_string(),
-                        ty: f.ty.clone(),
-                        default: None,
+                            .to_string();
+                        Slot {
+                            key: label.clone(),
+                            name: label,
+                            ty: f.ty.clone(),
+                            default: None,
+                        }
                     })
                     .collect();
                 let Some(body) = self.object_body(
                     &format!("{name}_{vname}"),
                     &slots,
                     &format!("{name}.{vname}($)"),
+                    strict,
                 ) else {
                     continue;
                 };
@@ -683,7 +731,7 @@ pub fn {name}FromJson(v: json.value, inout at: [int]) -> {name} ! {ERR} {{
 }}
 "
         );
-        self.decode_entry(&name);
+        self.decode_entry(&name, strict);
     }
 }
 
@@ -724,6 +772,21 @@ mod tests {
             "map<string, int>"
         );
         assert!(message.contains("cannot read a field"));
+    }
+
+    #[test]
+    fn json_attributes_rename_fields_and_make_a_type_strict() {
+        let e = expansion(
+            "@derive(fromJson)\n@json(strict)\nstruct p { @json(\"user_id\")\n id: int }",
+        );
+        assert!(e.errors.is_empty());
+        assert!(e.text.contains("v.indexOf(\"user_id\")"));
+        assert!(e.text.contains("f0"));
+        assert!(e.text.contains("id: f0"));
+        assert!(e.text.contains("json.rejectUnknown(v, [\"user_id\"]"));
+        assert!(e.text.contains("json.documentStrict(text)"));
+        let plain = expansion("@derive(fromJson)\nstruct p { id: int }");
+        assert!(!plain.text.contains("rejectUnknown"));
     }
 
     #[test]

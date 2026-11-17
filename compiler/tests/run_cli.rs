@@ -279,6 +279,17 @@ fn sleep_and_select_timeouts_use_the_clock() {
 }
 
 #[test]
+fn time_arithmetic_stops_on_overflow_and_checked_forms_do_not() {
+    let src = "import std.time\n\nfn main() {\n    print(time.longest().checkedAdd(time.nanos(1)) == none)\n    print(time.longest() + time.nanos(1))\n}\n";
+    for flags in args_modes() {
+        let (out, err, code) = run_with(flags, src, &[], "");
+        assert_eq!(out, "true\n", "{flags:?}: {err}");
+        assert!(err.contains("stopped: "), "{flags:?}: {err}");
+        assert_eq!(code, 1, "{flags:?}");
+    }
+}
+
+#[test]
 fn atomics_give_the_old_value_and_share_through_a_copy() {
     let src = "fn main() {\n    const a = atomic(5)\n    print(a.add(3))\n    print(a.load())\n    print(a.swap(10))\n    print(a.compareSwap(10, 11))\n    print(a.compareSwap(10, 12))\n    print(a.load())\n    a.store(1)\n    const b = copy a\n    b.add(4)\n    print(a.load())\n}\n";
     for flags in args_modes() {

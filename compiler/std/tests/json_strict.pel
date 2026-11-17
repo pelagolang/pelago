@@ -1,0 +1,64 @@
+/// `@json("key")` renames a field in the document; `@json(strict)` refuses unknown keys, repeated keys and bad UTF-8.
+import std.json
+import { json_error } = std.json
+
+@derive(fromJson, toJson)
+struct user {
+    @json("user_id")
+    id: int
+    @json("display-name")
+    name: string
+    admin: bool = false
+}
+
+@derive(fromJson)
+@json(strict)
+struct limits {
+    @json("max_conn")
+    maxConn: int
+    note: string?
+}
+
+@derive(fromJson)
+@json(strict)
+enum job {
+    idle
+    run(cmd: string, times: int)
+}
+
+fn show(r: user ! json_error) -> string {
+    switch r {
+        case ok(u): "ok #(u.id) #(u.name) #(u.admin)"
+        case err(e): "error #e"
+    }
+}
+
+fn showLimits(r: limits ! json_error) -> string {
+    switch r {
+        case ok(l): "ok #(l.maxConn)"
+        case err(e): "error #e"
+    }
+}
+
+fn showJob(r: job ! json_error) -> string {
+    switch r {
+        case ok(_): "ok"
+        case err(e): "error #e"
+    }
+}
+
+fn main() {
+    print(show(userDecode("{\"user_id\": 7, \"display-name\": \"Ann\"}")))
+    print(show(userDecode("{\"id\": 7, \"display-name\": \"Ann\"}")))
+    print(show(userDecode("{\"user_id\": 7, \"display-name\": \"Ann\", \"extra\": 1}")))
+    print(userEncode(user { id: 3, name: "Bo", admin: true }))
+    print(showLimits(limitsDecode("{\"max_conn\": 4}")))
+    print(showLimits(limitsDecode("{\"max_conn\": 4, \"extra\": 1}")))
+    print(showLimits(limitsDecode("{\"max_conn\": 4,\n \"max_conn\": 5}")))
+    var bad = "{\"max_conn\": 4, \"note\": \"a"
+    bad.pushByte!(255.wrapToByte())
+    bad += "\"}"
+    print(showLimits(limitsDecode(bad)))
+    print(showJob(jobDecode("{\"run\": {\"cmd\": \"ls\", \"times\": 2}}")))
+    print(showJob(jobDecode("{\"run\": {\"cmd\": \"ls\", \"times\": 2, \"x\": 0}}")))
+}

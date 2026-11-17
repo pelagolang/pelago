@@ -34,6 +34,10 @@ fn real_main() {
         }
         Some("grammar") => print!("{}", pelago::editors::textmate_grammar()),
         Some("tokens") => print_punct(),
+        Some("std") => match args.next().as_deref() {
+            Some("--json") => println!("{}", pelago::package::std_tree_json()),
+            _ => print!("{}", pelago::package::std_tree_text()),
+        },
         Some("lex-bench") => match args.next() {
             Some(path) => lex_bench(&path),
             None => {
@@ -131,6 +135,7 @@ fn usage() {
     eprintln!("commands:");
     eprintln!("  keywords   list every keyword, hard ones first");
     eprintln!("  tokens     list operators and punctuation");
+    eprintln!("  std [--json]  list the standard library modules by group");
     eprintln!("  lex-bench <file>  time the lexer alone on a file");
     eprintln!("  parse [--no-docs] <file>  print the syntax tree and any errors (`-` reads standard input)");
     eprintln!("  ir <path>  check, lower to the IR, verify and print it");
