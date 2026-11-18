@@ -135,7 +135,9 @@ Built as listed. Changes from the plan: the zone-aware functions are `formatZone
   (zone name) and `'quoted text'`. English names only in version 1 (no locale tables; `std` has no locale story yet).
 - A bad pattern is a `time_error` at the first use, never a stop. The same patterns format and parse (round trip is a test).
 
-### T5: sleep, timers and concurrency
+### T5: sleep, timers and concurrency (built)
+
+Built: `time.sleepUntil(instant)`, `time.deadline(d)`, `instant.hasPassed()`, `time.startStopwatch()` with `elapsed`, `lap!`, `restart!`, and `time.ticker(period)` (a `receiver<instant>`: fixed rhythm from the schedule, missed ticks skipped, stops when the receiver is dropped, works inside `select` beside `case timeout(...)`). `time.timeout` was not added: `select` with `case timeout` is the primitive and the examples do not need a second one. Notes: a task started inside a function needs `rtForgetTask` or its handle's drop cancels it, and what a spawned closure uses must be captured with `sink` (a plain capture still points into the frame that returned: two tickers then shared one period); the interpreter's end-of-run leak report counts the detached ticker task.
 
 - `time.sleepUntil(instant)`, `time.deadline(d) -> instant`, `instant.hasPassed()`.
 - `time.ticker(period) -> chan<instant>`-style receiver that works inside `select` next to `case timeout(...)`, built on tasks and the scheduler's timer queue

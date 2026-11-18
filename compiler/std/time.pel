@@ -137,6 +137,72 @@ pub fn sinceEpoch() -> duration ! io_error = read(0)
 //~ wait until the system has a sleep call). A target with no clock stops the program, as `now()` would return an error.
 pub fn sleep(d: duration) = rtSleepNanos(d.nanos)
 
+//~ Stops the running task until `when` (returns at once when it has already passed). A task that sleeps lets the
+//~ others run; `sleepUntil` is the way to keep a fixed rhythm, because it does not add up the time the work took.
+pub fn sleepUntil(when: instant) -> void ! io_error {
+    const left = when.since(now()?)
+    if left > zero() { sleep(left) }
+}
+
+//~ The instant `d` from now, for `sleepUntil` and `hasPassed`.
+pub fn deadline(d: duration) -> instant ! io_error = ok((now()?).plus(d))
+
+/// A stopwatch: the time since it started, and laps.
+pub struct stopwatch {
+    started: instant,
+    lapped: instant
+}
+
+//~ A stopwatch started now.
+pub fn startStopwatch() -> stopwatch ! io_error {
+    const t = now()?
+    ok(stopwatch { started: t, lapped: t })
+}
+
+impl stopwatch {
+    //~ The time since the stopwatch started.
+    fn elapsed(self) -> duration ! io_error = ok((now()?).since(self.started))
+
+    //~ The time since the last lap (or the start), and starts the next lap.
+    fn lap(inout self) -> duration ! io_error {
+        const t = now()?
+        const d = t.since(self.lapped)
+        self.lapped = t
+        ok(d)
+    }
+
+    //~ Starts again from now.
+    fn restart(inout self) -> void ! io_error {
+        const t = now()?
+        self.started = t
+        self.lapped = t
+    }
+}
+
+//~ A receiver that gets the instant of each tick, every `period` (which must be positive), until you drop it. The
+//~ ticks keep a fixed rhythm (the next is `period` after the last was *due*, not after it was received); when the
+//~ receiver is slow the ticks it missed are skipped, never queued. Use it in a `select` beside `case timeout(...)`.
+pub fn ticker(period: duration) -> receiver<instant> ! io_error {
+    if period <= zero() { panic("ticker: the period must be positive") }
+    const (tx, rx) = chan<instant>(1)
+    const first = (now()?).plus(period)
+    /// Detached: a task handle that is dropped would cancel the task when this function returns.
+    rtForgetTask(sink spawn([sink tx, sink first, sink period] () ~> {
+        var next = first
+        while true {
+            if sleepUntil(next).isErr() { return }
+            const t = now()
+            if t.isErr() { return }
+            const at = t.or(next)
+            if tx.send(at).isErr() { return }
+            next = next.plus(period)
+            /// Behind the schedule (a slow receiver, a long sleep): skip to the next tick that is still ahead.
+            while next <= at { next = next.plus(period) }
+        }
+    }))
+    ok(rx)
+}
+
 impl duration {
     //~ Whole nanoseconds.
     fn asNanos(self) -> int = self.nanos
@@ -229,6 +295,9 @@ impl duration {
 }
 
 impl instant {
+    //~ Whether this instant is now or in the past.
+    fn hasPassed(self) -> bool ! io_error = ok((now()?) >= self)
+
     //~ How long after `earlier` this instant is (negative when it is before it).
     fn since(self, earlier: instant) -> duration = self.at - earlier.at
 

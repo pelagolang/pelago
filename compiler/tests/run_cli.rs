@@ -307,6 +307,20 @@ fn zone_database_matches_python_where_the_system_has_one() {
 }
 
 #[test]
+fn time_timers_sleep_and_tick() {
+    // A ticker is a detached task that is still running when `main` ends, so the interpreter's leak check
+    // (which the library suites apply) cannot hold for it; the program runs here on every backend instead.
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("std/tests/system");
+    let src = std::fs::read_to_string(dir.join("time_timers.pel")).unwrap();
+    let expected = std::fs::read_to_string(dir.join("time_timers.out")).unwrap();
+    for flags in args_modes() {
+        let (out, err, code) = run_with(flags, &src, &[], "");
+        assert_eq!(out, expected, "{flags:?}: {err}");
+        assert_eq!(code, 0, "{flags:?}");
+    }
+}
+
+#[test]
 fn atomics_give_the_old_value_and_share_through_a_copy() {
     let src = "fn main() {\n    const a = atomic(5)\n    print(a.add(3))\n    print(a.load())\n    print(a.swap(10))\n    print(a.compareSwap(10, 11))\n    print(a.compareSwap(10, 12))\n    print(a.load())\n    a.store(1)\n    const b = copy a\n    b.add(4)\n    print(a.load())\n}\n";
     for flags in args_modes() {
