@@ -16,7 +16,6 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 | Doing | [A-14](cards/A-14-pool-and-links.md) | Pools and narrow links: `pool<T, W>`, `link<T, W>` (1, 2 or 4 byte indexes; plan in `docs/design/narrow-links.md`) | L |
 | Doing | [A-15](cards/A-15-iter-fusion.md) | Lazy iterators by fusion in `for` loops (plan in `docs/design/iter.md`) | M |
 | Doing | [S-15](cards/S-15-std-library.md) | Standard library breadth like Rust's `std`: grouped modules, collections, numbers, fmt, io, sync, process, net (plan in `docs/plans/std-gap-plan.md`) | XL |
-| Doing | [S-16](cards/S-16-time.md) | Time library: `moment`, calendar, time zones (IANA), formatting and parsing, timers (plan in `docs/design/time.md`) | XL |
 | Done | [A-09](cards/A-09-native-backend.md) | Native backend: x86-64 machine code, ELF and PE, straight from the IR (all stages and the leftovers: buffered print, float semantics, stack guard) | XL |
 
 ## Track B: tooling and identity
@@ -26,6 +25,7 @@ Last updated when every card on the first list was finished (A-01 to A-08 and B-
 | Ready (Harden) | [B-05](cards/B-05-islet-yaml-port.md) | Port the Islet YAML reader to Pelago: first step toward writing Islet in Pelago; bootstrap stays on the Rust Islet until stores and locks are byte-identical (BLAKE3 hasher later) | M |
 | Done | [S-12](cards/S-12-regex-leftovers.md) | Regex leftovers: limit on referenced groups, the tier in `pelago check`, a budget helper | S |
 | Done | [S-13](cards/S-13-regex-unicode.md) | Regex Unicode mode: code points as byte automata, Unicode classes and folding | M |
+| Done | [S-16](cards/S-16-time.md) | Time library: `moment`, calendar, time zones (IANA), formatting and parsing, timers (plan in `docs/design/time.md`) | XL |
 
 ## Shelf (parked on purpose)
 
