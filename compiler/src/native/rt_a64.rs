@@ -2286,6 +2286,10 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         leave(a);
         a.ret();
         a.bind(after);
+        // This routine uses `x23` too (the `stat` record, then the result), and callers keep values there:
+        // save it, like the other routines that use more than `enter` does.
+        a.sub_ri(SP, SP, 16);
+        a.str(X23, SP, 0, 8);
         // Redo the entry: `start` made it before the jump, which skipped over the helper only.
         // x19 the path, x20 the second path (`rename`), x21 `aux`, x22 the operation, x23 the `stat` record.
         a.mov_rr(X22, X0);
@@ -2389,6 +2393,8 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         a.bl(rt.free);
         a.bind(no_free2);
         a.mov_rr(X0, X23);
+        a.ldr(X23, SP, 0, 8);
+        a.add_ri(SP, SP, 16);
         finish(a);
         a.bind(bad_op);
         a.mov_ri(X23, -2);
