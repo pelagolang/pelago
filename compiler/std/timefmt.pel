@@ -1,0 +1,745 @@
+/// Time as text: RFC 3339 and ISO 8601 (the forms for data), RFC 2822 and the HTTP date (the forms for mail and
+/// headers) and your own patterns. Every function that reads text returns a `time_error`, never stops.
+///
+/// ```
+/// import std.time
+/// import std.calendar
+/// import std.zone
+/// import std.timefmt
+///
+/// fn main() -> void ! time_error {
+///     const z = timefmt.parseRfc3339("2026-11-17T09:47:23.5+01:00")?
+///     print(z, z.moment())                                            /// 2026-11-17T09:47:23.5+01:00 1794905243.500000000
+///     print(timefmt.formatZoned(z, "EEEE d MMMM yyyy, HH:mm xxx")?)    /// Tuesday 17 November 2026, 09:47 +01:00
+///     const d = timefmt.parse("17/11/2026 9:05 PM", "dd/MM/yyyy h:mm a")?
+///     print(d)                                                         /// 2026-11-17T21:05:00
+///     print(timefmt.parseDuration("PT1H30M")?, timefmt.formatDuration(time.minutes(90)))
+/// }
+/// ```
+///
+/// Patterns use letters that read like what they print (the same letters format and parse), in the style of
+/// Unicode's date patterns:
+///
+/// | letters | meaning | example |
+/// |---|---|---|
+/// | `yyyy` `yy` | year (4 digits or 2) | `2026` `26` |
+/// | `M` `MM` `MMM` `MMMM` | month: number, two digits, name short, name long | `3` `03` `Mar` `March` |
+/// | `d` `dd` | day of the month | `7` `07` |
+/// | `EEE` `EEEE` | weekday name, short or long (read and checked on parse) | `Tue` `Tuesday` |
+/// | `H` `HH` / `h` `hh` | hour 0 to 23 / 1 to 12 | `9` `09` |
+/// | `a` | `AM` or `PM` (with `h`) | `PM` |
+/// | `m` `mm` / `s` `ss` | minute / second | `05` |
+/// | `S` to `SSSSSSSSS` | fraction of a second, that many digits | `500` |
+/// | `x` `xx` `xxx` | offset `+01`, `+0100`, `+01:00` | `+01:00` |
+/// | `X` `XX` `XXX` | the same, `Z` for zero | `Z` |
+/// | `z` `VV` | zone abbreviation, zone name (format only) | `CET` `Europe/Paris` |
+///
+/// Text between single quotes is literal (`'at'`, and `''` is a quote); any other non-letter is literal. A letter
+/// that is not in the table is a `time_error`. English names only. Parsing is strict: the whole text must be used,
+/// numbers have the widths the pattern gives and the date must exist. A pattern with `X` or `x` can be read into a
+/// `zoned` (`parseZoned`); one without gives a `date_time` (`parse`).
+
+import std.time
+import std.calendar
+import std.zone
+import { duration, moment, time_error, time_kind } = std.time
+import { date, date_time, time_of_day, weekday } = std.calendar
+import { time_zone, zoned } = std.zone
+
+fn bad(sink message: string) -> time_error = time.timeError(time_kind.parse, sink message)
+
+fn pad(n: int, width: int) -> string {
+    var s = "#(n)"
+    while s.len() < width { s = "0" + s }
+    s
+}
+
+fn monthNames() -> [string] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December"
+]
+
+fn dayNames() -> [string] = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+]
+
+fn shortName(name: str) -> string {
+    var s = ""
+    var n = 0
+    for b of name.bytes() {
+        if n < 3 { s.pushByte!(b) }
+        n += 1
+    }
+    s
+}
+
+fn offsetText(secs: int, count: int, zeroIsZ: bool) -> string {
+    if secs == 0 && zeroIsZ { return "Z" }
+    const a = secs.abs()
+    const sign = secs < 0 ? "-" : "+"
+    const hh = pad(a / 3600, 2)
+    const mm = pad(a % 3600 / 60, 2)
+    if count == 1 { return a % 3600 == 0 ? "#(sign)#(hh)" : "#(sign)#(hh)#(mm)" }
+    if count == 2 { return "#(sign)#(hh)#(mm)" }
+    "#(sign)#(hh):#(mm)"
+}
+
+/// ---------------------------------------------------------------------------------------------
+/// Formatting
+
+/// What a pattern can print: a local date and time, plus (when known) the zone's offset, abbreviation and name.
+fn render(
+    dt: date_time,
+    hasZone: bool,
+    offset: int,
+    abbr: str,
+    zname: str,
+    pattern: str,
+) -> string ! time_error {
+    const p = pattern.bytes().toList()
+    var out = ""
+    var i = 0
+    while i < p.len() {
+        const c = p[i] to int
+        if c == 39 {
+            /// Quoted literal; two quotes are one quote.
+            i += 1
+            if i < p.len() && (p[i] to int) == 39 {
+                out.pushByte!(p[i])
+                i += 1
+                continue
+            }
+            while i < p.len() && (p[i] to int) != 39 {
+                out.pushByte!(p[i])
+                i += 1
+            }
+            if i >= p.len() { return err(bad("unterminated quote in pattern: #(pattern)")) }
+            i += 1
+            continue
+        }
+        const isLetter = (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+        if !isLetter {
+            out.pushByte!(p[i])
+            i += 1
+            continue
+        }
+        var n = 0
+        while i + n < p.len() && (p[i + n] to int) == c { n += 1 }
+        i += n
+        const d = dt.date()
+        const t = dt.timeOfDay()
+        if c == 121 {
+            /// y
+            if n == 2 { out = out + pad(d.year() % 100, 2) } else { out = out + (d.year() < 0 ? "-" : "") + pad(d.year().abs(), n) }
+        } else if c == 77 {
+            /// M
+            if n <= 2 { out = out + pad(d.month(), n) } else if n == 3 { out = out + shortName(monthNames()[d.month() - 1]) } else if n == 4 { out = out + monthNames()[d.month() - 1] } else { return err(bad("too many M in pattern: #(pattern)")) }
+        } else if c == 100 {
+            if n > 2 { return err(bad("too many d in pattern: #(pattern)")) }
+            out = out + pad(d.day(), n)
+        } else if c == 69 {
+            const name = dayNames()[d.weekday().isoNumber() - 1]
+            if n <= 3 { out = out + shortName(name) } else if n == 4 { out = out + name } else { return err(bad("too many E in pattern: #(pattern)")) }
+        } else if c == 72 {
+            if n > 2 { return err(bad("too many H in pattern: #(pattern)")) }
+            out = out + pad(t.hour(), n)
+        } else if c == 104 {
+            if n > 2 { return err(bad("too many h in pattern: #(pattern)")) }
+            const h = t.hour() % 12
+            out = out + pad(h == 0 ? 12 : h, n)
+        } else if c == 97 {
+            if n != 1 { return err(bad("a is written once in a pattern: #(pattern)")) }
+            out = out + (t.hour() < 12 ? "AM" : "PM")
+        } else if c == 109 {
+            if n > 2 { return err(bad("too many m in pattern: #(pattern)")) }
+            out = out + pad(t.minute(), n)
+        } else if c == 115 {
+            if n > 2 { return err(bad("too many s in pattern: #(pattern)")) }
+            out = out + pad(t.second(), n)
+        } else if c == 83 {
+            if n > 9 { return err(bad("too many S in pattern: #(pattern)")) }
+            var f = pad(t.nanos(), 9)
+            var cut = ""
+            var k = 0
+            for b of f.bytes() {
+                if k < n { cut.pushByte!(b) }
+                k += 1
+            }
+            out = out + cut
+        } else if c == 120 || c == 88 {
+            if n > 3 { return err(bad("too many x in pattern: #(pattern)")) }
+            if !hasZone { return err(bad("the pattern needs an offset, and there is none: #(pattern)")) }
+            out = out + offsetText(offset, n, c == 88)
+        } else if c == 122 {
+            if !hasZone { return err(bad("the pattern needs a zone, and there is none: #(pattern)")) }
+            out = out + abbr
+        } else if c == 86 {
+            if n != 2 { return err(bad("zone names are VV in a pattern: #(pattern)")) }
+            if !hasZone { return err(bad("the pattern needs a zone, and there is none: #(pattern)")) }
+            out = out + zname
+        } else {
+            return err(bad("unknown pattern letter in: #(pattern)"))
+        }
+    }
+    ok(out)
+}
+
+//~ A date and time as `pattern` says (no zone, so `x`, `X`, `z` and `VV` are errors).
+pub fn format(dt: date_time, pattern: str) -> string ! time_error = render(
+    dt,
+    false,
+    0,
+    "",
+    "",
+    pattern,
+)
+
+//~ A `zoned` as `pattern` says.
+pub fn formatZoned(z: zoned, pattern: str) -> string ! time_error {
+    render(z.dateTime(), true, z.offsetSeconds(), z.abbreviation(), z.zone().name(), pattern)
+}
+
+//~ RFC 3339 / ISO 8601: `2026-11-17T09:47:23+01:00`, `...Z` for UTC itself, with the fraction when there is one.
+pub fn rfc3339(z: zoned) -> string = "#(z)"
+
+//~ RFC 2822 (mail): `Tue, 17 Nov 2026 09:47:23 +0100`.
+pub fn rfc2822(z: zoned) -> string {
+    const dt = z.dateTime()
+    const t = dt.timeOfDay()
+    const d = dt.date()
+    "#(shortName(dayNames()[d.weekday().isoNumber() - 1])), #(d.day()) #(shortName(monthNames()[d.month() - 1])) #(pad(d.year(), 4)) #(pad(t.hour(), 2)):#(pad(t.minute(), 2)):#(pad(t.second(), 2)) #(offsetText(z.offsetSeconds(), 2, false))"
+}
+
+//~ The HTTP date (RFC 9110, always GMT): `Tue, 17 Nov 2026 09:47:23 GMT`.
+pub fn httpDate(m: moment) -> string {
+    const dt = calendar.fromMoment(m)
+    const t = dt.timeOfDay()
+    const d = dt.date()
+    "#(shortName(dayNames()[d.weekday().isoNumber() - 1])), #(pad(d.day(), 2)) #(shortName(monthNames()[d.month() - 1])) #(pad(d.year(), 4)) #(pad(t.hour(), 2)):#(pad(t.minute(), 2)):#(pad(t.second(), 2)) GMT"
+}
+
+//~ A duration as ISO 8601 (`PT1H30M`, `P1DT12H`, `PT0.5S`, `-PT5S`): days, hours, minutes and seconds only.
+pub fn formatDuration(d: duration) -> string {
+    if d.isZero() { return "PT0S" }
+    var n = d.asNanos()
+    var s = ""
+    if n == -9223372036854775808 { return "-P106751DT23H47M16.854775808S" }
+    if n < 0 {
+        s = "-"
+        n = 0 - n
+    }
+    s = s + "P"
+    const days = n / 86400000000000
+    n = n % 86400000000000
+    if days > 0 { s = s + "#(days)D" }
+    if n > 0 {
+        s = s + "T"
+        const h = n / 3600000000000
+        n = n % 3600000000000
+        const m = n / 60000000000
+        n = n % 60000000000
+        if h > 0 { s = s + "#(h)H" }
+        if m > 0 { s = s + "#(m)M" }
+        if n > 0 {
+            var f = n % 1000000000
+            var w = 9
+            while f != 0 && f % 10 == 0 {
+                f /= 10
+                w -= 1
+            }
+            var secs = "#(n / 1000000000)"
+            if f != 0 { secs = secs + "." + pad(f, w) }
+            s = s + secs + "S"
+        }
+    }
+    s
+}
+
+/// ---------------------------------------------------------------------------------------------
+/// Reading
+
+/// A cursor over the bytes of the text being read.
+struct reader {
+    b: [byte],
+    i: int
+}
+
+fn at(r: reader) -> int = r.i < r.b.len() ? (r.b[r.i] to int) : -1
+
+fn isDigit(x: int) -> bool = x >= 48 && x <= 57
+
+/// Reads exactly `width` digits (or, with `width` 0, one or more up to nine).
+fn digits(inout r: reader, width: int) -> int? {
+    var n = 0
+    var k = 0
+    while isDigit(at(r)) && (width == 0 ? k < 9 : k < width) {
+        n = n * 10 + at(r) - 48
+        r.i += 1
+        k += 1
+    }
+    if width == 0 ? k == 0 : k != width { return none }
+    n
+}
+
+fn lower(x: int) -> int = x >= 65 && x <= 90 ? x + 32 : x
+
+/// Whether the text continues with `word` ignoring case; moves past it when so.
+fn word(inout r: reader, w: str) -> bool {
+    const p = w.bytes().toList()
+    if r.i + p.len() > r.b.len() { return false }
+    for k of 0..p.len() {
+        if lower(r.b[r.i + k] to int) != lower(p[k] to int) { return false }
+    }
+    r.i += p.len()
+    true
+}
+
+fn newReader(text: str) -> reader = reader { b: text.bytes().toList(), i: 0 }
+
+/// Everything a pattern can read, before it is checked and put together.
+struct fields {
+    year: int,
+    month: int,
+    day: int,
+    hour: int,
+    hour12: bool,
+    pm: int,
+    minute: int,
+    second: int,
+    nanos: int,
+    hasOffset: bool,
+    offset: int,
+    dow: int
+}
+
+fn emptyFields() -> fields = fields {
+    year: 1970,
+    month: 1,
+    day: 1,
+    hour: 0,
+    hour12: false,
+    pm: -1,
+    minute: 0,
+    second: 0,
+    nanos: 0,
+    hasOffset: false,
+    offset: 0,
+    dow: 0
+}
+
+/// Reads `+hh`, `+hhmm`, `+hh:mm` (as the count says) or `Z`.
+fn readOffset(inout r: reader, count: int, zeroIsZ: bool) -> int? {
+    if zeroIsZ && (at(r) == 90 || at(r) == 122) {
+        r.i += 1
+        return 0
+    }
+    var sign = 1
+    if at(r) == 45 { sign = -1 } else if at(r) != 43 { return none }
+    r.i += 1
+    const h = digits(r!, 2)
+    if h == none { return none }
+    var m = 0
+    if count == 3 {
+        if at(r) != 58 { return none }
+        r.i += 1
+        const mm = digits(r!, 2)
+        if mm == none { return none }
+        m = mm ?? 0
+    } else if count == 2 || (count == 1 && isDigit(at(r))) {
+        const mm = digits(r!, 2)
+        if mm == none { return none }
+        m = mm ?? 0
+    }
+    if (h ?? 0) > 23 || m > 59 { return none }
+    sign * ((h ?? 0) * 3600 + m * 60)
+}
+
+/// Reads one of the names (matched case-insensitively, longest first); the index, or -1.
+fn readName(inout r: reader, names: [string], long: bool) -> int {
+    for k of 0..names.len() {
+        if long {
+            if word(r!, names[k]) { return k }
+        }
+    }
+    for k of 0..names.len() {
+        if !long {
+            if word(r!, shortName(names[k])) { return k }
+        }
+    }
+    -1
+}
+
+fn readFields(text: str, pattern: str) -> fields ! time_error {
+    var r = newReader(text)
+    const p = pattern.bytes().toList()
+    var f = emptyFields()
+    var i = 0
+    while i < p.len() {
+        const c = p[i] to int
+        if c == 39 {
+            i += 1
+            if i < p.len() && (p[i] to int) == 39 {
+                if at(r) != 39 { return err(bad("expected ' in: #(text)")) }
+                r.i += 1
+                i += 1
+                continue
+            }
+            while i < p.len() && (p[i] to int) != 39 {
+                if at(r) != (p[i] to int) { return err(bad("expected the text in quotes in: #(text)")) }
+                r.i += 1
+                i += 1
+            }
+            if i >= p.len() { return err(bad("unterminated quote in pattern: #(pattern)")) }
+            i += 1
+            continue
+        }
+        const isLetter = (c >= 65 && c <= 90) || (c >= 97 && c <= 122)
+        if !isLetter {
+            if at(r) != c { return err(bad("expected the character from the pattern in: #(text)")) }
+            r.i += 1
+            i += 1
+            continue
+        }
+        var n = 0
+        while i + n < p.len() && (p[i + n] to int) == c { n += 1 }
+        i += n
+        if c == 121 {
+            if n == 2 {
+                const v = digits(r!, 2)
+                if v == none { return err(bad("expected a two-digit year in: #(text)")) }
+                f.year = 2000 + (v ?? 0)
+            } else {
+                var neg = false
+                if at(r) == 45 {
+                    neg = true
+                    r.i += 1
+                }
+                const v = digits(r!, n == 1 ? 0 : n)
+                if v == none { return err(bad("expected a year in: #(text)")) }
+                f.year = neg ? 0 - (v ?? 0) : v ?? 0
+            }
+        } else if c == 77 {
+            if n <= 2 {
+                const v = digits(r!, n == 1 ? 0 : 2)
+                if v == none { return err(bad("expected a month in: #(text)")) }
+                f.month = v ?? 1
+            } else if n <= 4 {
+                const k = readName(r!, monthNames(), n == 4)
+                if k < 0 { return err(bad("expected a month name in: #(text)")) }
+                f.month = k + 1
+            } else { return err(bad("too many M in pattern: #(pattern)")) }
+        } else if c == 100 || c == 72 || c == 104 || c == 109 || c == 115 {
+            if n > 2 { return err(bad("too many letters in pattern: #(pattern)")) }
+            const v = digits(r!, n == 1 ? 0 : 2)
+            if v == none { return err(bad("expected a number in: #(text)")) }
+            if c == 100 { f.day = v ?? 1 } else if c == 109 { f.minute = v ?? 0 } else if c == 115 { f.second = v ?? 0 } else {
+                f.hour = v ?? 0
+                f.hour12 = c == 104
+            }
+        } else if c == 69 {
+            if n > 4 { return err(bad("too many E in pattern: #(pattern)")) }
+            const k = readName(r!, dayNames(), n == 4)
+            if k < 0 { return err(bad("expected a weekday name in: #(text)")) }
+            f.dow = k + 1
+        } else if c == 97 {
+            if word(r!, "AM") { f.pm = 0 } else if word(
+                r!,
+                "PM",
+            ) { f.pm = 1 } else { return err(bad("expected AM or PM in: #(text)")) }
+        } else if c == 83 {
+            if n > 9 { return err(bad("too many S in pattern: #(pattern)")) }
+            const v = digits(r!, n)
+            if v == none { return err(bad("expected #(n) fraction digits in: #(text)")) }
+            var scale = 1
+            for k of 0..(9 - n) { scale *= 10 }
+            f.nanos = (v ?? 0) * scale
+        } else if c == 120 || c == 88 {
+            if n > 3 { return err(bad("too many x in pattern: #(pattern)")) }
+            const o = readOffset(r!, n, c == 88)
+            if o == none { return err(bad("expected an offset in: #(text)")) }
+            f.offset = o ?? 0
+            f.hasOffset = true
+        } else if c == 122 || c == 86 {
+            return err(bad("zone names and abbreviations cannot be read; use x or X: #(pattern)"))
+        } else {
+            return err(bad("unknown pattern letter in: #(pattern)"))
+        }
+    }
+    if r.i != r.b.len() { return err(bad("unexpected text after the end of the pattern in: #(text)")) }
+    ok(f)
+}
+
+fn build(f: fields, text: str) -> date_time ! time_error {
+    var hour = f.hour
+    if f.hour12 {
+        if hour < 1 || hour > 12 { return err(bad("hour #(hour) is not 1 to 12 in: #(text)")) }
+        if f.pm < 0 { return err(bad("a 12-hour clock needs AM or PM in: #(text)")) }
+        hour = hour % 12 + (f.pm == 1 ? 12 : 0)
+    } else if f.pm >= 0 {
+        return err(bad("AM or PM needs a 12-hour clock (h) in: #(text)"))
+    }
+    const d = calendar.dateOf(f.year, f.month, f.day)?
+    if f.dow != 0 && d.weekday().isoNumber() != f.dow {
+        return err(bad("#(d) is not a #(dayNames()[f.dow - 1]) in: #(text)"))
+    }
+    ok(calendar.dateTimeOf(d, calendar.timeOf(hour, f.minute, f.second, f.nanos)?))
+}
+
+//~ Reads `text` as a date and time, by `pattern` (no offset: use `parseZoned` for patterns with `x` or `X`).
+pub fn parse(text: str, pattern: str) -> date_time ! time_error {
+    const f = readFields(text, pattern)?
+    if f.hasOffset { return err(bad("the pattern has an offset; read it with parseZoned: #(pattern)")) }
+    build(f, text)
+}
+
+//~ Reads `text` as a `zoned` by `pattern`, which must have `x` or `X`; the zone is that fixed offset.
+pub fn parseZoned(text: str, pattern: str) -> zoned ! time_error {
+    const f = readFields(text, pattern)?
+    if !f.hasOffset { return err(bad("the pattern has no offset (x or X): #(pattern)")) }
+    const dt = build(f, text)?
+    const z = zone.fixed(f.offset)?
+    ok(z.zoned(dt.atUtc().minus(time.seconds(f.offset))))
+}
+
+//~ Reads an RFC 3339 / ISO 8601 date and time with an offset: `2026-11-17T09:47:23Z`, `...T09:47:23.123456789+01:00`
+//~ (`t`, `z` and a space for `T` are accepted, as RFC 3339 allows; a fraction has one to nine digits).
+pub fn parseRfc3339(text: str) -> zoned ! time_error {
+    var r = newReader(text)
+    const y = digits(r!, 4)
+    if y == none || at(r) != 45 { return err(bad("not an RFC 3339 date and time: #(text)")) }
+    r.i += 1
+    const mo = digits(r!, 2)
+    if mo == none || at(r) != 45 { return err(bad("not an RFC 3339 date and time: #(text)")) }
+    r.i += 1
+    const d = digits(r!, 2)
+    if d == none ||
+        !(at(r) == 84 || at(r) == 116 || at(r) == 32) { return err(bad("not an RFC 3339 date and time: #(text)")) }
+    r.i += 1
+    const h = digits(r!, 2)
+    if h == none || at(r) != 58 { return err(bad("not an RFC 3339 date and time: #(text)")) }
+    r.i += 1
+    const mi = digits(r!, 2)
+    if mi == none || at(r) != 58 { return err(bad("not an RFC 3339 date and time: #(text)")) }
+    r.i += 1
+    const s = digits(r!, 2)
+    if s == none { return err(bad("not an RFC 3339 date and time: #(text)")) }
+    var nanos = 0
+    if at(r) == 46 {
+        r.i += 1
+        var k = 0
+        while isDigit(at(r)) {
+            if k >= 9 { return err(bad("more than nine fraction digits in: #(text)")) }
+            nanos = nanos * 10 + at(r) - 48
+            r.i += 1
+            k += 1
+        }
+        if k == 0 { return err(bad("a fraction needs digits in: #(text)")) }
+        while k < 9 {
+            nanos *= 10
+            k += 1
+        }
+    }
+    const off = readOffset(r!, 3, true)
+    if off == none || r.i != r.b.len() { return err(bad("not an RFC 3339 date and time: #(text)")) }
+    const day = calendar.dateOf(y ?? 0, mo ?? 0, d ?? 0)?
+    const dt = calendar.dateTimeOf(day, calendar.timeOf(h ?? 0, mi ?? 0, s ?? 0, nanos)?)
+    const z = (off ?? 0) == 0 ? zone.utc() : zone.fixed(off ?? 0)?
+    ok(z.zoned(dt.atUtc().minus(time.seconds(off ?? 0))))
+}
+
+//~ Reads a date, `2026-11-17`.
+pub fn parseDate(text: str) -> date ! time_error {
+    const f = readFields(text, "yyyy-MM-dd")?
+    calendar.dateOf(f.year, f.month, f.day)
+}
+
+//~ Reads a time of day, `09:47`, `09:47:23` or `09:47:23.5` (one to nine fraction digits).
+pub fn parseTime(text: str) -> time_of_day ! time_error {
+    var r = newReader(text)
+    const h = digits(r!, 2)
+    if h == none || at(r) != 58 { return err(bad("not a time of day: #(text)")) }
+    r.i += 1
+    const m = digits(r!, 2)
+    if m == none { return err(bad("not a time of day: #(text)")) }
+    var s = 0
+    var nanos = 0
+    if at(r) == 58 {
+        r.i += 1
+        const sv = digits(r!, 2)
+        if sv == none { return err(bad("not a time of day: #(text)")) }
+        s = sv ?? 0
+        if at(r) == 46 {
+            r.i += 1
+            var k = 0
+            while isDigit(at(r)) && k < 9 {
+                nanos = nanos * 10 + at(r) - 48
+                r.i += 1
+                k += 1
+            }
+            if k == 0 { return err(bad("a fraction needs digits in: #(text)")) }
+            while k < 9 {
+                nanos *= 10
+                k += 1
+            }
+        }
+    }
+    if r.i != r.b.len() { return err(bad("not a time of day: #(text)")) }
+    calendar.timeOf(h ?? 0, m ?? 0, s, nanos)
+}
+
+//~ Reads a date and time with no offset, `2026-11-17T09:47:23.5` (`T` or a space between).
+pub fn parseDateTime(text: str) -> date_time ! time_error {
+    var cut = -1
+    var k = 0
+    for b of text.bytes() {
+        if cut < 0 && ((b to int) == 84 || (b to int) == 116 || (b to int) == 32) { cut = k }
+        k += 1
+    }
+    if cut < 0 { return err(bad("not a date and time: #(text)")) }
+    var left = ""
+    var right = ""
+    k = 0
+    for b of text.bytes() {
+        if k < cut { left.pushByte!(b) } else if k > cut { right.pushByte!(b) }
+        k += 1
+    }
+    ok(calendar.dateTimeOf(parseDate(left)?, parseTime(right)?))
+}
+
+//~ Reads an RFC 2822 date, `Tue, 17 Nov 2026 09:47:23 +0100` (the weekday part is optional and checked, the seconds
+//~ optional; `GMT` and `UT` mean +0000).
+pub fn parseRfc2822(text: str) -> zoned ! time_error {
+    var r = newReader(text)
+    var dow = 0
+    if !isDigit(at(r)) {
+        const k = readName(r!, dayNames(), false)
+        if k < 0 || at(r) != 44 { return err(bad("not an RFC 2822 date: #(text)")) }
+        dow = k + 1
+        r.i += 1
+        while at(r) == 32 { r.i += 1 }
+    }
+    const d = digits(r!, 0)
+    if d == none || at(r) != 32 { return err(bad("not an RFC 2822 date: #(text)")) }
+    while at(r) == 32 { r.i += 1 }
+    const mo = readName(r!, monthNames(), false)
+    if mo < 0 || at(r) != 32 { return err(bad("not an RFC 2822 date: #(text)")) }
+    while at(r) == 32 { r.i += 1 }
+    const y = digits(r!, 4)
+    if y == none || at(r) != 32 { return err(bad("not an RFC 2822 date: #(text)")) }
+    while at(r) == 32 { r.i += 1 }
+    const h = digits(r!, 2)
+    if h == none || at(r) != 58 { return err(bad("not an RFC 2822 date: #(text)")) }
+    r.i += 1
+    const mi = digits(r!, 2)
+    if mi == none { return err(bad("not an RFC 2822 date: #(text)")) }
+    var s = 0
+    if at(r) == 58 {
+        r.i += 1
+        const sv = digits(r!, 2)
+        if sv == none { return err(bad("not an RFC 2822 date: #(text)")) }
+        s = sv ?? 0
+    }
+    if at(r) != 32 { return err(bad("not an RFC 2822 date: #(text)")) }
+    while at(r) == 32 { r.i += 1 }
+    var off = 0
+    if word(r!, "GMT") || word(r!, "UT") {
+        off = 0
+    } else {
+        const o = readOffset(r!, 2, false)
+        if o == none { return err(bad("not an RFC 2822 date: #(text)")) }
+        off = o ?? 0
+    }
+    if r.i != r.b.len() { return err(bad("not an RFC 2822 date: #(text)")) }
+    const day = calendar.dateOf(y ?? 0, mo + 1, d ?? 0)?
+    if dow != 0 &&
+        day.weekday().isoNumber() != dow { return err(bad("#(day) is not a #(dayNames()[dow - 1]) in: #(text)")) }
+    const dt = calendar.dateTimeOf(day, calendar.timeOf(h ?? 0, mi ?? 0, s, 0)?)
+    const z = off == 0 ? zone.utc() : zone.fixed(off)?
+    ok(z.zoned(dt.atUtc().minus(time.seconds(off))))
+}
+
+//~ Reads an HTTP date, `Tue, 17 Nov 2026 09:47:23 GMT`, as a moment.
+pub fn parseHttpDate(text: str) -> moment ! time_error {
+    const z = parseRfc2822(text)?
+    ok(z.moment())
+}
+
+//~ Reads an ISO 8601 duration of days, hours, minutes and seconds: `PT1H30M`, `P1DT12H`, `PT0.25S`, `-PT5S`. Years
+//~ and months are not a fixed length, so they are a `time_error`.
+pub fn parseDuration(text: str) -> duration ! time_error {
+    var r = newReader(text)
+    var sign = 1
+    if at(r) == 45 {
+        sign = -1
+        r.i += 1
+    } else if at(r) == 43 {
+        r.i += 1
+    }
+    if at(r) != 80 { return err(bad("not an ISO 8601 duration: #(text)")) }
+    r.i += 1
+    var total = 0
+    var inTime = false
+    var any = false
+    while r.i < r.b.len() {
+        if at(r) == 84 {
+            if inTime { return err(bad("not an ISO 8601 duration: #(text)")) }
+            inTime = true
+            r.i += 1
+            continue
+        }
+        const whole = digits(r!, 0)
+        if whole == none { return err(bad("not an ISO 8601 duration: #(text)")) }
+        var frac = 0
+        var fracDigits = 0
+        if at(r) == 46 {
+            r.i += 1
+            while isDigit(at(r)) && fracDigits < 9 {
+                frac = frac * 10 + at(r) - 48
+                r.i += 1
+                fracDigits += 1
+            }
+            if fracDigits == 0 { return err(bad("not an ISO 8601 duration: #(text)")) }
+        }
+        var unit = 0
+        const u = at(r)
+        r.i += 1
+        if u == 68 &&
+            !inTime { unit = 86400000000000 } else if u == 72 &&
+            inTime { unit = 3600000000000 } else if u == 77 &&
+            inTime { unit = 60000000000 } else if u == 83 &&
+            inTime { unit = 1000000000 } else if (u == 89 || u == 87 || u == 77) &&
+            !inTime {
+            return err(bad("years, months and weeks are not a fixed length; use days: #(text)"))
+        } else {
+            return err(bad("not an ISO 8601 duration: #(text)"))
+        }
+        if fracDigits > 0 &&
+            u != 83 { return err(bad("only seconds can have a fraction: #(text)")) }
+        var scale = 1
+        for k of 0..(9 - fracDigits) { scale *= 10 }
+        const part = (whole ?? 0).checkedMul(unit)
+        if part == none { return err(time.timeError(time_kind.range, "the duration does not fit: #(text)")) }
+        const sum = total.checkedAdd((part ?? 0) + frac * scale)
+        if sum == none { return err(time.timeError(time_kind.range, "the duration does not fit: #(text)")) }
+        total = sum ?? 0
+        any = true
+    }
+    if !any { return err(bad("not an ISO 8601 duration: #(text)")) }
+    ok(time.nanos(sign * total))
+}

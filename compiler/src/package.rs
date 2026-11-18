@@ -47,6 +47,7 @@ pub const STD_MODULES: &[(&str, &str)] = &[
     ("time", include_str!("../std/time.pel")),
     ("calendar", include_str!("../std/calendar.pel")),
     ("zone", include_str!("../std/zone.pel")),
+    ("timefmt", include_str!("../std/timefmt.pel")),
     ("random", include_str!("../std/random.pel")),
     ("hash", include_str!("../std/hash.pel")),
     ("sha2", include_str!("../std/sha2.pel")),
@@ -109,7 +110,7 @@ pub const STD_GROUPS: &[(&str, &str, &str, &[&str])] = &[
         "time",
         "Time",
         "clocks, durations, calendar dates, time zones and formatting",
-        &["time", "calendar", "zone"],
+        &["time", "calendar", "zone", "timefmt"],
     ),
     (
         "random",
