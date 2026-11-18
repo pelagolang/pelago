@@ -1,6 +1,6 @@
 Id: S-16
 Title: Time library: moments, calendar, zones, formatting, timers
-Column: Doing
+Column: Done
 Order: -
 Depends on: clocks on every backend (done, #276, #285)
 Size: XL
@@ -19,6 +19,9 @@ One PR per batch (design section 5):
 3. **T3** `std.zone`: offsets, TZif reader, local zone, `zoned`, ambiguous and missing local times as values.
 4. **T4** `std.timefmt`: RFC 3339, ISO 8601, RFC 2822, patterns.
 5. **T5** timers: `sleepUntil`, `deadline`, `ticker`, `stopwatch`, with `select`.
+6. **T3b** `std.tzdata`: the bundled tz database, so `zone.named` works on Windows.
+
+All six batches are merged (#310 to #313 and the earlier ones). Optional follow-ups: ISO week-date patterns, locale names, zone names in patterns, the interpreter's leak report counting the detached ticker task.
 
 # Done means
 
