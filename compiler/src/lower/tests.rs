@@ -1175,7 +1175,7 @@ fn box_inside_an_option_field() {
     assert_eq!(output_of(src), "5\ntrue\n");
 }
 
-// ---- A-08: `inout` closure parameters and the `scope` handle ------------------------------------
+// ---- `inout` closure parameters and the `scope` handle ------------------------------------
 
 #[test]
 fn inout_closure_parameters() {
@@ -1189,7 +1189,7 @@ fn scope_tasks_finish_with_the_scope() {
     assert_eq!(output_of(src), "spawned\n1 2\n");
 }
 
-// ---- A-03: the ledger (a fresh value nobody binds is dropped where its statement ends) -----------
+// ---- the ledger (a fresh value nobody binds is dropped where its statement ends) -----------
 
 #[test]
 fn object_temporaries_are_dropped() {
@@ -1277,7 +1277,7 @@ fn temporaries_die_in_reverse_order_at_the_end_of_the_statement() {
     assert_eq!(output_of(src), "3\ndrop 2\ndrop 1\nnext\n");
 }
 
-// ---- A-05 stage M1: `meta if` ---------------------------------------------------------------------
+// ---- `meta if` ---------------------------------------------------------------------
 
 #[test]
 fn meta_if_lowers_only_the_chosen_branch() {
@@ -1297,7 +1297,7 @@ fn meta_if_lowers_only_the_chosen_branch() {
     assert_eq!(o.output, "linux\n8\n");
 }
 
-// ---- A-05 stage M2: `meta N: int` value parameters ------------------------------------------------
+// ---- `meta N: int` value parameters ------------------------------------------------
 
 #[test]
 fn value_parameters_make_one_instance_per_value() {
@@ -1311,7 +1311,7 @@ fn value_parameters_on_a_struct() {
     assert_eq!(output_of(src), "4 3\n");
 }
 
-// ---- A-06: soa<T> ----------------------------------------------------------------------------------
+// ---- soa<T> ----------------------------------------------------------------------------------
 
 #[test]
 fn soa_works_like_a_list_of_structs() {
@@ -1361,7 +1361,7 @@ fn soa_prints_as_a_list_of_structs_and_has_blocked_form() {
     );
 }
 
-// ---- A-05 stage M3: `meta expr` and `meta fn` -------------------------------------------------------
+// ---- `meta expr` and `meta fn` -------------------------------------------------------
 
 fn lowered_diags(src: &str) -> Vec<(String, bool)> {
     let mut program = Program::with_core();
@@ -1451,7 +1451,7 @@ fn meta_note_is_a_compile_time_message() {
     );
 }
 
-// ---- A-07: async / await (stage 0: a call runs the body to the end) -----------------------------------
+// ---- async / await (stage 0: a call runs the body to the end) -----------------------------------
 
 #[test]
 fn async_functions_and_await() {
@@ -1597,7 +1597,7 @@ fn main() {
     assert_eq!(output_of(src), "some(4) 4 true false 5\n11\n");
 }
 
-// ---- The native build on the edge cases of `docs/design/backend.md` -------------------------------------
+// ---- The native build on the edge cases of `design note backend` -------------------------------------
 
 #[test]
 fn appending_with_plus_assign_keeps_its_meaning() {
@@ -1960,7 +1960,7 @@ fn agree(src: &str) {
 }
 
 /// `fma` rounds once: it agrees with the interpreter on every back end, and with the exact value
-/// where `a * b + c` would lose the low bits (card A-10).
+/// where `a * b + c` would lose the low bits.
 #[test]
 fn native_agrees_on_fused_multiply_add() {
     agree(
@@ -2029,8 +2029,7 @@ fn licm_keeps_a_zero_constant_a_hoisted_op_reads() {
     );
 }
 
-/// Division and remainder by constants that are not powers of two run as a high multiply (card A-11,
-/// W1); the loops give the optimiser values it cannot fold, spread over the whole range.
+/// Division and remainder by constants that are not powers of two run as a high multiply; the loops give the optimiser values it cannot fold, spread over the whole range.
 #[test]
 fn native_agrees_on_division_by_constants() {
     agree(
@@ -2338,7 +2337,7 @@ fn main() {
     );
 }
 
-/// Floats in SSE registers (A-11 W11): arithmetic in place, compares fused into branches, values kept
+/// Floats in SSE registers: arithmetic in place, compares fused into branches, values kept
 /// across calls, swaps through block parameters, arguments in `xmm0..7` and on the stack.
 #[test]
 fn float_registers_stress() {
@@ -2477,7 +2476,7 @@ fn main() {
     }
 }
 
-/// Memory operations (A-11 W5): addresses folded into the load or store, copies as plain moves.
+/// Memory operations: addresses folded into the load or store, copies as plain moves.
 #[test]
 fn memory_operations_stress() {
     let programs: [(&str, &str); 2] = [
@@ -4077,4 +4076,66 @@ fn wide_integers_stop_like_the_narrow_ones() {
         stop("fn main() { const x: uint128 = 1\n print(x << 128) }"),
         Err("shifted by the width or more".to_string())
     );
+}
+
+/// A large `main` with many values alive at once, checked arithmetic against values the optimiser
+/// cannot fold, and floats: every instruction that has to reload several spilled registers.
+fn register_pressure_program(n: usize) -> String {
+    let mut s = String::from(
+        "fn mix(x: int, k: int) -> int {\n    var r = x\n    var i = 0\n    while i < k { r = (r * 31 + i) % 1000003; i += 1 }\n    r\n}\n\nfn main() {\n    var seed = mix(7, 3)\n",
+    );
+    for i in 0..n {
+        s += &format!("    var a{i} = mix(seed + {i}, 4)\n");
+    }
+    for i in 0..n {
+        s += &format!("    var f{i} = 1.5 * (a{i} to float) / 3.0\n");
+    }
+    s += "    var s = 0\n    var t = 0.0\n";
+    for i in 0..n {
+        s += &format!(
+            "    s = s + a{i} * a{} - a{}\n    t = t + f{i} * f{}\n",
+            (i * 7) % n,
+            (i * 13) % n,
+            (i * 5) % n
+        );
+    }
+    s += "    print(s)\n    print(t)\n}\n";
+    s
+}
+
+/// A native build with one, two or three registers of each kind must not run out of scratch
+/// registers: an AArch64 checked add that also carries the test of a `CheckedIf` names four
+/// spilled registers (and a checked multiply used to reserve `x9` as well). The programs are only
+/// built, so this runs on every machine.
+#[test]
+fn a_large_main_builds_with_one_register_of_each_kind() {
+    use crate::native::{gen, gen_a64, Os};
+    let src = register_pressure_program(40);
+    let l = lowered(&src);
+    let mut optimised = l.module.clone();
+    crate::ir::opt::optimize(&mut optimised, crate::ir::opt::Options::default());
+    crate::ir::opt::prune(&mut optimised, &["main"]);
+    for (what, m) in [("plain", &l.module), ("optimised", &optimised)] {
+        for limit in [1, 2, 3] {
+            gen::REG_LIMIT.with(|l| l.set(limit));
+            let opts = gen::Options {
+                leak_check: false,
+                target: Os::Linux,
+                symbols: false,
+            };
+            let x86 = gen::compile(m, "main", &opts);
+            let a64 = gen_a64::compile(m, "main", &opts);
+            gen::REG_LIMIT.with(|l| l.set(usize::MAX));
+            assert!(
+                x86.is_ok(),
+                "x86-64 {what}, {limit} registers: {:?}",
+                x86.err()
+            );
+            assert!(
+                a64.is_ok(),
+                "AArch64 {what}, {limit} registers: {:?}",
+                a64.err()
+            );
+        }
+    }
 }

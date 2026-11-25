@@ -16,7 +16,7 @@
 ///
 /// HKDF turns one secret that is already random (a key-exchange result) into any number of keys, one per `info`.
 /// PBKDF2 turns a password into a key by repeating the HMAC `iterations` times; it is old and cheap to attack on
-/// GPUs, so prefer `argon2` for new password storage (planned, `docs/design/crypto.md`). `length` stops the program
+/// GPUs, so prefer `argon2` for new password storage (planned, `design note crypto`). `length` stops the program
 /// when it is below 0 or above the format's limit (HKDF: 255 hash lengths). Checked against the RFC 5869 vectors and
 /// Python's `hashlib.pbkdf2_hmac`.
 

@@ -1,4 +1,4 @@
-//! Recomputing the operand of a checked add instead of keeping it (card A-11). A loop that grows a
+//! Recomputing the operand of a checked add instead of keeping it. A loop that grows a
 //! length reads
 //!
 //! ```text

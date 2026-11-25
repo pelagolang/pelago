@@ -1,4 +1,4 @@
-//! Frozen loads (docs/design/mir.md 8.1). A `let` parameter passed in memory is not written for the
+//! Frozen loads (design note mir 8.1). A `let` parameter passed in memory is not written for the
 //! whole call: the checker rejects `inout` access to a value that is borrowed. So everything reachable
 //! from it is constant while the function runs: the header words, the data pointer read from a
 //! header, the elements read through that pointer. This pass finds the loads that read such memory

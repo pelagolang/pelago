@@ -1,4 +1,4 @@
-//! The register allocator for machine IR (work item W4, design in `docs/design/mir.md`).
+//! The register allocator for machine IR (work item W4, design in `design note mir`).
 //!
 //! It is the allocator of `regs.rs` (stage W3) made independent of the CPU: a target describes its
 //! register file through [`Target`], and the allocator rewrites a [`MFunc`] in place so that no
