@@ -373,7 +373,7 @@ fn ir_or_run(
     let run = cmd == "run";
     let build = cmd == "build";
     // `run` is native where the backend can run the result here; `--interp` (and `--stats`, whose
-    // step count only the interpreter has) ask for the interpreter (design note run-mode).
+    // step count only the interpreter has) ask for the interpreter.
     let interp = flags.contains(&"--interp") || flags.contains(&"--stats");
     let can_native = matches!(
         pelago::native::Os::host(),

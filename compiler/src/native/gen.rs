@@ -1,7 +1,6 @@
 //! The x86-64 code generator driver: it lays out the runtime, the data and the stop routines, then hands
-//! each function to the machine IR (`x86_select.rs`, `ralloc.rs`, `x86_emit.rs`; see
-//! `design note mir`) and writes the executable. The rules for division, shifts, overflow and NaN are
-//! in `design note backend`.
+//! each function to the machine IR (`x86_select.rs`, `ralloc.rs`, `x86_emit.rs`) and
+//! writes the executable.
 
 use super::elf::{self, Blob, Symbol};
 use super::rt::{self, Runtime};

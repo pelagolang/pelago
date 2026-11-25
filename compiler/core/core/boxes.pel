@@ -31,7 +31,7 @@ impl<T> box<T> {
 
 /// ---- async ---------------------------------------------------------------------------------------
 
-//~ What an `async fn` gives: the body runs as a task of its own (`design note concurrency-runtime`), started by the call;
+//~ What an `async fn` gives: the body runs as a task of its own, started by the call;
 //~ `await f()` waits for it and takes the result out (`wait`). The parameters moved into the task (a `let` one was copied).
 pub struct future<T> {
     t: task<T>

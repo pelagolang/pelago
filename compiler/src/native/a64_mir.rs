@@ -1,4 +1,4 @@
-//! The AArch64 side of the machine IR (design in `design note mir`): the opcodes, the register file
+//! The AArch64 side of the machine IR: the opcodes, the register file
 //! the shared allocator sees, and the spill moves. [`super::a64_select`] makes MIR from the IR and
 //! [`super::a64_emit`] turns allocated MIR into bytes.
 //!

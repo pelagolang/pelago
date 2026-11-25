@@ -16,7 +16,6 @@
 /// A `hasher` is a plain value. `update!` feeds it bytes in any chunking (the digest never depends on where the
 /// chunks split), `finish` reads the digest from a copy so the hasher stays usable (value semantics: no "finalised"
 /// state to misuse), and `reset!` starts over. Hashes live in their own modules (`std.sha2`, `std.sha3`, ...).
-/// The plan and the catalogue are in `design note crypto`.
 
 pub interface hasher {
     //~ Feeds `data` into the hash.
