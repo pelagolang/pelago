@@ -1,4 +1,4 @@
-//! The IR optimiser (card A-04, `design note ir` IR23).
+//! The IR optimiser.
 //!
 //! The lowering is simple on purpose: every variable is a stack slot, every owner has a drop flag in a
 //! slot, small library functions are real calls. These passes clean that up. Every pass works on one

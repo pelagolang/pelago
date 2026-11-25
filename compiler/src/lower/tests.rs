@@ -1175,7 +1175,7 @@ fn box_inside_an_option_field() {
     assert_eq!(output_of(src), "5\ntrue\n");
 }
 
-// ---- A-08: `inout` closure parameters and the `scope` handle ------------------------------------
+// ---- `inout` closure parameters and the `scope` handle ------------------------------------
 
 #[test]
 fn inout_closure_parameters() {
@@ -1189,7 +1189,7 @@ fn scope_tasks_finish_with_the_scope() {
     assert_eq!(output_of(src), "spawned\n1 2\n");
 }
 
-// ---- A-03: the ledger (a fresh value nobody binds is dropped where its statement ends) -----------
+// ---- the ledger (a fresh value nobody binds is dropped where its statement ends) -----------
 
 #[test]
 fn object_temporaries_are_dropped() {
@@ -1277,7 +1277,7 @@ fn temporaries_die_in_reverse_order_at_the_end_of_the_statement() {
     assert_eq!(output_of(src), "3\ndrop 2\ndrop 1\nnext\n");
 }
 
-// ---- A-05 stage M1: `meta if` ---------------------------------------------------------------------
+// ---- `meta if` ---------------------------------------------------------------------
 
 #[test]
 fn meta_if_lowers_only_the_chosen_branch() {
@@ -1297,7 +1297,7 @@ fn meta_if_lowers_only_the_chosen_branch() {
     assert_eq!(o.output, "linux\n8\n");
 }
 
-// ---- A-05 stage M2: `meta N: int` value parameters ------------------------------------------------
+// ---- `meta N: int` value parameters ------------------------------------------------
 
 #[test]
 fn value_parameters_make_one_instance_per_value() {
@@ -1311,7 +1311,7 @@ fn value_parameters_on_a_struct() {
     assert_eq!(output_of(src), "4 3\n");
 }
 
-// ---- A-06: soa<T> ----------------------------------------------------------------------------------
+// ---- soa<T> ----------------------------------------------------------------------------------
 
 #[test]
 fn soa_works_like_a_list_of_structs() {
@@ -1361,7 +1361,7 @@ fn soa_prints_as_a_list_of_structs_and_has_blocked_form() {
     );
 }
 
-// ---- A-05 stage M3: `meta expr` and `meta fn` -------------------------------------------------------
+// ---- `meta expr` and `meta fn` -------------------------------------------------------
 
 fn lowered_diags(src: &str) -> Vec<(String, bool)> {
     let mut program = Program::with_core();
@@ -1451,7 +1451,7 @@ fn meta_note_is_a_compile_time_message() {
     );
 }
 
-// ---- A-07: async / await (stage 0: a call runs the body to the end) -----------------------------------
+// ---- async / await (stage 0: a call runs the body to the end) -----------------------------------
 
 #[test]
 fn async_functions_and_await() {
@@ -1960,7 +1960,7 @@ fn agree(src: &str) {
 }
 
 /// `fma` rounds once: it agrees with the interpreter on every back end, and with the exact value
-/// where `a * b + c` would lose the low bits (card A-10).
+/// where `a * b + c` would lose the low bits.
 #[test]
 fn native_agrees_on_fused_multiply_add() {
     agree(
@@ -2029,8 +2029,7 @@ fn licm_keeps_a_zero_constant_a_hoisted_op_reads() {
     );
 }
 
-/// Division and remainder by constants that are not powers of two run as a high multiply (card A-11,
-/// W1); the loops give the optimiser values it cannot fold, spread over the whole range.
+/// Division and remainder by constants that are not powers of two run as a high multiply; the loops give the optimiser values it cannot fold, spread over the whole range.
 #[test]
 fn native_agrees_on_division_by_constants() {
     agree(
@@ -2338,7 +2337,7 @@ fn main() {
     );
 }
 
-/// Floats in SSE registers (A-11 W11): arithmetic in place, compares fused into branches, values kept
+/// Floats in SSE registers: arithmetic in place, compares fused into branches, values kept
 /// across calls, swaps through block parameters, arguments in `xmm0..7` and on the stack.
 #[test]
 fn float_registers_stress() {
@@ -2477,7 +2476,7 @@ fn main() {
     }
 }
 
-/// Memory operations (A-11 W5): addresses folded into the load or store, copies as plain moves.
+/// Memory operations: addresses folded into the load or store, copies as plain moves.
 #[test]
 fn memory_operations_stress() {
     let programs: [(&str, &str); 2] = [

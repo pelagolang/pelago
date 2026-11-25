@@ -1,4 +1,4 @@
-//! Slots that a loop fills completely before anything else touches them (card A-11).
+//! Slots that a loop fills completely before anything else touches them.
 //!
 //! A `Slot` is zero when it comes into use. For a big array written by `[x; n]` that is a second pass
 //! over the memory for nothing: the very next loop stores every element. The native code generator

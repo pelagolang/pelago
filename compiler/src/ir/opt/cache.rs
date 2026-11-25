@@ -1,4 +1,4 @@
-//! Slots that only calls can see (card A-11): a small slot whose address is handed to calls, but
+//! Slots that only calls can see: a small slot whose address is handed to calls, but
 //! never kept by them, is read and written by the function itself through a private copy, which
 //! the other passes then turn into registers. Around every call that gets the slot, the copy is
 //! written back first and read again afterwards:

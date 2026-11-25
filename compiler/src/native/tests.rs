@@ -526,7 +526,7 @@ fn slots_read_as_zero_unless_overwritten() {
     }
 }
 
-// ---- AArch64 encoder (card A-10, stage R1) ----------------------------------------------------------
+// ---- AArch64 encoder ----------------------------------------------------------
 
 fn words(bytes: &[u8]) -> String {
     bytes

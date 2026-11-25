@@ -1,4 +1,4 @@
-//! Index tests settled once, in front of the loop (card A-11). In
+//! Index tests settled once, in front of the loop. In
 //!
 //! ```text
 //! for j in 0..n { cur[j + 1] = prev[j] + 1 }

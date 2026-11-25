@@ -1,4 +1,4 @@
-//! Counters that move together become one (card A-11). In a loop, a block parameter that the loop
+//! Counters that move together become one. In a loop, a block parameter that the loop
 //! sends back as itself plus a constant is a counter (`x = x + 3`, `i = i + 1`). A value made from
 //! counters by wrapping `add`, `sub`, `mul` by a constant or `shl` by a constant moves by a fixed step
 //! each pass too: `3 * x + y` with the steps above gains `3 * 3 + 1` per pass. That value becomes a
