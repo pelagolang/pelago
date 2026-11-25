@@ -41,7 +41,7 @@ the shelf items that need real machine features (S-01 measured maps, S-02 thread
 | Case | Interpreter | Native must |
 |---|---|---|
 | division or remainder by zero | stops "division by zero" | test and branch to the stop block (the CPU would trap with SIGFPE) |
-| signed `MIN / -1` | wraps (`wrapping_div`) | guard it: x86 `idiv` traps on it |
+| signed `MIN / -1` | IR `Div` wraps (`wrapping_div`); the language stops with `arithmetic overflow` (the lowering checks, fixed 2026-11-25) | guard it: x86 `idiv` traps on it |
 | shift by the width or more | stops "shifted by the width or more" | test and branch (x86 masks the count silently) |
 | checked add/sub/mul overflow | stops | `add` plus `jo` (and `jc` for unsigned) to a shared stop block |
 | float to int | (check `FloatToInt` in `interp.rs`) | same result, including NaN and out of range; write a table test first |

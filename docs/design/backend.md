@@ -21,7 +21,7 @@ The interpreter (`ir/interp.rs`) is the specification. Every row is a test (card
 | Case | Required behaviour | Native code |
 |---|---|---|
 | `Div`, `Rem`, `UDiv`, `URem` by zero | stop `division by zero` | compare the divisor with 0 and branch to the stop block (the CPU would raise `SIGFPE`) |
-| signed `MIN / -1` and `MIN % -1` | wraps: `MIN` and `0` | compare with -1 and branch around `idiv` (the CPU traps) |
+| signed `MIN / -1` and `MIN % -1` (language level) | stop `arithmetic overflow` | the lowering tests `b == -1` and then `a == MIN` before the IR `Div`/`Rem`; folded away for a constant divisor other than -1. The IR `Div`/`Rem` themselves still wrap (`MIN` and `0`), so native code compares with -1 and branches around `idiv` (the CPU traps) |
 | `Shl`, `Shr`, `UShr` by the type's width or more | stop `shifted by the width or more` | compare the count and branch (x86 masks it silently); no test when the count is `x & c` with `c` below the width |
 | `Checked` add, sub, mul | stop on overflow | `add`/`sub`/`imul` then `jo` (signed) or `jc` (unsigned) to the stop block |
 | plain `Add`, `Sub`, `Mul` | wrap around at the type's width | the bare instruction at the right operand size |
@@ -184,7 +184,7 @@ or without the padding, so the erratum does not show here; the padding is there 
 | Case | AArch64 |
 |---|---|
 | division by zero | `cbz` on the divisor, to the stop; `sdiv`/`udiv` themselves never trap |
-| signed `MIN / -1` | `sdiv` wraps to `MIN` and `msub` gives remainder 0 with no check, as the interpreter does |
+| signed `MIN / -1` | `sdiv` wraps to `MIN` and `msub` gives remainder 0 with no check, as the interpreter does; the language-level stop comes from the lowering, before the IR division |
 | shifts by the width or more | `cmp`, `b.hs` to the stop (the hardware would mask the count) |
 | `Checked` 64-bit add and sub | `adds`/`subs`, then `b.vs` (signed), `b.hs` (unsigned add) or `b.lo` (unsigned sub, the borrow) |
 | `Checked` 64-bit mul | signed: `mul` and `smulh`, overflow when the high half differs from the sign extension of the low half (`cmp x, y, asr #63`); unsigned: `umulh` not zero |

@@ -4078,3 +4078,27 @@ fn wide_integers_stop_like_the_narrow_ones() {
         Err("shifted by the width or more".to_string())
     );
 }
+
+/// `MIN / -1` and `MIN % -1` overflow at every width, like every other overflow; the interpreter, the
+/// optimised IR and the native code all stop, and every neighbour of that case still divides.
+#[test]
+fn min_divided_by_minus_one_stops() {
+    let over = Err("arithmetic overflow".to_string());
+    for (ty, min) in [
+        ("int8", "-128"),
+        ("int16", "-32768"),
+        ("int32", "-2147483648"),
+        ("int64", "-9223372036854775807 - 1"),
+        ("int", "-9223372036854775807 - 1"),
+        ("int128", "-170141183460469231731687303715884105727 - 1"),
+    ] {
+        for op in ["/", "%"] {
+            let src = format!(
+                "fn f(a: {ty}, b: {ty}) -> {ty} = a {op} b\n\
+                 fn main() {{\n print(f(7, 2))\n print(f(-7, -1))\n print(f({min} + 1, -1))\n print(f({min}, 1))\n print(f({min}, -1))\n}}"
+            );
+            assert_eq!(run_main(&src).result, over, "{ty} {op}");
+            agree(&src);
+        }
+    }
+}

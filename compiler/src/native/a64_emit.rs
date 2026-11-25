@@ -598,7 +598,7 @@ impl Em<'_, '_> {
         let z = self.stop(super::a64_mir::SYM_DIV0);
         let a = &mut *self.env.a;
         a.cbz(y, z);
-        // `MIN / -1` does not trap here: the quotient wraps, like the interpreter's.
+        // The IR division wraps for `MIN / -1`; the lowering stops it before this.
         let q = if rem { hw::X9 } else { d };
         if signed {
             a.sdiv(q, x, y);

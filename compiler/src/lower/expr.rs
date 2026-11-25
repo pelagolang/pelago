@@ -1009,6 +1009,24 @@ impl<'a> Lowerer<'a> {
                 if let Some(z) = self.emit(Op::Cmp(CmpOp::Eq, b, zero), Some(IrTy::Bool), span) {
                     self.stop_if(z, "division by zero");
                 }
+                if signed {
+                    // `MIN / -1` and `MIN % -1` overflow, like every other integer overflow.
+                    let neg1 = self.konst(ty, Const::Int(-1), span);
+                    let is_neg1 = self.emit(Op::Cmp(CmpOp::Eq, b, neg1), Some(IrTy::Bool), span);
+                    if let Some(n) = is_neg1 {
+                        let (check, go) = (self.new_block(&[]), self.new_block(&[]));
+                        self.branch(n, check, go);
+                        self.start(check);
+                        let min = self.konst(ty, Const::Int(-(1i128 << (bits - 1))), span);
+                        if let Some(m) =
+                            self.emit(Op::Cmp(CmpOp::Eq, a, min), Some(IrTy::Bool), span)
+                        {
+                            let stop = self.stop_block("arithmetic overflow");
+                            self.branch(m, stop, go);
+                        }
+                        self.start(go);
+                    }
+                }
                 let o = match (op, signed) {
                     (Punct::Slash, true) => BinOp::Div,
                     (Punct::Slash, false) => BinOp::UDiv,
