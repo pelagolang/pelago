@@ -575,17 +575,17 @@ impl Em<'_, '_> {
                 // The high half first: `d` may be one of the operands.
                 let y = r(&ops[2]);
                 let a = &mut *self.env.a;
-                a.smulh(hw::X9, x, y);
+                a.smulh(hw::X17, x, y);
                 a.mul(d, x, y);
-                a.cmp_rr_sh(hw::X9, d, Shift::Asr, 63);
+                a.cmp_rr_sh(hw::X17, d, Shift::Asr, 63);
                 self.ov_branch(Br::Cc(Cond::Ne), ov, tail);
             }
             op::CHK_MUL_U => {
                 let y = r(&ops[2]);
                 let a = &mut *self.env.a;
-                a.umulh(hw::X9, x, y);
+                a.umulh(hw::X17, x, y);
                 a.mul(d, x, y);
-                self.ov_branch(Br::Nz(hw::X9), ov, tail);
+                self.ov_branch(Br::Nz(hw::X17), ov, tail);
             }
             k => panic!("check kind {k}"),
         }

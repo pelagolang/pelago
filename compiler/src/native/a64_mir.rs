@@ -237,7 +237,10 @@ impl A64 {
             int,
             float,
             vec,
-            int_scratch: vec![x(9), x(10), x(11), x(12)],
+            // `x15` (the call target) is free except between the copy that sets it and the call, and a
+            // reload never lands between the two. The last one only counts when an instruction has
+            // more spilled registers than the others (a checked operation with a test: five).
+            int_scratch: vec![x(9), x(10), x(11), x(12), CALL_TARGET],
             float_scratch: vec![v(29), v(30), v(31)],
         }
     }
