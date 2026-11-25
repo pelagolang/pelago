@@ -358,7 +358,7 @@ impl<A, B, meta K: int> [(A, B); K] {
 }
 
 //~ A cycle of three types, `(A, B, C; N)`: what the cycle of two has for reading, with a round (A, B, C) in place of a pair.
-//~ (Longer cycles follow the same shape; they are added when a program needs them.)
+//~ (Cycles of four, five and six types follow below, with `fourth`, `fifth` and `sixth`; longer ones have the type, literals and constant slots.)
 impl<A, B, C, meta N: int> (A, B, C; N) {
     //~ Slots, `N`.
     fn len(self) -> int = N
@@ -404,4 +404,220 @@ impl<A, B, C, meta N: int> (A, B, C; N) {
 
     //~ The braid as an array of rounds, as a copy. `N` must be a multiple of 3.
     fn asRounds(self) -> [(A, B, C); N / 3] = rtClone<[(A, B, C); N / 3]>(rtAddrOf(self))
+}
+
+//~ A cycle of 4 types, `(A, B, C, D; N)`: the same as the cycle of three, with a round (A, B, C, D).
+impl<A, B, C, D, meta N: int> (A, B, C, D; N) {
+    //~ Slots, `N`.
+    fn len(self) -> int = N
+
+    //~ Full rounds: `N / 4`, rounded down.
+    fn rounds(self) -> int = N / 4
+
+    //~ Slot `4r` (type A) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn first(self, r: int) -> A {
+        const at = rtPairAt(r, N / 4)
+        return rtClone<A>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D)>()))
+    }
+
+    //~ Slot `4r + 1` (type B) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn second(self, r: int) -> B {
+        const at = rtPairAt(r, N / 4)
+        return rtClone<B>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D)>() + rtSlotOff<(A, B, C, D)>(1)))
+    }
+
+    //~ Slot `4r + 2` (type C) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn third(self, r: int) -> C {
+        const at = rtPairAt(r, N / 4)
+        return rtClone<C>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D)>() + rtSlotOff<(A, B, C, D)>(2)))
+    }
+
+    //~ Slot `4r + 3` (type D) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn fourth(self, r: int) -> D {
+        const at = rtPairAt(r, N / 4)
+        return rtClone<D>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D)>() + rtSlotOff<(A, B, C, D)>(3)))
+    }
+
+    //~ A view of the slots of type A, without copying them. See `strand`.
+    fn firstStrand(self) -> strand<A> = strand { addr: rtAddrOf(self), stride: rtSizeOf<(A, B, C, D)>(), count: (N + 3) / 4 }
+
+    //~ Like `firstStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn firstStrandMut(inout self) -> strand_mut<A> = strand_mut { addr: rtAddrOf(self), stride: rtSizeOf<(A, B, C, D)>(), count: (N + 3) / 4 }
+
+    //~ A view of the slots of type B, without copying them. See `strand`.
+    fn secondStrand(self) -> strand<B> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D)>(1)), stride: rtSizeOf<(A, B, C, D)>(), count: (N + 2) / 4 }
+
+    //~ Like `secondStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn secondStrandMut(inout self) -> strand_mut<B> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D)>(1)), stride: rtSizeOf<(A, B, C, D)>(), count: (N + 2) / 4 }
+
+    //~ A view of the slots of type C, without copying them. See `strand`.
+    fn thirdStrand(self) -> strand<C> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D)>(2)), stride: rtSizeOf<(A, B, C, D)>(), count: (N + 1) / 4 }
+
+    //~ Like `thirdStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn thirdStrandMut(inout self) -> strand_mut<C> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D)>(2)), stride: rtSizeOf<(A, B, C, D)>(), count: (N + 1) / 4 }
+
+    //~ A view of the slots of type D, without copying them. See `strand`.
+    fn fourthStrand(self) -> strand<D> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D)>(3)), stride: rtSizeOf<(A, B, C, D)>(), count: N / 4 }
+
+    //~ Like `fourthStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn fourthStrandMut(inout self) -> strand_mut<D> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D)>(3)), stride: rtSizeOf<(A, B, C, D)>(), count: N / 4 }
+
+    //~ The braid as an array of rounds, as a copy. `N` must be a multiple of 4.
+    fn asRounds(self) -> [(A, B, C, D); N / 4] = rtClone<[(A, B, C, D); N / 4]>(rtAddrOf(self))
+}
+
+//~ A cycle of 5 types, `(A, B, C, D, E; N)`: the same as the cycle of three, with a round (A, B, C, D, E).
+impl<A, B, C, D, E, meta N: int> (A, B, C, D, E; N) {
+    //~ Slots, `N`.
+    fn len(self) -> int = N
+
+    //~ Full rounds: `N / 5`, rounded down.
+    fn rounds(self) -> int = N / 5
+
+    //~ Slot `5r` (type A) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn first(self, r: int) -> A {
+        const at = rtPairAt(r, N / 5)
+        return rtClone<A>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D, E)>()))
+    }
+
+    //~ Slot `5r + 1` (type B) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn second(self, r: int) -> B {
+        const at = rtPairAt(r, N / 5)
+        return rtClone<B>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D, E)>() + rtSlotOff<(A, B, C, D, E)>(1)))
+    }
+
+    //~ Slot `5r + 2` (type C) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn third(self, r: int) -> C {
+        const at = rtPairAt(r, N / 5)
+        return rtClone<C>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D, E)>() + rtSlotOff<(A, B, C, D, E)>(2)))
+    }
+
+    //~ Slot `5r + 3` (type D) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn fourth(self, r: int) -> D {
+        const at = rtPairAt(r, N / 5)
+        return rtClone<D>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D, E)>() + rtSlotOff<(A, B, C, D, E)>(3)))
+    }
+
+    //~ Slot `5r + 4` (type E) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn fifth(self, r: int) -> E {
+        const at = rtPairAt(r, N / 5)
+        return rtClone<E>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D, E)>() + rtSlotOff<(A, B, C, D, E)>(4)))
+    }
+
+    //~ A view of the slots of type A, without copying them. See `strand`.
+    fn firstStrand(self) -> strand<A> = strand { addr: rtAddrOf(self), stride: rtSizeOf<(A, B, C, D, E)>(), count: (N + 4) / 5 }
+
+    //~ Like `firstStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn firstStrandMut(inout self) -> strand_mut<A> = strand_mut { addr: rtAddrOf(self), stride: rtSizeOf<(A, B, C, D, E)>(), count: (N + 4) / 5 }
+
+    //~ A view of the slots of type B, without copying them. See `strand`.
+    fn secondStrand(self) -> strand<B> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E)>(1)), stride: rtSizeOf<(A, B, C, D, E)>(), count: (N + 3) / 5 }
+
+    //~ Like `secondStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn secondStrandMut(inout self) -> strand_mut<B> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E)>(1)), stride: rtSizeOf<(A, B, C, D, E)>(), count: (N + 3) / 5 }
+
+    //~ A view of the slots of type C, without copying them. See `strand`.
+    fn thirdStrand(self) -> strand<C> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E)>(2)), stride: rtSizeOf<(A, B, C, D, E)>(), count: (N + 2) / 5 }
+
+    //~ Like `thirdStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn thirdStrandMut(inout self) -> strand_mut<C> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E)>(2)), stride: rtSizeOf<(A, B, C, D, E)>(), count: (N + 2) / 5 }
+
+    //~ A view of the slots of type D, without copying them. See `strand`.
+    fn fourthStrand(self) -> strand<D> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E)>(3)), stride: rtSizeOf<(A, B, C, D, E)>(), count: (N + 1) / 5 }
+
+    //~ Like `fourthStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn fourthStrandMut(inout self) -> strand_mut<D> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E)>(3)), stride: rtSizeOf<(A, B, C, D, E)>(), count: (N + 1) / 5 }
+
+    //~ A view of the slots of type E, without copying them. See `strand`.
+    fn fifthStrand(self) -> strand<E> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E)>(4)), stride: rtSizeOf<(A, B, C, D, E)>(), count: N / 5 }
+
+    //~ Like `fifthStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn fifthStrandMut(inout self) -> strand_mut<E> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E)>(4)), stride: rtSizeOf<(A, B, C, D, E)>(), count: N / 5 }
+
+    //~ The braid as an array of rounds, as a copy. `N` must be a multiple of 5.
+    fn asRounds(self) -> [(A, B, C, D, E); N / 5] = rtClone<[(A, B, C, D, E); N / 5]>(rtAddrOf(self))
+}
+
+//~ A cycle of 6 types, `(A, B, C, D, E, F; N)`: the same as the cycle of three, with a round (A, B, C, D, E, F).
+impl<A, B, C, D, E, F, meta N: int> (A, B, C, D, E, F; N) {
+    //~ Slots, `N`.
+    fn len(self) -> int = N
+
+    //~ Full rounds: `N / 6`, rounded down.
+    fn rounds(self) -> int = N / 6
+
+    //~ Slot `6r` (type A) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn first(self, r: int) -> A {
+        const at = rtPairAt(r, N / 6)
+        return rtClone<A>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D, E, F)>()))
+    }
+
+    //~ Slot `6r + 1` (type B) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn second(self, r: int) -> B {
+        const at = rtPairAt(r, N / 6)
+        return rtClone<B>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D, E, F)>() + rtSlotOff<(A, B, C, D, E, F)>(1)))
+    }
+
+    //~ Slot `6r + 2` (type C) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn third(self, r: int) -> C {
+        const at = rtPairAt(r, N / 6)
+        return rtClone<C>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D, E, F)>() + rtSlotOff<(A, B, C, D, E, F)>(2)))
+    }
+
+    //~ Slot `6r + 3` (type D) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn fourth(self, r: int) -> D {
+        const at = rtPairAt(r, N / 6)
+        return rtClone<D>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D, E, F)>() + rtSlotOff<(A, B, C, D, E, F)>(3)))
+    }
+
+    //~ Slot `6r + 4` (type E) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn fifth(self, r: int) -> E {
+        const at = rtPairAt(r, N / 6)
+        return rtClone<E>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D, E, F)>() + rtSlotOff<(A, B, C, D, E, F)>(4)))
+    }
+
+    //~ Slot `6r + 5` (type F) of round `r`. A negative `r` counts from the end; an `r` outside the rounds stops the program.
+    fn sixth(self, r: int) -> F {
+        const at = rtPairAt(r, N / 6)
+        return rtClone<F>(rtOffset(rtAddrOf(self), at * rtSizeOf<(A, B, C, D, E, F)>() + rtSlotOff<(A, B, C, D, E, F)>(5)))
+    }
+
+    //~ A view of the slots of type A, without copying them. See `strand`.
+    fn firstStrand(self) -> strand<A> = strand { addr: rtAddrOf(self), stride: rtSizeOf<(A, B, C, D, E, F)>(), count: (N + 5) / 6 }
+
+    //~ Like `firstStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn firstStrandMut(inout self) -> strand_mut<A> = strand_mut { addr: rtAddrOf(self), stride: rtSizeOf<(A, B, C, D, E, F)>(), count: (N + 5) / 6 }
+
+    //~ A view of the slots of type B, without copying them. See `strand`.
+    fn secondStrand(self) -> strand<B> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E, F)>(1)), stride: rtSizeOf<(A, B, C, D, E, F)>(), count: (N + 4) / 6 }
+
+    //~ Like `secondStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn secondStrandMut(inout self) -> strand_mut<B> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E, F)>(1)), stride: rtSizeOf<(A, B, C, D, E, F)>(), count: (N + 4) / 6 }
+
+    //~ A view of the slots of type C, without copying them. See `strand`.
+    fn thirdStrand(self) -> strand<C> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E, F)>(2)), stride: rtSizeOf<(A, B, C, D, E, F)>(), count: (N + 3) / 6 }
+
+    //~ Like `thirdStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn thirdStrandMut(inout self) -> strand_mut<C> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E, F)>(2)), stride: rtSizeOf<(A, B, C, D, E, F)>(), count: (N + 3) / 6 }
+
+    //~ A view of the slots of type D, without copying them. See `strand`.
+    fn fourthStrand(self) -> strand<D> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E, F)>(3)), stride: rtSizeOf<(A, B, C, D, E, F)>(), count: (N + 2) / 6 }
+
+    //~ Like `fourthStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn fourthStrandMut(inout self) -> strand_mut<D> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E, F)>(3)), stride: rtSizeOf<(A, B, C, D, E, F)>(), count: (N + 2) / 6 }
+
+    //~ A view of the slots of type E, without copying them. See `strand`.
+    fn fifthStrand(self) -> strand<E> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E, F)>(4)), stride: rtSizeOf<(A, B, C, D, E, F)>(), count: (N + 1) / 6 }
+
+    //~ Like `fifthStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn fifthStrandMut(inout self) -> strand_mut<E> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E, F)>(4)), stride: rtSizeOf<(A, B, C, D, E, F)>(), count: (N + 1) / 6 }
+
+    //~ A view of the slots of type F, without copying them. See `strand`.
+    fn sixthStrand(self) -> strand<F> = strand { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E, F)>(5)), stride: rtSizeOf<(A, B, C, D, E, F)>(), count: N / 6 }
+
+    //~ Like `sixthStrand`, but the slots can be changed through it (the braid must be `inout`).
+    fn sixthStrandMut(inout self) -> strand_mut<F> = strand_mut { addr: rtOffset(rtAddrOf(self), rtSlotOff<(A, B, C, D, E, F)>(5)), stride: rtSizeOf<(A, B, C, D, E, F)>(), count: N / 6 }
+
+    //~ The braid as an array of rounds, as a copy. `N` must be a multiple of 6.
+    fn asRounds(self) -> [(A, B, C, D, E, F); N / 6] = rtClone<[(A, B, C, D, E, F); N / 6]>(rtAddrOf(self))
 }

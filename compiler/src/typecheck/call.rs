@@ -1079,10 +1079,17 @@ impl<'p> Checker<'p> {
             let mut msg = format!("`{s}` has no method `{n}`");
             if let TyKind::AltTuple(ts, _) = &rk {
                 if ts.len() != 2 && BRAID_METHODS.contains(&n) {
-                    msg = format!(
-                        "`{s}` has a cycle of {} types; `{n}` is written for a cycle of two. Use a constant position like `x[3]`",
-                        ts.len()
-                    );
+                    msg = if ts.len() <= 6 {
+                        format!(
+                            "`{s}` has a cycle of {} types; `{n}` is written for a cycle of two. Use `first(r)`, `second(r)`, ... for rounds, or a constant position like `x[3]`",
+                            ts.len()
+                        )
+                    } else {
+                        format!(
+                            "`{s}` has a cycle of {} types; the methods are written for cycles of two to six. Use a constant position like `x[3]`",
+                            ts.len()
+                        )
+                    };
                 } else if ts.len() == 2 && n == "toArray" {
                     msg = format!("`toArray` needs every slot to have one type, but `{s}` has two; use `split()` or `evens()`");
                 }
