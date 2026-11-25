@@ -16,7 +16,7 @@ The first target is **x86-64 Linux, a static ELF64 executable, no libc, no linke
 
 ## 2. Semantics the native code must share with the interpreter
 
-The interpreter (`ir/interp.rs`) is the specification. Every row is a test (card A-09, tests).
+The interpreter (`ir/interp.rs`) is the specification. Every row is a test (tests).
 
 | Case | Required behaviour | Native code |
 |---|---|---|
@@ -173,7 +173,7 @@ or without the padding, so the erratum does not show here; the padding is there 
 
 **Select, conditional stops, `lea` (A-11).** `select` is a `cmov`: when the condition is a comparison made by the instruction just before and read only by selects, the comparison is not turned into a bool and the `cmov`s move on its flags (`Gen::flags`); a select reuses the register of the operand that already sits in the result's register and moves the other one in with the opposite condition. `checked_if` is a checked operation whose overflow jump goes to an out-of-line stub that tests the condition and either stops or jumps back (`Gen::cond_stubs`); for a comparison test the stub makes the comparison again, borrowing `rax` and `rcx` with `push`/`pop`, so no bool is kept. A multiplication by 3, 5 or 9 is `lea d, [a + a*2/4/8]` (one cycle instead of three), with the constant on either side; a checked multiplication by a constant is `imul d, a, imm`.
 
-## 7. AArch64 Linux (card A-10)
+## 7. AArch64 Linux
 
 `pelago build --arch=aarch64 -o out <path>` writes a static AArch64 ELF (`EM_AARCH64`) with no libc and no linker, the same way as for x86-64. Decision (owner: start now, option 1 of the card): a **second generator over the same IR**, `native/gen_a64.rs`, beside `gen.rs`; the machine-level IR waits for A-11. The pieces: `native/a64.rs` (encoder), `native/rt_a64.rs` (runtime), `native/elf.rs` (`write_a64`), `native/gen_a64.rs`.
 

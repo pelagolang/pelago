@@ -1,4 +1,4 @@
-//! The runtime for AArch64 (card A-10), written as machine code like `rt.rs` is for x86-64:
+//! The runtime for AArch64, written as machine code like `rt.rs` is for x86-64:
 //! process start, output, the stop routine, the allocator and the routines the generator calls
 //! (`memcpy`, `fmod`). The behaviour is the same as the x86-64 runtime's; see `rt.rs` for the
 //! state layout (`STATE_SIZE` bytes at the start of `.data`) and `docs/design/backend.md`.

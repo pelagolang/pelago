@@ -1,4 +1,4 @@
-//! `meta expr` (card A-05, stage M3): code that runs while compiling.
+//! `meta expr` (stage M3): code that runs while compiling.
 //!
 //! The expression becomes a small function of its own; everything it reaches is lowered, the module
 //! built so far is run in the IR interpreter under a step budget, and the value left in memory is read

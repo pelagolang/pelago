@@ -1,4 +1,4 @@
-//! Overflow checks that cannot fire (card A-11, steps S2 and W2). A forward range analysis finds
+//! Overflow checks that cannot fire (steps S2 and W2). A forward range analysis finds
 //! values that are known to be small non-negative numbers (a widened byte, `x & 255`, `x % 10`,
 //! `x >> 3`, a sum or product of such values, a loop counter); a checked `add`, `sub` or `mul` whose
 //! result provably fits becomes the plain operation, so the native code does not test the overflow

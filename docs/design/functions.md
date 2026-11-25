@@ -249,7 +249,7 @@ is still no interpreter or runtime in the output. Compile-time code cannot do I/
 at first, and has a step limit so a runaway loop becomes an error, not a hang.
 `meta if` would do the job that the `when` keyword was reserved for.
 
-### Built so far (card A-05)
+### Built so far
 
 - **`meta if`** (stage M1, `compiler/src/meta.rs`): the condition is evaluated while resolving names, from literals, `target.os`,
   `target.arch`, `target.pointer_bits`, `target.endian`, `target.debug`, bare words such as `linux`, `==`, `!=`, `&&`, `||`, `!` (and
@@ -272,7 +272,7 @@ at first, and has a step limit so a runaway loop becomes an error, not a hang.
   later, budget 10 million with `@meta_limit`, baked data is built where it is used (a copy), `target` fields as listed above. A failing compile-time run reports its call chain
   (`... (in inner <- outer)`). Not built: static data with relocations (the code that builds the value is generated instead).
 
-### Built so far: async at stage 0 (card A-07)
+### Built so far: async at stage 0
 
 `async fn f(...) -> T` is called like any function and gives a `future<T>`; `await e` (only inside an `async fn`) consumes the future and gives
 the `T`; `blockOn(future)` does the same from ordinary code. At this stage a call **runs the body to the end** (like the cooperative tasks
@@ -402,7 +402,7 @@ The checker finds the consuming forms that are written out (`sink x` argument, `
 - **G2** Tail calls are explicit and guaranteed: `become f(x)`.
 - **G3** `meta` has four uses: `meta expr`, `meta fn`, `meta N: int` as a generic value parameter, and `meta if`. The `when` keyword is dropped.
 - **G4** Optimizer hints are attributes (`@inline`, `@noinline`, `@cold`), not keywords.
-- **G5** Async was deferred; the owner asked for everything to be completed, so stage 0 now has `async fn` and `await` (see the note after section 17): a call runs the body to the end and gives a `future<T>`, `await` takes the value out. True suspension (a state machine per `async fn`) is still future work (card S-04).
+- **G5** Async was deferred; the owner asked for everything to be completed, so stage 0 now has `async fn` and `await` (see the note after section 17): a call runs the body to the end and gives a `future<T>`, `await` takes the value out. True suspension (a state machine per `async fn`) is still future work.
 - **G6** Several ways to create a value are associated functions (`point.polar(...)`).
 - **G7** Consuming a value looks different from changing it.
 

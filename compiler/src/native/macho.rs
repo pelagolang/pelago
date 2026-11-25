@@ -1,4 +1,4 @@
-//! Writes a macOS AArch64 executable (Mach-O, card A-10 stage R4): no library is loaded, no `libSystem`.
+//! Writes a macOS AArch64 executable (Mach-O, stage R4): no library is loaded, no `libSystem`.
 //! macOS 14 refuses a program without `dyld` (the kernel kills a static `LC_UNIXTHREAD` one), so the
 //! file asks for `/usr/lib/dyld`, which sets the process up and calls the `LC_MAIN` entry; from there the
 //! program talks to the kernel with system calls, like the Linux one.

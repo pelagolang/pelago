@@ -159,7 +159,7 @@ The milestone of Phase 2 ("programs are type-checked and lowered to IR") is step
 - **IR16** `init` builds a struct in the return slot (or in a temporary when it can fail); for an `obj` the caller allocates the block and `init`
   gets its address. `deinit` runs before the fields are dropped. Fields with defaults are filled before `init` runs.
 - **IR17** Module-level `const` values are evaluated where they are used; a module-level `var` is static data, set up the first time it is reached.
-- **IR18** Tasks are stackful contexts run by one worker (card A-12, stage C2). `spawn` makes a task block with a 256 KiB stack
+- **IR18** Tasks are stackful contexts run by one worker (stage C2). `spawn` makes a task block with a 256 KiB stack
   (`CtxInit`) and queues it; a task starts and resumes when the running one waits: `join`, `recv` on an empty channel, a `select` with
   nothing ready, the end of a `scope` or of `main`, or `yield_now()`. Waiting switches (`CtxSwitch`) to the next live task in turn, so two
   tasks can talk back and forth. When every task has waited a full round with nothing happening the program stops with `deadlock: ...`.

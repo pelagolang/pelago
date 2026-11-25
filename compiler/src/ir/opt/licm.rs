@@ -1,4 +1,4 @@
-//! Loop-invariant code motion (card A-11, W9). An instruction in a loop whose operands are all
+//! Loop-invariant code motion (W9). An instruction in a loop whose operands are all
 //! defined outside the loop (or already moved out) gives the same result on every iteration, so it
 //! is computed once in front of the loop.
 //!

@@ -1,4 +1,4 @@
-//! The loop test on another counter (card A-11). `for i in 0..N` with another counter `q` that moves
+//! The loop test on another counter. `for i in 0..N` with another counter `q` that moves
 //! with `i` (a length that grows by 2 each trip) carries both: the test reads `i`, the work reads `q`,
 //! and each trip pays for the two additions. Since `q = q0 + K * k` after `k` trips, `i < N` says the
 //! same as `q < q0 + K * trips`, and when nothing else reads `i` it goes away:

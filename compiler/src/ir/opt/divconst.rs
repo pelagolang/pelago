@@ -1,4 +1,4 @@
-//! Division and remainder by a constant power of two (card A-11, step S1): `x / 2^k` and `x % 2^k`
+//! Division and remainder by a constant power of two (step S1): `x / 2^k` and `x % 2^k`
 //! become shifts, masks and a short fix-up for negative numbers, so the native code does not run
 //! `idiv` (and its zero and `-1` checks) for them. Division by 1 needs no division either.
 //!

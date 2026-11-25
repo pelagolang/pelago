@@ -114,7 +114,7 @@ Best of 5, seconds. Five programs added in `claude/perf/more-benchmarks`; the fi
 | sortwork | 0.035 | 0.169 | 0.039 | 0.21x | done: `list<int>::sort` is a radix sort (insertion sort up to 48 elements); other element types still use the byte-wise merge sort with an indirect compare (was 0.156) |
 - **Size:** each M to L. `resultpath` (return small `result`/`option` in registers, inline across `?`) and `sortwork` (monomorphic compare, typed element moves) look like the best first targets.
 
-### W10. AArch64 (card A-10)
+### W10. AArch64
 - Starts after W4. Not part of A-11; listed so nobody starts it early.
 
 ## Suggested threads

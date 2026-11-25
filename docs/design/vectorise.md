@@ -1,4 +1,4 @@
-# Vectoriser (card A-11)
+# Vectoriser
 
 Dennis asked for it (2026-10-20) after unrolling brought `structloop` to Rust's time (`ir/opt/unroll.rs`). This page is the plan: what the first version does, what it leaves alone, and the order of the pull requests. Rust's own code for `structloop` is the model: counters kept as steps, four iterations per pass in two SSE2 registers.
 

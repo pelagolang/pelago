@@ -1,4 +1,4 @@
-//! An AArch64 instruction encoder: only the forms the code generator uses (card A-10, stage R1).
+//! An AArch64 instruction encoder: only the forms the code generator uses (stage R1).
 //!
 //! Every instruction is one 32-bit word. `Asm` collects the words and labels; branches to labels and
 //! references to the data sections are patched when the final layout is known ([`Asm::finish`]).

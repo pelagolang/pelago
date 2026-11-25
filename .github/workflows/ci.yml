@@ -12,7 +12,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      # The AArch64 backend (card A-10): its programs run under qemu here, and its encoder is checked
+      # The AArch64 backend: its programs run under qemu here, and its encoder is checked
       # against the real assembler.
       - run: sudo apt-get update && sudo apt-get install -y qemu-user binutils-aarch64-linux-gnu
       - run: cargo fmt --all -- --check

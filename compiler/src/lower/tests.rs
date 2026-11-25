@@ -1960,7 +1960,7 @@ fn agree(src: &str) {
 }
 
 /// `fma` rounds once: it agrees with the interpreter on every back end, and with the exact value
-/// where `a * b + c` would lose the low bits (card A-10).
+/// where `a * b + c` would lose the low bits.
 #[test]
 fn native_agrees_on_fused_multiply_add() {
     agree(
@@ -2029,8 +2029,7 @@ fn licm_keeps_a_zero_constant_a_hoisted_op_reads() {
     );
 }
 
-/// Division and remainder by constants that are not powers of two run as a high multiply (card A-11,
-/// W1); the loops give the optimiser values it cannot fold, spread over the whole range.
+/// Division and remainder by constants that are not powers of two run as a high multiply; the loops give the optimiser values it cannot fold, spread over the whole range.
 #[test]
 fn native_agrees_on_division_by_constants() {
     agree(
