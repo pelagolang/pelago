@@ -1,4 +1,4 @@
-//! The AArch64 side of the machine IR (design in `docs/design/mir.md`): the opcodes, the register file
+//! The AArch64 side of the machine IR (design in `design note mir`): the opcodes, the register file
 //! the shared allocator sees, and the spill moves. [`super::a64_select`] makes MIR from the IR and
 //! [`super::a64_emit`] turns allocated MIR into bytes.
 //!
@@ -237,7 +237,10 @@ impl A64 {
             int,
             float,
             vec,
-            int_scratch: vec![x(9), x(10), x(11), x(12)],
+            // `x15` (the call target) is free except between the copy that sets it and the call, and a
+            // reload never lands between the two. The last one only counts when an instruction has
+            // more spilled registers than the others (a checked operation with a test: five).
+            int_scratch: vec![x(9), x(10), x(11), x(12), CALL_TARGET],
             float_scratch: vec![v(29), v(30), v(31)],
         }
     }

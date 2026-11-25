@@ -1,7 +1,7 @@
-//! The runtime for AArch64 (card A-10), written as machine code like `rt.rs` is for x86-64:
+//! The runtime for AArch64, written as machine code like `rt.rs` is for x86-64:
 //! process start, output, the stop routine, the allocator and the routines the generator calls
 //! (`memcpy`, `fmod`). The behaviour is the same as the x86-64 runtime's; see `rt.rs` for the
-//! state layout (`STATE_SIZE` bytes at the start of `.data`) and `docs/design/backend.md`.
+//! state layout (`STATE_SIZE` bytes at the start of `.data`) and `design note backend`.
 //!
 //! Internal calling convention: arguments in `x0` to `x7`, result in `x0` (`d0` for floats). A
 //! routine may change `x0` to `x17` and the flags; it keeps `x19` to `x28`, `x29` and the stack
@@ -1744,12 +1744,12 @@ fn advise_huge(a: &mut Asm, os: Os, addr: Reg, len: Reg) {
     a.bind(skip);
 }
 
-/// The OS memory calls (docs/design/os-memory.md), in a function of their own: `emit_for` is already a huge
+/// The OS memory calls (design note os-memory), in a function of their own: `emit_for` is already a huge
 /// frame in debug builds.
 #[inline(never)]
 fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: bool) {
     let win = os == Os::Windows;
-    // ---- the OS memory calls (docs/design/os-memory.md) ----------------------------------------------
+    // ---- the OS memory calls (design note os-memory) ----------------------------------------------
     // Sizes and addresses must be whole pages (else -2). A system error becomes -1 (no memory), -2
     // (invalid argument) or -3. Windows routines keep a frame (the imports lose the link register).
     let (bad, nomem, other, os_error) =

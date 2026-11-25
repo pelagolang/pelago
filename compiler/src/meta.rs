@@ -1,4 +1,4 @@
-//! Compile-time code (`meta`, card A-05). Stage M1: `meta if` and the `target` record; stage M2:
+//! Compile-time code (`meta`). Stage M1: `meta if` and the `target` record; stage M2:
 //! values as generic parameters (`meta N: int`), whose arithmetic is evaluated here too.
 //!
 //! A `meta if` condition is evaluated while resolving names, from literals, the fields of `target`,

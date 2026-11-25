@@ -1,4 +1,4 @@
-//! The loop vectoriser (card A-11, `docs/design/vectorise.md`). A counted loop whose body is plain
+//! The loop vectoriser. A counted loop whose body is plain
 //! wrapping integer arithmetic over its counters and over the elements of arrays runs two iterations
 //! per vector (SSE2 has two 64-bit lanes) and `U` vectors per pass, so `2 * U` iterations per pass:
 //!

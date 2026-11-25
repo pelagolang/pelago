@@ -4,7 +4,7 @@
 ///
 /// Addition, subtraction, comparison, bit operations and conversions are expanded inline by the lowering
 /// (`compiler/src/lower/wide.rs`). What is here is multiplication, division, shifts and printing. These are
-/// plain loops over the words, written for being correct first; `docs/design/wide-integers.md` lists how they
+/// plain loops over the words, written for being correct first; `design note wide-integers` lists how they
 /// get faster. The routines that can overflow give back a `bool` and the caller stops the program, so the
 /// stop is reported at the line of the arithmetic and not inside the library.
 

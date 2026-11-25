@@ -11,7 +11,7 @@
 //! `std/regex.pel`, which it mirrors step by step), checks the fields against the groups, and appends
 //! ordinary Pelago source to the module (as `derive.rs` does): the compiled program as constant tables and
 //! the functions `dateFind`, `dateFindAll` and `dateIsMatch`. A pattern that cannot work is an error at
-//! the attribute; there is no pattern error at run time. Design: `docs/design/regex.md`.
+//! the attribute; there is no pattern error at run time. Design: `design note regex`.
 //!
 //! The generated code stands alone: it needs no import.
 
@@ -1810,7 +1810,7 @@ pub enum @N@Outcome {
     gaveUp
 }
 
-//~ A budget in proportion to the text: 64 states for each byte (the figure in `docs/design/regex.md`); a starting point, not a promise.
+//~ A budget in proportion to the text: 64 states for each byte (the figure in `design note regex`); a starting point, not a promise.
 pub fn @N@Budget(text: str) -> int = 64 * (text.len() + 1)
 
 //~ The first match; `budget` is the most states the search may visit (the same input always gives the same answer).
@@ -1973,7 +1973,7 @@ fn one(
     let n = &tname;
     let list = |v: &[i64]| -> (String, usize) {
         let mut v = v.to_vec();
-        // At least two entries: a one-element array trips the native backend (see docs/design/regex.md).
+        // At least two entries: a one-element array trips the native backend (see design note regex).
         while v.len() < 2 {
             v.push(0);
         }

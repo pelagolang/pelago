@@ -1,4 +1,4 @@
-/// The braid: `(A, B; N)` or `braid<A, B; N>`, a fixed run of N slots whose types alternate (docs/design/alternating.md).
+/// The braid: `(A, B; N)` or `braid<A, B; N>`, a fixed run of N slots whose types alternate (design note alternating).
 ///
 /// The slots lie one after the other like the fields of a struct (section 5 of the design), so pair `p` starts at
 /// `p * rtSizeOf<(A, B)>()` and slot B sits at the offset B has inside a pair. Every method here is written for a

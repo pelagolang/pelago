@@ -1,4 +1,4 @@
-//! Tail calls to the function itself become jumps (card A-11). `return f(x - 1, acc * x)` at the end
+//! Tail calls to the function itself become jumps. `return f(x - 1, acc * x)` at the end
 //! of `f` runs in constant stack and without a call: the arguments go to the parameters of a new
 //! loop header and control jumps back to the top.
 //!

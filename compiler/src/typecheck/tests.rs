@@ -1472,7 +1472,7 @@ fn naming_styles_find_each_other() {
     flagged("fn t() -> int = nothing_here()", "cannot find");
 }
 
-// ---- braids (docs/design/alternating.md) -----------------------------------------------------------
+// ---- braids (design note alternating) -----------------------------------------------------------
 
 #[test]
 fn a_braid_literal_is_decided_by_its_annotation() {

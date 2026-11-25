@@ -1,6 +1,6 @@
 # Smoke benchmark map
 
-Which programs a PR runs, chosen by the paths it touches (see `docs/process/workflow.md`). Not wired to CI yet.
+Which programs a PR runs, chosen by the paths it touches. Not wired to CI yet.
 
 | PR touches | Programs |
 |---|---|

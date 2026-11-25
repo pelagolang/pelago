@@ -1,4 +1,4 @@
-//! If-conversion (card A-11): a branch whose two sides only compute a few values and then meet again
+//! If-conversion: a branch whose two sides only compute a few values and then meet again
 //! becomes straight-line code with a conditional move. A branch the processor cannot predict (the
 //! parity test of `collatz`) costs a pipeline flush every time it is wrong; a `select` costs one cycle.
 //!

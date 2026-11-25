@@ -1,4 +1,4 @@
-//! Syntax highlighting for `.pel` (card B-03): `pelago highlight`.
+//! Syntax highlighting for `.pel`: `pelago highlight`.
 //!
 //! The classification uses the real lexer, so strings, numbers, comments and every hard keyword are
 //! exact. Soft keywords and the roles of plain names (type, function) are decided by the tokens around
