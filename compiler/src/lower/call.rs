@@ -196,6 +196,9 @@ impl<'a> Lowerer<'a> {
     ) -> Res {
         let _ = mark;
         let (def, map) = self.resolve_dispatch(def, map);
+        if let Some(r) = self.glue_method_call(e, def, &map, recv, args, dst) {
+            return r;
+        }
         if self.is_intrinsic(def) {
             return self.intrinsic_call(e, def, &map, recv, args, dst);
         }
@@ -222,6 +225,70 @@ impl<'a> Lowerer<'a> {
             None => return Res::Never,
         }
         self.call_with(e, def, &map, sources, dst)
+    }
+
+    /// `x.eq(y)`, `x.cmp(y)`, `x.hash()` and `x.clone()` on a type that has no code of its own for
+    /// them (a number, text, a list, a derived struct or obj): the glue for the type does the work.
+    fn glue_method_call(
+        &mut self,
+        e: &'a Expr,
+        def: DefId,
+        map: &HashMap<DefId, Ty>,
+        recv: Option<&'a Expr>,
+        args: &'a [Arg],
+        dst: Option<Value>,
+    ) -> Option<Res> {
+        let parent = self.res.def(def).parent?;
+        if self.res.def(parent).kind != DefKind::Interface
+            || !matches!(
+                self.res.def(parent).name.as_str(),
+                "eq" | "order" | "hash" | "clone"
+            )
+            || self
+                .fns
+                .get(&def)
+                .is_none_or(|f| !matches!(f.decl.body, FnBody::None))
+        {
+            return None;
+        }
+        let in_core = self.fns.get(&def).is_some_and(|f| {
+            self.program
+                .package(self.program.module(f.file).package)
+                .name
+                == "core"
+        });
+        if !in_core {
+            return None;
+        }
+        let ty = self.types.zonk(*map.get(&parent)?);
+        let r = recv?;
+        let name = self.res.def(def).name.clone();
+        if name == "clone" {
+            return Some(self.copy_expr(e, r, dst));
+        }
+        let a = self.operand_addr(r, ty)?;
+        let r = match name.as_str() {
+            "hash" => {
+                let g = self.glue_fn(GlueKind::Hash, ty)?;
+                self.emit(Op::Call(g, vec![a]), Some(IrTy::I64), e.span)
+            }
+            "eq" | "cmp" => {
+                let other = &args.first()?.value;
+                let b = self.operand_addr(other, ty)?;
+                if name == "eq" {
+                    let g = self.glue_fn(GlueKind::Eq, ty)?;
+                    self.emit(Op::Call(g, vec![a, b]), Some(IrTy::Bool), e.span)
+                } else {
+                    let g = self.glue_fn(GlueKind::Cmp, ty)?;
+                    self.emit(Op::Call(g, vec![a, b]), Some(IrTy::I64), e.span)
+                }
+            }
+            _ => return None,
+        };
+        Some(match r {
+            Some(v) => Res::Val(v),
+            None => Res::Never,
+        })
     }
 
     /// A receiver that is a `box` whose method belongs to the value inside: the address of that
