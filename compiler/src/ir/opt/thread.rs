@@ -1,4 +1,4 @@
-//! Jump threading (card A-11): a block that only computes a test from its parameters and branches
+//! Jump threading: a block that only computes a test from its parameters and branches
 //! is skipped by a predecessor that already knows the answer.
 //!
 //! ```text

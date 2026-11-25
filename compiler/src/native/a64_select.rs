@@ -1,4 +1,4 @@
-//! From the IR to AArch64 MIR (design in `docs/design/mir.md`, opcodes in [`super::a64_mir`]).
+//! From the IR to AArch64 MIR (design in `design note mir`, opcodes in [`super::a64_mir`]).
 //!
 //! The same plan as [`super::x86_select`]: every IR value that is not a constant or a folded address
 //! becomes a virtual register, integers, booleans and pointers are 64 bits wide in a register and
@@ -1477,7 +1477,7 @@ impl<'m> Sel<'m> {
             };
             let mut ops = vec![dop, Operand::use_(ra), rhs, Operand::Imm(kind)];
             ops.extend(tail);
-            self.emit(MInst::new(op::CHK, ops).clobbering(RegSet::of(&[x::x(9)])));
+            self.emit(MInst::new(op::CHK, ops));
             return;
         }
         // Narrow: no overflow in 64 bits; the result must survive the trip through the width.

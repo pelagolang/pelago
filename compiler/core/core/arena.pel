@@ -1,4 +1,4 @@
-/// Bump arenas (docs/design/arena.md).
+/// Bump arenas (design note arena).
 
 //~ A value placed in an `arena`, named by the byte offset in the low 32 bits and the arena's epoch above them.
 //~ It is plain data: copying it copies the name, dropping it does nothing. `arena.get` stops on a stale one.

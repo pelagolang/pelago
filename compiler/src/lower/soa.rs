@@ -1,4 +1,4 @@
-//! `soa<T>`: a struct-of-arrays collection (card A-06, `docs/design/memory.md`).
+//! `soa<T>`: a struct-of-arrays collection.
 //!
 //! Layout: one list header (24 bytes: pointer, length, capacity) per field of `T`, one after the
 //! other; all columns have the same length. The element is never stored whole: `points[i].x` is
