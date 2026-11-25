@@ -21,7 +21,7 @@
 /// xxHash is the number in big-endian bytes (xxHash's canonical form); SipHash's is little-endian as in the paper.
 /// `value()` gives the number as a `uint64`. xxHash is seedable. Checked against the published values and a Python port
 /// of each specification (`compiler/std/tests/fast_ref.py`). Not yet here: XXH3 and XXH128, MurmurHash3, wyhash,
-/// CityHash, HighwayHash (`docs/design/crypto.md`).
+/// CityHash, HighwayHash (`design note crypto`).
 
 import std.hash
 import { hasher } = std.hash

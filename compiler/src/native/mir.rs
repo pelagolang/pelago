@@ -1,4 +1,4 @@
-//! The machine IR (work item W4, design in `docs/design/mir.md`).
+//! The machine IR (work item W4, design in `design note mir`).
 //!
 //! A function is a list of blocks in layout order; a block is a list of instructions. The instructions
 //! are the target's own (the opcode is a number the target defines), but their operands have one shape

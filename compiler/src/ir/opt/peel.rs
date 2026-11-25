@@ -1,4 +1,4 @@
-//! Base-case peeling (card A-11). A recursive function that starts with a test and returns at once
+//! Base-case peeling. A recursive function that starts with a test and returns at once
 //! on one side (`fib`: `if n < 2 { n }`) is called mostly with arguments that take that exit. The
 //! test moves to the call: `f(a)` becomes `if test(a) { value } else { f(a) }`, so the call, with
 //! its saves and restores of registers, happens only when the function has real work to do.

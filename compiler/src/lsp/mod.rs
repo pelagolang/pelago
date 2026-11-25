@@ -1,5 +1,5 @@
 //! `pelago lsp`: a language server speaking the Language Server Protocol on standard input and
-//! output (card S-06). No external crates: [`json`] reads and writes the messages.
+//! output. No external crates: [`json`] reads and writes the messages.
 //!
 //! What it offers: diagnostics from every compiler stage, hover (the type or signature), go to
 //! definition, find references, rename, signature help, the document outline, completion (names, and members after a dot;
