@@ -5,11 +5,27 @@
   </picture>
 </p>
 
-<p align="center"><strong>A self-hosting systems language.</strong><br>Native code. No GC. No runtime.</p>
+<p align="center"><strong>A systems language that compiles straight to machine code.</strong><br>No garbage collector. No runtime. No linker. Integer overflow stops the program.</p>
+
+<p align="center">
+  <a href="https://pelagolang.github.io/website/">Website</a> ·
+  <a href="https://pelagolang.github.io/website/en-US/docs/">Documentation</a> ·
+  <a href="https://pelagolang.github.io/website/en-US/docs/getting-started/install/">Install</a> ·
+  <a href="https://pelagolang.github.io/website/en-US/docs/tour/">Tour</a> ·
+  <a href="https://pelagolang.github.io/website/benchmarks/">Benchmarks</a>
+</p>
 
 # Pelago
 
-Pelago (from *pelagos*, Greek for "the open sea"; source files end in `.pel`) is a self-hosting systems language. It compiles to native code with its own backend, has no garbage collector and no runtime, and is memory safe through value semantics instead of a borrow checker. The syntax is braces and newlines, with a TypeScript-like feel.
+Pelago (from *pelagos*, Greek for "the open sea"; source files end in `.pel`) is a compiled systems language with braces and newlines for syntax and a small set of strict rules for memory and errors:
+
+- **Value semantics instead of a borrow checker.** Values are read-only by default. Mutation and consumption are named at the call site: `c.bump!()` changes a receiver (`inout`), `c.close!!()` consumes it (`sink`).
+- **No exceptions and no null.** Failure is a `result` (`int ! parse_error`), absence is an `option` (`none`), and `?` passes a failure up.
+- **Exact integer overflow.** Arithmetic that overflows stops the program with `stopped: arithmetic overflow` and a source location. It never wraps silently, and the native backends keep that behaviour.
+- **One `switch`** for pattern matching, including list patterns, with exhaustiveness checking.
+- **Its own backend.** `pelago build` writes the executable file itself (ELF, PE or Mach-O), without a C compiler, a linker or libc. On Linux a hello world is about 4 KB.
+
+The compiler in this repository is the stage 0 compiler. It is written in Rust with no dependencies. Pelago is not yet rewritten in Pelago, and the project is pre-release: there are no binary releases yet and the language can still change.
 
 ```
 //~ Sum the squares of 1 to n.
@@ -22,25 +38,105 @@ fn sum_squares(n: int) -> int {
 }
 
 fn main() {
-    /// a plain comment
     print("sum of squares: #(sum_squares(10))")
 }
 ```
 
-Status: the stage 0 compiler, written in Rust with no dependencies, handles the whole language. It lexes, parses, resolves names, checks types and value semantics, lowers to an IR, optimises, and produces x86-64 executables for Linux (ELF) and Windows (PE) without a linker or libc. A formatter and a language server are built. The compiler is not yet rewritten in Pelago itself, and a few things are still open (real threads, `async` suspension, other CPUs); see [docs/NEXT.md](docs/NEXT.md) and the [task board](docs/plans/BOARD.md).
+Errors are values, and a *braid* (a Pelago data type) holds a fixed number of slots whose types alternate:
 
-## The language in brief
+```
+/// Errors are values: `! parse_error` says the function can fail, `?` passes the failure on.
+fn parse_all(items: [str]) -> [int] ! parse_error {
+    var out: [int] = []
+    for item of items {
+        out.push!(item.parseInt()?)
+    }
+    ok(out)
+}
 
-- **Value semantics.** Values are read-only by default; `inout` and `sink` access modes are repeated at the call site, and `c.bump!()` changes a receiver while `c.close!!()` consumes it.
-- **No exceptions, no null.** Errors are `result` values, absence is `option` (`none`), and `?` propagates.
-- **One `switch`** for pattern matching, including list patterns. Exhaustiveness is checked.
-- `fn`, `const` and `var`; lowercase type names; `obj` with inheritance written `:`; `~>` closures; `#name` and `#(expr)` inside strings; `meta` for compile-time code; `pub` and `priv`.
-- **Symbol operators only.** No word operators.
-- **Integer overflow traps.** Arithmetic that overflows stops the program (`stopped: arithmetic overflow`) instead of wrapping silently, and the native backend keeps that exact behaviour.
+fn main() {
+    switch parse_all(["1", "2", "x"]) {
+        case ok(values): print("sum: #(values.iter().sum())")
+        case err(e): print("bad number: #(e.message)")
+    }
+
+    /// A braid alternates its slot types: here int, string, int, string.
+    const b: (int, string; 4) = (1, "one", 2, "two")
+    print(b[0], b[1], b[2], b[3])
+
+    /// Overflow stops the program. It never wraps.
+    var x: int8 = 120
+    x += 10
+    print(x)
+}
+```
+
+```
+bad number: bad digit at position 0
+1 one 2 two
+stopped: arithmetic overflow
+```
+
+More programs are in [`examples/programs/`](examples/programs) (they type check and run), a syntax sampler is [`examples/tour.pel`](examples/tour.pel), and a small multi-file project with CI is in [pelagolang/examples](https://github.com/pelagolang/examples).
+
+## Install
+
+There are no prebuilt downloads yet. Until the first release, build `pelago` from source with a [Rust toolchain](https://rustup.rs); the steps for Windows (PowerShell), Linux and macOS are on the [install page](https://pelagolang.github.io/website/en-US/docs/getting-started/install/), and release channels will be announced there too.
+
+From a checkout, `cargo build --release` puts the tool at `target/release/pelago` (`pelago.exe` on Windows).
+
+## Quick start
+
+```
+pelago run hello.pel                # build machine code in memory and run `main`
+pelago run --interp hello.pel       # the IR interpreter instead (--opt optimises first, --stats counts steps)
+pelago build -o hello hello.pel     # write a native executable, optimised by default
+pelago check src                    # parse, resolve names and check types of a file or a directory
+pelago fmt --check .                # check formatting; drop --check to format in place
+```
+
+`pelago run` and `pelago build` take a file or a directory, and both take `--no-opt`, `--leak-check` (report memory that was never freed) and `--timings` (milliseconds per phase). The [run and build guide](https://pelagolang.github.io/website/en-US/docs/getting-started/run-and-build/) has the details.
+
+| Command | What it does |
+|---|---|
+| `pelago run <path>` | build and run `main`; `--interp` uses the IR interpreter, with `--opt` and `--stats` |
+| `pelago build [-o out] <path>` | native executable; `--target=linux\|windows\|macos`, `--arch=x86_64\|aarch64` (macOS is AArch64 only), `--symbols` keeps symbols for gdb and objdump |
+| `pelago check <path>` | names and types, no code generation |
+| `pelago ir <path>` | lower to the IR, verify it and print it |
+| `pelago fmt [--check] <path>...` | the formatter; `-` filters standard input; configured by `pelago.yaml` |
+| `pelago lsp` | the language server, over stdio |
+| `pelago highlight <file>` | colour a file in the terminal or as HTML |
+| `pelago std [--json]` | list the standard library modules by group |
+| `pelago lex`, `parse`, `keywords`, `tokens`, `grammar` | tools for working on the language itself |
+
+## Targets
+
+`pelago build` cross-compiles: pick the system with `--target` and the CPU with `--arch`.
+
+| | x86-64 | AArch64 |
+|---|---|---|
+| Linux | yes | yes |
+| Windows | yes | yes |
+| macOS | no | yes |
+
+The output is a static executable that talks to the operating system directly (system calls on Linux and macOS, `kernel32` on Windows). `pelago run` runs a program only on the machine it was built for. CI builds and runs the native test programs on Linux (x86-64 and ARM64), Windows (x86-64 and ARM64) and macOS (Apple silicon). The AArch64 backend is the youngest and sees the least testing; macOS support covers the basics so far (clock, arguments, files, sleep).
+
+## What is in the box
+
+Pelago ships with a standard library written in Pelago. The full list, grouped, is `pelago std`; the site documents each module in the [library reference](https://pelagolang.github.io/website/en-US/docs/library/).
+
+- **Core types.** Integers from `int8` to `int256` and unsigned twins, `byte`, `float16` to `float256`, `str` and `string` with UTF-8 text, lists, maps, sets, options, results, iterators, boxes and arenas.
+- **Braids.** Fixed-size sequences of alternating types, `(int, string; 3)`, with pair and strand views. See the [braids guide](https://pelagolang.github.io/website/en-US/docs/guide/braids/). This feature is experimental.
+- **Concurrency.** `spawn` returns a task that you `join`; tasks run on their own small stacks, and Linux x86-64 uses real operating system threads with futexes and atomics. AArch64 and the other systems are catching up.
+- **Text and data.** `std.json` (with `@derive(fromJson)` for your own types) and `std.regex` (an own engine, with Unicode classes).
+- **Files and system.** `std.io`, `std.fs`, `std.path`, `std.os`, `std.env`.
+- **Time.** `std.time`, `std.calendar`, `std.zone` with a bundled tz database, and `std.timefmt`.
+- **Random numbers.** `std.random` (seeded generators) and `std.csprng` (secure).
+- **Hashes and checksums.** SHA-2, SHA-3, BLAKE2, BLAKE3, RIPEMD, SM3, fast hashes, checksums and the legacy ones.
+- **Cryptography.** MACs, key derivation, password hashing (including bcrypt), ChaCha and AEAD ciphers, Poly1305. Pelago's own implementations are checked against test vectors, but they have not been audited, so treat them as a work in progress.
+- **Big numbers.** `std.big` for integers beyond the machine's width.
 
 ### Comments
-
-Pelago has its own comment syntax (decided in [docs/design/comments.md](docs/design/comments.md)):
 
 | Form | Meaning |
 |---|---|
@@ -51,96 +147,45 @@ Pelago has its own comment syntax (decided in [docs/design/comments.md](docs/des
 
 A plain `//` or `/* */` is a lexer error with a hint.
 
-A guided tour of the syntax is [examples/tour.pel](examples/tour.pel) (it shows syntax, so it is not meant to type check as a program). [examples/programs/](examples/programs) holds real programs that check and run cleanly.
+## Editors and tools
 
-## Getting started
+`pelago lsp` is a language server: errors as you type, hover, go to definition, find references, rename, completion, signature help, outline, code actions, semantic tokens and formatting.
 
-You need a Rust toolchain. From a checkout of this repository:
-
-```
-cargo build --release
-cargo run -- run examples/hello.pel
-cargo run -- build -o hello examples/hello.pel
-```
-
-The tool is called `pelago`; on Windows (PowerShell) use `cargo run -- ...` the same way, or put `target\release\pelago.exe` on your `PATH`.
-
-### Commands
-
-| Command | What it does |
-|---|---|
-| `pelago check <path>` | parse, resolve names and check types of a file or a directory |
-| `pelago run <path>` | build machine code and run `main` (optimised; `--no-opt`, `--leak-check`); `--interp` runs the IR interpreter instead (`--opt` optimises first, `--stats` counts steps) |
-| `pelago build [-o out] <path>` | build a native executable (x86-64, or AArch64 Linux with `--arch=aarch64`), optimised by default (`--no-opt`, `--target=linux\|windows`, `--leak-check`, `--symbols` keeps the section headers and symbol table, 0.6 to 0.8 KB, for gdb, objdump and callgrind) |
-| `pelago ir <path>` | check, lower to the IR, verify and print it |
-| `pelago fmt [--check] <path>...` | format `.pel` files in place; `-` filters standard input to standard output |
-| `pelago lsp` | the language server, over stdio |
-| `pelago highlight <file>` | colour a file (`--ansi`, `--html`, `--html-page`, `--plain`, `--theme dark\|light`) |
-| `pelago lex`, `parse` | print tokens or the syntax tree and report errors (`lex-bench`, `parse-bench` time them) |
-| `pelago keywords`, `tokens` | list the keywords and operators |
-| `pelago grammar` | print the generated TextMate grammar |
-
-### Formatter
-
-`pelago fmt` is a token-based formatter: indentation, trailing spaces, blank lines, spacing around commas. It never touches comments, refuses files with errors, and checks that the result has the same tokens. `--check` exits non-zero if a file would change, which is what CI uses on `examples/`. The formatter is also served through the language server. It is configured by a `fmt` section in `pelago.yaml`, read from the closest such file above the one being formatted:
-
-```yaml
-format: 1
-fmt:
-  indent: 4   # spaces per level, 1 to 8
-  width: 100  # 20 to 400; not used yet, it is for line wrapping
-```
-
-The file is a strict block-style YAML subset (no anchors, tags, quotes, lists or `{}`; `format: 1` first).
-
-Unknown sections and keys are errors. Line wrapping from the syntax tree is next; see [S-07](docs/plans/cards/S-07-formatter.md).
-
-### Language server
-
-`pelago lsp` gives errors as you type, hover, go to definition, find references, rename, completion, signature help, document symbols, code actions, semantic tokens and formatting. It is checked by tests in `compiler/src/lsp/`; the design is in [S-06](docs/plans/cards/S-06-language-server.md).
-
-## Editor support
-
-| Editor | Repository | State |
+| Editor | Repository | |
 |---|---|---|
-| VS Code | [pelagolang/vscode-pelago](https://github.com/pelagolang/vscode-pelago) | highlighting, snippets and the language server; install from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=pelagolang.pelago), or from the `.vsix` attached to each [release](https://github.com/pelagolang/vscode-pelago/releases) (not on Open VSX yet) |
-| Zed | [pelagolang/zed-pelago](https://github.com/pelagolang/zed-pelago) | Tree-sitter highlighting plus the language server (`pelago` must be on your `PATH`); not published yet |
-| Tree-sitter | [pelagolang/tree-sitter-pelago](https://github.com/pelagolang/tree-sitter-pelago) | grammar for Zed, Neovim and Helix |
+| VS Code | [pelagolang/vscode-pelago](https://github.com/pelagolang/vscode-pelago) | highlighting, snippets and the language server |
+| Zed | [pelagolang/zed-pelago](https://github.com/pelagolang/zed-pelago) | highlighting and the language server (`pelago` must be on your `PATH`) |
+| Neovim, Helix and others | [pelagolang/tree-sitter-pelago](https://github.com/pelagolang/tree-sitter-pelago) | the Tree-sitter grammar |
 
-The TextMate grammar in `editors/textmate/` is generated from the compiler's keyword table and kept in step by a test (`BLESS=1 cargo test editors` regenerates it); the VS Code repository receives a copy through a workflow.
+Setup steps for each are on the [editors page](https://pelagolang.github.io/website/en-US/docs/getting-started/editors/). The TextMate grammar in `editors/textmate/` is generated from the compiler's keyword table and kept in step by a test.
+
+## Packages: Islet
+
+[Islet](https://github.com/pelagolang/islet) is the package manager for Pelago. It is early: packages are source that the compiler reads next to yours, stored once by hash in a global store, with signing from the start. Manifests (`islet.yaml`, `islet.lock`) are YAML. A public registry does not exist yet.
 
 ## Speed
 
-The native backend is held to a hard goal: every program in the benchmark suite at or below both C at `-O2` and Rust at `-O`, without giving up overflow traps. The suite is in [bench/](bench), each Pelago program next to C, C++ and Rust twins that print the same output.
+The target is every program of the benchmark suite at or below C at `-O2` and Rust at `-O`, without giving up overflow traps. The suite is in [`bench/`](bench): each Pelago program sits next to C, C++ and Rust versions that print the same output. Numbers move with every performance change, so the current ones are on the [benchmarks page](https://pelagolang.github.io/website/benchmarks/).
 
 ```
-python3 bench/harness/run.py                       # needs python 3.11+, gcc and optionally g++, clang, tcc, rustc; run from the repository root
-python3 bench/harness/run.py --runs 7 --size small,medium,large collatz sieve
+python3 bench/harness/run.py [--runs N] [--size small,medium,large] [name ...]   # needs python 3.11+, gcc; optionally g++, clang, tcc, rustc
 ```
 
-A snapshot (best of 5, one container, native `--opt`): geometric mean 1.04x of C `-O2` and 1.09x of Rust, at or below C `-O2` on 8 of 16 programs (the five newest, covering sorting, strings, `switch`, structs in lists and `result` paths, are the weakest). Numbers move with every performance PR; the work plan is [docs/perf/a11-work-items.md](docs/perf/a11-work-items.md), and the backend is described in [docs/design/backend.md](docs/design/backend.md). CI also runs the suite on Windows.
-
-## Repository layout
-
-- `compiler/`: the stage 0 compiler (`src/`), the library (`core/core.pel`), the tests; the benchmarks are in `bench/`.
-- `examples/`: `tour.pel`, `hello.pel` and `programs/`.
-- `docs/design/`: design drafts for each part of the language and compiler (start with [basics](docs/design/basics.md), [types](docs/design/types.md), [memory](docs/design/memory.md), [checker](docs/design/checker.md), [ir](docs/design/ir.md)).
-- `docs/plans/`: the task board and one card per piece of work.
-- `editors/`: the generated TextMate grammar.
-- [ROADMAP.md](ROADMAP.md): vision, decisions table and phases. [docs/NEXT.md](docs/NEXT.md): where we stopped.
-
-## Contributing
-
-Run these before pushing:
+## Building and testing the compiler
 
 ```
+cargo build --release
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-Branches are `<author>/<type>/<short-name>`, commit subjects and PR titles use [Conventional Commits](docs/contributing/commits.md), and every PR fills in the [template](.github/pull_request_template.md) ([worked examples](docs/contributing/pr-scenarios.md)). The compiler has no external dependencies on purpose; ask before adding one. [CLAUDE.md](CLAUDE.md) has more detail on conventions.
+The code is in `compiler/src/` (lexer, parser, name resolution, type checker, IR and its optimiser, the native backends, formatter, language server). The standard library is in `compiler/core/` and `compiler/std/`, each with a `tests/` directory of `.pel` programs and their expected output.
+
+## Contributing
+
+Run the three checks above before pushing. Branches are `<author>/<type>/<short-name>`, commit subjects and PR titles use [Conventional Commits](docs/contributing/commits.md), and every PR fills in the [template](.github/pull_request_template.md) ([worked examples](docs/contributing/pr-scenarios.md)). The compiler has no external dependencies on purpose; ask before adding one. See [SECURITY.md](https://github.com/pelagolang/.github/blob/main/SECURITY.md) to report a vulnerability.
 
 ## Licence
 
-MIT OR Apache-2.0, at your option: see `LICENSE-MIT` and `LICENSE-APACHE`.
+MIT OR Apache-2.0, at your option: see [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE).
