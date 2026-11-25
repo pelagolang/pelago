@@ -1,4 +1,4 @@
-/// The heap, written in the language (design note heap, stage H6). It is small on purpose, for chips with little room.
+/// The heap, written in the language. It is small on purpose, for chips with little room.
 ///
 /// One reserved range is cut into lanes, one lane per block size: 16 bytes, 32, 64, and so on (each the double of the one
 /// before). A block's address says which lane, and so which size, it is in: no header, no table, no search. Each lane has a

@@ -1,5 +1,5 @@
 /// Decoding by hand with the reader helpers of `std.json`: exact integers, range errors, paths and positions.
-/// `@derive(fromJson)` writes this same code (design note json).
+/// `@derive(fromJson)` writes this same code.
 import std.json
 import { json_error } = std.json
 

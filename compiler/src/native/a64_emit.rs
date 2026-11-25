@@ -1,4 +1,4 @@
-//! From allocated AArch64 MIR to bytes (design in `design note mir`).
+//! From allocated AArch64 MIR to bytes.
 //!
 //! The frame has no frame pointer. From `sp` up: the outgoing argument area, the saved registers (`x30`
 //! when the function calls, then the callee-saved ones it uses), the other frame objects. The stack

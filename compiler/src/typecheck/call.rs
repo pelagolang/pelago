@@ -1139,7 +1139,7 @@ impl<'p> Checker<'p> {
         }
     }
 
-    /// What a braid method's signature cannot say (design note alternating, section 3 and 4): `tail` needs an
+    /// What a braid method's signature cannot say: `tail` needs an
     /// odd length, `swap` an even one, `mapPairs` keeps the tail so its type may not change, and a pair number
     /// written as a constant must be inside the braid.
     fn braid_rules(&mut self, e: &'p Expr, recv: Ty, name: &str, args: &'p [Arg], ret: Ty) {

@@ -1,4 +1,4 @@
-//! From allocated x86-64 MIR to bytes (design in `design note mir`).
+//! From allocated x86-64 MIR to bytes.
 //!
 //! The frame has no frame pointer. After the pushes of the callee-saved registers and one `sub rsp`
 //! the stack pointer stays where it is for the whole function, so every frame object is `[rsp + k]`

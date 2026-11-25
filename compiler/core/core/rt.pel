@@ -10,7 +10,7 @@ pub ext fn rtAlloc(size: int) -> ptr
 pub ext fn rtFree(p: ptr)
 //~ A block of `size` bytes holding the first bytes of `p` (null allocates), the rest zero; `p` is dead afterwards.
 pub ext fn rtRealloc(p: ptr, size: int) -> ptr
-//~ The operating system's memory, for allocators (`design note os-memory`). Each gives an address or `0`, or a negative
+//~ The operating system's memory, for allocators. Each gives an address or `0`, or a negative
 //~ error: -1 out of memory, -2 a bad argument (a size or address that is not a whole number of 4096-byte pages), -3 another failure.
 //~ Address space of `size` bytes with no access.
 pub ext fn rtOsReserve(size: int) -> int
@@ -50,7 +50,7 @@ pub ext fn rtStoreChar(p: ptr, v: char)
 pub ext fn rtLoadBool(p: ptr) -> bool
 pub ext fn rtStoreBool(p: ptr, v: bool)
 pub ext fn rtPrint(p: ptr, n: int)
-//~ The operating system layer (design note runtime). `rtOsWrite` flushes standard output first and
+//~ The operating system layer. `rtOsWrite` flushes standard output first and
 //~ writes once: it gives the count written or a negative error number; `rtOsRead` gives the count read,
 //~ 0 at the end, or a negative error number. `rtOsArgv` is the start-up block: the count, that many
 //~ pointers to zero-terminated texts, a zero, then the environment the same way (on Windows the count is

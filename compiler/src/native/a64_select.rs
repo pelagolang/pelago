@@ -1,4 +1,4 @@
-//! From the IR to AArch64 MIR (design in `design note mir`, opcodes in [`super::a64_mir`]).
+//! From the IR to AArch64 MIR (opcodes in [`super::a64_mir`]).
 //!
 //! The same plan as [`super::x86_select`]: every IR value that is not a constant or a folded address
 //! becomes a virtual register, integers, booleans and pointers are 64 bits wide in a register and

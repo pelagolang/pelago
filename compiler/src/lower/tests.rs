@@ -1597,7 +1597,7 @@ fn main() {
     assert_eq!(output_of(src), "some(4) 4 true false 5\n11\n");
 }
 
-// ---- The native build on the edge cases of `design note backend` -------------------------------------
+// ---- The native build on the edge cases -------------------------------------
 
 #[test]
 fn appending_with_plus_assign_keeps_its_meaning() {
