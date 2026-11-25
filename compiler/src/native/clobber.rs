@@ -1,4 +1,4 @@
-//! What a call destroys, function by function (card A-10, `design note os-memory` section 3).
+//! What a call destroys, function by function.
 //!
 //! A call used to destroy every caller-saved register. Functions are now selected and allocated callee
 //! first; the registers a function writes (its own, plus those its callees write) form its *write

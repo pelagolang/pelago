@@ -1,4 +1,4 @@
-//! Common subexpressions (card A-11): when an operation is computed again on the same operands and an
+//! Common subexpressions: when an operation is computed again on the same operands and an
 //! earlier copy dominates it, the later one reuses the earlier result. `n % 10` and `n / 10` each
 //! become a high multiply and shifts; after this pass they share the multiply.
 //!

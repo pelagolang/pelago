@@ -31,7 +31,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 BRAND = HERE.parent
 
-# Palette (brand record, private plans repo)
+# Palette
 TEAL = "#0E7C86"
 LAGOON = "#5FD0C8"
 DEEP = "#0B2239"

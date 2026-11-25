@@ -1,4 +1,4 @@
-//! Masks that no one needs (card A-11). A backward analysis finds, for every integer value, the bits
+//! Masks that no one needs. A backward analysis finds, for every integer value, the bits
 //! that some later use can tell apart: `x & 1023` reads ten bits of `x`, a sum reads the bits of its
 //! operands up to the highest bit it is asked for, a comparison, a store, a call or a checked
 //! operation reads them all. A block parameter needs what its users need, and so do the values the

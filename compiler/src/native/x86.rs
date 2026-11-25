@@ -1,4 +1,4 @@
-//! An x86-64 instruction encoder: only the forms the code generator uses (card A-09).
+//! An x86-64 instruction encoder: only the forms the code generator uses.
 //!
 //! `Asm` collects bytes and labels. Jumps and calls to labels are always `rel32`; references to
 //! the data sections are patched when the final layout is known ([`Asm::finish`]). Every encoding
