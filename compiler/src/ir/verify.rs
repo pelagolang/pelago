@@ -67,7 +67,7 @@ fn check(f: &Func, m: Option<&Module>) -> Vec<String> {
         err!("has no blocks".to_string());
         return errs;
     }
-    // A frozen mark names a load that is still in the function (docs/design/mir.md 8.1).
+    // A frozen mark names a load that is still in the function (design note mir 8.1).
     let placed: std::collections::HashSet<usize> = f
         .blocks
         .iter()

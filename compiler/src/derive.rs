@@ -3,7 +3,7 @@
 //! The derive appends ordinary Pelago code to the module before it is checked (the spans of the
 //! generated items point into the appended text, so nothing else in the compiler has to know about
 //! it). The code is what you would write by hand with the helpers of `std.json`
-//! (`docs/design/json.md`): a struct is an object read by field name, an enum without payloads is
+//! (`design note json`): a struct is an object read by field name, an enum without payloads is
 //! the text of its case, an enum with payloads is an object with one member named after the case.
 //! A type needs `import std.json` in the module that derives it.
 

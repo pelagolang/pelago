@@ -84,7 +84,7 @@ Branch `dennis/feat/for-step`, title `feat(parser): add step to for ranges`.
 > **After:** `for i in 0..10 step 2` counts by two. `step` stays a soft keyword.
 >
 > ## Why
-> Decision 14 in `ROADMAP.md`; plan card A-12.
+> Decision 14 in the roadmap decisions table; plan card A-12.
 >
 > ## How
 > Parser reads the optional `step` expression, checker requires an integer, lowering emits an add of the step.
@@ -95,7 +95,7 @@ Branch `dennis/feat/for-step`, title `feat(parser): add step to for ranges`.
 > - `cargo run -- check examples/programs` clean (`examples/tour.pel` is a syntax sampler that only has to lex, parse and format).
 >
 > ## Language and docs in step
-> - [x] `docs/design/basics.md` and the `ROADMAP.md` decisions table updated in this PR
+> - [x] The design doc and the roadmap decisions table (private plans repo) updated
 > - [x] `parser`, `ast_print.rs`, `visit.rs`, `check.rs`, `examples/tour.pel` all done
 > - [x] `keywords.md` and `keyword.rs` unchanged (`step` was already soft)
 >

@@ -29,7 +29,7 @@ Title: Conventional Commits, `type(scope): summary`, e.g. `perf(native): divide 
 
 ## Why
 
-<The problem or the card behind it. Link the plan card (`docs/plans/cards/...`), issue or earlier PR.>
+<The problem or the card behind it. Name the plan card (kept in the private plans repo), or link the issue or earlier PR. Do not link private files.>
 
 ## How
 
@@ -53,7 +53,7 @@ cargo test
 
 ### Performance (`perf`, or anything that can change generated code)
 
-Run `python3 bench/harness/run.py --runs 7` from the repository root (see `bench/design.md`). Goal: every row at or below **both** C `-O2` and Rust `-O`.
+Run `python3 bench/harness/run.py --runs 7` from the repository root (see the benchmark notes in the private plans repo). Goal: every row at or below **both** C `-O2` and Rust `-O`.
 
 | program | before (s) | after (s) | C -O2 (s) | Rust -O (s) | vs -O2 | vs Rust |
 |---|---|---|---|---|---|---|
@@ -80,10 +80,10 @@ Run `python3 bench/harness/run.py --runs 7` from the repository root (see `bench
 
 <!-- Delete if nothing here applies. -->
 
-- [ ] Decision recorded in the design doc under `docs/design/` and in the `ROADMAP.md` decisions table
-- [ ] `docs/design/keywords.md` and `compiler/src/keyword.rs` agree; editors regenerated (`BLESS=1 cargo test editors`)
+- [ ] Decision recorded in the design doc and the `ROADMAP.md` decisions table in `pelagolang/plans`
+- [ ] The keywords design doc (in `pelagolang/plans`) and `compiler/src/keyword.rs` agree; editors regenerated (`BLESS=1 cargo test editors`)
 - [ ] New syntax: parser, `ast_print.rs`, `visit.rs`, `check.rs`, `examples/tour.pel` and a parser test all done
-- [ ] Plan card and `docs/plans/BOARD.md` moved to the right column
+- [ ] Plan card and board in `pelagolang/plans` moved to the right column
 - [ ] No dropped word came back (`class`, `match`, `when`, `extern`, `comptime`, `inline`, `null`, word operators)
 - [ ] No new external dependency (or the owner agreed to it first)
 

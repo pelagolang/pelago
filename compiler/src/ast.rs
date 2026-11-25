@@ -131,7 +131,7 @@ pub enum TypeKind {
     /// `(A, B)`; `()` is the empty tuple.
     Tuple(Vec<Type>),
     /// `(A, B; N)` or `braid<A, B; N>` (the flag is true for the second spelling): a braid, a fixed run of
-    /// `N` slots whose types repeat in the cycle `A, B, ...` (docs/design/alternating.md).
+    /// `N` slots whose types repeat in the cycle `A, B, ...` (design note alternating).
     FixedTuple(Vec<Type>, Box<Expr>, bool),
     /// `T?`
     Option(Box<Type>),
@@ -422,7 +422,7 @@ pub enum ExprKind {
     DotName(Ident),
     Paren(Box<Expr>),
     Tuple(Vec<Expr>),
-    /// `(a, b; 6)`: the cycle `a, b` repeated up to 6 slots; a braid (docs/design/alternating.md).
+    /// `(a, b; 6)`: the cycle `a, b` repeated up to 6 slots; a braid (design note alternating).
     BraidRepeat {
         items: Vec<Expr>,
         count: Box<Expr>,

@@ -8,7 +8,7 @@
 /// ```
 /// A number without fraction or exponent that fits `int` is an `integer`, so large ids stay exact; every other
 /// number is a `number` (a float). Objects keep their keys in the order they were written.
-/// Typed decoding into your own structs: `docs/design/json.md`.
+/// Typed decoding into your own structs: `design note json`.
 
 //~ One JSON value.
 pub enum value {

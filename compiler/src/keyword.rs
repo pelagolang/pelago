@@ -4,7 +4,7 @@
 //! keyword, and the lookup. The lookup is a `match` on the string, which the
 //! compiler turns into efficient code, so there is no hash map to build at start-up.
 //!
-//! Source of truth for the design is `docs/design/keywords.md`. Keep them in step.
+//! Source of truth for the design is `design note keywords`. Keep them in step.
 //!
 //! # Hard and soft keywords
 //!
@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn decided_words_exist() {
-        // Spot checks against docs/design/keywords.md.
+        // Spot checks against design note keywords.
         for word in [
             "var", "const", "fn", "obj", "meta", "inout", "sink", "become", "unless", "of",
         ] {
