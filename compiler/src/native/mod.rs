@@ -80,6 +80,8 @@ pub struct Uses {
     pub ctx: bool,
     /// The OS memory calls (`Op::Os`).
     pub os: bool,
+    /// `OsKind::ThreadStart`: the heap and the output buffer need their lock (AArch64 only; x86-64 always has it).
+    pub threads: bool,
 }
 
 /// What a program that talks to its process (arguments, descriptors, exit) cannot yet be built for.
@@ -106,6 +108,7 @@ impl Uses {
         fmod: true,
         ctx: true,
         os: true,
+        threads: true,
     };
 
     /// The routines the module's instructions can call (a little too many is fine, too few is not).
@@ -130,6 +133,9 @@ impl Uses {
                     Op::CtxInit(..) | Op::CtxSwitch(..) => u.ctx = true,
                     Op::Os(k, ..) => {
                         u.os = true;
+                        if *k == crate::ir::OsKind::ThreadStart {
+                            u.threads = true;
+                        }
                         // Opening a file builds a block for the path on Windows.
                         if *k == crate::ir::OsKind::Open {
                             u.alloc = true;

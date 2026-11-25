@@ -74,6 +74,10 @@ enum Sys {
     Close,
     ClockGettime,
     Nanosleep,
+    /// `clone` and `futex`, and `exit` of one thread (Linux only).
+    Clone,
+    Futex,
+    ThreadExit,
     Getrandom,
     Faccessat,
     Unlinkat,
@@ -107,6 +111,10 @@ fn number(os: Os, call: Sys) -> i64 {
         Sys::ClockGettime => (113, 0),
         // `nanosleep`; macOS has none in this table, `OsKind::Sleep` answers -3 there.
         Sys::Nanosleep => (101, 0),
+        // Threads are Linux only here (`OsKind::ThreadStart`, `FutexWait` and `FutexWake` answer -3 elsewhere).
+        Sys::Clone => (220, 0),
+        Sys::Futex => (98, 0),
+        Sys::ThreadExit => (93, 0),
         // `getrandom` on Linux, `getentropy` on macOS (the buffer and at most 256 bytes).
         Sys::Getrandom => (278, 500),
         // The file-system calls are Linux only here (`OsKind::Fs` and `Dents` answer -3 on the others).
@@ -145,6 +153,13 @@ pub struct Runtime {
     pub free: Label,
     /// `rtRealloc(ptr = x0, size = x1) -> x0`
     pub realloc: Label,
+    /// The entry points the generated code calls for `print`, `alloc`, `free` and `realloc`: the routines above,
+    /// taken under the runtime's lock once a thread has been started (`rtThreadStart`), else just jumped to.
+    /// Where no thread is started (not Linux, or no `ThreadStart`) they are the routines themselves.
+    pub print_x: Label,
+    pub alloc_x: Label,
+    pub free_x: Label,
+    pub realloc_x: Label,
     /// `rtExit(status = x0)`
     pub exit: Label,
     /// `rtWriteU64(fd = x0, value = x1)`: decimal digits.
@@ -472,14 +487,22 @@ pub fn emit_for(
     let rsv = win || mac;
     let state_at = data.add_zero(STATE_SIZE, 16);
     assert_eq!(state_at, 0, "the runtime state must come first in .data");
+    // The locked entry points exist on Linux, for a program that starts threads.
+    let threads = os == Os::Linux && uses.threads;
+    let (l_print, l_alloc, l_free, l_realloc) =
+        (a.new_label(), a.new_label(), a.new_label(), a.new_label());
     let rt = Runtime {
         write_fd: a.new_label(),
-        print: a.new_label(),
+        print: l_print,
         stop: a.new_label(),
         stop_at: a.new_label(),
-        alloc: a.new_label(),
-        free: a.new_label(),
-        realloc: a.new_label(),
+        alloc: l_alloc,
+        free: l_free,
+        realloc: l_realloc,
+        print_x: if threads { a.new_label() } else { l_print },
+        alloc_x: if threads { a.new_label() } else { l_alloc },
+        free_x: if threads { a.new_label() } else { l_free },
+        realloc_x: if threads { a.new_label() } else { l_realloc },
         exit: a.new_label(),
         write_u64: a.new_label(),
         memcpy: a.new_label(),
@@ -1214,6 +1237,17 @@ pub fn emit_for(
 
     if uses.os {
         emit_os(a, &rt, os, flush, uses.print, alloc_used && free_used);
+        if threads {
+            emit_locked_entries(
+                a,
+                [
+                    (uses.print, rt.print_x, rt.print),
+                    (alloc_used, rt.alloc_x, rt.alloc),
+                    (free_used, rt.free_x, rt.free),
+                    (uses.realloc, rt.realloc_x, rt.realloc),
+                ],
+            );
+        }
     }
 
     if uses.ctx {
@@ -1742,6 +1776,46 @@ fn advise_huge(a: &mut Asm, os: Os, addr: Reg, len: Reg) {
     a.mov_ri(X2, 14);
     sys(a, os, Sys::Madvise);
     a.bind(skip);
+}
+
+/// The entry points of the shared routines. One thread (no thread started yet, the flag at 176 is 0): a
+/// jump to the routine, the whole cost. Several: a spin lock (a `ldaxr`/`stlxr` loop on the word at 184)
+/// held for the routine, one lock for the heap and the output buffer, since both are short. The wrappers
+/// touch only `x10` to `x13` and the link register, so every argument reaches the routine as it was.
+fn emit_locked_entries(a: &mut Asm, routines: [(bool, Label, Label); 4]) {
+    for (used, outer, inner) in routines {
+        if !used {
+            continue;
+        }
+        let (locked, spin, wait, got) =
+            (a.new_label(), a.new_label(), a.new_label(), a.new_label());
+        a.bind(outer);
+        state(a, X10, 176);
+        a.ldr(X11, X10, 0, 8);
+        a.cbnz(X11, locked);
+        a.b(inner);
+        a.bind(locked);
+        a.stp_pre(LR, XZR, SP, -16);
+        a.add_ri(X10, X10, 8);
+        a.mov_ri(X11, 1);
+        a.bind(spin);
+        a.ldaxr(X12, X10);
+        a.cbnz(X12, wait);
+        a.stlxr(X13, X11, X10);
+        a.cbnz(X13, spin);
+        a.b(got);
+        a.bind(wait);
+        a.word(0xD503_203F); // yield
+        a.b(spin);
+        a.bind(got);
+        a.dmb_ish();
+        a.bl(inner);
+        state(a, X10, 184);
+        a.dmb_ish();
+        a.str(XZR, X10, 0, 8);
+        a.ldp_post(LR, XZR, SP, 16);
+        a.ret();
+    }
 }
 
 /// The OS memory calls (docs/design/os-memory.md), in a function of their own: `emit_for` is already a huge
@@ -2749,11 +2823,75 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
     a.dmb_ish();
     a.mov_rr(X0, X9);
     a.ret();
-    // Threads and futexes: not on the 64-bit Arm targets yet (-3).
-    for i in [19, 20, 21] {
-        a.bind(rt.os[i]);
+    if os == Os::Linux {
+        // thread_start(code = x0, arg = x1, stack_top = x2): `clone` sharing the address space, files, handlers
+        // and thread group. The top of the stack holds, from `stack_top - 8` down, the thread's word (the kernel
+        // writes its id there at once and clears it, waking a futex wait, when the thread has ended: the stack is
+        // free to go after that), a pad, the code and the argument; the child loads the argument and the code
+        // and calls `code(arg)`, then ends only its own thread (`exit`, not `exit_group`).
+        let (parent, failed) = (a.new_label(), a.new_label());
+        a.bind(rt.os[19]);
+        state(a, X9, 176);
+        a.mov_ri(X10, 1);
+        a.str(X10, X9, 0, 8); // from now on the heap and the output buffer are locked
+        assert!(a.and_ri(X10, X2, !15u64));
+        a.sub_ri(X11, X10, 32);
+        a.stp(X1, X0, X11, 0);
+        a.sub_ri(X2, X10, 8);
+        a.mov_rr(X4, X2);
+        a.mov_ri(X3, 0);
+        a.mov_rr(X1, X11);
+        a.mov_ri(X0, 0x350F00); // VM, FS, FILES, SIGHAND, THREAD, SYSVSEM, PARENT_SETTID, CHILD_CLEARTID
+        sys(a, os, Sys::Clone);
+        a.cbnz(X0, parent);
+        a.ldp(X0, X9, SP, 0);
+        a.blr(X9);
+        a.mov_ri(X0, 0);
+        sys(a, os, Sys::ThreadExit);
+        a.bind(parent);
+        a.cmp_ri(X0, 0);
+        a.b_cond(Cond::Lt, failed);
+        a.ret();
+        a.bind(failed);
         a.mov_ri(X0, -3);
         a.ret();
+        // futex_wait(address = x0, expected = x1, nanoseconds = x2): `futex` with `FUTEX_WAIT` and a relative
+        // timeout (none when negative). Every outcome but a failure to call is 0.
+        let (forever, go) = (a.new_label(), a.new_label());
+        a.bind(rt.os[20]);
+        a.sub_ri(SP, SP, 16);
+        a.cmp_ri(X2, 0);
+        a.b_cond(Cond::Lt, forever);
+        a.mov_ri(X9, 1_000_000_000);
+        a.udiv(X10, X2, X9);
+        a.msub(X11, X10, X9, X2);
+        a.stp(X10, X11, SP, 0);
+        a.mov_from_sp(X3);
+        a.b(go);
+        a.bind(forever);
+        a.mov_ri(X3, 0);
+        a.bind(go);
+        a.mov_rr(X2, X1);
+        a.mov_ri(X1, 0); // FUTEX_WAIT (not private: the kernel wakes a thread's word that way)
+        a.mov_ri(X4, 0);
+        a.mov_ri(X5, 0);
+        sys(a, os, Sys::Futex);
+        a.add_ri(SP, SP, 16);
+        a.mov_ri(X0, 0);
+        a.ret();
+        // futex_wake(address = x0, count = x1): `FUTEX_WAKE`; gives how many woke.
+        a.bind(rt.os[21]);
+        a.mov_rr(X2, X1);
+        a.mov_ri(X1, 1); // FUTEX_WAKE
+        sys(a, os, Sys::Futex);
+        a.ret();
+    } else {
+        // Threads and futexes: not on Windows or macOS (-3).
+        for i in [19, 20, 21] {
+            a.bind(rt.os[i]);
+            a.mov_ri(X0, -3);
+            a.ret();
+        }
     }
     // The exits.
     a.bind(bad);
