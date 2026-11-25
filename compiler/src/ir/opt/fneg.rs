@@ -1,4 +1,4 @@
-//! A negation in front of a multiplication or division by a constant (card A-11): `(-x) * c` is
+//! A negation in front of a multiplication or division by a constant: `(-x) * c` is
 //! `x * (-c)`, exactly (the sign of a product is the exclusive or of the signs, and negating a
 //! constant changes no digit), so the sign flip leaves the chain of dependent operations. In a loop
 //! like `a = -x * 0.001; v += a * 0.01` that chain is what the time is made of.

@@ -11,7 +11,7 @@ type(scope): summary
 
 Body: what changed and why, wrapped at about 72 columns. Optional.
 
-Footer: BREAKING CHANGE: ..., Refs: card A-11. Optional.
+Footer: BREAKING CHANGE: ..., Refs: #123. Optional.
 ```
 
 - `scope` is optional. In `pelago` use the stage or area: `lexer`, `parser`, `check`, `typecheck`, `lower`, `ir`, `opt`, `native`, `lsp`, `fmt`, `editors`, `bench`, `docs`.
@@ -26,7 +26,7 @@ Footer: BREAKING CHANGE: ..., Refs: card A-11. Optional.
 | `fix` | something was wrong, now it is right (the branch type may be `bug` or `fix`; the commit type is `fix`) |
 | `perf` | faster code, a faster compiler, or smaller output |
 | `refactor` | no change in behaviour |
-| `docs` | docs, plans, comments only |
+| `docs` | docs and comments only |
 | `test` | tests only |
 | `chore` | tooling and housekeeping that fits nowhere else |
 | `ci` | GitHub workflows and other CI files |

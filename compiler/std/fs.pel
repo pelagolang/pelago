@@ -14,7 +14,7 @@
 /// ```
 ///
 /// Paths are UTF-8 text and are passed to the operating system unchanged. Every function gives an `io_error` as
-/// a value; none stops the program (docs/design/input.md).
+/// a value; none stops the program (design note input).
 
 import std.io
 import std.path

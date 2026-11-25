@@ -1,4 +1,4 @@
-//! Lowering the checked program to the IR (`docs/design/ir.md`).
+//! Lowering the checked program to the IR (`design note ir`).
 //!
 //! The lowering works function by function, starting from the functions that have no type parameters
 //! and from `main`; every call to a generic function (or a method of a generic type) asks for an
@@ -188,7 +188,7 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
 }
 
 /// Like `lower`; with `language_heap` the library's `heap_alloc`, `heap_free` and `heap_realloc` are lowered too, for
-/// `opt::expand_heap` to call (docs/design/heap.md, stage H6).
+/// `opt::expand_heap` to call (design note heap, stage H6).
 pub fn lower_with(
     program: &Program,
     res: &Resolved,

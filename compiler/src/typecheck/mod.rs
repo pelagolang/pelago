@@ -1,4 +1,4 @@
-//! The type checker (stage 2 of `docs/design/checker.md`): a type for every expression.
+//! The type checker (stage 2 of `design note checker`): a type for every expression.
 //!
 //! The shape of the work:
 //!

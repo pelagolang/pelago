@@ -19,7 +19,7 @@
 /// `finish` and `squeeze` work on a copy and the hasher stays usable. Only `^`, `&`, `~` and rotations touch the data
 /// (no table lookups, no data-dependent branches). Checked against Python's `hashlib` (`compiler/std/tests/sha3.pel`).
 /// cSHAKE and KMAC (SP 800-185) are here too; TupleHash, ParallelHash and KangarooTwelve are not yet (see
-/// `docs/design/crypto.md`).
+/// `design note crypto`).
 
 import std.hash
 import { hasher } = std.hash

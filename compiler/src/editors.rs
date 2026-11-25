@@ -1,4 +1,4 @@
-//! Editor support generated from the compiler's own tables (card B-03): the TextMate grammar used by
+//! Editor support generated from the compiler's own tables: the TextMate grammar used by
 //! VS Code and many other editors, and `pelago keywords --json`.
 //!
 //! The grammar is `editors/textmate/template.tmLanguage.json` (hand written) with markers such as
