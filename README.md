@@ -153,7 +153,7 @@ A plain `//` or `/* */` is a lexer error with a hint.
 
 | Editor | Repository | |
 |---|---|---|
-| VS Code | [pelagolang/vscode-pelago](https://github.com/pelagolang/vscode-pelago) | highlighting, snippets and the language server |
+| VS Code | [pelagolang/vscode-pelago](https://github.com/pelagolang/vscode-pelago) | highlighting, snippets and the language server; install from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=pelagolang.pelago) |
 | Zed | [pelagolang/zed-pelago](https://github.com/pelagolang/zed-pelago) | highlighting and the language server (`pelago` must be on your `PATH`) |
 | Neovim, Helix and others | [pelagolang/tree-sitter-pelago](https://github.com/pelagolang/tree-sitter-pelago) | the Tree-sitter grammar |
 
