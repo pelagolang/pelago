@@ -1043,7 +1043,9 @@ impl<'a> Lowerer<'a> {
         if let (Some(k), true) = (self.soft_of(lt), self.call_target(e.span).is_none()) {
             return self.soft_compare(e, op, lhs, rhs, k);
         }
-        if !self.is_scalar(lt) || matches!(self.kind(lt), TyKind::Box(_)) {
+        let is_obj =
+            matches!(self.kind(lt), TyKind::Adt(d, _) if self.res.def(d).kind == DefKind::Obj);
+        if !self.is_scalar(lt) || matches!(self.kind(lt), TyKind::Box(_)) || is_obj {
             return self.compare_mem(e, op, lhs, rhs, lt);
         }
         let signed = self.is_signed(lt);
