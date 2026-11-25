@@ -1,4 +1,4 @@
-//! The toolchain version and its channel (card B-06).
+//! The toolchain version and its channel.
 //!
 //! One version covers the compiler, interpreter, `std` and the CLI. The channel is read from the
 //! version text: `-nightly.`, `-beta.` and `-rc.` mark the other channels, a plain `X.Y.Z` is stable.

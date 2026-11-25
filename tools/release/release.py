@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Release helper (card B-06). The one place that knows the version rules.
+"""Release helper. The one place that knows the version rules.
 
 Standard library only. Subcommands:
 

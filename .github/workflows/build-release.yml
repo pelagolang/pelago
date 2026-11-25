@@ -1,4 +1,4 @@
-# Builds the six release archives (card B-06). Called by release.yml (tags) and nightly.yml.
+# Builds the six release archives. Called by release.yml (tags) and nightly.yml.
 name: build-release
 
 on:

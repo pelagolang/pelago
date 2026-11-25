@@ -1,4 +1,4 @@
-//! Build script: records the commit hash and date for `pelago --version` (card B-06).
+//! Build script: records the commit hash and date for `pelago --version`.
 //!
 //! `PELAGO_BUILD_VERSION` (set by the release workflows) overrides the crate version, so a nightly
 //! can be called `0.2.0-nightly.20261126+abc1234` without editing `Cargo.toml`. Outside a git

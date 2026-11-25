@@ -1,6 +1,6 @@
 # Release signing
 
-Releases are signed with Ed25519 (card B-06). The workflows sign `SHA256SUMS` (or `SHA256SUMS-<version>` for nightlies) with the private key in the GitHub Actions secret `RELEASE_SIGNING_KEY` (a PKCS#8 PEM). The public key goes in `docs/release/pelago-release.pub` (a PEM `PUBLIC KEY`), which the workflows use to check their own signature, and which `pelago self update` will embed.
+Releases are signed with Ed25519. The workflows sign `SHA256SUMS` (or `SHA256SUMS-<version>` for nightlies) with the private key in the GitHub Actions secret `RELEASE_SIGNING_KEY` (a PKCS#8 PEM). The public key goes in `docs/release/pelago-release.pub` (a PEM `PUBLIC KEY`), which the workflows use to check their own signature, and which `pelago self update` will embed.
 
 Until the secret exists, nightlies publish checksums with no signature (a warning in the run), and a tagged release fails closed.
 

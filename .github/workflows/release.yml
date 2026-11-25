@@ -1,4 +1,4 @@
-# Tag push `v*` builds every target and publishes the release (card B-06).
+# Tag push `v*` builds every target and publishes the release.
 name: release
 
 on:

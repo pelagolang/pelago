@@ -1,4 +1,4 @@
-# Daily nightly build of `main` (card B-06). Runs only when main changed since the last nightly and its
+# Daily nightly build of `main`. Runs only when main changed since the last nightly and its
 # CI is green. One rolling pre-release, tag `nightly`, keeps the last 14 builds as assets.
 name: nightly
 
