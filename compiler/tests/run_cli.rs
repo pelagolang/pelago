@@ -321,6 +321,18 @@ fn time_timers_sleep_and_tick() {
 }
 
 #[test]
+fn sleeping_without_spawning_leaks_nothing() {
+    // `sleep` sets the task queue up without any task starting; the end of `main` must free it again.
+    let src = "import std.time\nfn main() {\n    time.sleep(time.millis(1))\n    const d = time.deadline(time.millis(1))\n    print(\"done\")\n}\n";
+    for flags in [&["--leak-check"][..], &["--interp", "--leak-check"]] {
+        let (out, err, code) = run(flags, src);
+        assert_eq!(out.trim_end(), "done", "{flags:?}: {err}");
+        assert!(!err.contains("leaked"), "{flags:?}: {err}");
+        assert_eq!(code, 0, "{flags:?}");
+    }
+}
+
+#[test]
 fn atomics_give_the_old_value_and_share_through_a_copy() {
     let src = "fn main() {\n    const a = atomic(5)\n    print(a.add(3))\n    print(a.load())\n    print(a.swap(10))\n    print(a.compareSwap(10, 11))\n    print(a.compareSwap(10, 12))\n    print(a.load())\n    a.store(1)\n    const b = copy a\n    b.add(4)\n    print(a.load())\n}\n";
     for flags in args_modes() {
