@@ -19,6 +19,7 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all
       - run: cargo run -- fmt --check examples
+      - run: python3 tools/release/test_release.py
 
   # The native backend runs its programs for real: Linux ones above, Windows ones here (no WSL, no Wine).
   windows:
