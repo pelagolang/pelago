@@ -281,7 +281,14 @@ impl<'a> Lowerer<'a> {
             TyKind::Tuple(_) | TyKind::AltTuple(..) => self.cmp_fields(a, b, ty),
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Enum => self.cmp_enum(a, b, ty),
-                DefKind::Obj => false,
+                DefKind::Obj => {
+                    // `@derive(order)`: the fields of the two objects, in order.
+                    let x = self.load_at(a, 0, IrTy::Ptr);
+                    let y = self.load_at(b, 0, IrTy::Ptr);
+                    let bx = self.addr(x, super::obj::OBJ_HEADER);
+                    let by = self.addr(y, super::obj::OBJ_HEADER);
+                    self.cmp_fields(bx, by, ty)
+                }
                 _ => self.cmp_fields(a, b, ty),
             },
             TyKind::Option(_) | TyKind::Result(..) => self.cmp_enum(a, b, ty),

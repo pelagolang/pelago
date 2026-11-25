@@ -1,6 +1,6 @@
 /// `@derive(clone)`, `@derive(eq)` and `@derive(hash)` on an `obj`: fields, nested objects, lists,
 /// options and braids; and the derived `eq` and `hash` agree with hand-written ones.
-@derive(clone, eq, hash)
+@derive(clone, eq, order, hash)
 obj point { x: int, y: int }
 
 @derive(clone, eq, hash)
@@ -85,4 +85,7 @@ fn main() {
     dogs.insert!(copy rex)
     dogs.insert!(sink rex2)
     print(dogs.len())
+
+    /// order: field by field, first field first
+    print(point { x: 1, y: 5 } < point { x: 2, y: 0 }, point { x: 2, y: 1 } < point { x: 2, y: 0 }, point { x: 2, y: 0 } <= point { x: 2, y: 0 })
 }
