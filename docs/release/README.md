@@ -25,3 +25,19 @@ Get-FileHash pelago-0.1.0-x86_64-windows.zip -Algorithm SHA256   # compare with 
 ```
 
 Windows binaries are not Authenticode-signed at first, so SmartScreen shows an "unknown publisher" warning on first run. The checksum and signature above are the way to check them.
+
+## Installing and updating
+
+```powershell
+irm https://pelagolang.github.io/install.ps1 | iex                      # Windows, stable
+& ([scriptblock]::Create((irm https://pelagolang.github.io/install.ps1))) -Channel nightly
+```
+
+```sh
+curl -fsSL https://pelagolang.github.io/install.sh | sh                  # Linux and macOS, stable
+curl -fsSL https://pelagolang.github.io/install.sh | sh -s -- --channel nightly
+```
+
+The scripts live in `tools/install/` and are copied to the website. `pelago self update [--channel stable|beta|rc|nightly] [--version X.Y.Z] [--check]` updates an installed binary and remembers the channel in `pelago.channel` next to it. Until the first signed release both need `--allow-unsigned` (`-AllowUnsigned`), which still checks the SHA-256.
+
+The release public key is compiled into `pelago` (`RELEASE_KEYS` in `compiler/src/selfupdate/mod.rs`) and pasted into both scripts (`PUBKEY`) when the key exists.
