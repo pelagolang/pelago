@@ -1477,7 +1477,7 @@ impl<'m> Sel<'m> {
             };
             let mut ops = vec![dop, Operand::use_(ra), rhs, Operand::Imm(kind)];
             ops.extend(tail);
-            self.emit(MInst::new(op::CHK, ops).clobbering(RegSet::of(&[x::x(9)])));
+            self.emit(MInst::new(op::CHK, ops));
             return;
         }
         // Narrow: no overflow in 64 bits; the result must survive the trip through the width.

@@ -4078,3 +4078,65 @@ fn wide_integers_stop_like_the_narrow_ones() {
         Err("shifted by the width or more".to_string())
     );
 }
+
+/// A large `main` with many values alive at once, checked arithmetic against values the optimiser
+/// cannot fold, and floats: every instruction that has to reload several spilled registers.
+fn register_pressure_program(n: usize) -> String {
+    let mut s = String::from(
+        "fn mix(x: int, k: int) -> int {\n    var r = x\n    var i = 0\n    while i < k { r = (r * 31 + i) % 1000003; i += 1 }\n    r\n}\n\nfn main() {\n    var seed = mix(7, 3)\n",
+    );
+    for i in 0..n {
+        s += &format!("    var a{i} = mix(seed + {i}, 4)\n");
+    }
+    for i in 0..n {
+        s += &format!("    var f{i} = 1.5 * (a{i} to float) / 3.0\n");
+    }
+    s += "    var s = 0\n    var t = 0.0\n";
+    for i in 0..n {
+        s += &format!(
+            "    s = s + a{i} * a{} - a{}\n    t = t + f{i} * f{}\n",
+            (i * 7) % n,
+            (i * 13) % n,
+            (i * 5) % n
+        );
+    }
+    s += "    print(s)\n    print(t)\n}\n";
+    s
+}
+
+/// A native build with one, two or three registers of each kind must not run out of scratch
+/// registers: an AArch64 checked add that also carries the test of a `CheckedIf` names four
+/// spilled registers (and a checked multiply used to reserve `x9` as well). The programs are only
+/// built, so this runs on every machine.
+#[test]
+fn a_large_main_builds_with_one_register_of_each_kind() {
+    use crate::native::{gen, gen_a64, Os};
+    let src = register_pressure_program(40);
+    let l = lowered(&src);
+    let mut optimised = l.module.clone();
+    crate::ir::opt::optimize(&mut optimised, crate::ir::opt::Options::default());
+    crate::ir::opt::prune(&mut optimised, &["main"]);
+    for (what, m) in [("plain", &l.module), ("optimised", &optimised)] {
+        for limit in [1, 2, 3] {
+            gen::REG_LIMIT.with(|l| l.set(limit));
+            let opts = gen::Options {
+                leak_check: false,
+                target: Os::Linux,
+                symbols: false,
+            };
+            let x86 = gen::compile(m, "main", &opts);
+            let a64 = gen_a64::compile(m, "main", &opts);
+            gen::REG_LIMIT.with(|l| l.set(usize::MAX));
+            assert!(
+                x86.is_ok(),
+                "x86-64 {what}, {limit} registers: {:?}",
+                x86.err()
+            );
+            assert!(
+                a64.is_ok(),
+                "AArch64 {what}, {limit} registers: {:?}",
+                a64.err()
+            );
+        }
+    }
+}
