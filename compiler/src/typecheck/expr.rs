@@ -609,7 +609,7 @@ impl<'p> Checker<'p> {
     }
 
     /// A parenthesised list where the type says it is a braid: one item per slot, item `i` of the type of
-    /// slot `i mod k` (rule L1 of docs/design/alternating.md).
+    /// slot `i mod k` (rule L1 of design note alternating).
     fn braid_literal(&mut self, e: &'p Expr, items: &'p [Expr], ts: Vec<Ty>, n: u64) -> Ty {
         if items.len() as u64 != n {
             self.err(

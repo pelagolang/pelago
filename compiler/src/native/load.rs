@@ -1,4 +1,4 @@
-//! Runs a built Linux image inside the current process (`pelago run`, docs/design/run-mode.md).
+//! Runs a built Linux image inside the current process (`pelago run`, design note run-mode).
 //!
 //! The image is a static executable with no libc: it sits at a fixed address, its entry builds a
 //! stack of its own and the program ends in `exit_group`. So instead of writing a file and starting a

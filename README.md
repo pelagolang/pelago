@@ -27,7 +27,7 @@ fn main() {
 }
 ```
 
-Status: the stage 0 compiler, written in Rust with no dependencies, handles the whole language. It lexes, parses, resolves names, checks types and value semantics, lowers to an IR, optimises, and produces x86-64 executables for Linux (ELF) and Windows (PE) without a linker or libc. A formatter and a language server are built. The compiler is not yet rewritten in Pelago itself, and a few things are still open (real threads, `async` suspension, other CPUs); see [docs/NEXT.md](docs/NEXT.md) and the [task board](docs/plans/BOARD.md).
+Status: the stage 0 compiler, written in Rust with no dependencies, handles the whole language. It lexes, parses, resolves names, checks types and value semantics, lowers to an IR, optimises, and produces x86-64 executables for Linux (ELF) and Windows (PE) without a linker or libc. A formatter and a language server are built. The compiler is not yet rewritten in Pelago itself, and a few things are still open (real threads, `async` suspension, other CPUs); the task board and roadmap are kept in a private planning repository.
 
 ## The language in brief
 
@@ -40,7 +40,7 @@ Status: the stage 0 compiler, written in Rust with no dependencies, handles the 
 
 ### Comments
 
-Pelago has its own comment syntax (decided in [docs/design/comments.md](docs/design/comments.md)):
+Pelago has its own comment syntax (see the comments page of the language reference on the website):
 
 | Form | Meaning |
 |---|---|
@@ -93,11 +93,11 @@ fmt:
 
 The file is a strict block-style YAML subset (no anchors, tags, quotes, lists or `{}`; `format: 1` first).
 
-Unknown sections and keys are errors. Line wrapping from the syntax tree is next; see [S-07](docs/plans/cards/S-07-formatter.md).
+Unknown sections and keys are errors. Line wrapping from the syntax tree is next.
 
 ### Language server
 
-`pelago lsp` gives errors as you type, hover, go to definition, find references, rename, completion, signature help, document symbols, code actions, semantic tokens and formatting. It is checked by tests in `compiler/src/lsp/`; the design is in [S-06](docs/plans/cards/S-06-language-server.md).
+`pelago lsp` gives errors as you type, hover, go to definition, find references, rename, completion, signature help, document symbols, code actions, semantic tokens and formatting. It is checked by tests in `compiler/src/lsp/`.
 
 ## Editor support
 
@@ -118,16 +118,16 @@ python3 bench/harness/run.py                       # needs python 3.11+, gcc and
 python3 bench/harness/run.py --runs 7 --size small,medium,large collatz sieve
 ```
 
-A snapshot (best of 5, one container, native `--opt`): geometric mean 1.04x of C `-O2` and 1.09x of Rust, at or below C `-O2` on 8 of 16 programs (the five newest, covering sorting, strings, `switch`, structs in lists and `result` paths, are the weakest). Numbers move with every performance PR; the work plan is [docs/perf/a11-work-items.md](docs/perf/a11-work-items.md), and the backend is described in [docs/design/backend.md](docs/design/backend.md). CI also runs the suite on Windows.
+A snapshot (best of 5, one container, native `--opt`): geometric mean 1.04x of C `-O2` and 1.09x of Rust, at or below C `-O2` on 8 of 16 programs (the five newest, covering sorting, strings, `switch`, structs in lists and `result` paths, are the weakest). Numbers move with every performance PR; the benchmark harness is described in `bench/`. CI also runs the suite on Windows.
 
 ## Repository layout
 
 - `compiler/`: the stage 0 compiler (`src/`), the library (`core/core.pel`), the tests; the benchmarks are in `bench/`.
 - `examples/`: `tour.pel`, `hello.pel` and `programs/`.
-- `docs/design/`: design drafts for each part of the language and compiler (start with [basics](docs/design/basics.md), [types](docs/design/types.md), [memory](docs/design/memory.md), [checker](docs/design/checker.md), [ir](docs/design/ir.md)).
-- `docs/plans/`: the task board and one card per piece of work.
 - `editors/`: the generated TextMate grammar.
-- [ROADMAP.md](ROADMAP.md): vision, decisions table and phases. [docs/NEXT.md](docs/NEXT.md): where we stopped.
+- `docs/contributing/`: commit and pull request conventions.
+
+Plans, the roadmap and design drafts live in a private repository.
 
 ## Contributing
 

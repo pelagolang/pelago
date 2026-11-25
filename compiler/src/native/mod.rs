@@ -1,4 +1,4 @@
-//! The native backend (card A-09, design in `docs/design/backend.md`): x86-64 machine code and
+//! The native backend (card A-09, design in `design note backend`): x86-64 machine code and
 //! an ELF executable, straight from the IR, with no assembler, linker or libc.
 //!
 //! * [`x86`] encodes instructions.

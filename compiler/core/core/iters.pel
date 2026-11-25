@@ -62,7 +62,7 @@ impl<T> iter<T> {
     }
 }
 
-//~ The rest of the adapters and consumers. Like `map` and `filter` they build a list for now (docs/design/iter.md);
+//~ The rest of the adapters and consumers. Like `map` and `filter` they build a list for now (design note iter);
 //~ a `for` over a chain is still fused by the lowering.
 impl<T> iter<T> {
     //~ Folds the elements left to right into one value: `xs.iter().fold(0, (a, x) ~> a + x)`.
