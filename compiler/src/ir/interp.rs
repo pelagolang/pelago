@@ -1085,6 +1085,13 @@ impl Machine<'_> {
                     }
                     // chdir: only the program's own idea of the current directory changes.
                     7 => std::fs::canonicalize(&path).and_then(|full| {
+                        // Windows gives the `\\?\C:\...` form; the program should see the usual `C:\...`.
+                        let full = match full.to_str().and_then(|t| t.strip_prefix(r"\\?\")) {
+                            Some(plain) if !plain.starts_with("UNC\\") => {
+                                std::path::PathBuf::from(plain)
+                            }
+                            _ => full,
+                        };
                         if full.is_dir() {
                             self.os.cwd = Some(full);
                             Ok(())
