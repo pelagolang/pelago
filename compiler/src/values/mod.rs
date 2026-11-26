@@ -15,6 +15,9 @@
 //! - **Exclusive access.** A call may not change a place and also pass an overlapping place to
 //!   another argument: `swap(inout a[0], inout a[1])`, `xs.extend!(xs)`. Temporaries computed by
 //!   other arguments are evaluated first and do not count.
+//! - **Views follow their text.** A name that holds a `str` view (`const w = s[0..3]`, `s.trim()`) is unusable
+//!   once the text it points into is reassigned, changed in place or moved: `s = ...`, `s.clear!()`, `take(sink s)`.
+//!   Use the view before that, or keep a `string`. Views returned by ordinary calls are not tracked yet.
 //! - **Closures** change outer variables only when they capture them with `inout`.
 //!
 //! Moves are tracked through branches and loops: after an `if`, a variable is moved when either
@@ -87,6 +90,9 @@ struct State {
     moved: HashMap<DefId, Span>,
     /// `linear` variables that may still hold their value (not consumed on some path).
     held: HashSet<DefId>,
+    /// `str` views whose source was changed or moved since the view was made, and where. Using one is an
+    /// error: the text it points into may be gone.
+    stale: HashMap<DefId, Span>,
     /// After `return`, `break`, `continue` or a call that never returns.
     dead: bool,
 }
@@ -103,6 +109,9 @@ fn merge(a: State, b: State) -> State {
         out.moved.entry(d).or_insert(s);
     }
     out.held.extend(b.held);
+    for (d, s) in b.stale {
+        out.stale.entry(d).or_insert(s);
+    }
     out
 }
 
@@ -159,6 +168,8 @@ struct Walker<'a> {
     diags: Vec<Diagnostic>,
     seen: HashSet<(u32, &'static str)>,
     binds: HashMap<DefId, Bind>,
+    /// Names that hold a `str` view, with the place the text belongs to.
+    views: HashMap<DefId, PlaceKey>,
     state: State,
     loops: Vec<LoopFrame>,
     closures: Vec<ClosureFrame>,
@@ -181,6 +192,7 @@ impl<'a> Walker<'a> {
             diags: Vec::new(),
             seen: HashSet::new(),
             binds: HashMap::new(),
+            views: HashMap::new(),
             state: State::default(),
             loops: Vec::new(),
             closures: Vec::new(),
@@ -587,6 +599,11 @@ impl<'a> Walker<'a> {
             DeclKind::Const => Bind::Const,
         };
         self.bind_pattern(&d.pattern, kind);
+        if let (PatternKind::Binding { name, .. }, Some(init)) = (&d.pattern.kind, &d.init) {
+            if let Some(&def) = self.res.decls.get(&(self.file, name.span.start)) {
+                self.track_view(def, init);
+            }
+        }
     }
 
     /// Records how each name of a pattern was introduced. A new binding starts unmoved.
@@ -676,8 +693,90 @@ impl<'a> Walker<'a> {
             );
             return;
         }
+        if let Some(&at) = self.state.stale.get(&d) {
+            let (n, line) = (self.name_of(d), self.line_of(at));
+            let src = self
+                .views
+                .get(&d)
+                .map(|p| self.name_of(p.root))
+                .unwrap_or("its source");
+            self.report(
+                span,
+                "stale",
+                format!("`{n}` points into `{src}`, which was changed or moved on line {line}; use `{n}` before that, or keep a `string` (`... to string`)"),
+            );
+            return;
+        }
         if ctx == Ctx::Consume && owning {
             self.take(d, bind, span);
+        }
+    }
+
+    /// The text a `str` expression points into: `s` in `s[1..3]`, `s.trim()`, `p.name`. A name that holds a view
+    /// gives what that view points into.
+    fn origin_place(&self, e: &Expr) -> Option<PlaceKey> {
+        let e = Self::strip(e);
+        match &e.kind {
+            ExprKind::Name(_) | ExprKind::SelfValue => {
+                let p = self.place_of(e)?;
+                match self.views.get(&p.root) {
+                    Some(o) if p.segs.is_empty() => Some(o.clone()),
+                    _ => Some(p),
+                }
+            }
+            ExprKind::Field { base, .. }
+            | ExprKind::TupleIndex { base, .. }
+            | ExprKind::Index { base, .. } => match self.place_of(e) {
+                Some(p) => Some(self.views.get(&p.root).cloned().unwrap_or(p)),
+                None => self.origin_place(base),
+            },
+            ExprKind::Call { callee, .. } => match &Self::strip(callee).kind {
+                ExprKind::Field { base, .. } => self.origin_place(base),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// `name` now holds the `str` value of `init`: remember what it points into, so that changing that text
+    /// makes the view unusable.
+    fn track_view(&mut self, name: DefId, init: &Expr) {
+        self.views.remove(&name);
+        self.state.stale.remove(&name);
+        let is_str = self
+            .typed
+            .tys
+            .get(&(self.file, init.span.start, init.span.end))
+            .map(|t| self.typed.types.kind_of(*t))
+            .is_some_and(|k| matches!(k, TyKind::Str));
+        if !is_str {
+            return;
+        }
+        let Some(origin) = self.origin_place(init) else {
+            return;
+        };
+        // Read-only parameters and pattern names cannot change while the function runs.
+        if !matches!(
+            self.binds.get(&origin.root),
+            Some(
+                Bind::Var | Bind::Const | Bind::Sink | Bind::Owned | Bind::Inout | Bind::ViewInout
+            )
+        ) {
+            return;
+        }
+        self.views.insert(name, origin);
+    }
+
+    /// The text at `changed` is being changed or moved: views of it are no longer safe to use.
+    fn invalidate(&mut self, changed: &PlaceKey, span: Span) {
+        let hit: Vec<DefId> = self
+            .views
+            .iter()
+            .filter(|(v, o)| **v != changed.root && overlap(o, changed))
+            .map(|(v, _)| *v)
+            .collect();
+        for v in hit {
+            self.state.stale.entry(v).or_insert(span);
         }
     }
 
@@ -722,6 +821,11 @@ impl<'a> Walker<'a> {
                     );
                 }
                 if !self.declared_outside_closure(d) || captured_by_sink {
+                    let whole = PlaceKey {
+                        root: d,
+                        segs: Vec::new(),
+                    };
+                    self.invalidate(&whole, span);
                     self.state.moved.insert(d, span);
                     self.state.held.remove(&d);
                 }
@@ -808,6 +912,7 @@ impl<'a> Walker<'a> {
     fn change_place(&mut self, e: &Expr) {
         if let Some(p) = self.place_of(e) {
             self.may_change(p.root, Self::strip(e).span);
+            self.invalidate(&p, Self::strip(e).span);
         }
     }
 
@@ -1110,6 +1215,8 @@ impl<'a> Walker<'a> {
             if let Some(p) = whole {
                 // A new value revives a moved variable.
                 self.may_change(p.root, Self::strip(lhs).span);
+                self.invalidate(&p, Self::strip(lhs).span);
+                self.track_view(p.root, rhs);
                 if self.state.held.contains(&p.root) {
                     let n = self.name_of(p.root);
                     self.report(

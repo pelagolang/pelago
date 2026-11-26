@@ -636,7 +636,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// The address of an operand's value; a scalar (a box) is first stored in a temporary.
-    fn operand_addr(&mut self, e: &'a Expr, t: Ty) -> Option<Value> {
+    pub(crate) fn operand_addr(&mut self, e: &'a Expr, t: Ty) -> Option<Value> {
         if let Repr::Scalar(_) = self.repr(t) {
             let v = self.scalar(e)?;
             let slot = self.slot_for(t);

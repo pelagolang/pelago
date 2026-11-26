@@ -26,6 +26,7 @@ pub mod regexgen;
 pub mod regexunicode;
 mod regexunicode_tables;
 pub mod resolve;
+pub mod selfupdate;
 pub mod softfloat;
 pub mod span;
 pub mod token;

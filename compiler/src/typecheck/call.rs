@@ -65,7 +65,37 @@ impl<'p> Checker<'p> {
         }
         // Promised and default methods of the interfaces the type provides.
         let r = self.tt.shallow(recv);
-        self.iface_method(r, name)
+        if let Some(m) = self.iface_method(r, name) {
+            return Some(m);
+        }
+        self.core_glue_method(r, name)
+    }
+
+    /// `eq`, `cmp`, `hash` and `clone` as method calls on a type that provides the interface
+    /// without writing code for it (a number, text, a list, a derived struct or obj).
+    fn core_glue_method(&mut self, r: Ty, name: &str) -> Option<Method> {
+        let iface_name = match name {
+            "eq" => "eq",
+            "cmp" => "order",
+            "hash" => "hash",
+            "clone" => "clone",
+            _ => return None,
+        };
+        if matches!(
+            self.kind_of(r),
+            TyKind::Unknown | TyKind::Var(_) | TyKind::Param(_) | TyKind::Any(_)
+        ) {
+            return None;
+        }
+        let i = self.core_iface(iface_name)?;
+        if !self.provides(r, i) {
+            return None;
+        }
+        let m = self.res.member(i, name)?;
+        let sig = self.fn_sig(m)?;
+        let mut map = HashMap::new();
+        map.insert(i, r);
+        Some(Method { def: m, sig, map })
     }
 
     /// A method the type itself has: in its declaration, its `obj` bases or an `impl` block.
