@@ -1,4 +1,4 @@
-//! From allocated AArch64 MIR to bytes (design in `design note mir`).
+//! From allocated AArch64 MIR to bytes.
 //!
 //! The frame has no frame pointer. From `sp` up: the outgoing argument area, the saved registers (`x30`
 //! when the function calls, then the callee-saved ones it uses), the other frame objects. The stack
@@ -598,7 +598,7 @@ impl Em<'_, '_> {
         let z = self.stop(super::a64_mir::SYM_DIV0);
         let a = &mut *self.env.a;
         a.cbz(y, z);
-        // `MIN / -1` does not trap here: the quotient wraps, like the interpreter's.
+        // The IR division wraps for `MIN / -1`; the lowering stops it before this.
         let q = if rem { hw::X9 } else { d };
         if signed {
             a.sdiv(q, x, y);

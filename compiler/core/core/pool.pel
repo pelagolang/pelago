@@ -1,4 +1,4 @@
-/// Pools and narrow links (design note narrow-links).
+/// Pools and narrow links.
 
 //~ A value in a `pool`, named by its slot number stored in a `W` (`uint8`, `uint16` or `uint32`). The all-ones
 //~ number means no slot. It is plain data: copying it copies the number, dropping it does nothing.

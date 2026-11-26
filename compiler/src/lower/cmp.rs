@@ -17,6 +17,15 @@ impl<'a> Lowerer<'a> {
         body.then_some((m, map))
     }
 
+    /// An `obj` is passed to its methods as the object's address, which the glue holds a slot for.
+    fn method_arg(&mut self, slot: Value, ty: Ty) -> Value {
+        if self.obj_def(ty).is_some() {
+            self.load_at(slot, 0, IrTy::Ptr)
+        } else {
+            slot
+        }
+    }
+
     fn require_true(&mut self, c: Value, fail: BlockId) {
         let ok = self.new_block(&[]);
         self.branch(c, ok, fail);
@@ -72,6 +81,7 @@ impl<'a> Lowerer<'a> {
             let Some(f) = self.request_fn(m, &map) else {
                 return false;
             };
+            let (a, b) = (self.method_arg(a, ty), self.method_arg(b, ty));
             let Some(r) = self.emit(Op::Call(f, vec![a, b]), Some(IrTy::Bool), sp) else {
                 return false;
             };
@@ -115,7 +125,14 @@ impl<'a> Lowerer<'a> {
             }
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Enum => self.eq_enum(a, b, ty, fail),
-                DefKind::Obj => false,
+                DefKind::Obj => {
+                    // `@derive(eq)`: the fields of the two objects, one by one.
+                    let x = self.load_at(a, 0, IrTy::Ptr);
+                    let y = self.load_at(b, 0, IrTy::Ptr);
+                    let bx = self.addr(x, super::obj::OBJ_HEADER);
+                    let by = self.addr(y, super::obj::OBJ_HEADER);
+                    self.eq_fields(bx, by, ty, fail)
+                }
                 _ => self.eq_fields(a, b, ty, fail),
             },
             TyKind::Option(_) | TyKind::Result(..) => self.eq_enum(a, b, ty, fail),
@@ -226,6 +243,7 @@ impl<'a> Lowerer<'a> {
             let Some(f) = self.request_fn(m, &map) else {
                 return false;
             };
+            let (a, b) = (self.method_arg(a, ty), self.method_arg(b, ty));
             let Some(r) = self.emit(Op::Call(f, vec![a, b]), Some(IrTy::I64), sp) else {
                 return false;
             };
@@ -263,7 +281,14 @@ impl<'a> Lowerer<'a> {
             TyKind::Tuple(_) | TyKind::AltTuple(..) => self.cmp_fields(a, b, ty),
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Enum => self.cmp_enum(a, b, ty),
-                DefKind::Obj => false,
+                DefKind::Obj => {
+                    // `@derive(order)`: the fields of the two objects, in order.
+                    let x = self.load_at(a, 0, IrTy::Ptr);
+                    let y = self.load_at(b, 0, IrTy::Ptr);
+                    let bx = self.addr(x, super::obj::OBJ_HEADER);
+                    let by = self.addr(y, super::obj::OBJ_HEADER);
+                    self.cmp_fields(bx, by, ty)
+                }
                 _ => self.cmp_fields(a, b, ty),
             },
             TyKind::Option(_) | TyKind::Result(..) => self.cmp_enum(a, b, ty),
@@ -398,6 +423,7 @@ impl<'a> Lowerer<'a> {
             let Some(f) = self.request_fn(m, &map) else {
                 return false;
             };
+            let a = self.method_arg(a, ty);
             let Some(r) = self.emit(Op::Call(f, vec![a]), Some(IrTy::I64), sp) else {
                 return false;
             };
@@ -443,6 +469,27 @@ impl<'a> Lowerer<'a> {
                 }
                 true
             }
+            TyKind::List(e) => {
+                let len = self.load_at(a, 8, IrTy::I64);
+                self.mix(acc, len);
+                let data = self.load_at(a, 0, IrTy::Ptr);
+                let esize = self.layout(e).size;
+                let mut ok = true;
+                self.each_elem(data, len, esize, |s, p, _| {
+                    ok &= s.hash_part(p, e, acc);
+                });
+                ok
+            }
+            TyKind::Array(e, len) => {
+                let n = self.array_len(len);
+                let nv = self.i64c(n);
+                let esize = self.layout(e).size;
+                let mut ok = true;
+                self.each_elem(a, nv, esize, |s, p, _| {
+                    ok &= s.hash_part(p, e, acc);
+                });
+                ok
+            }
             TyKind::Tuple(_) | TyKind::AltTuple(..) => {
                 for f in self.struct_fields(ty) {
                     let p = self.addr(a, f.off);
@@ -454,7 +501,18 @@ impl<'a> Lowerer<'a> {
             }
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Enum => self.hash_enum(a, ty, acc),
-                DefKind::Obj => false,
+                DefKind::Obj => {
+                    // `@derive(hash)`: the fields of the object, in order.
+                    let o = self.load_at(a, 0, IrTy::Ptr);
+                    let body = self.addr(o, super::obj::OBJ_HEADER);
+                    for f in self.struct_fields(ty) {
+                        let p = self.addr(body, f.off);
+                        if !self.hash_part(p, f.ty, acc) {
+                            return false;
+                        }
+                    }
+                    true
+                }
                 _ => {
                     for f in self.struct_fields(ty) {
                         let p = self.addr(a, f.off);

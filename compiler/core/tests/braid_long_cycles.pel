@@ -1,0 +1,16 @@
+/// Cycles of four, five and six types: rounds, positions, strand views and the layout of an array of rounds.
+fn main() {
+    const a: (int, string, bool, float; 9) = (1, "a", true, 1.5, 2, "b", false, 2.5, 3)
+    print(a.len(), a.rounds())
+    print(a.first(1), a.second(1), a.third(1), a.fourth(1), a.first(-1))
+    print(a.firstStrand().toList(), a.secondStrand().toList(), a.thirdStrand().toList(), a.fourthStrand().toList())
+    const b: (int, string, bool, float; 8) = (1, "a", true, 1.5, 2, "b", false, 2.5)
+    print(b.asRounds()[1])
+    var m: (int, string, bool, float; 4) = (1, "a", true, 1.5)
+    m.firstStrandMut!().set(0, 7)
+    print(m.first(0), m[0])
+    const c: (int, int8, string, bool, float; 10) = (1, 2, "x", true, 0.5, 3, 4, "y", false, 1.5)
+    print(c.fifth(1), c.third(0), c.fifthStrand().toList())
+    const d: (int, string, bool, float, int, string; 6) = (1, "a", true, 1.5, 9, "z")
+    print(d.sixth(0), d.fifth(0), d.rounds(), d.asRounds()[0])
+}

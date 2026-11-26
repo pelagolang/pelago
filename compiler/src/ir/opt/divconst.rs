@@ -8,7 +8,7 @@
 //!
 //! The results are the same as the interpreter's: signed division rounds toward zero and the
 //! remainder takes the sign of the dividend. The divisors 0, 1 and -1 and the negative powers of two
-//! are left alone (zero must still stop the program, `MIN / -1` wraps).
+//! are left alone (zero must still stop the program; `MIN / -1` stops in the lowering, before the division).
 
 use crate::ir::*;
 use crate::span::Span;

@@ -1,7 +1,7 @@
 //! Stage 5 of the checker: value semantics. What the types cannot say: who may change what, and
 //! when a value is gone.
 //!
-//! The rules (see `design note checker`):
+//! The rules:
 //!
 //! - **Changing needs permission.** A place can be changed (assigned to, passed as `inout`, used
 //!   as the receiver of `c.bump!()`) only when its root variable allows it: a `var`, an `inout` or

@@ -295,7 +295,9 @@ fn inline_at(f: &mut Func, bi: usize, pos: usize, callee: &Func) {
 /// A program that starts no task has none to finish when `main` ends: takes out the calls of
 /// `rtRunPending` (the library function that runs the tasks nobody waited for) when no function
 /// reachable from `main` starts one, so the task queue, and what it needs of the heap, stay out of
-/// the program. Tasks start in `spawn`, whose instances call `rtTaskBody`.
+/// the program. Tasks start in `spawn`, whose instances call `rtTaskBody`. A program that sleeps or
+/// waits (anything reaching `rtMainInit`) sets the queue up too, and the drain frees it, so the drain
+/// stays then.
 pub fn drop_idle_task_drain(m: &mut Module) {
     let id_of = |m: &Module, name: &str| m.funcs.iter().position(|f| f.name == name);
     let (Some(main), Some(drain)) = (id_of(m, "main"), id_of(m, "rtRunPending")) else {
@@ -305,7 +307,7 @@ pub fn drop_idle_task_drain(m: &mut Module) {
     seen[main] = true;
     let mut stack = vec![main];
     while let Some(x) = stack.pop() {
-        if m.funcs[x].name.starts_with("rtTaskBody<") {
+        if m.funcs[x].name.starts_with("rtTaskBody<") || m.funcs[x].name == "rtMainInit" {
             return;
         }
         for b in &m.funcs[x].blocks {

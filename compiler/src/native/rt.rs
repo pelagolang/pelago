@@ -1,5 +1,5 @@
 //! The runtime the generated code links against, written as machine code: process start, output,
-//! the stop routine, and the allocator (`design note backend`, section 3).
+//! the stop routine, and the allocator.
 //!
 //! Internal calling convention (System V shaped): arguments in `rdi rsi rdx rcx r8 r9`, result in
 //! `rax`. Every routine here preserves `rbx`, `rbp` and `r12` to `r15`.
@@ -8,7 +8,7 @@
 //!
 //! | offset | what |
 //! |---|---|
-//! | 0, 8, 16 | Linux: the base and size of the allocator's region (0 until the first allocation) and its next unused span (`design note heap`) |
+//! | 0, 8, 16 | Linux: the base and size of the allocator's region (0 until the first allocation) and its next unused span |
 //! | 0 to 95 | Windows: heads of the twelve free lists (block sizes 32 B to 64 KiB) |
 //! | 96, 104 | Windows: next free byte and end of the current chunk |
 //! | 112 | live blocks (for the leak check) |
@@ -1479,11 +1479,11 @@ fn map_failed(a: &mut Asm, r: Reg, oom: Label, win: bool) {
     }
 }
 
-/// The OS memory calls (design note os-memory), in a function of their own: `emit_for` is already a huge
+/// The OS memory calls, in a function of their own: `emit_for` is already a huge
 /// frame in debug builds.
 #[inline(never)]
 fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap: bool) {
-    // ---- the OS memory calls (design note os-memory) ----------------------------------------------
+    // ---- the OS memory calls ----------------------------------------------
     // Sizes and addresses must be whole pages (else -2). A system error becomes -1 (no memory), -2
     // (invalid argument) or -3. Callers treat every register but the callee-saved ones as lost.
     let (bad, nomem, other) = (a.new_label(), a.new_label(), a.new_label());

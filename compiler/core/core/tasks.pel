@@ -1,6 +1,6 @@
-/// Concurrency: tasks, channels, shared values and locks (design note concurrency).
+/// Concurrency: tasks, channels, shared values and locks.
 
-/// ---- Concurrency (design note concurrency) ----------------------------------------------------
+/// ---- Concurrency ----------------------------------------------------
 
 //~ What `send` returns when nobody is receiving any more.
 pub struct closed {}
@@ -10,7 +10,7 @@ pub struct closed {}
 //~ A task is a function on a stack of its own (`rtCtxInit`). One worker runs the tasks in turn: a spawned task
 //~ starts when the running one waits (a `join`, a `recv` on an empty channel, a `select` with nothing ready, the
 //~ end of a `scope` or of `main`) or calls `yield_now()`. Waiting lets the others run, so tasks may talk back and
-//~ forth. Several workers come later (design note concurrency-runtime).
+//~ forth. Several workers come later.
 pub struct task<T> {
     state: ptr
 
