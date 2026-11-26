@@ -143,6 +143,8 @@ impl Parser<'_> {
                 let kind = if self.eat(Punct::Semi) {
                     let n = self.with_struct(true, |p| p.parse_expr());
                     TypeKind::Array(Box::new(elem), Box::new(n))
+                } else if self.eat(Punct::DotDot) {
+                    TypeKind::Slice(Box::new(elem), false)
                 } else {
                     TypeKind::List(Box::new(elem))
                 };

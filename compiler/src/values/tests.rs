@@ -495,6 +495,15 @@ fn a_window_cannot_change_its_length() {
 }
 
 #[test]
+fn a_window_parameter_cannot_change_its_length() {
+    flagged(
+        "fn f(w!: [int..]) { w.push!(1) }\nfn t() { var xs = [1]\n f(xs!) }",
+        "only borrows part of a list",
+    );
+    clean("fn f(w!: [int..]) { w.sort!() }\nfn t() { var xs = [3, 1]\n f(xs!) }");
+}
+
+#[test]
 fn a_kept_str_view_stops_being_usable_when_its_text_changes() {
     let stale = "points into `s`";
     // Reassigning, changing in place and moving the source all end the view.

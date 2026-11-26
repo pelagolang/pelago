@@ -25,6 +25,10 @@ impl<'p> Checker<'p> {
             (TyKind::Never, _) => true,
             (_, TyKind::Option(inner)) => self.try_coerce(f, inner),
             (TyKind::String, TyKind::Str) => true,
+            // A list, an array or another window may stand where a window is wanted, and a window where a
+            // read-only list is wanted (a `let` parameter cannot grow it). `inout` is checked at the call.
+            (TyKind::List(x) | TyKind::Array(x, _) | TyKind::Slice(x), TyKind::Slice(y))
+            | (TyKind::Slice(x), TyKind::List(y)) => self.tt.unify(x, y),
             (_, TyKind::Any(i)) => self.provides(f, i),
             (TyKind::Adt(d1, a1), TyKind::Adt(d2, a2)) => self.is_subtype(d1, &a1, d2, &a2),
             // a many-call function may stand where a one-call function is wanted
@@ -273,6 +277,10 @@ impl<'p> Checker<'p> {
             ExprKind::Unary { op, operand } => self.unary(e, *op, operand, exp),
             ExprKind::Copy(inner) => {
                 let t = self.check_expr(inner, exp);
+                // Copying a window makes the list it covers.
+                if let TyKind::Slice(el) = self.kind_of(t) {
+                    return self.tt.list(el);
+                }
                 if let Some(i) = self.core_iface("clone") {
                     if !self.provides(t, i) {
                         let s = self.show(t);
@@ -733,6 +741,7 @@ impl<'p> Checker<'p> {
                 let t = self.check_expr(&it.value, Exp::Any);
                 match self.kind_of(t) {
                     TyKind::List(e)
+                    | TyKind::Slice(e)
                     | TyKind::Array(e, _)
                     | TyKind::Set(e)
                     | TyKind::Iter(e)
@@ -887,6 +896,7 @@ impl<'p> Checker<'p> {
         }
         match k {
             TyKind::List(e)
+            | TyKind::Slice(e)
             | TyKind::Array(e, _)
             | TyKind::Soa(e, _)
             | TyKind::Iter(e)
@@ -1007,10 +1017,13 @@ impl<'p> Checker<'p> {
         let bt = self.peel_boxes(bt);
         let k = self.kind_of(bt);
         match k {
-            TyKind::List(elem) | TyKind::Array(elem, _) => {
+            TyKind::List(elem) | TyKind::Array(elem, _) | TyKind::Slice(elem) => {
                 if matches!(index.kind, ExprKind::Range { .. }) {
                     let r = self.int_range_ty();
                     self.check_expr(index, Exp::Is(r));
+                    if matches!(k, TyKind::Slice(_)) {
+                        return self.tt.mk(TyKind::Slice(elem));
+                    }
                     return self.tt.list(elem);
                 }
                 self.check_coerce(index, self.tt.int);
@@ -1409,6 +1422,7 @@ impl<'p> Checker<'p> {
         let elem = match self.kind_of(rt) {
             TyKind::Range(e)
             | TyKind::List(e)
+            | TyKind::Slice(e)
             | TyKind::Array(e, _)
             | TyKind::Set(e)
             | TyKind::Iter(e) => Some(e),

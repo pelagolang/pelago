@@ -1,4 +1,4 @@
-fn bump(xs!: [int]) {
+fn bump(xs!: [int..]) {
     for inout x of xs {
         x += 100
     }
