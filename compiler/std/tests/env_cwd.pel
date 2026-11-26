@@ -1,0 +1,22 @@
+/// `env.currentDir`, `env.setCurrentDir`, `os.pid` and `os.hostname`: relative paths follow the program's own directory.
+import std.env
+import std.os
+import std.fs
+fn main() -> void ! io_error {
+    const here = env.currentDir()?
+    print(here.len() > 1)
+    fs.createDirs("pelago_cwd_test/inner")?
+    env.setCurrentDir("pelago_cwd_test/inner")?
+    const there = env.currentDir()?
+    print(there.len() > here.len())
+    fs.writeText("f.txt", "hi")?
+    env.setCurrentDir("../..")?
+    print(env.currentDir()? == here)
+    print(fs.readText("pelago_cwd_test/inner/f.txt")?)
+    fs.removeFile("pelago_cwd_test/inner/f.txt")?
+    fs.removeDir("pelago_cwd_test/inner")?
+    fs.removeDir("pelago_cwd_test")?
+    print(env.setCurrentDir("no/such/dir") is err(_))
+    const host = os.hostname()?
+    print(os.pid() > 0, host.len() > 0)
+}
