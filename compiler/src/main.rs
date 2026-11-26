@@ -24,6 +24,13 @@ fn main() {
 fn real_main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
+        Some("--version" | "-V" | "version") => {
+            if args.next().as_deref() == Some("--verbose") {
+                println!("{}", pelago::version::version_verbose());
+            } else {
+                println!("{}", pelago::version::version_line());
+            }
+        }
         Some("keywords") => match args.next().as_deref() {
             Some("--json") => println!("{}", pelago::editors::keywords_json()),
             _ => print_keywords(),
@@ -133,6 +140,7 @@ fn usage() {
     eprintln!("usage: pelago <command>");
     eprintln!();
     eprintln!("commands:");
+    eprintln!("  --version [--verbose]  print the version (commit and date on non-stable builds)");
     eprintln!("  keywords   list every keyword, hard ones first");
     eprintln!("  tokens     list operators and punctuation");
     eprintln!("  std [--json]  list the standard library modules by group");
