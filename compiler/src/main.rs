@@ -31,6 +31,10 @@ fn real_main() {
                 println!("{}", pelago::version::version_line());
             }
         }
+        Some("self") => {
+            let rest: Vec<String> = args.collect();
+            std::process::exit(pelago::selfupdate::run(&rest));
+        }
         Some("keywords") => match args.next().as_deref() {
             Some("--json") => println!("{}", pelago::editors::keywords_json()),
             _ => print_keywords(),
@@ -141,6 +145,9 @@ fn usage() {
     eprintln!();
     eprintln!("commands:");
     eprintln!("  --version [--verbose]  print the version (commit and date on non-stable builds)");
+    eprintln!(
+        "  self update [--channel stable|beta|rc|nightly]  install the newest release of a channel"
+    );
     eprintln!("  keywords   list every keyword, hard ones first");
     eprintln!("  tokens     list operators and punctuation");
     eprintln!("  std [--json]  list the standard library modules by group");
