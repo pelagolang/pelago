@@ -576,7 +576,7 @@ impl Em<'_, '_> {
                 if signed {
                     let (normal, done) = (self.env.a.new_label(), self.env.a.new_label());
                     if wide {
-                        // `MIN / -1` would trap: the interpreter wraps.
+                        // The lowering stops `MIN / -1` before this; the IR division itself wraps, so keep `idiv` from trapping.
                         self.env.a.alu_ri(Alu::Cmp, s, -1, 8);
                         self.env.a.jcc(Cc::Ne, normal);
                         if rem {
