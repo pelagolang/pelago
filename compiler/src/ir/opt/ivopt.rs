@@ -241,7 +241,7 @@ fn try_loop(
             rewrite(&mut g, lp, latch, &terms, &members, &step);
         }
         super::dce::run(&mut g);
-        let after = weight(&g, lp);
+        let after = weight_live(&g, lp);
         if after < before || (level && after == before) {
             *f = g;
             return true;
@@ -254,6 +254,11 @@ fn try_loop(
 fn weight(f: &Func, lp: &Loop) -> usize {
     let mut base = f.clone();
     super::dce::run(&mut base);
+    weight_live(&base, lp)
+}
+
+/// `weight` of a function that has had its dead code removed already.
+fn weight_live(base: &Func, lp: &Loop) -> usize {
     base.blocks
         .iter()
         .enumerate()
