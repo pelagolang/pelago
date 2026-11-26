@@ -1532,6 +1532,7 @@ impl<'a> Walker<'a> {
         match receiver {
             Some(base) => match mark {
                 CallMark::Changes => {
+                    self.check_window_length(callee, base);
                     self.place_read(base);
                     self.change_place(base);
                     self.access(base, true, &mut accesses);
@@ -1572,6 +1573,40 @@ impl<'a> Walker<'a> {
     }
 
     /// Records the place an argument names. Reads of plain values are copies and do not count.
+    /// A window of a list (`xs[1..3]`) can change its elements but not its length: it does not own the buffer.
+    fn check_window_length(&mut self, callee: &Expr, base: &Expr) {
+        let ExprKind::Index { index, .. } = &Self::strip(base).kind else {
+            return;
+        };
+        if !matches!(Self::strip(index).kind, ExprKind::Range { .. }) {
+            return;
+        }
+        let ExprKind::Field { name, .. } = &Self::strip(callee).kind else {
+            return;
+        };
+        let m = self.text(name.span);
+        if matches!(
+            m,
+            "push"
+                | "pop"
+                | "insert"
+                | "remove"
+                | "clear"
+                | "extend"
+                | "retain"
+                | "truncate"
+                | "dedup"
+                | "reserve"
+        ) {
+            let m = m.to_string();
+            self.report(
+                Self::strip(base).span,
+                "window",
+                format!("`{m}!` changes the length, but a window `xs[a..b]` only borrows part of a list; call it on the list itself"),
+            );
+        }
+    }
+
     fn access(&self, e: &Expr, changes: bool, out: &mut Vec<Access>) {
         let Some(place) = self.place_of(e) else {
             return;

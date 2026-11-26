@@ -479,3 +479,17 @@ fn a_closure_parameter_is_read_only_like_a_function_parameter() {
     clean("fn t() { const f = (s: string) ~> copy s }");
     clean("fn t() { const f = (n: int) ~> n + 1 }");
 }
+
+#[test]
+fn a_window_cannot_change_its_length() {
+    flagged(
+        "fn t() { var xs = [3, 1, 2]\n xs[0..2].push!(9) }",
+        "only borrows part of a list",
+    );
+    flagged(
+        "fn t() { var xs = [3, 1, 2]\n xs[1..].clear!() }",
+        "changes the length",
+    );
+    clean("fn t() { var xs = [3, 1, 2]\n xs[0..2].sort!()\n xs[1..3].reverse!() }");
+    clean("fn t() { var xs = [3, 1, 2]\n xs.push!(4)\n xs[0..2].swap!(0, 1) }");
+}
