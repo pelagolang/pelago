@@ -1,4 +1,4 @@
-//! The x86-64 side of the machine IR (design in `docs/design/mir.md`): the opcodes, the register file
+//! The x86-64 side of the machine IR: the opcodes, the register file
 //! the shared allocator sees, and the spill moves. [`super::x86_select`] makes MIR from the IR and
 //! [`super::x86_emit`] turns allocated MIR into bytes.
 //!
@@ -19,6 +19,7 @@ pub const RAX: PReg = PReg(0);
 pub const RCX: PReg = PReg(1);
 pub const RDX: PReg = PReg(2);
 pub const RBX: PReg = PReg(3);
+pub const RBP: PReg = PReg(5);
 pub const RSI: PReg = PReg(6);
 pub const RDI: PReg = PReg(7);
 pub const R8: PReg = PReg(8);
@@ -114,6 +115,8 @@ pub mod op {
     pub const RT_PRINT: i64 = 3;
     pub const RT_CTX_INIT: i64 = 4;
     pub const RT_CTX_SWITCH: i64 = 5;
+    /// The OS memory calls: `RT_OS + OsKind as i64`.
+    pub const RT_OS: i64 = 16;
     /// Epilogue and `ret`; `[rax Use]` when a value is returned.
     pub const RET: u16 = B + 31;
     /// Stop the program with the message number `Imm`: `[Imm n]`.
@@ -181,7 +184,9 @@ pub mod op {
     pub const REP_STOS: u16 = B + 61;
     /// `d = sqrt / floor / ceil of s`: `[d Def, s Use, Imm kind (0, 1, 2), Imm double]`.
     pub const FUN: u16 = B + 62;
-    pub const COUNT: u16 = B + 63;
+    /// The raw bits of a float in an integer register: `[d Def, s Use, Imm double]`.
+    pub const FBITS: u16 = B + 63;
+    pub const COUNT: u16 = B + 64;
 }
 
 /// Symbols: the shared stop routines, then the functions of the module.
@@ -269,7 +274,7 @@ impl X86 {
             regs,
             // Caller-saved first (free when nothing is called while the value lives), then the
             // callee-saved ones.
-            int: vec![R10, R8, R9, RSI, RDI, RBX, R12, R13, R14, R15],
+            int: vec![R10, R8, R9, RSI, RDI, RBX, R12, R13, R14, R15, RBP],
             float: (0..13).map(xmm).collect(),
             int_scratch: vec![RAX, R11, RCX, RDX],
             float_scratch: vec![xmm(15), xmm(14), xmm(13)],
@@ -311,7 +316,7 @@ impl Target for X86 {
     }
 
     fn op_name(&self, o: u16) -> &'static str {
-        const NAMES: [&str; 62] = [
+        const NAMES: [&str; 64] = [
             "add",
             "sub",
             "and",
@@ -374,6 +379,8 @@ impl Target for X86 {
             "vbuild",
             "valu",
             "rep_stos",
+            "fun",
+            "fbits",
         ];
         NAMES
             .get(o.wrapping_sub(op::ADD) as usize)

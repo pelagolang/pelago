@@ -1,0 +1,9 @@
+ok a:80 tags=["x", "y"] tls=true note=some("n") origin=1,-2 shapes=4
+ok a:80 tags=[] tls=false note=none origin=1,2 shapes=0
+error 1:23: $.port: 70000 does not fit in uint16 (0 to 65535)
+error 2:16: $.tags[1]: expected text, found an integer
+error 1:48: $.origin: missing field "y"
+error 1:77: $.shapes[0]: unknown case "square"
+error 1:99: $.shapes[0].circle.radius: expected a number, found text
+error 1:1: $: expected an object, found an array
+colour ok

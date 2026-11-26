@@ -1,0 +1,67 @@
+/// Message authentication codes: HMAC (RFC 2104 / FIPS 198-1) over any `hasher`.
+///
+/// ```
+/// import std.hash
+/// import std.mac
+/// import std.sha2
+/// import { sha256 } = std.sha2
+///
+/// fn main() {
+///     const tag = mac.sign(sha256.new(), "key".bytes().toList(), "message".bytes().toList())
+///     print(hash.hex(tag))
+///     print(mac.verify(sha256.new(), "key".bytes().toList(), "message".bytes().toList(), tag))   /// true, in constant time
+/// }
+/// ```
+///
+/// Conventional: the construction is the standard one. The key block is built once; keys longer than the hash's
+/// block are hashed first, shorter ones are zero padded. `verify` compares in constant time (`hash.equalConstTime`).
+/// Checked against Python's `hmac` and the RFC 4231 vectors (`compiler/std/tests/mac.pel`).
+
+import std.hash
+import { hasher } = std.hash
+
+/// An HMAC being computed; feed it with `update!`, read the tag with `finish`.
+pub struct hmac<H: hasher> {
+    inner: H
+    outerKey: [byte]
+
+    //~ Feeds `data` into the message.
+    fn update(inout self, data: [byte]) { self.inner.update!(data) }
+
+    //~ The tag of everything fed so far; the HMAC stays usable.
+    fn finish(self) -> [byte] {
+        const innerDigest = self.inner.finish()
+        var outer = self.inner.fresh()
+        outer.update!(self.outerKey)
+        outer.update!(innerDigest)
+        outer.finish()
+    }
+}
+
+//~ Starts an HMAC with `key`, using the hash kind of `h`.
+pub fn start<H: hasher>(h: H, key: [byte]) -> hmac<H> {
+    const bs = h.blockSize()
+    var k: [byte] = copy key
+    if k.len() > bs { k = hash.digest(h, key) }
+    var inner = h.fresh()
+    var ipad: [byte] = []
+    var opad: [byte] = []
+    for i of 0..bs {
+        const b = i < k.len() ? (k[i] to int) : 0
+        ipad.push!((b ^ 54).wrapToByte())
+        opad.push!((b ^ 92).wrapToByte())
+    }
+    inner.update!(ipad)
+    hmac { inner: inner, outerKey: opad }
+}
+
+//~ The HMAC of `msg` under `key`, with the hash kind of `h`.
+pub fn sign<H: hasher>(h: H, key: [byte], msg: [byte]) -> [byte] {
+    var m = start(h, key)
+    m.update!(msg)
+    m.finish()
+}
+
+//~ True when `tag` is the HMAC of `msg` under `key`; compares in constant time.
+pub fn verify<H: hasher>(h: H, key: [byte], msg: [byte], tag: [byte]) -> bool =
+    hash.equalConstTime(sign(h, key, msg), tag)

@@ -1,0 +1,71 @@
+# Builds the six release archives. Called by release.yml (tags) and nightly.yml.
+name: build-release
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "The version the binaries report (for example 0.1.0 or 0.2.0-nightly.20261126+abc1234)"
+        required: true
+        type: string
+      ref:
+        description: "The commit to build"
+        required: true
+        type: string
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-linux, os: ubuntu-latest, rust: x86_64-unknown-linux-musl, musl: true }
+          - { target: aarch64-linux, os: ubuntu-24.04-arm, rust: aarch64-unknown-linux-musl, musl: true }
+          # Both macOS archives are built on Apple silicon runners (the Intel runner image is being retired).
+          - { target: x86_64-macos, os: macos-latest, rust: x86_64-apple-darwin }
+          - { target: aarch64-macos, os: macos-latest, rust: aarch64-apple-darwin }
+          - { target: x86_64-windows, os: windows-latest, rust: x86_64-pc-windows-msvc }
+          - { target: aarch64-windows, os: windows-11-arm, rust: aarch64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust }}
+      - name: Install musl tools
+        if: matrix.musl
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Build
+        shell: bash
+        env:
+          PELAGO_BUILD_VERSION: ${{ inputs.version }}
+        run: |
+          export PELAGO_BUILD_COMMIT="$(git rev-parse --short=7 HEAD)"
+          export PELAGO_BUILD_DATE="$(git show -s --format=%cs HEAD)"
+          case "${{ matrix.target }}" in
+            *windows) export RUSTFLAGS="-C target-feature=+crt-static" ;;
+          esac
+          cargo build --release --locked --target ${{ matrix.rust }} -p pelago
+      - name: Smoke test
+        shell: bash
+        run: |
+          exe=target/${{ matrix.rust }}/release/pelago
+          case "${{ matrix.target }}" in *windows) exe="$exe.exe" ;; esac
+          out="$("$exe" --version)"
+          echo "$out"
+          case "$out" in "pelago ${{ inputs.version }}"*) ;; *) echo "wrong version"; exit 1 ;; esac
+      - name: Package
+        shell: bash
+        run: |
+          exe=target/${{ matrix.rust }}/release/pelago
+          case "${{ matrix.target }}" in *windows) exe="$exe.exe" ;; esac
+          python3 tools/release/release.py package --binary "$exe" --target ${{ matrix.target }} --version "${{ inputs.version }}" --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error

@@ -1,0 +1,27 @@
+/// `braid.fromLists` reports a list of the wrong length as a `zip_error`.
+
+fn build(xs: [int], ys: [string]) -> int ! zip_error {
+    const b: braid<int, string; 4> = braid.fromLists(xs, ys)?
+    print(b)
+    ok(b.pairs())
+}
+
+fn main() {
+    switch build([1, 2], ["a", "b"]) {
+        case ok(n): print("ok", n)
+        case err(e): print(e.message)
+    }
+    switch build([1, 2, 3], ["a", "b"]) {
+        case ok(n): print("ok", n)
+        case err(e): print(e.message, e.left, e.right)
+    }
+    switch odd() {
+        case ok(b): print(b)
+        case err(e): print(e.message)
+    }
+}
+
+fn odd() -> braid<int, string; 3> ! zip_error {
+    const b: braid<int, string; 3> = braid.fromLists([1, 2], ["a"])?
+    ok(b)
+}

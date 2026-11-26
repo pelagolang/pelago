@@ -1,5 +1,7 @@
 //~ A tour of the syntax decided so far. Not a program anyone can run yet:
 //~ it exists so the lexer (and later the parser) has something real to read.
+//~ It is a syntax sampler: it has to lex, parse and format, and it does not type check
+//~ (names are free-floating). Programs that must type check live in `examples/programs/`.
 
 //~* Documentation can also
     span many lines. *~//
@@ -59,6 +61,20 @@ fn finish(sink xs: [int]) -> int = xs.len()
 clear(inout scores)
 finish(sink scores)
 
+/// Short spellings, same meaning: `x!` is `inout x`, `x!!` is `sink x`.
+fn clear2(xs!: [int]) { xs.clear!() }
+fn finish2(xs!!: [int]) -> int = xs.len()
+
+clear2(scores!)
+finish2(scores!!)
+
+/// A window `[T..]` (long spelling `slice<T>`) borrows part of a list or array.
+fn shift(xs!: [int..], by: int) {
+    for inout x of xs { x += by }
+}
+
+shift(scores[1..3]!, 10)
+
 fn sum_to(n: int, acc: int = 0) -> int {
     if n == 0 { return acc }
     become sum_to(n - 1, acc + n)
@@ -72,7 +88,7 @@ fn parseInt(s: string) -> int ! parse_error {
 fn find(xs: [string], name: string) -> int? { none }
 const index = find(names, "Dennis") ?? -1
 
-@inline fn square(x: int) -> int = x * x
+@inline_always fn square(x: int) -> int = x * x
 
 @checkfree
 fn dot(a: [int], b: [int]) -> int {
@@ -316,6 +332,7 @@ pub import { read } = std.io
 use std.io
 
 type id = int64
+type wide = int128      /// also uint128, int256, uint256, float16, float128, float256
 type pair<A, B> = (A, B)
 
 @derive(eq, order, hash, show)
@@ -353,8 +370,17 @@ impl<T> show for stack<T> where T: show {
 fn largest<T>(xs: [T]) -> T? where T: ordered, T: eq { none }
 fn sized<meta N: int>() -> [int; N] { [0; N] }
 fn apply(f: fn(int) -> int, x: int) -> int = f(f(x))
+/// Access modes in a function type: `T!` is `inout T`, `T!!` is `sink T`.
+fn bump_twice(step: fn(int!), n!: int) {
+    step(n!)
+    step(n!)
+}
 fn shapes_area(xs: [any shape_like]) -> float = 0.0
 fn dense(points: soa<point, 8>, grid: (int, string; 4), pair: (int, int)) { }
+/// A braid: N slots whose types alternate. The annotation makes a list a braid; `(a, b; 6)` repeats a cycle.
+const names_by_id: braid<int, string; 4> = (1, "one", 2, "two")
+const blank: (int, string; 6) = (0, ""; 6)
+fn braids(t: braid<uint8, uint16; 6>) -> uint16 = t.second(0) + t.second(-1)
 ext fn puts(s: ptr) -> int
 ext "C" fn abs(x: int) -> int
 

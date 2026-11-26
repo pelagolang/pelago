@@ -262,6 +262,12 @@ impl Analysis {
     pub fn definition(&self, m: ModuleId, off: usize) -> Option<(ModuleId, Span)> {
         let id = self.ident_at(m, off)?;
         let def = self.resolved.def(self.def_of_name(m, id.start)?);
+        if def.file.is_none() && def.kind == DefKind::Module {
+            // A module that is a file: its scope has the module's index. Jump to the top of it.
+            let idx = def.scope?;
+            let module = self.program.modules.get(idx)?;
+            return (!module.synthetic).then_some((module.id, Span::new(0, 0)));
+        }
         Some((def.file?, def.span))
     }
 
@@ -358,7 +364,15 @@ impl Analysis {
                 _ => {}
             }
         }
-        let callee = toks.get(open?.checked_sub(1)?)?;
+        // `xs.push!(4)` and `c.close!!()`: the `!` or `!!` belongs to the call.
+        let mut before = open?.checked_sub(1)?;
+        if matches!(
+            toks.get(before)?.kind,
+            TokenKind::Punct(Punct::Bang | Punct::BangBang)
+        ) {
+            before = before.checked_sub(1)?;
+        }
+        let callee = toks.get(before)?;
         if callee.kind != TokenKind::Ident {
             return None;
         }
@@ -396,8 +410,8 @@ impl Analysis {
         }
         let info_has_self = self.typed.fn_infos.get(&def).is_some_and(|i| i.has_self);
         // A method called with a dot does not pass `self`: skip that piece of the label.
-        let called_on_value = open
-            .and_then(|o| o.checked_sub(2))
+        let called_on_value = Some(before)
+            .and_then(|o| o.checked_sub(1))
             .and_then(|k| toks.get(k))
             .is_some_and(|t| t.kind == TokenKind::Punct(Punct::Dot));
         let skip = usize::from(info_has_self && called_on_value);
@@ -510,7 +524,13 @@ impl Analysis {
                     DefKind::Field => "(field) ".to_string(),
                     _ => "(local) ".to_string(),
                 };
-                match self.typed.local_tys.get(&def) {
+                // A field's type is recorded with its struct or obj.
+                let field_ty = d
+                    .parent
+                    .and_then(|p| self.typed.adts.get(&p))
+                    .and_then(|a| a.fields.iter().find(|(f, _)| *f == def))
+                    .map(|(_, t)| t);
+                match self.typed.local_tys.get(&def).or(field_ty) {
                     Some(t) => format!("{tag}{}: {}", d.name, ty(*t)),
                     None => format!("{tag}{}", d.name),
                 }
@@ -550,28 +570,45 @@ impl Analysis {
         let mut out: Vec<(String, u32)> = Vec::new();
         if after_dot {
             let dot = start - 1;
-            // The expression just before the dot.
-            let owner = self
+            // The type of the expression just before the dot.
+            let owner_ty = self
                 .typed
                 .tys
                 .iter()
                 .filter(|((f, _, e), _)| *f == m && *e as usize == dot)
                 .min_by_key(|((_, s, e), _)| e - s)
-                .and_then(
-                    |(_, t)| match self.typed.types.kind(self.typed.types.shallow(*t)) {
-                        TyKind::Adt(d, _) => Some(*d),
-                        _ => None,
-                    },
-                );
-            for (i, d) in self.resolved.defs.iter().enumerate() {
-                let member = d.parent.is_some()
-                    && matches!(d.kind, DefKind::Field | DefKind::Fn | DefKind::Variant);
-                let wanted = match owner {
-                    Some(o) => d.parent == Some(o) || self.impl_method_of(o, DefId(i as u32)),
-                    None => true,
-                };
-                if member && wanted {
-                    out.push((d.name.clone(), kind_num(d.kind)));
+                .map(|(_, t)| self.typed.types.shallow(*t));
+            let owner = owner_ty.and_then(|t| match self.typed.types.kind(t) {
+                TyKind::Adt(d, _) => Some(*d),
+                _ => None,
+            });
+            match (owner, owner_ty) {
+                (None, Some(t)) if !matches!(self.typed.types.kind(t), TyKind::Error) => {
+                    // A built-in type (list, string, number, ...): the methods of the `impl`
+                    // blocks written for that kind of type, and of blanket impls.
+                    for i in &self.typed.impls {
+                        if self.same_head(i.self_ty, t) {
+                            for (name, f) in &i.methods {
+                                let kind = self.resolved.def(*f).kind;
+                                out.push((name.clone(), kind_num(kind)));
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    for (i, d) in self.resolved.defs.iter().enumerate() {
+                        let member = d.parent.is_some()
+                            && matches!(d.kind, DefKind::Field | DefKind::Fn | DefKind::Variant);
+                        let wanted = match owner {
+                            Some(o) => {
+                                d.parent == Some(o) || self.impl_method_of(o, DefId(i as u32))
+                            }
+                            None => true,
+                        };
+                        if member && wanted {
+                            out.push((d.name.clone(), kind_num(d.kind)));
+                        }
+                    }
                 }
             }
         } else {
@@ -608,6 +645,25 @@ impl Analysis {
         out.sort();
         out.dedup();
         out
+    }
+
+    /// Does an `impl` for `impl_ty` apply to values of the type `value`? Compares the kind of type
+    /// (list, string, int of one width, ...), not the type arguments; a generic `impl<T> for T`
+    /// applies to everything and `str` methods apply to `string`.
+    fn same_head(&self, impl_ty: crate::types::Ty, value: crate::types::Ty) -> bool {
+        use std::mem::discriminant;
+        let types = &self.typed.types;
+        let (a, b) = (
+            types.kind(types.shallow(impl_ty)),
+            types.kind(types.shallow(value)),
+        );
+        match (a, b) {
+            (TyKind::Param(_), _) => true,
+            (TyKind::Int(x), TyKind::Int(y)) => x == y,
+            (TyKind::Float(x), TyKind::Float(y)) => x == y,
+            (TyKind::Str, TyKind::String) => true,
+            _ => discriminant(a) == discriminant(b),
+        }
     }
 
     /// Is `f` a method written in an `impl` for the type `owner`?
@@ -726,7 +782,13 @@ impl Analysis {
             let d = self.resolved.def(def);
             let (name, mods) = match d.kind {
                 DefKind::Module => ("namespace", 0),
-                DefKind::Fn if d.parent.is_some() => ("method", 0),
+                // A method is a function written with `self`, in a type or in an `impl`.
+                DefKind::Fn
+                    if d.parent.is_some()
+                        || self.typed.fn_infos.get(&def).is_some_and(|i| i.has_self) =>
+                {
+                    ("method", 0)
+                }
                 DefKind::Fn => ("function", 0),
                 DefKind::BuiltinFn => ("function", 4),
                 DefKind::Const => ("variable", 8),

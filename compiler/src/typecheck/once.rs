@@ -1,4 +1,4 @@
-//! Which closures can be called only once (`docs/design/functions.md`, section 19).
+//! Which closures can be called only once.
 //!
 //! A closure that consumes a `[sink x]` capture runs its body on a value that is gone afterwards,
 //! so its type is `once fn`. The checker looks for the consuming forms that are written out:

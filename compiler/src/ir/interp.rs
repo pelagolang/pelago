@@ -20,6 +20,29 @@ pub enum Val {
     Unit,
 }
 
+/// The Linux error number for a failed host operation, so a program sees the same numbers on every host (the
+/// native Linux and macOS back ends return the system's own, which agree for these). Kinds with no number
+/// here give the host's, or 5 (`EIO`) where the host has none.
+fn os_errno(e: &std::io::Error) -> i64 {
+    use std::io::ErrorKind as K;
+    match e.kind() {
+        K::NotFound => 2,
+        K::PermissionDenied => 13,
+        K::AlreadyExists => 17,
+        K::NotADirectory => 20,
+        K::IsADirectory => 21,
+        K::InvalidInput => 22,
+        K::StorageFull => 28,
+        K::DirectoryNotEmpty => 39,
+        K::BrokenPipe => 32,
+        K::Interrupted => 4,
+        K::WouldBlock => 11,
+        K::TimedOut => 110,
+        _ if cfg!(unix) => e.raw_os_error().map_or(5, i64::from),
+        _ => 5,
+    }
+}
+
 impl Val {
     /// An integer read as signed, for the given width.
     pub fn signed(self, bits: u32) -> i128 {
@@ -68,7 +91,7 @@ const FUNC_BASE: usize = 1 << 40;
 const STACK_SIZE: usize = 8 << 20;
 /// Deep chains (a list of ten thousand boxes) recurse once per node; the host thread that runs the
 /// machine gets a big stack for it.
-const HOST_STACK: usize = 1 << 30;
+const HOST_STACK: usize = if cfg!(windows) { 3 << 29 } else { 1 << 30 };
 const MAX_DEPTH: u32 = 200_000;
 /// A context started by `CtxInit` runs on a host thread of its own; it gets a smaller host stack and call depth.
 const CTX_HOST_STACK: usize = 64 << 20;
@@ -77,6 +100,8 @@ const CTX_MAX_DEPTH: u32 = 20_000;
 const CTX_BASE: usize = 1 << 41;
 /// Starts the message of the error that unwinds a context thread after the run has ended.
 const SHUTDOWN: &str = "\0shutdown";
+/// The stop that `os_exit` makes; the status is in `OsState::exit`.
+const EXIT: &str = "\0exit";
 
 /// Contexts (`CtxInit`, `CtxSwitch`) are host threads that pass a baton: exactly one runs at a time, so
 /// the machine is never used by two threads at once and the order is fixed by the program.
@@ -104,6 +129,52 @@ struct CtxInfo {
 /// The machine's address, passed to a context thread. Only the thread holding the baton uses it.
 struct MachinePtr(usize);
 
+/// What the program sees of the operating system: the stand-in for `OsOp`.
+struct OsState {
+    argv: Vec<String>,
+    env: Vec<String>,
+    stdin: Vec<u8>,
+    stdin_pos: usize,
+    /// Read standard input from the real process when the program asks (the command line), instead of from
+    /// `stdin`.
+    live_stdin: bool,
+    /// What was written to file descriptor 2.
+    err: Vec<u8>,
+    exit: Option<i32>,
+    /// The start-up block, made the first time `os_argv` is used.
+    block: usize,
+    /// Files opened by `os_open`: descriptor `3 + i` is `files[i]` (a closed one is `None`).
+    files: Vec<Option<std::fs::File>>,
+    /// The entries of a directory opened for reading, by descriptor: (name, type) and how many were handed
+    /// out by `Dents`.
+    dirs: std::collections::HashMap<i64, (Vec<(String, u8)>, usize)>,
+    /// The program's current directory once it has changed it. The real one is left alone, because the
+    /// interpreter can run inside a process that other programs share (the tests); relative paths are
+    /// resolved against this in `Open` and `Fs`.
+    cwd: Option<std::path::PathBuf>,
+}
+
+impl OsState {
+    /// `path` as the program means it: relative to its own current directory.
+    fn resolve(&self, path: &str) -> std::path::PathBuf {
+        match &self.cwd {
+            Some(dir) => dir.join(path),
+            None => std::path::PathBuf::from(path),
+        }
+    }
+}
+
+/// The process the interpreter pretends to be in: its arguments (the first is the program's name), its
+/// environment and what standard input holds.
+#[derive(Clone, Default, Debug)]
+pub struct OsEnv {
+    pub argv: Vec<String>,
+    pub env: Vec<String>,
+    pub stdin: Vec<u8>,
+    /// Take standard input from the real process, a read at a time, rather than from `stdin`.
+    pub live_stdin: bool,
+}
+
 struct Machine<'m> {
     m: &'m Module,
     mem: Vec<u8>,
@@ -116,11 +187,14 @@ struct Machine<'m> {
     /// Heap blocks by start address: size and whether still alive.
     heap: BTreeMap<usize, (usize, bool)>,
     out: Vec<u8>,
+    os: OsState,
     steps: u64,
     max_steps: u64,
     depth: u32,
     max_depth: u32,
     trace: Vec<String>,
+    /// Where the stop that is unwinding happened (the innermost place that knew), once it has.
+    stop_at: Span,
     /// The part of memory slots are taken from (`sp` moves inside it).
     stack_lo: usize,
     stack_hi: usize,
@@ -137,11 +211,18 @@ struct Machine<'m> {
 pub struct Outcome {
     pub result: Result<Val, String>,
     pub output: String,
+    /// What was written to standard error with `os_write`.
+    pub err: String,
+    /// The exit status: 0, or what `os_exit` was given.
+    pub status: i32,
     pub leaked: usize,
     /// Instructions executed: the metric for the optimiser.
     pub steps: u64,
     /// When the run stopped with an error: the functions that were running, innermost first (at most 12).
     pub trace: Vec<String>,
+    /// When the run stopped with an error: the file and line of the instruction that stopped it, when the
+    /// IR knew (see `Span::at`).
+    pub stop_at: Option<(String, u32)>,
 }
 
 /// Runs the function called `name`. `Err` holds the message of a stop.
@@ -150,7 +231,12 @@ pub fn run(m: &Module, name: &str, args: &[Val]) -> Result<Val, String> {
 }
 
 pub fn run_full(m: &Module, name: &str, args: &[Val]) -> Outcome {
-    run_inner(m, name, args, DEFAULT_STEPS, None).0
+    run_inner(m, name, args, DEFAULT_STEPS, None, OsEnv::default()).0
+}
+
+/// Like [`run_full`], as a process with the given arguments, environment and standard input.
+pub fn run_os(m: &Module, name: &str, args: &[Val], os: OsEnv) -> Outcome {
+    run_inner(m, name, args, DEFAULT_STEPS, None, os).0
 }
 
 /// A run that also keeps what is left in memory, for compile-time code (`meta`).
@@ -166,7 +252,7 @@ pub struct Capture {
 /// and its address is the only argument (the function writes its result there, as functions
 /// returning memory values do); the block does not count as a leak.
 pub fn run_capture(m: &Module, name: &str, ret_size: Option<usize>, max_steps: u64) -> Capture {
-    let (outcome, image, ret_addr) = run_inner(m, name, &[], max_steps, ret_size);
+    let (outcome, image, ret_addr) = run_inner(m, name, &[], max_steps, ret_size, OsEnv::default());
     Capture {
         outcome,
         image,
@@ -182,15 +268,19 @@ fn run_inner(
     args: &[Val],
     max_steps: u64,
     ret_size: Option<usize>,
+    os: OsEnv,
 ) -> (Outcome, Vec<u8>, usize) {
     let Some(i) = m.funcs.iter().position(|f| f.name == name) else {
         return (
             Outcome {
                 result: Err(format!("no function `{name}`")),
                 output: String::new(),
+                err: String::new(),
+                status: 0,
                 leaked: 0,
                 steps: 0,
                 trace: Vec::new(),
+                stop_at: None,
             },
             Vec::new(),
             0,
@@ -220,11 +310,25 @@ fn run_inner(
         heap_base,
         heap: BTreeMap::new(),
         out: Vec::new(),
+        os: OsState {
+            argv: os.argv,
+            env: os.env,
+            stdin: os.stdin,
+            stdin_pos: 0,
+            live_stdin: os.live_stdin,
+            err: Vec::new(),
+            exit: None,
+            block: 0,
+            files: Vec::new(),
+            dirs: std::collections::HashMap::new(),
+            cwd: None,
+        },
         steps: 0,
         max_steps,
         depth: 0,
         max_depth: MAX_DEPTH,
         trace: Vec::new(),
+        stop_at: Span::default(),
         stack_lo: stack_base,
         stack_hi: stack_base + STACK_SIZE,
         ctxs: vec![CtxInfo {
@@ -270,18 +374,36 @@ fn run_inner(
             b.1 = false;
         }
     }
-    let leaked = mc
+    let mut result = result;
+    let mut status = 0;
+    if matches!(&result, Err(m) if m == EXIT) {
+        status = mc.os.exit.unwrap_or(0);
+        result = Ok(Val::Unit);
+    }
+    if mc.os.block != 0 {
+        if let Some(b) = mc.heap.get_mut(&mc.os.block) {
+            b.1 = false;
+        }
+    }
+    // `os_exit` ends the process at once: nothing is dropped, so nothing counts as a leak.
+    let leaked: usize = mc
         .heap
         .values()
-        .filter(|(_, live)| *live)
+        .filter(|(_, live)| *live && mc.os.exit.is_none())
         .map(|(s, _)| *s)
         .sum();
     let outcome = Outcome {
         result,
+        status,
+        err: String::from_utf8_lossy(&mc.os.err).into_owned(),
         output: String::from_utf8_lossy(&mc.out).into_owned(),
         leaked,
         steps: mc.steps,
         trace: std::mem::take(&mut mc.trace),
+        stop_at: mc
+            .stop_at
+            .place()
+            .and_then(|(f, l)| m.files.get(f as usize - 1).map(|name| (name.clone(), l))),
     };
     let image = if ret_size.is_some() {
         std::mem::take(&mut mc.mem)
@@ -295,11 +417,20 @@ impl Machine<'_> {
     fn call(&mut self, fi: usize, args: &[Val]) -> Result<Val, String> {
         let r = self.call_inner(fi, args);
         if let Err(msg) = &r {
-            if self.trace.len() < 12 && msg != SHUTDOWN {
+            if self.trace.len() < 12 && msg != SHUTDOWN && msg != EXIT {
                 self.trace.push(self.m.funcs[fi].name.clone());
             }
         }
         r
+    }
+
+    /// Remembers where the first stop happened: the innermost instruction knows, the callers it passes through
+    /// do not overwrite it.
+    #[inline(never)]
+    fn note(&mut self, at: Span, msg: &str) {
+        if self.stop_at == Span::default() && msg != SHUTDOWN && msg != EXIT {
+            self.stop_at = at;
+        }
     }
 
     fn call_inner(&mut self, fi: usize, args: &[Val]) -> Result<Val, String> {
@@ -344,7 +475,13 @@ impl Machine<'_> {
                         let _ = align;
                         Val::Ptr(at)
                     }
-                    op => self.exec(f, &vals, op)?,
+                    op => match self.exec(f, &vals, op) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            self.note(inst.span, &e);
+                            return Err(e);
+                        }
+                    },
                 };
                 if let Some(r) = inst.result {
                     vals[r.0 as usize] = v;
@@ -361,7 +498,10 @@ impl Machine<'_> {
                     block = enter(f, &mut vals, t);
                 }
                 Term::Return(x) => break x.map_or(Val::Unit, |x| vals[x.0 as usize]),
-                Term::Stop(msg) => return Err(msg.clone()),
+                Term::Stop(msg, at) => {
+                    self.note(*at, msg);
+                    return Err(msg.clone());
+                }
                 Term::Unreachable => return Err("reached unreachable code".to_string()),
             }
         };
@@ -505,6 +645,10 @@ impl Machine<'_> {
 
     /// Checks that `len` bytes at `addr` may be touched.
     fn check(&self, addr: usize, len: usize) -> Result<(), String> {
+        // Touching no bytes cannot fault, even at a null address (an empty list or string has none).
+        if len == 0 {
+            return Ok(());
+        }
         if addr < 16 {
             return Err("used a null address".to_string());
         }
@@ -588,6 +732,96 @@ impl Machine<'_> {
         addr
     }
 
+    /// The OS memory calls on the interpreter's heap: a reservation is a zeroed block, a commit and an
+    /// advice change nothing, a remap is a reallocation. The error values are those of the compiled code.
+    #[inline(never)]
+    fn os_op(&mut self, vals: &[Val], k: OsKind, v: [&Value; 3]) -> Result<Val, String> {
+        let g = |x: &Value| vals[x.0 as usize];
+        Ok(Val::int(self.os_call(k, g(v[0]), g(v[1]), g(v[2]))?))
+    }
+
+    #[inline(never)]
+    fn os_call(&mut self, k: OsKind, a: Val, b: Val, c: Val) -> Result<i64, String> {
+        const PAGE: i64 = 4096;
+        let (a, b, c) = (
+            a.signed(64) as i64,
+            b.signed(64) as i64,
+            c.signed(64) as i64,
+        );
+        let sized = |n: i64| n > 0 && n % PAGE == 0;
+        let known = |s: &Self, p: i64| matches!(s.heap.get(&(p as usize)), Some((_, true)));
+        // A commit or an advice may name any page-aligned range inside a reservation (as `mprotect` does).
+        let inside = |s: &Self, p: i64, n: i64| {
+            s.heap
+                .range(..=p as usize)
+                .next_back()
+                .is_some_and(|(at, (size, live))| *live && p as usize + n as usize <= at + size)
+        };
+        Ok(match k {
+            OsKind::Write
+            | OsKind::Read
+            | OsKind::Exit
+            | OsKind::Argv
+            | OsKind::Open
+            | OsKind::Close
+            | OsKind::Clock
+            | OsKind::Fs
+            | OsKind::Dents
+            | OsKind::Random
+            | OsKind::Sleep
+            | OsKind::AtomicCas
+            | OsKind::AtomicAdd
+            | OsKind::AtomicSwap
+            | OsKind::ThreadStart
+            | OsKind::FutexWait
+            | OsKind::FutexWake => return self.os_layer(k, a, b, c),
+            OsKind::Reserve => {
+                if !sized(a) {
+                    OS_BAD
+                } else if a > (1 << 32) {
+                    OS_NOMEM
+                } else {
+                    // A reservation starts on a page.
+                    while !(self.mem.len() + 16).is_multiple_of(PAGE as usize) {
+                        self.mem.push(0);
+                    }
+                    self.alloc(a as usize) as i64
+                }
+            }
+            OsKind::Commit | OsKind::AdviseNoHuge => {
+                if !sized(b) || a % PAGE != 0 || a <= 0 || !inside(self, a, b) {
+                    OS_BAD
+                } else {
+                    0
+                }
+            }
+            OsKind::Release => {
+                if !sized(b) || !known(self, a) {
+                    OS_BAD
+                } else {
+                    self.free(Val::Ptr(a as usize))?;
+                    0
+                }
+            }
+            OsKind::Remap => {
+                if !sized(b) || !sized(c) || !known(self, a) {
+                    OS_BAD
+                } else if c > (1 << 32) {
+                    OS_NOMEM
+                } else {
+                    while !(self.mem.len() + 16).is_multiple_of(PAGE as usize) {
+                        self.mem.push(0);
+                    }
+                    let new = self.alloc(c as usize);
+                    let keep = b.min(c) as usize;
+                    self.mem.copy_within(a as usize..a as usize + keep, new);
+                    self.free(Val::Ptr(a as usize))?;
+                    new as i64
+                }
+            }
+        })
+    }
+
     fn free(&mut self, p: Val) -> Result<(), String> {
         let Val::Ptr(addr) = p else {
             return Err("freed a value that is not an address".to_string());
@@ -607,6 +841,373 @@ impl Machine<'_> {
             }
             None => Err("freed an address that was not allocated".to_string()),
         }
+    }
+
+    /// The interpreter's stand-in for the operating system layer (`OsKind::Write` and the others that talk to
+    /// the process rather than to memory). Kept out of `exec`: its frame is on the stack of every interpreted
+    /// call, and the stack depth is what a deeply recursive program runs out of first.
+    #[inline(never)]
+    fn os_layer(&mut self, k: OsKind, a: i64, b: i64, c: i64) -> Result<i64, String> {
+        Ok(match k {
+            OsKind::Write => {
+                let (p, n) = (b as usize, c.max(0) as usize);
+                self.check(p, n)?;
+                let bytes = self.mem[p..p + n].to_vec();
+                match a {
+                    1 => self.out.extend_from_slice(&bytes),
+                    2 => self.os.err.extend_from_slice(&bytes),
+                    _ => {
+                        use std::io::Write;
+                        let slot = (a - 3) as usize;
+                        match self.os.files.get_mut(slot).and_then(|f| f.as_mut()) {
+                            Some(f) if a >= 3 => {
+                                return Ok(match f.write_all(&bytes) {
+                                    Ok(()) => n as i64,
+                                    Err(e) => -os_errno(&e),
+                                })
+                            }
+                            _ => return Ok(-9),
+                        }
+                    }
+                }
+                n as i64
+            }
+            OsKind::Read => {
+                let (p, n) = (b as usize, c.max(0) as usize);
+                self.check(p, n)?;
+                if a >= 3 {
+                    use std::io::Read;
+                    let slot = (a - 3) as usize;
+                    let Some(f) = self.os.files.get_mut(slot).and_then(|f| f.as_mut()) else {
+                        return Ok(-9);
+                    };
+                    let mut chunk = vec![0u8; n];
+                    return Ok(match f.read(&mut chunk) {
+                        Ok(k) => {
+                            self.mem[p..p + k].copy_from_slice(&chunk[..k]);
+                            k as i64
+                        }
+                        Err(e) => -os_errno(&e),
+                    });
+                }
+                if a != 0 {
+                    return Ok(-9);
+                }
+                if self.os.live_stdin {
+                    use std::io::Read;
+                    let mut chunk = vec![0u8; n];
+                    return Ok(match std::io::stdin().read(&mut chunk) {
+                        Ok(k) => {
+                            self.mem[p..p + k].copy_from_slice(&chunk[..k]);
+                            k as i64
+                        }
+                        Err(e) => -os_errno(&e),
+                    });
+                }
+                let left = self.os.stdin.len() - self.os.stdin_pos;
+                let k = left.min(n);
+                let from = self.os.stdin_pos;
+                let chunk = self.os.stdin[from..from + k].to_vec();
+                self.mem[p..p + k].copy_from_slice(&chunk);
+                self.os.stdin_pos += k;
+                k as i64
+            }
+            OsKind::Open => {
+                let mut end = a as usize;
+                while self.mem.get(end).is_some_and(|&b| b != 0) {
+                    end += 1;
+                }
+                self.check(a as usize, end - a as usize + 1)?;
+                let path = String::from_utf8_lossy(&self.mem[a as usize..end]).into_owned();
+                let path = self.os.resolve(&path);
+                let mut o = std::fs::OpenOptions::new();
+                match b {
+                    0 => o.read(true),
+                    1 => o.write(true).create(true).truncate(true),
+                    _ => o.append(true).create(true),
+                };
+                match o.open(&path) {
+                    Ok(f) => {
+                        self.os.files.push(Some(f));
+                        let fd = self.os.files.len() as i64 + 2;
+                        if b == 0 && std::fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
+                            let mut entries = Vec::new();
+                            if let Ok(rd) = std::fs::read_dir(&path) {
+                                for e in rd.flatten() {
+                                    let t = match e.file_type() {
+                                        Ok(t) if t.is_dir() => 4,
+                                        Ok(t) if t.is_file() => 8,
+                                        Ok(t) if t.is_symlink() => 10,
+                                        _ => 0,
+                                    };
+                                    entries.push((e.file_name().to_string_lossy().into_owned(), t));
+                                }
+                            }
+                            // The system's two extra entries.
+                            entries.push((".".to_string(), 4));
+                            entries.push(("..".to_string(), 4));
+                            self.os.dirs.insert(fd, (entries, 0));
+                        }
+                        fd
+                    }
+                    Err(e) => match e.kind() {
+                        std::io::ErrorKind::NotFound => OS_NOENT,
+                        std::io::ErrorKind::PermissionDenied => OS_ACCES,
+                        _ => -os_errno(&e),
+                    },
+                }
+            }
+            OsKind::Close => match a - 3 {
+                i if i >= 0 && (i as usize) < self.os.files.len() => {
+                    self.os.dirs.remove(&a);
+                    if self.os.files[i as usize].take().is_some() {
+                        0
+                    } else {
+                        OS_BAD
+                    }
+                }
+                _ => OS_BAD,
+            },
+            OsKind::Exit => {
+                self.os.exit = Some(a as i32);
+                return Err(EXIT.to_string());
+            }
+            OsKind::Clock => {
+                let p = b as usize;
+                self.check(p, 16)?;
+                let now = match a {
+                    0 => std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default(),
+                    1 => {
+                        // Measured from the first use, so the value is small and never goes back.
+                        static START: std::sync::OnceLock<std::time::Instant> =
+                            std::sync::OnceLock::new();
+                        START.get_or_init(std::time::Instant::now).elapsed()
+                    }
+                    _ => return Ok(-2),
+                };
+                self.mem[p..p + 8].copy_from_slice(&(now.as_secs() as i64).to_le_bytes());
+                self.mem[p + 8..p + 16].copy_from_slice(&(now.subsec_nanos() as i64).to_le_bytes());
+                0
+            }
+            OsKind::AtomicCas | OsKind::AtomicAdd | OsKind::AtomicSwap => {
+                let p = a as usize;
+                self.check(p, 8)?;
+                let old = i64::from_le_bytes(self.mem[p..p + 8].try_into().unwrap());
+                let new = match k {
+                    OsKind::AtomicCas => (old == b).then_some(c),
+                    OsKind::AtomicAdd => Some(old.wrapping_add(b)),
+                    _ => Some(b),
+                };
+                if let Some(n) = new {
+                    self.mem[p..p + 8].copy_from_slice(&n.to_le_bytes());
+                }
+                old
+            }
+            // One task at a time here: no threads, a wait returns at once (the caller looks again), nobody to wake.
+            OsKind::ThreadStart => OS_FAIL,
+            OsKind::FutexWait | OsKind::FutexWake => 0,
+            OsKind::Sleep => {
+                if a < 0 || !(0..1_000_000_000).contains(&b) {
+                    return Ok(OS_BAD);
+                }
+                std::thread::sleep(std::time::Duration::new(a as u64, b as u32));
+                0
+            }
+            OsKind::Fs => {
+                // The calls that take no path: the current directory (6), the process id (8) and the system's
+                // identification record, whose second field is the host name (9).
+                if matches!(a, 6 | 8 | 9) {
+                    return Ok(match a {
+                        6 => {
+                            let dir = match &self.os.cwd {
+                                Some(d) => Ok(d.clone()),
+                                None => std::env::current_dir(),
+                            };
+                            match dir {
+                                Ok(d) => {
+                                    let text = d.to_string_lossy().into_owned();
+                                    let n = text.len();
+                                    if (c as usize) < n + 1 {
+                                        -34 // ERANGE
+                                    } else {
+                                        self.check(b as usize, n + 1)?;
+                                        let p = b as usize;
+                                        self.mem[p..p + n].copy_from_slice(text.as_bytes());
+                                        self.mem[p + n] = 0;
+                                        n as i64
+                                    }
+                                }
+                                Err(e) => -os_errno(&e),
+                            }
+                        }
+                        8 => i64::from(std::process::id()),
+                        _ => {
+                            self.check(b as usize, 390)?;
+                            let name = std::fs::read_to_string("/proc/sys/kernel/hostname")
+                                .map(|s| s.trim().to_string())
+                                .or_else(|_| std::env::var("HOSTNAME"))
+                                .unwrap_or_else(|_| "localhost".to_string());
+                            let p = b as usize;
+                            self.mem[p..p + 390].fill(0);
+                            let n = name.len().min(64);
+                            self.mem[p + 65..p + 65 + n].copy_from_slice(&name.as_bytes()[..n]);
+                            0
+                        }
+                    });
+                }
+                let mut end = b as usize;
+                while self.mem.get(end).is_some_and(|&x| x != 0) {
+                    end += 1;
+                }
+                self.check(b as usize, end - b as usize + 1)?;
+                let path = String::from_utf8_lossy(&self.mem[b as usize..end]).into_owned();
+                let path = self.os.resolve(&path).to_string_lossy().into_owned();
+                let fail = |e: std::io::Error| match e.kind() {
+                    std::io::ErrorKind::NotFound => OS_NOENT,
+                    std::io::ErrorKind::PermissionDenied => OS_ACCES,
+                    _ => -os_errno(&e),
+                };
+                let r = match a {
+                    0 => std::fs::symlink_metadata(&path).map(|_| ()),
+                    1 => std::fs::remove_file(&path),
+                    2 => std::fs::remove_dir(&path),
+                    3 => std::fs::create_dir(&path),
+                    4 => {
+                        let mut e2 = c as usize;
+                        while self.mem.get(e2).is_some_and(|&x| x != 0) {
+                            e2 += 1;
+                        }
+                        self.check(c as usize, e2 - c as usize + 1)?;
+                        let to = String::from_utf8_lossy(&self.mem[c as usize..e2]).into_owned();
+                        std::fs::rename(&path, self.os.resolve(&to))
+                    }
+                    // chdir: only the program's own idea of the current directory changes.
+                    7 => std::fs::canonicalize(&path).and_then(|full| {
+                        // Windows gives the `\\?\C:\...` form; the program should see the usual `C:\...`.
+                        let full = match full.to_str().and_then(|t| t.strip_prefix(r"\\?\")) {
+                            Some(plain) if !plain.starts_with("UNC\\") => {
+                                std::path::PathBuf::from(plain)
+                            }
+                            _ => full,
+                        };
+                        if full.is_dir() {
+                            self.os.cwd = Some(full);
+                            Ok(())
+                        } else {
+                            Err(std::io::Error::from(std::io::ErrorKind::NotADirectory))
+                        }
+                    }),
+                    5 => match std::fs::metadata(&path) {
+                        Ok(m) => {
+                            self.check(c as usize, 16)?;
+                            let kind: i64 = if m.is_file() {
+                                1
+                            } else if m.is_dir() {
+                                2
+                            } else {
+                                3
+                            };
+                            let p = c as usize;
+                            self.mem[p..p + 8].copy_from_slice(&(m.len() as i64).to_le_bytes());
+                            self.mem[p + 8..p + 16].copy_from_slice(&kind.to_le_bytes());
+                            Ok(())
+                        }
+                        Err(e) => Err(e),
+                    },
+                    _ => return Ok(OS_BAD),
+                };
+                match r {
+                    Ok(()) => 0,
+                    Err(e) => fail(e),
+                }
+            }
+            OsKind::Random => {
+                use std::io::Read;
+                let (p, n) = (a as usize, b);
+                if !(1..=256).contains(&n) {
+                    return Ok(OS_BAD);
+                }
+                self.check(p, n as usize)?;
+                let mut buf = vec![0u8; n as usize];
+                let got = match std::fs::File::open("/dev/urandom")
+                    .and_then(|mut f| f.read_exact(&mut buf))
+                {
+                    Ok(()) => true,
+                    // No `/dev/urandom` (Windows): the standard library's hasher keys come from the system.
+                    Err(_) => {
+                        use std::hash::{BuildHasher, Hasher};
+                        for chunk in buf.chunks_mut(8) {
+                            let w = std::collections::hash_map::RandomState::new()
+                                .build_hasher()
+                                .finish()
+                                .to_le_bytes();
+                            chunk.copy_from_slice(&w[..chunk.len()]);
+                        }
+                        true
+                    }
+                };
+                if got {
+                    self.mem[p..p + n as usize].copy_from_slice(&buf);
+                    0
+                } else {
+                    OS_FAIL
+                }
+            }
+            OsKind::Dents => {
+                let (p, n) = (b as usize, c as usize);
+                self.check(p, n)?;
+                let Some((entries, at)) = self.os.dirs.get_mut(&a) else {
+                    return Ok(OS_BAD);
+                };
+                let mut used = 0;
+                while *at < entries.len() {
+                    let (name, t) = &entries[*at];
+                    let reclen = (19 + name.len() + 1).div_ceil(8) * 8;
+                    if used + reclen > n {
+                        if used == 0 {
+                            return Ok(OS_BAD);
+                        }
+                        break;
+                    }
+                    let q = p + used;
+                    self.mem[q..q + reclen].fill(0);
+                    self.mem[q..q + 8].copy_from_slice(&(*at as u64 + 1).to_le_bytes());
+                    self.mem[q + 8..q + 16].copy_from_slice(&((*at as u64) + 1).to_le_bytes());
+                    self.mem[q + 16..q + 18].copy_from_slice(&(reclen as u16).to_le_bytes());
+                    self.mem[q + 18] = *t;
+                    self.mem[q + 19..q + 19 + name.len()].copy_from_slice(name.as_bytes());
+                    used += reclen;
+                    *at += 1;
+                }
+                used as i64
+            }
+            OsKind::Argv => {
+                if self.os.block == 0 {
+                    let (argv, env) = (self.os.argv.clone(), self.os.env.clone());
+                    let words = 1 + argv.len() + 1 + env.len() + 1;
+                    let text: usize = argv.iter().chain(&env).map(|s| s.len() + 1).sum();
+                    let base = self.alloc(words * 8 + text);
+                    let mut at = base + words * 8;
+                    let mut put = |m: &mut Self, slot: usize, s: &str| {
+                        m.mem[slot..slot + 8].copy_from_slice(&(at as u64).to_le_bytes());
+                        m.mem[at..at + s.len()].copy_from_slice(s.as_bytes());
+                        at += s.len() + 1;
+                    };
+                    self.mem[base..base + 8].copy_from_slice(&(argv.len() as u64).to_le_bytes());
+                    for (i, s) in argv.iter().enumerate() {
+                        put(self, base + 8 * (1 + i), s);
+                    }
+                    for (i, s) in env.iter().enumerate() {
+                        put(self, base + 8 * (2 + argv.len() + i), s);
+                    }
+                    self.os.block = base;
+                }
+                self.os.block as i64
+            }
+            _ => unreachable!("a memory call"),
+        })
     }
 
     fn exec(&mut self, f: &Func, vals: &[Val], op: &Op) -> Result<Val, String> {
@@ -782,6 +1383,7 @@ impl Machine<'_> {
                 addr(&get(code))?,
                 get(env),
             )?,
+            Op::Os(k, a, b, c) => self.os_op(vals, *k, [a, b, c])?,
             Op::CtxSwitch(save, to) => {
                 self.ctx_switch(addr(&get(save))?, addr(&get(to))?)?;
                 Val::Unit

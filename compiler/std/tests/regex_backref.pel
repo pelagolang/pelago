@@ -1,0 +1,68 @@
+/// Backreferences in `std.regex` (`compileWithBackrefs`, `search`, `searchAll`); the expected lines come from Python's `re`.
+import std.regex
+
+fn spans(hits: [regex.found]) -> string {
+    var out = ""
+    var i = 0
+    while i < hits.len() {
+        out.pushStr!("#(hits[i].start)-#(hits[i].end) ")
+        i += 1
+    }
+    "#(out.trim())"
+}
+
+fn t(pattern: str, text: str) -> int ! parse_error {
+    const re = regex.compileWithBackrefs(pattern)?
+    switch re.searchAll(text, 10000000) {
+        case some(hits): print(true, hits.len(), spans(hits))
+        case none: print(false, 0, "")
+    }
+    ok(0)
+}
+
+fn g(pattern: str, text: str, budget: int) -> int ! parse_error {
+    const re = regex.compileWithBackrefs(pattern)?
+    switch re.search(text, budget) {
+        case .matched(m): print("matched", m.start, m.end)
+        case .nomatch: print("nomatch")
+        case .gaveUp: print("gaveUp")
+    }
+    ok(0)
+}
+
+fn main() {
+    t("(a|bc)\\1", "xbcbcx aa abca").or(1)
+    t("(\\w)\\1", "hello bookkeeper").or(1)
+    t("(?P<q>['\\\"]).*?(?P=q)", "say 'hi' and \"yo\" now 'x").or(1)
+    t("(?P<q>['\\\"]).*?\\k<q>", "say 'hi' and \"yo\" now 'x").or(1)
+    t("(a)?\\1", "b aa").or(1)
+    t("(a*)*\\1b", "aaab aaaac").or(1)
+    t("(\\d+)-\\1", "12-12 3-4 55-5").or(1)
+    t("(\\w+) \\1", "the the cat sat sat down").or(1)
+    t("\\b(\\w+)\\s+\\1\\b", "it is is a test test of of").or(1)
+    t("(?i)(a)\\1", "aA Aa aa b").or(1)
+    t("(a|b)*\\1", "abab abba").or(1)
+    t("(.)(.)\\2\\1", "abba xyyx abab").or(1)
+    t("(<(\\w+)>).*?</\\2>", "<b>bold</b> <i>it</i> <u>x</b>").or(1)
+    t("^(.+)\\1$", "abcabc abab").or(1)
+    t("(a+)b\\1", "aabaa abaaa").or(1)
+    t("(a)(b)?\\2", "ab a aab").or(1)
+    t("(a?)\\1b", "aab ab b").or(1)
+    t("(\\w)(?:\\1)+", "aaabbc zzzz").or(1)
+    t("(a{1,2})\\1", "aaaa aaa a").or(1)
+    t("(.)\\1{2}", "aaa abbbc").or(1)
+    t("([ab])([ab])\\2\\1", "abba baab abab").or(1)
+    t("(?P<x>a|b)(?P=x)", "aabbab").or(1)
+    t("(abc|ab)\\1", "abcabc abab").or(1)
+    t("(.*)\\1", "abab").or(1)
+    t("(.*?)\\1", "aa").or(1)
+    print(
+        regex.compileWithBackrefs("(x)(?=\\1)").isOk(),
+        regex.compile("(a)\\1").isOk(),
+        regex.compile("\\1(a)").isOk(),
+        regex.compile("(a\\1)").isOk(),
+    )
+    g("(a*)*\\1b", "aaaaaaaaaaaaaaaaaaaac", 50).or(1)
+    g("(a*)*\\1b", "aaaaaaaaaaaaaaaaaaaac", 100000).or(1)
+    g("(a*)*\\1b", "aaaaaaaaaaaaaaaaaaaab", 100000).or(1)
+}

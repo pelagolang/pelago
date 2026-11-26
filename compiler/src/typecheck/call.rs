@@ -65,7 +65,37 @@ impl<'p> Checker<'p> {
         }
         // Promised and default methods of the interfaces the type provides.
         let r = self.tt.shallow(recv);
-        self.iface_method(r, name)
+        if let Some(m) = self.iface_method(r, name) {
+            return Some(m);
+        }
+        self.core_glue_method(r, name)
+    }
+
+    /// `eq`, `cmp`, `hash` and `clone` as method calls on a type that provides the interface
+    /// without writing code for it (a number, text, a list, a derived struct or obj).
+    fn core_glue_method(&mut self, r: Ty, name: &str) -> Option<Method> {
+        let iface_name = match name {
+            "eq" => "eq",
+            "cmp" => "order",
+            "hash" => "hash",
+            "clone" => "clone",
+            _ => return None,
+        };
+        if matches!(
+            self.kind_of(r),
+            TyKind::Unknown | TyKind::Var(_) | TyKind::Param(_) | TyKind::Any(_)
+        ) {
+            return None;
+        }
+        let i = self.core_iface(iface_name)?;
+        if !self.provides(r, i) {
+            return None;
+        }
+        let m = self.res.member(i, name)?;
+        let sig = self.fn_sig(m)?;
+        let mut map = HashMap::new();
+        map.insert(i, r);
+        Some(Method { def: m, sig, map })
     }
 
     /// A method the type itself has: in its declaration, its `obj` bases or an `impl` block.
@@ -87,6 +117,14 @@ impl<'p> Checker<'p> {
                 let Some(mdef) = found else {
                     continue;
                 };
+                // A braid impl is written for one cycle length; skip the others before making fresh variables.
+                if let (TyKind::AltTuple(a, _), TyKind::AltTuple(b, _)) =
+                    (self.kind_of(r), self.kind_of(self.impls[idx].self_ty))
+                {
+                    if a.len() != b.len() {
+                        continue;
+                    }
+                }
                 let gens = self.impls[idx].generics.clone();
                 let map = self.fresh_map(&gens, span);
                 let inst = self.tt.subst(self.impls[idx].self_ty, &map);
@@ -107,7 +145,7 @@ impl<'p> Checker<'p> {
                 let s = self.tt.str_;
                 self.lookup_method(s, name, span)
             }
-            TyKind::Array(e, _) => {
+            TyKind::Array(e, _) | TyKind::Slice(e) => {
                 let l = self.tt.list(e);
                 self.lookup_method(l, name, span)
             }
@@ -192,6 +230,25 @@ impl<'p> Checker<'p> {
             }
         }
         names
+    }
+
+    /// A window (`xs[1..3]`, or a `[T..]` value) may not go where a list that can grow is changed: the callee
+    /// could push to a buffer it does not own. Such a parameter is written `[T..]`.
+    fn window_to_changing_list(&mut self, mode: Option<Mode>, arg: &'p Expr, found: Ty, want: Ty) {
+        if mode != Some(Mode::Inout) || !matches!(self.kind_of(want), TyKind::List(_)) {
+            return;
+        }
+        let mut inner = arg;
+        while let ExprKind::Paren(i) = &inner.kind {
+            inner = i;
+        }
+        let range = matches!(&inner.kind, ExprKind::Index { index, .. } if matches!(index.kind, ExprKind::Range { .. }));
+        if range || matches!(self.kind_of(found), TyKind::Slice(_)) {
+            self.err(
+                arg.span,
+                "a window only borrows part of a list, so it cannot go to a parameter that may change the list's length; declare the parameter as `[T..]`, or pass the whole list",
+            );
+        }
     }
 
     /// Is this expression something that can be changed or moved out of (a place)?
@@ -566,7 +623,9 @@ impl<'p> Checker<'p> {
                     );
                 }
                 filled[i] = true;
-                self.check_coerce(&a.value, ptys[i]);
+                let found = self.check_expr(&a.value, Exp::Is(ptys[i]));
+                self.coerce_at(found, ptys[i], a.value.span, "this");
+                self.window_to_changing_list(p.mode, &a.value, found, ptys[i]);
             }
         }
         let missing: Vec<String> = params
@@ -781,7 +840,7 @@ impl<'p> Checker<'p> {
         if core && name == "print" {
             self.err(
                 e.span,
-                "`print` is not available at compile time; use `meta_note(\"...\")`",
+                "`print` is not available at compile time; use `metaNote(\"...\")`",
             );
         }
         let outside = matches!(
@@ -989,11 +1048,11 @@ impl<'p> Checker<'p> {
         self.tt.result(okt, errt)
     }
 
-    /// `box(value)`: calls the library function `rt_box_new`, which fixes the type to `box<T>`.
+    /// `box(value)`: calls the library function `rtBoxNew`, which fixes the type to `box<T>`.
     fn box_ctor(&mut self, e: &'p Expr, args: &'p [Arg], exp: Exp) -> Ty {
         let found = (0..self.res.defs.len() as u32).map(DefId).find(|d| {
             let def = self.def(*d);
-            def.kind == DefKind::Fn && def.name == "rt_box_new" && self.is_core_def(*d)
+            def.kind == DefKind::Fn && def.name == "rtBoxNew" && self.is_core_def(*d)
         });
         match found {
             Some(def) => {
@@ -1069,6 +1128,23 @@ impl<'p> Checker<'p> {
             }
             let s = self.show(recv);
             let mut msg = format!("`{s}` has no method `{n}`");
+            if let TyKind::AltTuple(ts, _) = &rk {
+                if ts.len() != 2 && BRAID_METHODS.contains(&n) {
+                    msg = if ts.len() <= 6 {
+                        format!(
+                            "`{s}` has a cycle of {} types; `{n}` is written for a cycle of two. Use `first(r)`, `second(r)`, ... for rounds, or a constant position like `x[3]`",
+                            ts.len()
+                        )
+                    } else {
+                        format!(
+                            "`{s}` has a cycle of {} types; the methods are written for cycles of two to six. Use a constant position like `x[3]`",
+                            ts.len()
+                        )
+                    };
+                } else if ts.len() == 2 && n == "toArray" {
+                    msg = format!("`toArray` needs every slot to have one type, but `{s}` has two; use `split()` or `evens()`");
+                }
+            }
             let cands = self.candidate_methods(recv);
             if let Some(c) = self.closest(n, cands.iter().map(|s| s.as_str())) {
                 msg.push_str(&format!("; did you mean `{c}`?"));
@@ -1109,6 +1185,7 @@ impl<'p> Checker<'p> {
         self.note_call(e.span, m.def, &map);
         self.match_args(&m.sig.params, &map, args, e.span, n);
         let ret = self.tt.subst(m.sig.ret, &map);
+        self.braid_rules(e, recv, n, args, ret);
         if wrap {
             if matches!(self.kind_of(ret), TyKind::Option(_)) {
                 ret
@@ -1117,6 +1194,63 @@ impl<'p> Checker<'p> {
             }
         } else {
             ret
+        }
+    }
+
+    /// What a braid method's signature cannot say: `tail` needs an
+    /// odd length, `swap` an even one, `mapPairs` keeps the tail so its type may not change, and a pair number
+    /// written as a constant must be inside the braid.
+    fn braid_rules(&mut self, e: &'p Expr, recv: Ty, name: &str, args: &'p [Arg], ret: Ty) {
+        let TyKind::AltTuple(ts, ArrayLen::Known(n)) = self.kind_of(recv) else {
+            return;
+        };
+        if ts.len() != 2 {
+            return;
+        }
+        match name {
+            "tail" if n % 2 == 0 => self.err(
+                e.span,
+                format!("a braid of {n} slots has no tail: every slot belongs to a pair; `tail()` needs an odd length"),
+            ),
+            "swap" if n % 2 == 1 => self.err(
+                e.span,
+                format!("`swap` needs an even length, but this braid has {n} slots; the last slot would have no partner"),
+            ),
+            "asPairs" if n % 2 == 1 => self.err(
+                e.span,
+                format!("`asPairs` needs an even length, but this braid has {n} slots; the last slot would have no partner (use `split` or `tail`)"),
+            ),
+            "mapPairs" if n % 2 == 1 => {
+                let r = self.tt.zonk(ret);
+                if let TyKind::AltTuple(rs, _) = self.kind_of(r) {
+                    let a = self.tt.zonk(ts[0]);
+                    if rs.first().map(|c| self.tt.zonk(*c)) != Some(a) {
+                        let s = self.show(a);
+                        self.err(
+                            e.span,
+                            format!("this braid has {n} slots, so its last slot is kept as it is and must stay `{s}`; `mapPairs` has to return a `{s}` first"),
+                        );
+                    }
+                }
+            }
+            "first" | "second" | "setFirst" | "setSecond" => {
+                if let Some(p) = args.first() {
+                    if matches!(p.value.kind, ExprKind::Int) {
+                        let text = self.program.module(self.file).src
+                            [p.value.span.start as usize..p.value.span.end as usize]
+                            .replace('_', "");
+                        if let Ok(p) = text.parse::<u64>() {
+                            if p >= n / 2 {
+                                self.err(
+                                    p_span(&args[0]),
+                                    format!("pair {p} is out of range: this braid has {} pairs", n / 2),
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1152,4 +1286,31 @@ impl<'p> Checker<'p> {
         let ret = self.tt.subst(sig.ret, &map);
         self.tt.mk(TyKind::Fn(params, ret, false))
     }
+}
+
+/// The methods the library writes for a braid with a cycle of two types.
+const BRAID_METHODS: &[&str] = &[
+    "first",
+    "second",
+    "setFirst",
+    "setSecond",
+    "tail",
+    "pairs",
+    "pairIter",
+    "evens",
+    "odds",
+    "strands",
+    "split",
+    "unbraid",
+    "mapPairs",
+    "mapEvens",
+    "mapOdds",
+    "swap",
+    "asPairs",
+    "firstStrand",
+    "secondStrand",
+];
+
+fn p_span(a: &Arg) -> Span {
+    a.value.span
 }

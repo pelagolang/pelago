@@ -1,7 +1,7 @@
 (file
   (mod
     (doc
-      "A tour of the syntax decided so far. Not a program anyone can run yet:\nit exists so the lexer (and later the parser) has something real to read.\nDocumentation can also\nspan many lines.")
+      "A tour of the syntax decided so far. Not a program anyone can run yet:\nit exists so the lexer (and later the parser) has something real to read.\nIt is a syntax sampler: it has to lex, parse and format, and it does not type check\n(names are free-floating). Programs that must type check live in `examples/programs/`.\nDocumentation can also\nspan many lines.")
     tour)
   (import std)
   (const name (str "Dennis"))
@@ -44,6 +44,15 @@
   (fn finish ((sink xs : (list int))) -> int = (call (. xs len)))
   (call clear (arg inout scores))
   (call finish (arg sink scores))
+  (fn clear2 ((inout xs : (list int))) (block (tail (call! (. xs clear)))))
+  (fn finish2 ((sink xs : (list int))) -> int = (call (. xs len)))
+  (call clear2 (arg inout scores))
+  (call finish2 (arg sink scores))
+  (fn
+    shift
+    ((inout xs : (slice int)) (by : int))
+    (block (tail (for-of ((inout x)) xs (block (tail (+= x by)))))))
+  (call shift (arg inout (index scores (.. 1 3))) 10)
   (fn
     sum_to
     ((n : int) (acc : int = 0))
@@ -60,7 +69,7 @@
     (block (const n (try (call digits s))) (tail (call ok n))))
   (fn find ((xs : (list string)) (name : string)) -> (option int) (block (tail none)))
   (const index (?? (call find names (str "Dennis")) (neg 1)))
-  (fn (@ inline) square ((x : int)) -> int = (* x x))
+  (fn (@ inline_always) square ((x : int)) -> int = (* x x))
   (fn
     (@ checkfree)
     dot
@@ -305,6 +314,7 @@
   (import pub (read) = std.io)
   (use std.io)
   (type id int64)
+  (type wide int128)
   (type pair (generics A B) (tuple A B))
   (struct
     (@ derive eq order hash show)
@@ -349,11 +359,24 @@
     (block (tail none)))
   (fn sized (generics (meta N int)) () -> (array int N) (block (tail (repeat 0 N))))
   (fn apply ((f : (fn (int) -> int)) (x : int)) -> int = (call f (call f x)))
+  (fn
+    bump_twice
+    ((step : (fn ((inout int)))) (inout n : int))
+    (block (call step (arg inout n)) (tail (call step (arg inout n)))))
   (fn shapes_area ((xs : (list (any shape_like)))) -> float = 0.0)
   (fn
     dense
     ((points : (soa point 8)) (grid : (tuple int string ; 4)) (pair : (tuple int int)))
     (block))
+  (const names_by_id (: (braid int string ; 4)) (tuple 1 (str "one") 2 (str "two")))
+  (const blank (: (tuple int string ; 6)) (braid 0 (str) ; 6))
+  (fn
+    braids
+    ((t : (braid uint8 uint16 ; 6)))
+    ->
+    uint16
+    =
+    (+ (call (. t second) 0) (call (. t second) (neg 1))))
   (fn ext puts ((s : ptr)) -> int)
   (fn ext abs ((x : int)) -> int)
   (test (str "addition works") (block (tail (call assert (== (call add 1 2) 3)))))

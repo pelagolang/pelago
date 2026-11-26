@@ -1,0 +1,24 @@
+/// `@derive(fromJson)` reads a braid, a tuple and `[T; N]` as one flat array; `[(A, B); N]` is an array of two-element arrays.
+/// `json.braidItems` writes a braid back as the same flat array.
+import std.json
+import { json_error } = std.json
+
+@derive(fromJson)
+struct table { ops: (int, string; 4), odd: braid<uint8, string; 3>, rows: [(int, string); 2], plain: (int, bool), tri: (int, string, bool; 6) }
+
+fn show(text: str) {
+    switch tableDecode(text) {
+        case ok(t): print(t.ops, t.odd, t.rows, t.plain, t.tri)
+        case err(e): print(e.line, e.column, e.path, e.message)
+    }
+}
+
+fn main() {
+    show("{\"ops\": [1, \"a\", 2, \"b\"], \"odd\": [7, \"x\", 9], \"rows\": [[1, \"p\"], [2, \"q\"]], \"plain\": [4, true], \"tri\": [1, \"a\", true, 2, \"b\", false]}")
+    show("{\"ops\": [1, \"a\", 2], \"odd\": [7, \"x\", 9], \"rows\": [[1, \"p\"], [2, \"q\"]], \"plain\": [4, true], \"tri\": []}")
+    show("{\"ops\": [1, \"a\", 2, 5], \"odd\": [7, \"x\", 9], \"rows\": [], \"plain\": [4, true], \"tri\": []}")
+    show("{\"ops\": [1, \"a\", 2, \"b\"], \"odd\": [7, \"x\", 900], \"rows\": [], \"plain\": [4, true], \"tri\": []}")
+    show("{\"ops\": [1, \"a\", 2, \"b\"], \"odd\": [7, \"x\", 9], \"rows\": [[1, \"p\"]], \"plain\": [4, true], \"tri\": []}")
+    const t: (int, string; 3) = (7, "seven", 8)
+    print(json.braidItems(t, n ~> json.value.integer(n), s ~> json.value.text(copy s)).encode())
+}

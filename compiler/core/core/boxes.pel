@@ -1,0 +1,53 @@
+/// `box`, `async` and the compile-time notes.
+
+/// ---- Boxes -------------------------------------------------------------------------------------
+
+//~ `box(value)`: one value on the heap with a single owner. The block holds the bare value.
+pub fn rtBoxNew<T>(sink value: T) -> box<T> {
+    const p = rtAlloc(rtSizeOf<T>() + 1)
+    rtWrite<T>(p, sink value)
+    rtCast<ptr, box<T>>(p)
+}
+
+impl<T> box<T> {
+    //~ A view of the value inside. The compiler treats a call of `get` as a place (like a field).
+    ext fn get(self) -> T
+
+    //~ Drops the old value and puts a new one in.
+    fn set(inout self, sink value: T) {
+        const p = rtLoadPtr(rtAddrOf(self))
+        rtDropAt<T>(p)
+        rtWrite<T>(p, sink value)
+    }
+
+    //~ Takes the value out and frees the block.
+    fn take(sink self) -> T {
+        const p = rtCast<box<T>, ptr>(sink self)
+        const v = rtRead<T>(p)
+        rtFree(p)
+        v
+    }
+}
+
+/// ---- async ---------------------------------------------------------------------------------------
+
+//~ What an `async fn` gives: the body runs as a task of its own, started by the call;
+//~ `await f()` waits for it and takes the result out (`wait`). The parameters moved into the task (a `let` one was copied).
+pub struct future<T> {
+    t: task<T>
+}
+
+impl<T> future<T> {
+    fn wait(sink self) -> T = rtCast<future<T>, task<T>>(sink self).join!!()
+}
+
+//~ Waits for a future from ordinary code.
+pub fn blockOn<T>(sink f: future<T>) -> T = f.wait!!()
+
+/// ---- Compile-time code -------------------------------------------------------------------------
+
+//~ Compile-time code says something: it is shown as a note while compiling.
+pub fn metaNote(message: string) { print("meta: #message") }
+
+//~ Compile-time code stops the compilation with this message.
+pub fn metaError(message: string) -> never { panic(message) }

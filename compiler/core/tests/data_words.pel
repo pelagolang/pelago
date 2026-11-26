@@ -1,0 +1,14 @@
+/// `rtDataWord(k)` names the k-th word of a zeroed, writable block of static data.
+fn bump() {
+    const p = rtDataWord(0)
+    rtStoreInt(p, rtLoadInt(p) + 1)
+}
+
+fn main() {
+    print(rtLoadInt(rtDataWord(0)), rtLoadInt(rtDataWord(63)))
+    bump()
+    bump()
+    rtStoreInt(rtDataWord(63), 99)
+    rtStoreInt(rtDataWord(5), 1234)
+    print(rtLoadInt(rtDataWord(0)), rtLoadInt(rtDataWord(5)), rtLoadInt(rtDataWord(63)))
+}

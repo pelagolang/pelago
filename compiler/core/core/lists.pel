@@ -1,0 +1,514 @@
+/// Growing buffers, sorting and `list`.
+
+/// ---- Growing buffers: the header of a list or string is a pointer, a length and a capacity -----
+
+pub fn rtHdrData(h: ptr) -> ptr = rtLoadPtr(h)
+pub fn rtHdrLen(h: ptr) -> int = rtLoadInt(rtOffset(h, 8))
+pub fn rtHdrCap(h: ptr) -> int = rtLoadInt(rtOffset(h, 16))
+pub fn rtHdrSetLen(h: ptr, n: int) { rtStoreInt(rtOffset(h, 8), n) }
+
+//~ Makes room for `needed` elements of `size` bytes. A capacity of 0 means the buffer is not owned.
+//~ Small on purpose, so the optimiser inlines the check into every push loop; only a full buffer calls `rtGrowSlow`.
+pub fn rtGrow(h: ptr, size: int, needed: int) {
+    if rtHdrCap(h) >= needed { return }
+    rtGrowSlow(h, size, needed)
+}
+
+pub fn rtGrowSlow(h: ptr, size: int, needed: int) {
+    const cap = rtHdrCap(h)
+    var ncap = cap * 2
+    if ncap < 4 { ncap = 4 }
+    if ncap < needed { ncap = needed }
+    const old = rtHdrData(h)
+    if cap > 0 {
+        /// An owned buffer: a big one is remapped by the system instead of copied.
+        rtStorePtr(h, rtRealloc(old, ncap * size))
+    } else {
+        const data = rtAlloc(ncap * size)
+        const len = rtHdrLen(h)
+        if len > 0 { rtCopy(data, old, len * size) }
+        rtStorePtr(h, data)
+    }
+    rtStoreInt(rtOffset(h, 16), ncap)
+}
+
+//~ Exchanges two blocks of `size` bytes.
+pub fn rtSwapBytes(a: ptr, b: ptr, size: int) {
+    const tmp = rtAlloc(size)
+    rtCopy(tmp, a, size)
+    rtCopy(a, b, size)
+    rtCopy(b, tmp, size)
+    rtFree(tmp)
+}
+
+//~ Sorts `n` elements of `size` bytes with a merge sort; `cmp` is a comparison glue function.
+pub fn rtSort(base: ptr, n: int, size: int, cmp: ptr) {
+    if n < 2 { return }
+    const tmp = rtAlloc(n * size)
+    var width = 1
+    var from = base
+    var to = tmp
+    while width < n {
+        var start = 0
+        while start < n {
+            var mid = start + width
+            if mid > n { mid = n }
+            var end = start + 2 * width
+            if end > n { end = n }
+            var i = start
+            var j = mid
+            var k = start
+            while k < end {
+                if i < mid &&
+                    (j >= end || rtCallInt2(cmp, rtOffset(from, i * size), rtOffset(from, j * size)) <= 0) {
+                    rtCopy(rtOffset(to, k * size), rtOffset(from, i * size), size)
+                    i += 1
+                } else {
+                    rtCopy(rtOffset(to, k * size), rtOffset(from, j * size), size)
+                    j += 1
+                }
+                k += 1
+            }
+            start += 2 * width
+        }
+        const swapped = from
+        from = to
+        to = swapped
+        width *= 2
+    }
+    if rtAddrInt(from) != rtAddrInt(base) { rtCopy(base, from, n * size) }
+    rtFree(tmp)
+}
+
+//~ Sorts `n` integers at `base`: insertion sort when short, else a radix sort on the eight bytes (the
+//~ order of equal integers cannot be seen, so the result is the same as for any stable sort).
+pub fn rtSortInt(base: ptr, n: int) {
+    if n < 2 { return }
+    if n <= 48 {
+        var i = 1
+        while i < n {
+            const x = rtLoadInt(rtOffset(base, i * 8))
+            var j = i
+            while j > 0 && rtLoadInt(rtOffset(base, (j - 1) * 8)) > x {
+                rtStoreInt(rtOffset(base, j * 8), rtLoadInt(rtOffset(base, (j - 1) * 8)))
+                j -= 1
+            }
+            rtStoreInt(rtOffset(base, j * 8), x)
+            i += 1
+        }
+        return
+    }
+    const tmp = rtAlloc(n * 8)
+    const counts = rtAlloc(16384)
+    var z = 0
+    while z < 2048 { rtStoreInt(rtOffset(counts, z * 8), 0); z += 1 }
+    /// One pass over the data counts every byte position.
+    var i = 0
+    while i < n {
+        const x = rtLoadInt(rtOffset(base, i * 8))
+        var p = 0
+        while p < 8 {
+            var d = (x >> (p * 8)) & 255
+            if p == 7 { d = d ^ 128 }
+            const c = rtOffset(counts, (p * 256 + d) * 8)
+            rtStoreInt(c, rtLoadInt(c) +% 1)
+            p += 1
+        }
+        i += 1
+    }
+    var from = base
+    var to = tmp
+    var p = 0
+    while p < 8 {
+        const row = rtOffset(counts, p * 2048)
+        /// A byte position where every integer has the same byte needs no pass.
+        var busy = 0
+        var d = 0
+        var sum = 0
+        while d < 256 {
+            const c = rtLoadInt(rtOffset(row, d * 8))
+            if c > 0 { busy += 1 }
+            rtStoreInt(rtOffset(row, d * 8), sum)
+            sum = sum +% c
+            d += 1
+        }
+        if busy > 1 {
+            var k = 0
+            while k < n {
+                const x = rtLoadInt(rtOffset(from, k * 8))
+                var e = (x >> (p * 8)) & 255
+                if p == 7 { e = e ^ 128 }
+                const c = rtOffset(row, e * 8)
+                const at = rtLoadInt(c)
+                rtStoreInt(rtOffset(to, at * 8), x)
+                rtStoreInt(c, at +% 1)
+                k += 1
+            }
+            const swapped = from
+            from = to
+            to = swapped
+        }
+        p += 1
+    }
+    if rtAddrInt(from) != rtAddrInt(base) { rtCopy(base, from, n * 8) }
+    rtFree(counts)
+    rtFree(tmp)
+}
+
+//~ Is the value at `probe` equal to one of the `size`-byte elements of the list at `h`?
+pub fn rtListContains(h: ptr, probe: ptr, size: int, eq: ptr) -> bool {
+    var i = 0
+    const n = rtHdrLen(h)
+    while i < n {
+        if rtCallBool2(eq, rtOffset(rtHdrData(h), i * size), probe) { return true }
+        i += 1
+    }
+    false
+}
+
+//~ Does the text at `h` contain the text (or character) at `p`?
+pub fn rtStrContains(h: ptr, p: ptr) -> bool {
+    const n = rtHdrLen(h)
+    const pn = rtHdrLen(p)
+    var i = 0
+    while i + pn <= n {
+        if rtBytesEq(rtOffset(rtHdrData(h), i), rtHdrData(p), pn) { return true }
+        i += 1
+    }
+    pn == 0
+}
+
+impl<T: eq> list<T> {
+    //~ The index of the first element equal to `item`, or `none`.
+    fn indexOf(self, item: T) -> int? {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        const eq = rtEqFn<T>()
+        const probe = rtAddrOf(item)
+        var i = 0
+        const len = rtHdrLen(h)
+        while i < len {
+            if rtCallBool2(eq, rtOffset(rtHdrData(h), i * size), probe) { return i }
+            i += 1
+        }
+        return none
+    }
+
+    //~ Drops runs of equal neighbours: `[1, 1, 2, 1].dedup!()` leaves `[1, 2, 1]`.
+    fn dedup(inout self) {
+        const eq = rtEqFn<T>()
+        var out: list<T> = []
+        var i = 0
+        const n = self.len()
+        while i < n {
+            const h = rtAddrOf(self)
+            const size = rtSizeOf<T>()
+            if i == 0 || !rtCallBool2(
+                eq,
+                rtOffset(rtHdrData(h), (i - 1) * size),
+                rtOffset(rtHdrData(h), i * size),
+            ) {
+                out.push!(rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+            }
+            i += 1
+        }
+        self = out
+    }
+
+    fn contains(self, item: T) -> bool {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        const eq = rtEqFn<T>()
+        const probe = rtAddrOf(item)
+        var i = 0
+        const len = rtHdrLen(h)
+        while i < len {
+            if rtCallBool2(eq, rtOffset(rtHdrData(h), i * size), probe) { return true }
+            i += 1
+        }
+        false
+    }
+}
+
+impl<T: order> list<T> {
+    //~ Searches a sorted list: the index of `item`, or `none`. With equal elements any of them may be found.
+    fn binarySearch(self, item: T) -> int? {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        const cmp = rtCmpFn<T>()
+        const probe = rtAddrOf(item)
+        var lo = 0
+        var hi = rtHdrLen(h)
+        while lo < hi {
+            const mid = lo + (hi - lo) / 2
+            const c = rtCallInt2(cmp, rtOffset(rtHdrData(h), mid * size), probe)
+            if c == 0 { return mid }
+            if c < 0 { lo = mid + 1 } else { hi = mid }
+        }
+        return none
+    }
+
+    fn sort(inout self) {
+        const h = rtAddrOf(self)
+        if rtIsInt<T>() {
+            rtSortInt(rtHdrData(h), rtHdrLen(h))
+        } else {
+            rtSort(rtHdrData(h), rtHdrLen(h), rtSizeOf<T>(), rtCmpFn<T>())
+        }
+    }
+
+    fn sorted(self) -> list<T> {
+        var out = rtClone<list<T>>(rtAddrOf(self))
+        out.sort!()
+        out
+    }
+}
+
+impl<T> list<T> {
+    fn len(self) -> int = rtHdrLen(rtAddrOf(self))
+    fn isEmpty(self) -> bool = rtHdrLen(rtAddrOf(self)) == 0
+
+    fn get(self, index: int) -> T? {
+        const h = rtAddrOf(self)
+        if index < 0 || index >= rtHdrLen(h) { return none }
+        return rtClone<T>(rtOffset(rtHdrData(h), index * rtSizeOf<T>()))
+    }
+
+    fn first(self) -> T? = self.get(0)
+    fn last(self) -> T? = self.get(self.len() - 1)
+
+    //~ The items as an array of exactly `N` (the length comes from the type it lands in); `none` when the list has a different length.
+    fn toArray<meta N: int>(self) -> [T; N]? {
+        const h = rtAddrOf(self)
+        if rtHdrLen(h) != N { return none }
+        return rtClone<[T; N]>(rtHdrData(h))
+    }
+
+    //~ The same, for a list whose length is already known to be `N`; stops the program when it is not.
+    fn asArray<meta N: int>(self) -> [T; N] {
+        const h = rtAddrOf(self)
+        if rtHdrLen(h) != N { panic("asArray: the list has #(rtHdrLen(h)) items, not #N") }
+        return rtClone<[T; N]>(rtHdrData(h))
+    }
+
+    fn push(inout self, sink item: T) {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        const len = rtHdrLen(h)
+        const next = len +% 1
+        rtGrow(h, size, next)
+        /// `len < capacity` after the grow and `capacity * size` was allocated, so neither step can overflow.
+        rtWrite<T>(rtOffset(rtHdrData(h), len *% size), sink item)
+        rtHdrSetLen(h, next)
+    }
+
+    //~ Makes room for `extra` more elements, so that pushing them never grows the buffer.
+    fn reserve(inout self, extra: int) {
+        const h = rtAddrOf(self)
+        rtGrow(h, rtSizeOf<T>(), rtHdrLen(h) + extra)
+    }
+
+    fn pop(inout self) -> T? {
+        const h = rtAddrOf(self)
+        const len = rtHdrLen(h)
+        if len == 0 { return none }
+        rtHdrSetLen(h, len - 1)
+        return rtRead<T>(rtOffset(rtHdrData(h), (len - 1) * rtSizeOf<T>()))
+    }
+
+    fn insert(inout self, index: int, sink item: T) {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        const len = rtHdrLen(h)
+        if index < 0 || index > len { panic("insert: index out of range") }
+        rtGrow(h, size, len + 1)
+        const at = rtOffset(rtHdrData(h), index * size)
+        var i = len - 1
+        while i >= index {
+            rtCopy(
+                rtOffset(rtHdrData(h), (i + 1) * size),
+                rtOffset(rtHdrData(h), i * size),
+                size,
+            )
+            i -= 1
+        }
+        rtWrite<T>(at, sink item)
+        rtHdrSetLen(h, len + 1)
+    }
+
+    fn remove(inout self, index: int) -> T {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        const len = rtHdrLen(h)
+        if index < 0 || index >= len { panic("remove: index out of range") }
+        const value = rtRead<T>(rtOffset(rtHdrData(h), index * size))
+        var i = index
+        while i < len - 1 {
+            rtCopy(
+                rtOffset(rtHdrData(h), i * size),
+                rtOffset(rtHdrData(h), (i + 1) * size),
+                size,
+            )
+            i += 1
+        }
+        rtHdrSetLen(h, len - 1)
+        value
+    }
+
+    fn clear(inout self) {
+        const h = rtAddrOf(self)
+        const drop = rtDropFn<T>()
+        const size = rtSizeOf<T>()
+        if !rtIsNull(drop) {
+            var i = 0
+            const len = rtHdrLen(h)
+            while i < len {
+                rtCallVoid1(drop, rtOffset(rtHdrData(h), i * size))
+                i += 1
+            }
+        }
+        rtHdrSetLen(h, 0)
+    }
+
+    fn reverse(inout self) {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var i = 0
+        var j = rtHdrLen(h) - 1
+        while i < j {
+            rtSwapBytes(
+                rtOffset(rtHdrData(h), i * size),
+                rtOffset(rtHdrData(h), j * size),
+                size,
+            )
+            i += 1
+            j -= 1
+        }
+    }
+
+    fn swap(inout self, a: int, b: int) {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        const len = rtHdrLen(h)
+        if a < 0 || a >= len || b < 0 || b >= len { panic("swap: index out of range") }
+        if a != b { rtSwapBytes(rtOffset(rtHdrData(h), a * size), rtOffset(rtHdrData(h), b * size), size) }
+    }
+
+    fn extend(inout self, other: list<T>) {
+        const h = rtAddrOf(self)
+        const o = rtAddrOf(other)
+        const size = rtSizeOf<T>()
+        var i = 0
+        const n = rtHdrLen(o)
+        while i < n {
+            self.push!(rtClone<T>(rtOffset(rtHdrData(o), i * size)))
+            i += 1
+        }
+    }
+
+    fn reversed(self) -> list<T> {
+        var out = rtClone<list<T>>(rtAddrOf(self))
+        out.reverse!()
+        out
+    }
+
+    //~ Keeps only the elements for which `f` holds, in order.
+    fn retain(inout self, f: fn(T) -> bool) {
+        var out: list<T> = []
+        var i = 0
+        const n = self.len()
+        while i < n {
+            const h = rtAddrOf(self)
+            const x = rtClone<T>(rtOffset(rtHdrData(h), i * rtSizeOf<T>()))
+            if f(rtClone<T>(rtAddrOf(x))) { out.push!(sink x) }
+            i += 1
+        }
+        self = out
+    }
+
+    //~ Cuts the list to at most `n` elements.
+    fn truncate(inout self, n: int) {
+        while self.len() > n && self.len() > 0 { self.pop!() }
+    }
+
+    //~ Sorts with a comparison that returns a negative number, zero or a positive number (stable).
+    fn sortBy(inout self, cmp: fn(T, T) -> int) {
+        const n = self.len()
+        var out: list<T> = []
+        var i = 0
+        while i < n {
+            const h = rtAddrOf(self)
+            const x = rtClone<T>(rtOffset(rtHdrData(h), i * rtSizeOf<T>()))
+            var lo = 0
+            var hi = out.len()
+            while lo < hi {
+                const mid = lo + (hi - lo) / 2
+                const m = rtClone<T>(rtOffset(rtHdrData(rtAddrOf(out)), mid * rtSizeOf<T>()))
+                if cmp(m, rtClone<T>(rtAddrOf(x))) <= 0 { lo = mid + 1 } else { hi = mid }
+            }
+            out.insert!(lo, sink x)
+            i += 1
+        }
+        self = out
+    }
+
+    //~ The list cut into pieces of `size` (the last may be shorter).
+    fn chunks(self, size: int) -> iter<list<T>> {
+        if size <= 0 { panic("chunks: size must be positive") }
+        var out: list<list<T>> = []
+        const n = self.len()
+        var i = 0
+        while i < n {
+            var piece: list<T> = []
+            var j = i
+            while j < i + size && j < n {
+                piece.push!(rtClone<T>(rtOffset(rtHdrData(rtAddrOf(self)), j * rtSizeOf<T>())))
+                j += 1
+            }
+            out.push!(sink piece)
+            i += size
+        }
+        rtCast<list<list<T>>, iter<list<T>>>(sink out)
+    }
+
+    fn iter(self) -> iter<T> = rtCast<list<T>, iter<T>>(rtClone<list<T>>(rtAddrOf(self)))
+    fn toList(self) -> list<T> = rtClone<list<T>>(rtAddrOf(self))
+    fn map<U>(self, f: fn(T) -> U) -> iter<U> {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var out: list<U> = []
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            out.push!(f(rtClone<T>(rtOffset(rtHdrData(h), i * size))))
+            i += 1
+        }
+        rtCast<list<U>, iter<U>>(sink out)
+    }
+
+    fn filter(self, f: fn(T) -> bool) -> iter<T> {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var out: list<T> = []
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            if f(rtClone<T>(rtOffset(rtHdrData(h), i * size))) {
+                out.push!(rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+            }
+            i += 1
+        }
+        rtCast<list<T>, iter<T>>(sink out)
+    }
+
+    fn each(self, f: fn(T)) {
+        const h = rtAddrOf(self)
+        const size = rtSizeOf<T>()
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            f(rtClone<T>(rtOffset(rtHdrData(h), i * size)))
+            i += 1
+        }
+    }
+}

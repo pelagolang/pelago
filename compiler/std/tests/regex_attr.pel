@@ -1,0 +1,50 @@
+/// `@regex("...")`: a pattern compiled by the compiler, its named groups read as typed fields.
+@regex("(?<year>\\d{4})-(?<month>\\d\\d)(-(?<day>\\d\\d))?")
+struct date {
+    year: uint16
+    month: uint8
+    day: uint8?
+}
+
+@regex("(?<key>[a-z]+)=(?<value>[^;]*);?")
+struct pair {
+    key: string
+    value: string
+}
+
+/// A backreference to a group with two possible strings is rewritten into two plain alternatives (tier A).
+@regex("(?<q>['\"])(?<body>[a-z ]*)\\k<q>")
+struct quoted {
+    q: string
+    body: string
+}
+
+fn show(d: date) {
+    print(d.year, d.month, d.day)
+}
+
+fn main() {
+    switch dateFind("on 2026-11-10 and 1999-01") {
+        case some(d): show(d)
+        case none: print("none")
+    }
+    print(dateIsMatch("no date"), dateIsMatch("1-2-3"), dateIsMatch("1234-56"))
+    const all = dateFindAll("2026-11-10, 1999-01 and 2000-02-29")
+    var i = 0
+    while i < all.len() {
+        show(all[i])
+        i += 1
+    }
+    const pairs = pairFindAll("a=1;b=two;c=")
+    var j = 0
+    while j < pairs.len() {
+        print(pairs[j].key, pairs[j].value)
+        j += 1
+    }
+    const quotes = quotedFindAll("say 'hi there' or \"yo\" or 'x\"")
+    var k = 0
+    while k < quotes.len() {
+        print(quotes[k].q, quotes[k].body)
+        k += 1
+    }
+}

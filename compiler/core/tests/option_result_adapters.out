@@ -1,0 +1,11 @@
+8 -1
+some(4) none none
+some(8) none none
+some(8) some(1) none
+true false false
+some((8, "x")) none none
+none some("not positive")
+ok(6) err("not positive")
+err("not positive") err("not positive")
+3 12
+true false

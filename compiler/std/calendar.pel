@@ -1,0 +1,393 @@
+/// The calendar: dates, times of day and date-times as a wall calendar says them, with no zone (`std.zone` adds
+/// zones, `std.timefmt` text forms). Proleptic Gregorian calendar (the rules of today, extended backwards and
+/// forwards), ISO 8601 weekdays (Monday is 1) and ISO week numbers.
+///
+/// ```
+/// import std.calendar
+///
+/// fn main() -> void ! time_error {
+///     const d = calendar.dateOf(2026, 11, 17)?
+///     print(d, d.weekday(), d.ordinal(), d.plusMonths(3), d.plusDays(100))
+///     const t = calendar.timeOf(9, 47, 23, 0)?
+///     print(calendar.dateTimeOf(d, t))
+/// }
+/// ```
+///
+/// A `date` is made only by `calendar.dateOf` (checks the day exists), `calendar.fromDays` or `calendar.dateOrdinal`, so
+/// a value of the type is always a real day. Months are numbers 1 to 12. Arithmetic on days is exact for any year an
+/// `int` of days reaches; `plusMonths` and `plusYears` keep the day when they can and otherwise stop at the end of
+/// the month (31 January plus one month is 28 or 29 February). A day has 86400 seconds: there are no leap seconds.
+
+import std.time
+import { duration, moment, time_error, time_kind } = std.time
+
+/// A day of the week, Monday first (`monday` is 1 in `isoNumber`).
+pub enum weekday {
+    monday,
+    tuesday,
+    wednesday,
+    thursday,
+    friday,
+    saturday,
+    sunday
+}
+
+/// A day on the calendar. Make one with `calendar.dateOf`, `calendar.fromDays` or `calendar.dateOrdinal`.
+pub struct date {
+    year: int,
+    month: int,
+    day: int
+}
+
+/// A time of day, `00:00:00` to `23:59:59.999999999`.
+pub struct time_of_day {
+    hour: int,
+    minute: int,
+    second: int,
+    nanos: int
+}
+
+/// A date and a time of day, with no zone.
+pub struct date_time {
+    on: date,
+    at: time_of_day
+}
+
+/// An ISO 8601 week: the week-based `year` (which can differ from the calendar year near the new year) and the `week`, 1 to 53.
+pub struct iso_week {
+    pub year: int,
+    pub week: int
+}
+
+/// A time of day plus how many whole days the sum moved forward or back (see `time_of_day.plus`).
+pub struct day_shift {
+    pub time: time_of_day,
+    pub days: int
+}
+
+fn floorDiv(a: int, b: int) -> int {
+    const q = a / b
+    if a % b < 0 { return q - 1 }
+    q
+}
+
+fn floorMod(a: int, b: int) -> int {
+    const r = a % b
+    r < 0 ? r + b : r
+}
+
+fn pad(n: int, width: int) -> string {
+    var s = "#(n)"
+    while s.len() < width { s = "0" + s }
+    s
+}
+
+//~ Whether `year` is a leap year (divisible by 4, except centuries not divisible by 400).
+pub fn isLeap(year: int) -> bool = floorMod(
+    year,
+    4,
+) == 0 && (floorMod(year, 100) != 0 || floorMod(year, 400) == 0)
+
+//~ The number of days in `month` (1 to 12) of `year`; stops for any other month.
+pub fn daysInMonth(year: int, month: int) -> int {
+    if month == 2 { return isLeap(year) ? 29 : 28 }
+    if month == 4 || month == 6 || month == 9 || month == 11 { return 30 }
+    if month < 1 || month > 12 { panic("daysInMonth: month must be 1 to 12") }
+    31
+}
+
+/// Days since 1970-01-01 of a valid year, month and day (Howard Hinnant's days-from-civil).
+fn daysFromCivil(year: int, month: int, day: int) -> int {
+    const y = month <= 2 ? year - 1 : year
+    const era = floorDiv(y, 400)
+    const yoe = y - era * 400
+    const mp = month > 2 ? month - 3 : month + 9
+    const doy = (153 * mp + 2) / 5 + day - 1
+    const doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    era * 146097 + doe - 719468
+}
+
+//~ The date `n` days after 1970-01-01 (before it when negative).
+pub fn fromDays(n: int) -> date {
+    const z = n + 719468
+    const era = floorDiv(z, 146097)
+    const doe = z - era * 146097
+    const yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    const doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    const mp = (5 * doy + 2) / 153
+    const d = doy - (153 * mp + 2) / 5 + 1
+    const m = mp < 10 ? mp + 3 : mp - 9
+    date { year: yoe + era * 400 + (m <= 2 ? 1 : 0), month: m, day: d }
+}
+
+//~ The date `year`-`month`-`day`, or a `time_error` when the month is not 1 to 12 or the day is not in the month.
+pub fn dateOf(year: int, month: int, day: int) -> date ! time_error {
+    if month < 1 || month > 12 {
+        return err(time.timeError(time_kind.invalid, "month #(month) is not 1 to 12"))
+    }
+    if day < 1 || day > daysInMonth(year, month) {
+        return err(time.timeError(time_kind.invalid, "day #(day) is not in month #(month) of #(year)"))
+    }
+    ok(date { year: year, month: month, day: day })
+}
+
+//~ Day `n` of `year` (1 is 1 January), or a `time_error` when the year has fewer days.
+pub fn dateOrdinal(year: int, n: int) -> date ! time_error {
+    const len = isLeap(year) ? 366 : 365
+    if n < 1 || n > len {
+        return err(time.timeError(time_kind.invalid, "day of year #(n) is not 1 to #(len) in #(year)"))
+    }
+    ok(fromDays(daysFromCivil(year, 1, 1) + n - 1))
+}
+
+//~ A time of day, or a `time_error` when a part is out of range. A second of 60 (a leap second) is read as 59.
+pub fn timeOf(hour: int, minute: int, second: int, nanos: int) -> time_of_day ! time_error {
+    if hour < 0 ||
+        hour > 23 ||
+        minute < 0 ||
+        minute > 59 ||
+        second < 0 ||
+        second > 60 ||
+        nanos < 0 ||
+        nanos > 999999999 {
+        return err(time.timeError(time_kind.invalid, "#(hour):#(minute):#(second).#(nanos) is not a time of day"))
+    }
+    ok(time_of_day { hour: hour, minute: minute, second: second == 60 ? 59 : second, nanos: nanos })
+}
+
+//~ A date and a time of day together.
+pub fn dateTimeOf(d: date, t: time_of_day) -> date_time = date_time { on: d, at: t }
+
+//~ The date and time of day of a moment on the UTC timeline.
+pub fn fromMoment(m: moment) -> date_time {
+    const days = floorDiv(m.unixSeconds(), 86400)
+    const s = m.unixSeconds() - days * 86400
+    const t = time_of_day { hour: s / 3600, minute: s % 3600 / 60, second: s % 60, nanos: m.subsecNanos() }
+    date_time { on: fromDays(days), at: t }
+}
+
+impl weekday {
+    //~ 1 for Monday to 7 for Sunday.
+    fn isoNumber(self) -> int {
+        switch self {
+            case .monday: 1
+            case .tuesday: 2
+            case .wednesday: 3
+            case .thursday: 4
+            case .friday: 5
+            case .saturday: 6
+            case .sunday: 7
+        }
+    }
+
+    //~ The next day of the week (Sunday is followed by Monday).
+    fn next(self) -> weekday = weekdayOf(self.isoNumber() % 7 + 1)
+
+    //~ The previous day of the week.
+    fn prev(self) -> weekday = weekdayOf((self.isoNumber() + 5) % 7 + 1)
+}
+
+/// The weekday with ISO number `n` (1 to 7).
+fn weekdayOf(n: int) -> weekday {
+    if n == 1 { return weekday.monday }
+    if n == 2 { return weekday.tuesday }
+    if n == 3 { return weekday.wednesday }
+    if n == 4 { return weekday.thursday }
+    if n == 5 { return weekday.friday }
+    if n == 6 { return weekday.saturday }
+    weekday.sunday
+}
+
+impl show for weekday {
+    //~ `Monday` to `Sunday`.
+    fn show(self) -> string {
+        const names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        copy names[self.isoNumber() - 1]
+    }
+}
+
+impl eq for weekday {
+    fn eq(self, other: weekday) -> bool = self.isoNumber() == other.isoNumber()
+}
+
+impl date {
+    fn year(self) -> int = self.year
+
+    //~ The month, 1 to 12.
+    fn month(self) -> int = self.month
+
+    //~ The day of the month, 1 to 31.
+    fn day(self) -> int = self.day
+
+    //~ Days since 1970-01-01 (negative before it).
+    fn days(self) -> int = daysFromCivil(self.year, self.month, self.day)
+
+    fn weekday(self) -> weekday = weekdayOf(floorMod(self.days() + 3, 7) + 1)
+
+    //~ The day of the year, 1 for 1 January.
+    fn ordinal(self) -> int = self.days() - daysFromCivil(self.year, 1, 1) + 1
+
+    fn isLeapYear(self) -> bool = isLeap(self.year)
+
+    fn daysInMonth(self) -> int = daysInMonth(self.year, self.month)
+
+    //~ The ISO 8601 week: week 1 is the week with the year's first Thursday.
+    fn isoWeek(self) -> iso_week {
+        const wd = self.weekday().isoNumber()
+        const w = (self.ordinal() - wd + 10) / 7
+        if w < 1 { return iso_week { year: self.year - 1, week: weeksInIsoYear(self.year - 1) } }
+        if w > weeksInIsoYear(self.year) { return iso_week { year: self.year + 1, week: 1 } }
+        iso_week { year: self.year, week: w }
+    }
+
+    //~ The date `n` days later (earlier when negative).
+    fn plusDays(self, n: int) -> date = fromDays(self.days() + n)
+
+    //~ The date `n` months later, keeping the day or stopping at the end of a shorter month.
+    fn plusMonths(self, n: int) -> date {
+        const total = self.year * 12 + self.month - 1 + n
+        const y = floorDiv(total, 12)
+        const m = floorMod(total, 12) + 1
+        const last = daysInMonth(y, m)
+        date { year: y, month: m, day: self.day > last ? last : self.day }
+    }
+
+    //~ The date `n` years later; 29 February becomes 28 February in a common year.
+    fn plusYears(self, n: int) -> date = self.plusMonths(n * 12)
+
+    //~ How many days after `other` this date is (negative when before).
+    fn since(self, other: date) -> int = self.days() - other.days()
+}
+
+/// The number of ISO weeks (52 or 53) of week-year `y`: 53 when 1 January is a Thursday, or a Wednesday in a leap year.
+fn weeksInIsoYear(y: int) -> int {
+    const jan1 = floorMod(daysFromCivil(y, 1, 1) + 3, 7) + 1
+    if jan1 == 4 || (jan1 == 3 && isLeap(y)) { return 53 }
+    52
+}
+
+impl eq for date {
+    fn eq(
+        self,
+        other: date,
+    ) -> bool = self.year == other.year && self.month == other.month && self.day == other.day
+}
+
+impl order for date {
+    fn cmp(self, other: date) -> int {
+        if self.year != other.year { return self.year < other.year ? -1 : 1 }
+        if self.month != other.month { return self.month < other.month ? -1 : 1 }
+        self.day < other.day ? -1 : (self.day > other.day ? 1 : 0)
+    }
+}
+
+impl show for date {
+    //~ `2026-11-17` (the year has at least four digits; a negative year starts with `-`).
+    fn show(self) -> string {
+        const y = self.year < 0 ? "-" + pad(0 - self.year, 4) : pad(self.year, 4)
+        "#(y)-#(pad(self.month, 2))-#(pad(self.day, 2))"
+    }
+}
+
+impl time_of_day {
+    fn hour(self) -> int = self.hour
+
+    fn minute(self) -> int = self.minute
+
+    fn second(self) -> int = self.second
+
+    //~ The nanoseconds after the whole second.
+    fn nanos(self) -> int = self.nanos
+
+    //~ Nanoseconds since midnight.
+    fn nanosOfDay(self) -> int = ((self.hour * 60 + self.minute) * 60 + self.second) * 1000000000 +
+        self.nanos
+
+    //~ `d` later (earlier when negative), with the number of days it moved: `23:00 + 2h` is `01:00` and 1 day.
+    fn plus(self, d: duration) -> day_shift {
+        const whole = floorDiv(d.asNanos(), 86400000000000)
+        const rest = floorMod(d.asNanos(), 86400000000000)
+        var t = self.nanosOfDay() + rest
+        var carry = whole
+        if t >= 86400000000000 {
+            t -= 86400000000000
+            carry += 1
+        }
+        day_shift { time: timeFromNanos(t), days: carry }
+    }
+}
+
+/// The time of day `n` nanoseconds after midnight (`n` in `0..86400000000000`).
+fn timeFromNanos(n: int) -> time_of_day {
+    const s = n / 1000000000
+    time_of_day { hour: s / 3600, minute: s % 3600 / 60, second: s % 60, nanos: n % 1000000000 }
+}
+
+impl eq for time_of_day {
+    fn eq(self, other: time_of_day) -> bool = self.nanosOfDay() == other.nanosOfDay()
+}
+
+impl order for time_of_day {
+    fn cmp(self, other: time_of_day) -> int {
+        const a = self.nanosOfDay()
+        const b = other.nanosOfDay()
+        a < b ? -1 : (a > b ? 1 : 0)
+    }
+}
+
+impl show for time_of_day {
+    //~ `09:47:23`, with the fraction (`09:47:23.5`, up to nine digits, no trailing zeros) when there is one.
+    fn show(self) -> string {
+        var s = "#(pad(self.hour, 2)):#(pad(self.minute, 2)):#(pad(self.second, 2))"
+        if self.nanos != 0 {
+            var f = self.nanos
+            var w = 9
+            while f % 10 == 0 {
+                f /= 10
+                w -= 1
+            }
+            s = s + "." + pad(f, w)
+        }
+        s
+    }
+}
+
+impl date_time {
+    fn date(self) -> date = self.on
+
+    fn timeOfDay(self) -> time_of_day = self.at
+
+    //~ The moment this date and time is, read as UTC.
+    fn atUtc(self) -> moment {
+        const secs = self.on.days() * 86400 + (self.at.nanosOfDay() / 1000000000)
+        time.momentOf(secs, self.at.nanos).unwrapOr(time.fromUnix(0))
+    }
+
+    //~ `d` later (earlier when negative), by exact time (a day here is 24 hours).
+    fn plus(self, d: duration) -> date_time {
+        const shift = self.at.plus(d)
+        date_time { on: self.on.plusDays(shift.days), at: shift.time }
+    }
+
+    //~ How long after `other` this is, by exact time; stops when it does not fit a `duration` (about 292 years).
+    fn since(self, other: date_time) -> duration {
+        const days = self.on.since(other.on)
+        time.nanos(days * 86400000000000 + (self.at.nanosOfDay() - other.at.nanosOfDay()))
+    }
+}
+
+impl eq for date_time {
+    fn eq(self, other: date_time) -> bool = self.on == other.on && self.at == other.at
+}
+
+impl order for date_time {
+    fn cmp(self, other: date_time) -> int {
+        const c = self.on.cmp(other.on)
+        c != 0 ? c : self.at.cmp(other.at)
+    }
+}
+
+impl show for date_time {
+    //~ `2026-11-17T09:47:23` (RFC 3339 without an offset).
+    fn show(self) -> string = "#(self.on)T#(self.at)"
+}

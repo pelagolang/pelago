@@ -1,0 +1,10 @@
+some(0) none some(15) none
+20 19 0
+[ab ] [  ab]
+some("value=x") none
+some("file") none
+some(("a", "b=c")) none
+["a", "b", "c"] 0 ["x", "", "y"]
+ababab  007 ..ö 7-- long
+a, b, c a-b-c x+y+z
+[]

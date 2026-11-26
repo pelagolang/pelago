@@ -158,7 +158,7 @@ impl<'a> Lowerer<'a> {
                 Some(x) => x,
                 None if name == "show" && self.res.def(iface).name == "show" => {
                     // Built-in shapes show through the library.
-                    if let Some(def) = self.core_fn("rt_any_show") {
+                    if let Some(def) = self.core_fn("rtAnyShow") {
                         let g = self.typed.fn_infos.get(&def).map(|i| i.generics.clone());
                         let map: HashMap<DefId, Ty> =
                             g.unwrap_or_default().into_iter().zip([t]).collect();
@@ -203,7 +203,10 @@ impl<'a> Lowerer<'a> {
             ir_params.extend_from_slice(&sig.ir_params[skip..]);
             let mut func = Func::new(&tname, &ir_params, sig.ir_ret);
             let entry = func.entry();
-            func.terminate(entry, Term::Stop("not lowered yet".to_string()));
+            func.terminate(
+                entry,
+                Term::Stop("not lowered yet".to_string(), Span::default()),
+            );
             let id = self.module.add(func);
             self.any_thunks.push(AnyThunkJob { id, target, sig });
             if let Some(a) = self.emit(Op::FuncAddr(id), Some(IrTy::Ptr), sp) {
@@ -287,7 +290,10 @@ impl<'a> Lowerer<'a> {
     }
 
     pub(crate) fn clone_any(&mut self, _s: Value, _d: Value, _ty: Ty) {
-        self.terminate(Term::Stop("an `any` cannot be copied".to_string()));
+        self.terminate(Term::Stop(
+            "an `any` cannot be copied".to_string(),
+            Span::default(),
+        ));
         self.f.cur = Some(self.f.func.entry());
     }
 
@@ -358,7 +364,7 @@ impl<'a> Lowerer<'a> {
         );
         let d = self.load_at(tmp, 0, IrTy::Ptr);
         let n = self.load_at(tmp, 8, IrTy::I64);
-        self.call_core("rt_str_push", vec![out, d, n]);
+        self.call_core("rtStrPush", vec![out, d, n]);
         self.drop_at(tmp, string);
     }
 
@@ -406,6 +412,7 @@ impl<'a> Lowerer<'a> {
                     s.if_then_pub(owns, |s| {
                         s.terminate(Term::Stop(
                             "a closure that owns data cannot be copied".to_string(),
+                            Span::default(),
                         ));
                         let b = s.new_block(&[]);
                         s.start(b);

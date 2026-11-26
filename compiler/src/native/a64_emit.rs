@@ -1,4 +1,4 @@
-//! From allocated AArch64 MIR to bytes (design in `docs/design/mir.md`).
+//! From allocated AArch64 MIR to bytes.
 //!
 //! The frame has no frame pointer. From `sp` up: the outgoing argument area, the saved registers (`x30`
 //! when the function calls, then the callee-saved ones it uses), the other frame objects. The stack
@@ -90,8 +90,8 @@ fn layout(f: &MFunc) -> Frame {
         *at += o.size as i32;
     };
     // The outgoing arguments first: they sit at `[sp]`.
-    for i in 0..f.frame.len() {
-        if f.frame[i].kind == FrameKind::Outgoing {
+    for (i, o) in f.frame.iter().enumerate() {
+        if o.kind == FrameKind::Outgoing {
             place(i, &mut at, &mut off);
         }
     }
@@ -114,8 +114,8 @@ fn layout(f: &MFunc) -> Frame {
     at = (at + 7) / 8 * 8;
     let save_at = at;
     at += 8 * saves.len() as i32;
-    for i in 0..f.frame.len() {
-        if !matches!(f.frame[i].kind, FrameKind::Outgoing | FrameKind::Incoming) {
+    for (i, o) in f.frame.iter().enumerate() {
+        if !matches!(o.kind, FrameKind::Outgoing | FrameKind::Incoming) {
             place(i, &mut at, &mut off);
         }
     }
@@ -161,6 +161,12 @@ struct Em<'e, 'a> {
     strings: &'e [String],
     cold: Vec<Cold>,
     used: [bool; 4],
+    /// The location of the instruction being emitted (`Span::at`; 0 for none).
+    loc: u32,
+    /// The entries of this function's stop routines that take the place in `x2`, made when a check names one.
+    at: [Option<Label>; 4],
+    /// The stubs that say where: one per kind and location, each `mov x2, location` and a branch to the `_at` entry.
+    places: Vec<(u32, u32, Label)>,
 }
 
 impl Em<'_, '_> {
@@ -175,14 +181,36 @@ impl Em<'_, '_> {
         }
     }
 
+    /// Where a check of kind `n` (a `SYM_*` number) branches when it fails: the function's stop routine, or the
+    /// stub for the place of the instruction being emitted when it knows one.
     fn stop(&mut self, n: u32) -> Label {
         self.used[n as usize] = true;
-        self.env.stops[n as usize]
+        let loc = self.loc;
+        if loc == 0 {
+            return self.env.stops[n as usize];
+        }
+        if let Some((_, _, l)) = self.places.iter().find(|p| p.0 == n && p.1 == loc) {
+            return *l;
+        }
+        if self.at[n as usize].is_none() {
+            self.at[n as usize] = Some(self.env.a.new_label());
+        }
+        let l = self.env.a.new_label();
+        self.places.push((n, loc, l));
+        l
     }
 
     fn stop_label(&mut self, o: &Operand) -> Label {
+        self.used_label(o)
+    }
+
+    /// The routine itself, with no place (unreachable code and compare-and-stop checks).
+    fn used_label(&mut self, o: &Operand) -> Label {
         match o {
-            Operand::Sym(n) => self.stop(*n),
+            Operand::Sym(n) => {
+                self.used[*n as usize] = true;
+                self.env.stops[*n as usize]
+            }
             o => panic!("a stop routine was expected: {o:?}"),
         }
     }
@@ -311,7 +339,7 @@ impl Em<'_, '_> {
                     return;
                 }
                 if is_vec(d) {
-                    self.a().fmov_rr(true, vr(d), vr(*s));
+                    self.a().vmov(vr(d), vr(*s));
                 } else {
                     self.a().mov_rr(gp(d), gp(*s));
                 }
@@ -430,15 +458,28 @@ impl Em<'_, '_> {
     }
 
     fn stop_routines(&mut self) {
+        for (n, loc, l) in std::mem::take(&mut self.places) {
+            let at = self.at[n as usize].expect("a place stub has its entry");
+            let a = &mut *self.env.a;
+            a.bind(l);
+            a.mov_ri(hw::X2, i64::from(loc));
+            a.b(at);
+        }
         for (k, msg) in STOP_MESSAGES.iter().enumerate() {
             if !self.used[k] {
                 continue;
             }
             let off = self.env.ro.add(msg.as_bytes(), 1);
             let l = self.env.stops[k];
-            let stop = self.env.rt.stop;
+            let stop = self.env.rt.stop_at;
+            let at = self.at[k];
             let a = &mut *self.env.a;
             a.bind(l);
+            // A check with no place: the place is none.
+            a.mov_ri(hw::X2, 0);
+            if let Some(at) = at {
+                a.bind(at);
+            }
             a.lea_sect(hw::X0, Sect::Rodata, off);
             a.mov_ri(hw::X1, msg.len() as i64);
             a.bl(stop);
@@ -534,17 +575,17 @@ impl Em<'_, '_> {
                 // The high half first: `d` may be one of the operands.
                 let y = r(&ops[2]);
                 let a = &mut *self.env.a;
-                a.smulh(hw::X9, x, y);
+                a.smulh(hw::X17, x, y);
                 a.mul(d, x, y);
-                a.cmp_rr_sh(hw::X9, d, Shift::Asr, 63);
+                a.cmp_rr_sh(hw::X17, d, Shift::Asr, 63);
                 self.ov_branch(Br::Cc(Cond::Ne), ov, tail);
             }
             op::CHK_MUL_U => {
                 let y = r(&ops[2]);
                 let a = &mut *self.env.a;
-                a.umulh(hw::X9, x, y);
+                a.umulh(hw::X17, x, y);
                 a.mul(d, x, y);
-                self.ov_branch(Br::Nz(hw::X9), ov, tail);
+                self.ov_branch(Br::Nz(hw::X17), ov, tail);
             }
             k => panic!("check kind {k}"),
         }
@@ -557,7 +598,7 @@ impl Em<'_, '_> {
         let z = self.stop(super::a64_mir::SYM_DIV0);
         let a = &mut *self.env.a;
         a.cbz(y, z);
-        // `MIN / -1` does not trap here: the quotient wraps, like the interpreter's.
+        // The IR division wraps for `MIN / -1`; the lowering stops it before this.
         let q = if rem { hw::X9 } else { d };
         if signed {
             a.sdiv(q, x, y);
@@ -570,6 +611,7 @@ impl Em<'_, '_> {
     }
 
     fn inst(&mut self, i: &MInst, next: Option<u32>) {
+        self.loc = i.loc;
         let ops = &i.ops;
         match i.op {
             COPY => {
@@ -730,16 +772,27 @@ impl Em<'_, '_> {
             op::CALLRT => {
                 let rt = self.env.rt;
                 let l = match imm(&ops[0]) {
-                    op::RT_ALLOC => rt.alloc,
-                    op::RT_FREE => rt.free,
-                    op::RT_REALLOC => rt.realloc,
+                    op::RT_ALLOC => rt.alloc_x,
+                    op::RT_FREE => rt.free_x,
+                    op::RT_REALLOC => rt.realloc_x,
                     op::RT_CTX_INIT => rt.ctx_init,
                     op::RT_CTX_SWITCH => rt.ctx_switch,
+                    k if (op::RT_OS..op::RT_OS + 22).contains(&k) => {
+                        rt.os[(k - op::RT_OS) as usize]
+                    }
                     op::RT_MEMCPY => rt.memcpy,
-                    op::RT_FMOD => rt.fmod,
-                    _ => rt.print,
+                    op::RT_FMOD | op::RT_FMOD32 => rt.fmod,
+                    _ => rt.print_x,
                 };
+                let narrow = imm(&ops[0]) == op::RT_FMOD32;
+                if narrow {
+                    self.a().fcvt(true, hw::V(0), hw::V(0));
+                    self.a().fcvt(true, hw::V(1), hw::V(1));
+                }
                 self.a().bl(l);
+                if narrow {
+                    self.a().fcvt(false, hw::V(0), hw::V(0));
+                }
             }
             op::RET => self.epilogue(),
             op::STOP => {
@@ -749,10 +802,15 @@ impl Em<'_, '_> {
                 let msg = &self.strings[n as usize];
                 let off = self.env.ro.add(msg.as_bytes(), 1);
                 let len = msg.len() as i64;
-                let stop = self.env.rt.stop;
+                let at = match ops.get(1) {
+                    Some(Operand::Imm(at)) => *at,
+                    _ => 0,
+                };
+                let stop = self.env.rt.stop_at;
                 let a = &mut *self.env.a;
                 a.lea_sect(hw::X0, Sect::Rodata, off);
                 a.mov_ri(hw::X1, len);
+                a.mov_ri(hw::X2, at);
                 a.bl(stop);
             }
             op::JMPSYM => {
@@ -782,6 +840,134 @@ impl Em<'_, '_> {
                 let l = self.stop_label(&ops[3]);
                 self.ov_branch(Br::Cc(cc_of(imm(&ops[0]))), l, &ops[4..]);
             }
+            op::FLD => {
+                let d = vr(phys(&ops[0]));
+                let size = match imm(&ops[2]) {
+                    2 => 16,
+                    1 => 8,
+                    _ => 4,
+                };
+                match self.ea(&ops[1], size) {
+                    Ea::Off(b, off) => self.a().ldr_f(d, b, off, size),
+                    Ea::Idx(b, x, scaled) => self.a().ldr_f_idx(d, b, x, size, scaled),
+                }
+            }
+            op::FST => {
+                let s = vr(phys(&ops[1]));
+                let size = match imm(&ops[2]) {
+                    2 => 16,
+                    1 => 8,
+                    _ => 4,
+                };
+                match self.ea(&ops[0], size) {
+                    Ea::Off(b, off) => self.a().str_f(s, b, off, size),
+                    Ea::Idx(b, x, scaled) => self.a().str_f_idx(s, b, x, size, scaled),
+                }
+            }
+            op::FCONST => {
+                let d = vr(phys(&ops[0]));
+                let dbl = imm(&ops[2]) == 1;
+                let a = &mut *self.env.a;
+                match imm(&ops[1]) {
+                    0 => a.fmov_from_gp(dbl, d, hw::XZR),
+                    n => {
+                        a.mov_ri(hw::X17, n);
+                        a.fmov_from_gp(dbl, d, hw::X17);
+                    }
+                }
+            }
+            op::FARITH => {
+                let (d, x, y) = (vr(phys(&ops[0])), vr(phys(&ops[1])), vr(phys(&ops[2])));
+                let dbl = imm(&ops[4]) == 1;
+                let a = &mut *self.env.a;
+                match imm(&ops[3]) {
+                    0 => a.fadd(dbl, d, x, y),
+                    1 => a.fsub(dbl, d, x, y),
+                    2 => a.fmul(dbl, d, x, y),
+                    _ => a.fdiv(dbl, d, x, y),
+                }
+            }
+            op::FNEG => {
+                let (d, s) = (vr(phys(&ops[0])), vr(phys(&ops[1])));
+                self.a().fneg(imm(&ops[2]) == 1, d, s);
+            }
+            op::FCMPSET => {
+                let (x, y) = (vr(phys(&ops[2])), vr(phys(&ops[3])));
+                let d = r(&ops[0]);
+                let a = &mut *self.env.a;
+                a.fcmp(imm(&ops[4]) == 1, x, y);
+                a.cset(d, cc_of(imm(&ops[1])));
+            }
+            op::FCMPJCC => {
+                let (x, y) = (vr(phys(&ops[1])), vr(phys(&ops[2])));
+                let l = self.block_label(&ops[3]);
+                let a = &mut *self.env.a;
+                a.fcmp(imm(&ops[4]) == 1, x, y);
+                a.b_cond(cc_of(imm(&ops[0])), l);
+            }
+            op::ITOF => {
+                let (d, s) = (vr(phys(&ops[0])), r(&ops[1]));
+                self.a().scvtf(imm(&ops[2]) == 1, d, s);
+            }
+            op::FTOI => {
+                // `fcvtzs` saturates and turns NaN into 0, like Rust's `as`; then cut to the width.
+                let (d, s) = (r(&ops[0]), vr(phys(&ops[1])));
+                self.a().fcvtzs(imm(&ops[2]) == 1, d, s);
+                self.mask(d, d, imm(&ops[3]));
+            }
+            op::FRESIZE => {
+                let (d, s) = (vr(phys(&ops[0])), vr(phys(&ops[1])));
+                self.a().fcvt(imm(&ops[2]) == 1, d, s);
+            }
+            op::FUN => {
+                let (d, s, dbl) = (vr(phys(&ops[0])), vr(phys(&ops[1])), imm(&ops[3]) == 1);
+                match imm(&ops[2]) {
+                    0 => self.a().fsqrt(dbl, d, s),
+                    1 => self.a().frintm(dbl, d, s),
+                    _ => self.a().frintp(dbl, d, s),
+                }
+            }
+            op::FFMA => {
+                let d = vr(phys(&ops[0]));
+                let (x, y, z) = (vr(phys(&ops[1])), vr(phys(&ops[2])), vr(phys(&ops[3])));
+                self.a().fmadd(imm(&ops[4]) == 1, d, x, y, z);
+            }
+            op::VSPLAT => {
+                let (d, s) = (vr(phys(&ops[0])), r(&ops[1]));
+                self.a().vdup(d, s);
+            }
+            op::VSHIFT => {
+                let d = vr(phys(&ops[0]));
+                let k = imm(&ops[2]) as u32;
+                if imm(&ops[1]) == 1 {
+                    self.a().vshl(d, d, k);
+                } else {
+                    self.a().vushr(d, d, k);
+                }
+            }
+            op::VREDUCE => {
+                let (d, s) = (r(&ops[0]), vr(phys(&ops[1])));
+                // `addp d31, vS.2d` sums the lanes into a scratch register.
+                self.a().vaddp(hw::V(31), s);
+                self.a().fmov_to_gp(true, d, hw::V(31));
+            }
+            op::VBUILD => {
+                let d = vr(phys(&ops[0]));
+                let (x, y) = (r(&ops[1]), r(&ops[2]));
+                self.a().vins(d, 0, x);
+                self.a().vins(d, 1, y);
+            }
+            op::VALU => {
+                let d = vr(phys(&ops[0]));
+                let (x, y) = (vr(phys(&ops[1])), vr(phys(&ops[2])));
+                match imm(&ops[3]) {
+                    0 => self.a().vadd(d, x, y),
+                    1 => self.a().vsub(d, x, y),
+                    2 => self.a().vand(d, x, y),
+                    3 => self.a().vorr(d, x, y),
+                    _ => self.a().veor(d, x, y),
+                }
+            }
             o => panic!("the AArch64 emitter does not know opcode {o}"),
         }
     }
@@ -798,6 +984,9 @@ pub fn emit(env: &mut Env, f: &MFunc, label: Label) {
         strings: &f.strings,
         cold: Vec::new(),
         used: [false; 4],
+        loc: 0,
+        at: [None; 4],
+        places: Vec::new(),
     };
     em.a().bind(label);
     em.prologue();

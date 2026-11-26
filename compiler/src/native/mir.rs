@@ -1,4 +1,4 @@
-//! The machine IR (work item W4, design in `docs/design/mir.md`).
+//! The machine-level IR that sits between the IR and the machine code.
 //!
 //! A function is a list of blocks in layout order; a block is a list of instructions. The instructions
 //! are the target's own (the opcode is a number the target defines), but their operands have one shape
@@ -191,6 +191,8 @@ pub struct MInst {
     /// a call leaves undefined, or the registers a macro uses inside itself. The allocator keeps
     /// reloads out of them and, for a call, splits the values that live across it.
     pub clobbers: RegSet,
+    /// Where in the source this came from (a location, `Span::at`; 0 for nowhere): what a check that stops says.
+    pub loc: u32,
 }
 
 impl MInst {
@@ -200,6 +202,7 @@ impl MInst {
             ops,
             flags: IFlags::default(),
             clobbers: RegSet::default(),
+            loc: 0,
         }
     }
 
@@ -255,6 +258,9 @@ pub struct MFunc {
     pub used_callee_saved: RegSet,
     /// Texts the code refers to by number (the messages of `stop`).
     pub strings: Vec<String>,
+    /// The `Sym` numbers of functions that are rarely called (a `Slow` path): a call of one weighs
+    /// nothing in the allocator's choices, so values may live across it in caller-saved registers.
+    pub cold_syms: Vec<u32>,
 }
 
 impl MFunc {

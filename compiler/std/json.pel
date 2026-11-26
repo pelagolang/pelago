@@ -1,0 +1,981 @@
+/// JSON: `json.value` is a parsed document, `json.parse` reads text and `encode` / `pretty` write it.
+///
+/// ```
+/// import std.json
+///
+/// const doc = json.parse("{\"name\": \"Pelago\", \"tags\": [1, 2]}")?
+/// print(doc.get("name"), doc.encode())
+/// ```
+/// A number without fraction or exponent that fits `int` is an `integer`, so large ids stay exact; every other
+/// number is a `number` (a float). Objects keep their keys in the order they were written.
+/// Typed decoding into your own structs.
+
+//~ One JSON value.
+pub enum value {
+    nothing
+    flag(value: bool)
+    integer(value: int)
+    number(value: float)
+    text(value: string)
+    items(values: [value])
+    fields(keys: [string], values: [value])
+}
+
+fn fail(sink message: string) -> parse_error = parse_error { message: message }
+
+fn isSpace(b: int) -> bool = b == 32 || b == 9 || b == 10 || b == 13
+
+fn skip(s: str, inout p: int) {
+    while p < s.len() && isSpace(s.byteAt(p) to int) { p += 1 }
+}
+
+fn hexValue(b: int) -> int {
+    if b >= 48 && b <= 57 { return b - 48 }
+    if b >= 97 && b <= 102 { return b - 87 }
+    if b >= 65 && b <= 70 { return b - 55 }
+    -1
+}
+
+fn readHex4(s: str, inout p: int) -> int ! parse_error {
+    if p + 4 > s.len() { return err(fail("a \\u escape needs four hex digits")) }
+    var v = 0
+    var i = 0
+    while i < 4 {
+        const h = hexValue(s.byteAt(p + i) to int)
+        if h < 0 { return err(fail("a \\u escape needs four hex digits")) }
+        v = v * 16 + h
+        i += 1
+    }
+    p += 4
+    ok(v)
+}
+
+/// The string starting at the opening quote.
+fn readString(s: str, inout p: int) -> string ! parse_error {
+    p += 1
+    var out = ""
+    while true {
+        if p >= s.len() { return err(fail("the string is not closed")) }
+        const b = s.byteAt(p) to int
+        if b == 34 {
+            p += 1
+            return ok(out)
+        }
+        if b < 32 { return err(fail("a control character in a string must be escaped")) }
+        if b != 92 {
+            out.pushByte!(s.byteAt(p))
+            p += 1
+            continue
+        }
+        p += 1
+        if p >= s.len() { return err(fail("the string is not closed")) }
+        const e = s.byteAt(p) to int
+        p += 1
+        if e == 34 || e == 92 || e == 47 {
+            out.pushByte!(rtToByte(e))
+        } else if e == 98 {
+            out.pushByte!(8 to byte)
+        } else if e == 102 {
+            out.pushByte!(12 to byte)
+        } else if e == 110 {
+            out.pushByte!(10 to byte)
+        } else if e == 114 {
+            out.pushByte!(13 to byte)
+        } else if e == 116 {
+            out.pushByte!(9 to byte)
+        } else if e == 117 {
+            var cp = readHex4(s, inout p)?
+            if cp >= 55296 && cp <= 56319 {
+                /// A high surrogate must be followed by \u and a low surrogate.
+                if p + 2 <= s.len() && s.byteAt(p) == 92 && s.byteAt(p + 1) == 117 {
+                    p += 2
+                    const low = readHex4(s, inout p)?
+                    if low < 56320 ||
+                        low > 57343 { return err(fail("a high surrogate needs a low surrogate")) }
+                    cp = 65536 + (cp - 55296) * 1024 + (low - 56320)
+                } else {
+                    return err(fail("a high surrogate needs a low surrogate"))
+                }
+            } else if cp >= 56320 && cp <= 57343 {
+                return err(fail("a low surrogate without a high surrogate"))
+            }
+            out.pushChar!(rtToChar(cp))
+        } else {
+            return err(fail("unknown escape in a string"))
+        }
+    }
+    ok(out)
+}
+
+fn readNumber(s: str, inout p: int) -> value ! parse_error {
+    const start = p
+    var whole = true
+    if p < s.len() && s.byteAt(p) == 45 { p += 1 }
+    var digits = 0
+    while p < s.len() && s.byteAt(p) >= 48 && s.byteAt(p) <= 57 {
+        p += 1
+        digits += 1
+    }
+    if digits == 0 { return err(fail("a number needs digits")) }
+    if p < s.len() && s.byteAt(p) == 46 {
+        p += 1
+        var frac = 0
+        while p < s.len() && s.byteAt(p) >= 48 && s.byteAt(p) <= 57 {
+            p += 1
+            frac += 1
+        }
+        if frac == 0 { return err(fail("a number needs digits after the point")) }
+        whole = false
+    }
+    if p < s.len() && (s.byteAt(p) == 101 || s.byteAt(p) == 69) {
+        p += 1
+        whole = false
+        if p < s.len() && (s.byteAt(p) == 43 || s.byteAt(p) == 45) { p += 1 }
+        var exp = 0
+        while p < s.len() && s.byteAt(p) >= 48 && s.byteAt(p) <= 57 {
+            p += 1
+            exp += 1
+        }
+        if exp == 0 { return err(fail("a number needs digits in the exponent")) }
+    }
+    const text = s[start..p]
+    if whole {
+        /// Too large for `int`: falls through to a float.
+        const n = text.parseInt()
+        if n.isOk() { return ok(value.integer(value: n.or(0))) }
+    }
+    const f = text.parseFloat()?
+    ok(value.number(value: f))
+}
+
+fn expectWord(s: str, inout p: int, word: str) -> bool {
+    if p + word.len() > s.len() { return false }
+    var i = 0
+    while i < word.len() {
+        if s.byteAt(p + i) != word.byteAt(i) { return false }
+        i += 1
+    }
+    p += word.len()
+    true
+}
+
+fn readValue(s: str, inout p: int, depth: int) -> value ! parse_error {
+    if depth > 512 { return err(fail("the document is nested too deeply")) }
+    skip(s, inout p)
+    if p >= s.len() { return err(fail("a value is missing")) }
+    const c = s.byteAt(p) to int
+    if c == 123 {
+        p += 1
+        var keys: [string] = []
+        var values: [value] = []
+        skip(s, inout p)
+        if p < s.len() && s.byteAt(p) == 125 {
+            p += 1
+            return ok(value.fields(keys: keys, values: values))
+        }
+        while true {
+            skip(s, inout p)
+            if p >= s.len() || s.byteAt(p) != 34 { return err(fail("a key must be a string")) }
+            const key = readString(s, inout p)?
+            skip(s, inout p)
+            if p >= s.len() ||
+                s.byteAt(p) != 58 { return err(fail("a `:` is missing after the key")) }
+            p += 1
+            const v = readValue(s, inout p, depth + 1)?
+            keys.push!(sink key)
+            values.push!(sink v)
+            skip(s, inout p)
+            if p >= s.len() { return err(fail("the object is not closed")) }
+            if s.byteAt(p) == 44 {
+                p += 1
+            } else if s.byteAt(p) == 125 {
+                p += 1
+                break
+            } else {
+                return err(fail("expected `,` or `}`"))
+            }
+        }
+        return ok(value.fields(keys: keys, values: values))
+    }
+    if c == 91 {
+        p += 1
+        var values: [value] = []
+        skip(s, inout p)
+        if p < s.len() && s.byteAt(p) == 93 {
+            p += 1
+            return ok(value.items(values: values))
+        }
+        while true {
+            const v = readValue(s, inout p, depth + 1)?
+            values.push!(sink v)
+            skip(s, inout p)
+            if p >= s.len() { return err(fail("the array is not closed")) }
+            if s.byteAt(p) == 44 {
+                p += 1
+            } else if s.byteAt(p) == 93 {
+                p += 1
+                break
+            } else {
+                return err(fail("expected `,` or `]`"))
+            }
+        }
+        return ok(value.items(values: values))
+    }
+    if c == 34 {
+        const t = readString(s, inout p)?
+        return ok(value.text(value: t))
+    }
+    if c == 116 {
+        if expectWord(s, inout p, "true") { return ok(value.flag(value: true)) }
+        return err(fail("unknown word"))
+    }
+    if c == 102 {
+        if expectWord(s, inout p, "false") { return ok(value.flag(value: false)) }
+        return err(fail("unknown word"))
+    }
+    if c == 110 {
+        if expectWord(s, inout p, "null") { return ok(value.nothing) }
+        return err(fail("unknown word"))
+    }
+    if c == 45 || (c >= 48 && c <= 57) {
+        return readNumber(s, inout p)
+    }
+    err(fail("unexpected character"))
+}
+
+/// The line and column (counting characters, from 1) of a byte offset.
+fn lineColumn(s: str, upTo: int, inout line: int, inout column: int) {
+    line = 1
+    column = 1
+    var i = 0
+    while i < upTo && i < s.len() {
+        const b = s.byteAt(i) to int
+        if b == 10 {
+            line += 1
+            column = 1
+        } else if b < 128 || b >= 192 {
+            column += 1
+        }
+        i += 1
+    }
+}
+
+fn where(s: str, upTo: int) -> string {
+    var line = 1
+    var column = 1
+    lineColumn(s, upTo, inout line, inout column)
+    "line #line, column #column"
+}
+
+fn rawMessage(r: value ! parse_error) -> string {
+    switch r {
+        case err(e): copy e.message
+        case ok(_): ""
+    }
+}
+
+fn withPosition(s: str, p: int, r: value ! parse_error) -> string {
+    switch r {
+        case err(e): "#(e.message) (#(where(s, p)))"
+        case ok(_): ""
+    }
+}
+
+/// The document, with the raw messages; `p` ends where the error was found.
+fn parseDoc(text: str, inout p: int) -> value ! parse_error {
+    const v = readValue(text, inout p, 0)?
+    skip(text, inout p)
+    if p < text.len() { return err(fail("text after the end of the document")) }
+    ok(v)
+}
+
+//~ Reads a document. The whole text must be one value, with spaces around it allowed. An error says where it
+//~ is: `the string is not closed (line 3, column 9)`.
+pub fn parse(text: str) -> value ! parse_error {
+    var p = 0
+    const r = parseDoc(text, inout p)
+    if r.isErr() { return err(parse_error { message: withPosition(text, p, r) }) }
+    return r
+}
+
+fn quote(inout out: string, s: str) {
+    out.pushByte!(34 to byte)
+    var i = 0
+    while i < s.len() {
+        const b = s.byteAt(i) to int
+        if b == 34 {
+            out.pushStr!("\\\"")
+        } else if b == 92 {
+            out.pushStr!("\\\\")
+        } else if b == 10 {
+            out.pushStr!("\\n")
+        } else if b == 13 {
+            out.pushStr!("\\r")
+        } else if b == 9 {
+            out.pushStr!("\\t")
+        } else if b < 32 {
+            const digits = "0123456789abcdef"
+            out.pushStr!("\\u00")
+            out.pushByte!(digits.byteAt(b / 16))
+            out.pushByte!(digits.byteAt(b % 16))
+        } else {
+            out.pushByte!(s.byteAt(i))
+        }
+        i += 1
+    }
+    out.pushByte!(34 to byte)
+}
+
+fn write(inout out: string, v: value, indent: int, level: int) {
+    switch v {
+        case .nothing: out.pushStr!("null")
+        case .flag(b): out.pushStr!(b ? "true" : "false")
+        case .integer(n): out.pushStr!("#n")
+        case .number(n): out.pushStr!("#n")
+        case .text(t): quote(inout out, t)
+        case .items(values):
+            if values.len() == 0 {
+                out.pushStr!("[]")
+                return
+            }
+            out.pushByte!(91 to byte)
+            var i = 0
+            while i < values.len() {
+                if i > 0 { out.pushByte!(44 to byte) }
+                newline(inout out, indent, level + 1)
+                write(inout out, values[i], indent, level + 1)
+                i += 1
+            }
+            newline(inout out, indent, level)
+            out.pushByte!(93 to byte)
+        case .fields(keys, values):
+            if keys.len() == 0 {
+                out.pushStr!("{}")
+                return
+            }
+            out.pushByte!(123 to byte)
+            var i = 0
+            while i < keys.len() {
+                if i > 0 { out.pushByte!(44 to byte) }
+                newline(inout out, indent, level + 1)
+                quote(inout out, keys[i])
+                out.pushByte!(58 to byte)
+                if indent > 0 { out.pushByte!(32 to byte) }
+                write(inout out, values[i], indent, level + 1)
+                i += 1
+            }
+            newline(inout out, indent, level)
+            out.pushByte!(125 to byte)
+    }
+}
+
+fn newline(inout out: string, indent: int, level: int) {
+    if indent == 0 { return }
+    out.pushByte!(10 to byte)
+    var n = indent * level
+    while n > 0 {
+        out.pushByte!(32 to byte)
+        n -= 1
+    }
+}
+
+impl value {
+    //~ The compact text of the document.
+    fn encode(self) -> string {
+        var out = ""
+        write(inout out, self, 0, 0)
+        out
+    }
+
+    //~ The document spread over lines, indented by `indent` spaces per level.
+    fn pretty(self, indent: int = 2) -> string {
+        var out = ""
+        write(inout out, self, indent, 0)
+        out
+    }
+
+    //~ The member `key` of an object.
+    fn get(self, key: str) -> value? {
+        switch self {
+            case .fields(keys, values):
+                var i = 0
+                while i < keys.len() {
+                    if keys[i] == key { return copy values[i] }
+                    i += 1
+                }
+                none
+            case _: none
+        }
+    }
+
+    //~ The element `index` of an array.
+    fn at(self, index: int) -> value? {
+        switch self {
+            case .items(values):
+                if index >= 0 && index < values.len() { return copy values[index] }
+                none
+            case _: none
+        }
+    }
+
+    fn asNumber(self) -> float? {
+        switch self {
+            case .number(n): n
+            case .integer(n): n to float
+            case _: none
+        }
+    }
+
+    fn asText(self) -> string? {
+        switch self {
+            case .text(t): copy t
+            case _: none
+        }
+    }
+
+    fn asBool(self) -> bool? {
+        switch self {
+            case .flag(b): b
+            case _: none
+        }
+    }
+
+    //~ The number of elements of an array or members of an object; 0 for other values.
+    fn size(self) -> int {
+        switch self {
+            case .items(values): values.len()
+            case .fields(keys, _): keys.len()
+            case _: 0
+        }
+    }
+}
+
+//~ A braid as one flat array with a JSON value per slot: `(int, string; 3)` is `[7, "seven", 8]`. `a` makes the value of
+//~ each slot of type A, `b` of each slot of type B. (An array of pairs, `[(A, B); N]`, is an array of two-element arrays: make
+//~ each pair with `value.items([a(x), b(y)])`.) There is no typed encoder for structs yet; this is the braid's part of it.
+pub fn braidItems<A, B, meta N: int>(x: (A, B; N), a: fn(A) -> value, b: fn(B) -> value) -> value {
+    var out: [value] = []
+    var p = 0
+    while p < N / 2 {
+        out.push!(a(x.first(p)))
+        out.push!(b(x.second(p)))
+        p += 1
+    }
+    if N % 2 == 1 { out.push!(a(x.tail())) }
+    value.items(out)
+}
+
+impl show for value {
+    fn show(self) -> string = self.encode()
+}
+
+//~ A document did not fit the type being filled. `path` is where (`$.servers[2].port`), `line` and `column`
+//~ say where in the text (both 0 when the error did not come from text). `trail` is the same place as member
+//~ numbers, the form the decoders work with.
+pub struct json_error {
+    pub message: string
+    pub trail: [int]
+    pub path: string
+    pub line: int
+    pub column: int
+}
+
+impl show for json_error {
+    fn show(self) -> string {
+        const where = self.line > 0 ? "#(self.line):#(self.column): " : ""
+        "#where#(self.path): #(self.message)"
+    }
+}
+
+/// A new error at the place `at` names.
+fn problem(sink message: string, at: [int]) -> json_error {
+    json_error { message: message, trail: copy at, path: "", line: 0, column: 0 }
+}
+
+//~ A decode error at the place `at` names, for decoders written by hand (and by `@derive(fromJson)`).
+pub fn failure(sink message: string, at: [int]) -> json_error = problem(sink message, at)
+
+/// The place `trail` names in `root`, written `$.servers[2].port`.
+fn pathOf(root: value, trail: [int]) -> string {
+    var out = "$"
+    var d = 0
+    var here = copy root
+    while d < trail.len() {
+        const i = trail[d]
+        switch here {
+            case .fields(keys, values):
+                if i < 0 || i >= keys.len() { return out }
+                out.pushStr!(".")
+                out.pushStr!(keys[i])
+                here = copy values[i]
+            case .items(values):
+                if i < 0 || i >= values.len() { return out }
+                out.pushStr!("[#i]")
+                here = copy values[i]
+            case _: return out
+        }
+        d += 1
+    }
+    out
+}
+
+/// The byte offset where the value `trail` names starts in the text (the text is a valid document).
+fn locate(s: str, trail: [int]) -> int {
+    var p = 0
+    skip(s, inout p)
+    var d = 0
+    while d < trail.len() {
+        if p >= s.len() { return p }
+        const c = s.byteAt(p) to int
+        if c != 123 && c != 91 { return p }
+        const isObject = c == 123
+        const target = trail[d]
+        p += 1
+        var j = 0
+        while true {
+            skip(s, inout p)
+            if p >= s.len() { return p }
+            const e = s.byteAt(p) to int
+            if e == 93 || e == 125 { return p }
+            if isObject {
+                if readString(s, inout p).isErr() { return p }
+                skip(s, inout p)
+                p += 1
+                skip(s, inout p)
+            }
+            if j == target { break }
+            if readValue(s, inout p, 0).isErr() { return p }
+            skip(s, inout p)
+            if p < s.len() && s.byteAt(p) == 44 { p += 1 }
+            j += 1
+        }
+        d += 1
+    }
+    p
+}
+
+//~ Fills in the path, line and column of an error that came from decoding `root`, which was read from `text`.
+pub fn located(text: str, root: value, e: json_error) -> json_error {
+    var line = 1
+    var column = 1
+    lineColumn(text, locate(text, e.trail), inout line, inout column)
+    json_error {
+        message: copy e.message,
+        trail: copy e.trail,
+        path: pathOf(root, e.trail),
+        line: line,
+        column: column
+    }
+}
+
+//~ Fills in the path of an error from a tree that has no text (line and column stay 0).
+pub fn pathed(root: value, e: json_error) -> json_error {
+    json_error {
+        message: copy e.message,
+        trail: copy e.trail,
+        path: pathOf(root, e.trail),
+        line: 0,
+        column: 0
+    }
+}
+
+impl converts<json_error> for parse_error {
+    fn convert(self) -> json_error {
+        json_error { message: copy self.message, trail: [], path: "$", line: 0, column: 0 }
+    }
+}
+
+//~ Reads a document, with the errors as `json_error` (the place is in `line` and `column`).
+pub fn document(text: str) -> value ! json_error {
+    var p = 0
+    const r = parseDoc(text, inout p)
+    if r.isErr() {
+        var line = 1
+        var column = 1
+        lineColumn(text, p, inout line, inout column)
+        return err(json_error { message: rawMessage(r), trail: [], path: "$", line: line, column: column })
+    }
+    ok(r?)
+}
+
+
+/// The byte offset of the first byte that is not valid UTF-8 (no overlong forms, no surrogates, nothing past
+/// U+10FFFF), or -1 when the whole text is valid.
+fn badUtf8(s: str) -> int {
+    var i = 0
+    while i < s.len() {
+        const b = s.byteAt(i) to int
+        var need = 0
+        var low = 128
+        var high = 191
+        if b < 128 {
+            i += 1
+            continue
+        } else if b >= 194 && b <= 223 {
+            need = 1
+        } else if b >= 224 && b <= 239 {
+            need = 2
+            if b == 224 { low = 160 }
+            if b == 237 { high = 159 }
+        } else if b >= 240 && b <= 244 {
+            need = 3
+            if b == 240 { low = 144 }
+            if b == 244 { high = 143 }
+        } else {
+            return i
+        }
+        if i + need >= s.len() { return i }
+        var k = 1
+        while k <= need {
+            const c = s.byteAt(i + k) to int
+            if c < low || c > high { return i }
+            low = 128
+            high = 191
+            k += 1
+        }
+        i += need + 1
+    }
+    -1
+}
+
+/// Fails at the second member of an object that repeats a key; the trail is left at that member.
+fn noDuplicates(v: value, inout at: [int]) -> bool ! json_error {
+    switch v {
+        case .fields(keys, values):
+            var i = 0
+            while i < keys.len() {
+                at.push!(i)
+                var j = 0
+                while j < i {
+                    if keys[j] == keys[i] { return err(problem("duplicate field \"#(keys[i])\"", at)) }
+                    j += 1
+                }
+                const inner = noDuplicates(values[i], inout at)?
+                at.pop!()
+                i += 1
+            }
+            ok(true)
+        case .items(values):
+            var i = 0
+            while i < values.len() {
+                at.push!(i)
+                const inner = noDuplicates(values[i], inout at)?
+                at.pop!()
+                i += 1
+            }
+            ok(true)
+        case _: ok(true)
+    }
+}
+
+//~ Reads a document like `document`, and also refuses text that is not valid UTF-8 and objects that repeat a
+//~ key (`document` keeps both and `indexOf` finds the first).
+pub fn documentStrict(text: str) -> value ! json_error {
+    const bad = badUtf8(text)
+    if bad >= 0 {
+        var line = 1
+        var column = 1
+        lineColumn(text, bad, inout line, inout column)
+        return err(json_error { message: "the text is not valid UTF-8", trail: [], path: "$", line: line, column: column })
+    }
+    const root = document(text)?
+    var at: [int] = []
+    const r = noDuplicates(root, inout at)
+    if r.isErr() {
+        switch r {
+            case err(e): return err(located(text, root, e))
+            case ok(_):
+        }
+    }
+    ok(root)
+}
+
+//~ Fails when the object `v` has a member that is not in `known`; the error names it. Used by `@json(strict)`.
+pub fn rejectUnknown(v: value, known: [string], inout at: [int]) -> bool ! json_error {
+    switch v {
+        case .fields(keys, _):
+            var i = 0
+            while i < keys.len() {
+                var found = false
+                var j = 0
+                while j < known.len() {
+                    if known[j] == keys[i] { found = true }
+                    j += 1
+                }
+                if !found {
+                    at.push!(i)
+                    return err(problem("unknown field \"#(keys[i])\"", at))
+                }
+                i += 1
+            }
+            ok(true)
+        case _: ok(true)
+    }
+}
+
+
+/// The whole number in `s` (digits, an optional leading `-`) as an `int128`, or `none` when it is not one or does not fit.
+fn parseInt128(s: str) -> int128? {
+    var p = 0
+    var neg = false
+    if s.len() > 0 && s.byteAt(0) == 45 {
+        neg = true
+        p = 1
+    }
+    if p >= s.len() { return none }
+    /// Built downwards from zero, so the smallest number fits.
+    var r: int128 = 0
+    const low: int128 = -170141183460469231731687303715884105728
+    while p < s.len() {
+        const b = s.byteAt(p)
+        if b < 48 || b > 57 { return none }
+        const d: int128 = (b - 48) to int128
+        if r < (low + d) / 10 { return none }
+        r = r * 10 - d
+        p += 1
+    }
+    if neg { return r }
+    if r == low { return none }
+    -r
+}
+
+/// The whole number in `s` (digits only) as a `uint128`, or `none` when it is not one or does not fit.
+fn parseUint128(s: str) -> uint128? {
+    if s.len() == 0 { return none }
+    var r: uint128 = 0
+    const high: uint128 = 340282366920938463463374607431768211455
+    var p = 0
+    while p < s.len() {
+        const b = s.byteAt(p)
+        if b < 48 || b > 57 { return none }
+        const d: uint128 = (b - 48) to uint128
+        if r > (high - d) / 10 { return none }
+        r = r * 10 + d
+        p += 1
+    }
+    r
+}
+
+/// The whole number in `s` (digits, an optional leading `-`) as an `int256`, or `none` when it is not one or does not fit.
+fn parseInt256(s: str) -> int256? {
+    var p = 0
+    var neg = false
+    if s.len() > 0 && s.byteAt(0) == 45 {
+        neg = true
+        p = 1
+    }
+    if p >= s.len() { return none }
+    /// Built downwards from zero, so the smallest number fits.
+    var r: int256 = 0
+    const low: int256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968
+    while p < s.len() {
+        const b = s.byteAt(p)
+        if b < 48 || b > 57 { return none }
+        const d: int256 = (b - 48) to int256
+        if r < (low + d) / 10 { return none }
+        r = r * 10 - d
+        p += 1
+    }
+    if neg { return r }
+    if r == low { return none }
+    -r
+}
+
+/// The whole number in `s` (digits only) as a `uint256`, or `none` when it is not one or does not fit.
+fn parseUint256(s: str) -> uint256? {
+    if s.len() == 0 { return none }
+    var r: uint256 = 0
+    const high: uint256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935
+    var p = 0
+    while p < s.len() {
+        const b = s.byteAt(p)
+        if b < 48 || b > 57 { return none }
+        const d: uint256 = (b - 48) to uint256
+        if r > (high - d) / 10 { return none }
+        r = r * 10 + d
+        p += 1
+    }
+    r
+}
+
+/// What kind of value this is, for messages.
+fn describe(v: value) -> string {
+    switch v {
+        case .nothing: "null"
+        case .flag(_): "a boolean"
+        case .integer(_): "an integer"
+        case .number(_): "a number"
+        case .text(_): "text"
+        case .items(_): "an array"
+        case .fields(_, _): "an object"
+    }
+}
+
+impl value {
+    //~ The error for a value of the wrong kind: `expected an object, found text`.
+    fn mismatch(self, expected: str, at: [int]) -> json_error {
+        problem("expected #expected, found #(describe(self))", at)
+    }
+
+    //~ The error for an array with the wrong number of elements: `expected 3 elements, found 4`.
+    fn wrongLength(self, expected: int, at: [int]) -> json_error {
+        problem("expected #expected elements, found #(self.size())", at)
+    }
+
+    //~ The error for a missing member of an object.
+    fn missing(self, key: str, at: [int]) -> json_error {
+        problem("missing field \"#key\"", at)
+    }
+
+    //~ The number of the member `key` of an object, or -1 when there is none (or this is not an object).
+    fn indexOf(self, key: str) -> int {
+        switch self {
+            case .fields(keys, _):
+                var i = 0
+                while i < keys.len() {
+                    if keys[i] == key { return i }
+                    i += 1
+                }
+                -1
+            case _: -1
+        }
+    }
+
+    //~ A whole number from `lo` to `hi`: `name` is the type's name for the message. `1.0` is not a whole number
+    //~ and a number outside the range is an error, never wrapped.
+    fn toRanged(self, lo: int, hi: int, name: str, at: [int]) -> int ! json_error {
+        switch self {
+            case .integer(n):
+                if n < lo || n > hi {
+                    return err(problem("#n does not fit in #name (#lo to #hi)", at))
+                }
+                ok(n)
+            case _: err(self.mismatch("a whole number", at))
+        }
+    }
+
+    fn toInt(self, at: [int]) -> int ! json_error = self.toRanged(
+        -9223372036854775808,
+        9223372036854775807,
+        "int",
+        at,
+    )
+
+    //~ A float; a whole number is accepted too (`1` for `1.0`).
+    fn toFloat(self, at: [int]) -> float ! json_error {
+        switch self {
+            case .number(n): ok(n)
+            case .integer(n): ok(n to float)
+            case _: err(self.mismatch("a number", at))
+        }
+    }
+
+    fn toBool(self, at: [int]) -> bool ! json_error {
+        switch self {
+            case .flag(b): ok(b)
+            case _: err(self.mismatch("a boolean", at))
+        }
+    }
+
+    fn toText(self, at: [int]) -> string ! json_error {
+        switch self {
+            case .text(t): ok(copy t)
+            case _: err(self.mismatch("text", at))
+        }
+    }
+
+    //~ A `float16`: JSON text (how `toJson` writes it, so every digit is kept; `inf`, `-inf` and `nan` too), or a JSON number.
+    fn toFloat16(self, at: [int]) -> float16 ! json_error {
+        switch self {
+            case .number(n): ok("#n".parseFloat16().or(0.0 to float16))
+            case .integer(n): ok(n to float16)
+            case .text(t):
+                const r = t.parseFloat16()
+                if r.isErr() { return err(problem("\"#t\" is not a number", at)) }
+                ok(r.or(0.0 to float16))
+            case _: err(self.mismatch("a number or text", at))
+        }
+    }
+
+    //~ A `float128`: JSON text (how `toJson` writes it, so every digit is kept; `inf`, `-inf` and `nan` too), or a JSON number.
+    fn toFloat128(self, at: [int]) -> float128 ! json_error {
+        switch self {
+            case .number(n): ok(n to float128)
+            case .integer(n): ok(n to float128)
+            case .text(t):
+                const r = t.parseFloat128()
+                if r.isErr() { return err(problem("\"#t\" is not a number", at)) }
+                ok(r.or(0.0 to float128))
+            case _: err(self.mismatch("a number or text", at))
+        }
+    }
+
+    //~ A `float256`: JSON text (how `toJson` writes it, so every digit is kept; `inf`, `-inf` and `nan` too), or a JSON number.
+    fn toFloat256(self, at: [int]) -> float256 ! json_error {
+        switch self {
+            case .number(n): ok(n to float256)
+            case .integer(n): ok(n to float256)
+            case .text(t):
+                const r = t.parseFloat256()
+                if r.isErr() { return err(problem("\"#t\" is not a number", at)) }
+                ok(r.or(0.0 to float256))
+            case _: err(self.mismatch("a number or text", at))
+        }
+    }
+
+    //~ A whole number as an `int128`: JSON text of digits (how `toJson` writes it, so no digit is lost) or an
+    //~ integer that fits `int`.
+    fn toInt128(self, at: [int]) -> int128 ! json_error {
+        switch self {
+            case .integer(n): ok(n to int128)
+            case .text(t):
+                const r = parseInt128(t)
+                if r.isNone() { return err(problem("\"#t\" is not a whole number that fits in int128 (-170141183460469231731687303715884105728 to 170141183460469231731687303715884105727)", at)) }
+                ok(r.unwrapOr(0))
+            case _: err(self.mismatch("a whole number or text of digits", at))
+        }
+    }
+
+    //~ A whole number as an `uint128`: JSON text of digits (how `toJson` writes it, so no digit is lost) or an
+    //~ integer that fits `int`.
+    fn toUint128(self, at: [int]) -> uint128 ! json_error {
+        switch self {
+            case .integer(n):
+                if n < 0 { return err(problem("#n does not fit in uint128 (0 to 340282366920938463463374607431768211455)", at)) }
+                ok(parseUint128("#n").unwrapOr(0))
+            case .text(t):
+                const r = parseUint128(t)
+                if r.isNone() { return err(problem("\"#t\" is not a whole number that fits in uint128 (0 to 340282366920938463463374607431768211455)", at)) }
+                ok(r.unwrapOr(0))
+            case _: err(self.mismatch("a whole number or text of digits", at))
+        }
+    }
+
+    //~ A whole number as an `int256`: JSON text of digits (how `toJson` writes it, so no digit is lost) or an
+    //~ integer that fits `int`.
+    fn toInt256(self, at: [int]) -> int256 ! json_error {
+        switch self {
+            case .integer(n): ok(n to int256)
+            case .text(t):
+                const r = parseInt256(t)
+                if r.isNone() { return err(problem("\"#t\" is not a whole number that fits in int256 (-57896044618658097711785492504343953926634992332820282019728792003956564819968 to 57896044618658097711785492504343953926634992332820282019728792003956564819967)", at)) }
+                ok(r.unwrapOr(0))
+            case _: err(self.mismatch("a whole number or text of digits", at))
+        }
+    }
+
+    //~ A whole number as an `uint256`: JSON text of digits (how `toJson` writes it, so no digit is lost) or an
+    //~ integer that fits `int`.
+    fn toUint256(self, at: [int]) -> uint256 ! json_error {
+        switch self {
+            case .integer(n):
+                if n < 0 { return err(problem("#n does not fit in uint256 (0 to 115792089237316195423570985008687907853269984665640564039457584007913129639935)", at)) }
+                ok(parseUint256("#n").unwrapOr(0))
+            case .text(t):
+                const r = parseUint256(t)
+                if r.isNone() { return err(problem("\"#t\" is not a whole number that fits in uint256 (0 to 115792089237316195423570985008687907853269984665640564039457584007913129639935)", at)) }
+                ok(r.unwrapOr(0))
+            case _: err(self.mismatch("a whole number or text of digits", at))
+        }
+    }
+}

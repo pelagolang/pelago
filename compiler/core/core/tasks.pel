@@ -1,0 +1,922 @@
+/// Concurrency: tasks, channels, shared values and locks.
+
+/// ---- Concurrency ----------------------------------------------------
+
+//~ What `send` returns when nobody is receiving any more.
+pub struct closed {}
+
+//~ A running task that will produce a `T`. `join!!()` waits and consumes it.
+//~
+//~ A task is a function on a stack of its own (`rtCtxInit`). One worker runs the tasks in turn: a spawned task
+//~ starts when the running one waits (a `join`, a `recv` on an empty channel, a `select` with nothing ready, the
+//~ end of a `scope` or of `main`) or calls `yield_now()`. Waiting lets the others run, so tasks may talk back and
+//~ forth. Several workers come later.
+pub struct task<T> {
+    state: ptr
+
+    deinit {
+        /// Dropping the handle detaches the task; a task that is already done is freed here.
+        if rtLoadInt(self.state) == 1 {
+            rtDropAt<T>(rtOffset(self.state, 80))
+            rtFree(self.state)
+        } else {
+            rtStoreInt(rtOffset(self.state, 16), 1)
+        }
+    }
+}
+
+/// The task block: [state: 0 not started, 2 running, 1 done][saved context][detached][stack][closure: 16 bytes][cancelled][scope][parked][deadline][result].
+/// The running task is `rtCur`; `rtTasks` lists every live task, the one `main` runs in first.
+
+//~ Addresses of the live task blocks (0 is `main`'s, made on first use).
+pub var rtTasks: [int] = []
+//~ The address of the running task's block.
+pub var rtCur: int = 0
+//~ Counts what could let a waiting task go on: a value sent or taken, a lock or permit released, a task finished, a
+//~ cancel. A task that cannot go on parks at the current count and is skipped until the count changes, so a wait costs
+//~ nothing while nothing happens and a program in which every task is parked is a deadlock, exactly.
+pub var rtEvents: int = 0
+//~ A lock handed back with its value unchanged (`withWhen` found its condition false): wakes tasks waiting for the
+//~ lock, not those waiting for a condition.
+pub var rtFreed: int = 0
+//~ A finished task whose stack is freed by the next task to run.
+pub var rtZombie: int = 0
+
+const RT_TASK_STACK = 262144
+
+//~ Stacks of finished tasks, kept for the next `spawn` (no mapping, no unmapping). At most `RT_STACK_POOL` of them.
+pub var rtStackPool: [int] = []
+const RT_STACK_POOL = 16
+
+//~ A stack of `size` bytes with a page of no access below it, so running off the bottom stops the program at once
+//~ instead of writing over whatever lies there.
+const RT_GUARD = 4096
+
+fn rtStackNew(size: int) -> ptr {
+    const r = rtOsReserve(size + RT_GUARD)
+    if r <= 0 { panic("out of memory for a stack") }
+    const base = r + RT_GUARD
+    if rtOsCommit(rtIntAddr(base), size) != 0 { panic("out of memory for a stack") }
+    rtIntAddr(base)
+}
+
+fn rtStackFree(p: ptr, size: int) {
+    rtOsRelease(rtIntAddr(rtAddrInt(p) - RT_GUARD), size + RT_GUARD)
+}
+
+fn rtStackTake() -> ptr {
+    const n = rtStackPool.len()
+    if n == 0 { return rtStackNew(RT_TASK_STACK) }
+    const p = rtStackPool[n - 1]
+    rtStackPool.pop!()
+    rtCast<int, ptr>(p)
+}
+
+fn rtStackGive(p: ptr) {
+    if rtStackPool.len() < RT_STACK_POOL {
+        rtStackPool.push!(rtAddrInt(p))
+    } else {
+        rtStackFree(p, RT_TASK_STACK)
+    }
+}
+
+fn rtMainInit() {
+    if rtTasks.len() == 0 {
+        const s = rtAlloc(88)
+        rtCur = rtAddrInt(s)
+        rtTasks.push!(rtCur)
+    }
+}
+
+//~ Frees the stack (and a detached task's block) of the task that just finished.
+fn rtReap() {
+    if rtZombie != 0 {
+        const z = rtCast<int, ptr>(rtZombie)
+        rtZombie = 0
+        rtStackGive(rtLoadPtr(rtOffset(z, 24)))
+        rtStorePtr(rtOffset(z, 24), rtNull())
+        if rtLoadInt(rtOffset(z, 16)) == 1 {
+            rtFree(z)
+        }
+    }
+}
+
+fn rtSwitchTo(t: int) {
+    const me = rtCast<int, ptr>(rtCur)
+    const next = rtCast<int, ptr>(t)
+    rtCur = t
+    rtCtxSwitch(rtOffset(me, 8), rtLoadPtr(rtOffset(next, 8)))
+    rtReap()
+}
+
+//~ The monotonic clock in nanoseconds (stops the program on a target with no clock call yet).
+pub fn rtNow() -> int {
+    const buf = rtAlloc(16)
+    if rtOsClock(1, buf) < 0 { panic("no clock on this target yet") }
+    const t = rtLoadInt(buf) * 1000000000 + rtLoadInt(rtOffset(buf, 8))
+    rtFree(buf)
+    t
+}
+
+//~ Tasks parked with a deadline: while there are none, the scheduler never reads the clock.
+pub var rtTimers: int = 0
+
+//~ The word in a task block that says whether it is parked: 0 runs, else (count + 1) * 2 + kind, the count of events
+//~ (kind 0) or of events plus freed locks (kind 1) when it parked. A parked task may also carry a deadline (nanoseconds
+//~ on the monotonic clock) after which it can run again.
+fn rtToken(kind: int) -> int = if kind == 1 { rtEvents + rtFreed } else { rtEvents }
+
+//~ Whether the task can run: it is not parked, something happened since it parked, or its deadline passed (`now`).
+fn rtRunnable(t: int, now: int) -> bool {
+    const b = rtCast<int, ptr>(t)
+    const w = rtLoadInt(rtOffset(b, 64))
+    if w == 0 || rtToken(w % 2) != w / 2 - 1 { return true }
+    const d = rtLoadInt(rtOffset(b, 72))
+    d != 0 && now >= d
+}
+
+//~ Every task is parked and some wait for a deadline: lets the process sleep until the earliest one (`now` is the
+//~ time just read). A sleep that fails, or ends early, is harmless: the scheduler looks at the clock again.
+fn rtSleepToFirstDeadline(now: int) {
+    var first = 0
+    var j = 0
+    while j < rtTasks.len() {
+        const d = rtLoadInt(rtOffset(rtCast<int, ptr>(rtTasks[j]), 72))
+        if d != 0 && (first == 0 || d < first) { first = d }
+        j += 1
+    }
+    if first > now {
+        const n = first - now
+        rtOsSleep(n / 1000000000, n % 1000000000)
+    }
+}
+
+//~ Lets the next task that can run go; false when there is none besides the running one. When every task is parked
+//~ but some wait for a deadline, sleeps until the first one (`rtOsSleep`) and goes on with
+//~ whichever deadline comes first, which may be the running task's own (nothing switches then, and this is true).
+fn rtSwitchNext() -> bool {
+    rtMainInit()
+    var i = 0
+    while rtTasks[i] != rtCur { i += 1 }
+    while true {
+        const now = if rtTimers > 0 { rtNow() } else { 0 }
+        var k = 1
+        while k < rtTasks.len() {
+            const t = rtTasks[(i + k) % rtTasks.len()]
+            if rtRunnable(t, now) {
+                rtSwitchTo(t)
+                return true
+            }
+            k += 1
+        }
+        if rtTimers == 0 { return false }
+        if rtRunnable(rtCur, now) { return true }
+        rtSleepToFirstDeadline(now)
+    }
+    false
+}
+
+//~ The running task cannot go on until something happens (`kind` 1: until a lock is handed back, too) or until the
+//~ clock reaches `deadline` (0: no deadline): lets the others run. False when every other task is parked as well and
+//~ none waits for a deadline, which is a deadlock.
+fn rtPark(kind: int, deadline: int) -> bool {
+    rtMainInit()
+    const cur = rtCast<int, ptr>(rtCur)
+    rtStoreInt(rtOffset(cur, 64), (rtToken(kind) + 1) * 2 + kind)
+    rtStoreInt(rtOffset(cur, 72), deadline)
+    if deadline != 0 { rtTimers += 1 }
+    const ok = rtSwitchNext()
+    const me = rtCast<int, ptr>(rtCur)
+    if deadline != 0 { rtTimers -= 1 }
+    rtStoreInt(rtOffset(me, 72), 0)
+    rtStoreInt(rtOffset(me, 64), 0)
+    ok
+}
+
+fn rtWait(what: string) {
+    if !rtPark(0, 0) {
+        panic("deadlock: waiting for #what that nobody can provide")
+    }
+}
+
+//~ Waiting for a lock: also woken when a lock is handed back unchanged.
+fn rtWaitLock(what: string) {
+    if !rtPark(1, 0) {
+        panic("deadlock: waiting for #what that nobody can provide")
+    }
+}
+
+//~ Stops the running task for `n` nanoseconds; the others run meanwhile.
+pub fn rtSleepNanos(n: int) {
+    if n <= 0 { return }
+    const deadline = rtNow() + n
+    while rtNow() < deadline {
+        rtPark(0, deadline)
+    }
+}
+
+//~ `select` has nothing ready: waits for something to happen, or for `deadline` (0: none). True to look again, false
+//~ when the deadline has passed (take the `timeout` arm) or nobody can ever make an arm ready (a deadlock).
+pub fn rtSelectWait(deadline: int) -> bool {
+    if deadline != 0 && rtNow() >= deadline { return false }
+    if rtTasks.len() <= 1 && deadline == 0 { return false }
+    rtPark(0, deadline)
+}
+
+//~ Lets the other tasks run for a while.
+pub fn yield_now() {
+    rtSwitchNext()
+}
+
+//~ The first code a task runs: the task block's closure, then the end of the task, which never returns.
+fn rtTaskEntry() {
+    rtReap()
+    rtTaskRunClosure()
+    rtTaskExit()
+}
+
+//~ Its own function so the closure is dropped before the task ends: `rtTaskExit` never returns.
+fn rtTaskRunClosure() {
+    const cur = rtCast<int, ptr>(rtCur)
+    rtStoreInt(cur, 2)
+    const g = rtRead<once fn()>(rtOffset(cur, 32))
+    g!!()
+}
+
+fn rtTaskExit() {
+    rtEvents += 1
+    const cur = rtCast<int, ptr>(rtCur)
+    rtStoreInt(cur, 1)
+    var i = 0
+    while rtTasks[i] != rtCur { i += 1 }
+    rtTasks.remove!(i)
+    rtZombie = rtCur
+    const next = rtTasks[i % rtTasks.len()]
+    rtSwitchTo(next)
+    panic("a finished task ran again")
+}
+
+//~ Scopes opened and not yet closed (in every task), and the id the next one gets. A task started with `s.spawn`
+//~ carries the id of `s` in its block, so a scope knows which tasks are its own.
+pub var rtScopeNext: int = 0
+pub var rtScopeDepth: int = 0
+//~ Scopes that were cancelled and are still open.
+pub var rtCancelledScopes: [int] = []
+
+//~ The start of `scope s { ... }`: the id of the new scope.
+pub fn rtScopeEnter() -> int {
+    rtScopeNext += 1
+    rtScopeDepth += 1
+    rtScopeNext
+}
+
+//~ The end of a scope: waits for every task started with its `s.spawn`.
+pub fn rtScopeLeave(id: int) {
+    if rtTasks.len() > 0 {
+        while rtScopeLive(id) > 0 {
+            rtWait("a task")
+        }
+    }
+    var i = 0
+    while i < rtCancelledScopes.len() {
+        if rtCancelledScopes[i] == id {
+            rtCancelledScopes.remove!(i)
+        } else {
+            i += 1
+        }
+    }
+    rtScopeDepth -= 1
+    if rtScopeDepth == 0 { rtCancelledScopes = [] }
+    if rtScopeDepth == 0 && rtTasks.len() == 1 { rtReleaseAll() }
+}
+
+//~ How many unfinished tasks belong to the scope.
+fn rtScopeLive(id: int) -> int {
+    var n = 0
+    for t of rtTasks {
+        if rtLoadInt(rtOffset(rtCast<int, ptr>(t), 56)) == id { n += 1 }
+    }
+    n
+}
+
+//~ Frees what the task machinery holds once only `main` is left.
+fn rtReleaseAll() {
+    rtFree(rtCast<int, ptr>(rtTasks[0]))
+    while rtStackPool.len() > 0 {
+        rtStackFree(rtStackTake(), RT_TASK_STACK)
+    }
+    rtStackPool = []
+    rtTasks = []
+    rtCur = 0
+}
+
+//~ The end of `main`. Tasks that were not started in a scope and are not done are abandoned (owner decision, 2026-11-07):
+//~ they never run again; a task that never started drops its closure, one that did start leaks what its stack holds, since nothing unwinds. Scopes have joined their own.
+pub fn rtRunPending() {
+    if rtTasks.len() == 0 { return }
+    var i = 0
+    while i < rtTasks.len() {
+        const t = rtCast<int, ptr>(rtTasks[i])
+        if rtTasks[i] == rtCur {
+            i += 1
+        } else {
+            /// A task that never started still owns its closure; one that did start leaks what its stack holds.
+            if rtLoadInt(t) == 0 { rtDropAt<once fn()>(rtOffset(t, 32)) }
+            rtStackFree(rtLoadPtr(rtOffset(t, 24)), RT_TASK_STACK)
+            rtFree(t)
+            rtTasks.remove!(i)
+        }
+    }
+    if rtTasks.len() == 1 { rtReleaseAll() }
+}
+
+//~ Only for the `timeout(d)` arm of a `select`, which the compiler turns into a deadline; it is never called.
+pub fn timeout<D>(d: D) -> bool = false
+
+//~ The deadline of `timeout(d)` in a `select`: now plus `d`, a `duration` (whole nanoseconds in one word).
+pub fn rtTimeoutAt<D>(sink d: D) -> int = rtNow() + rtCast<D, int>(sink d)
+
+//~ Can a receive on this channel finish now: a value is queued, or no sender is left?
+pub fn rtChanReady(ch: ptr) -> bool = rtLoadInt(rtOffset(ch, 24)) > 0 ||
+    rtLoadInt(rtOffset(ch, 32)) == 0
+//~ Whether a send into the channel would not wait: it has room, no bound, or nobody is receiving.
+pub fn rtChanRoom(ch: ptr) -> bool {
+    const bound = rtLoadInt(rtOffset(ch, 48))
+    bound == 0 || rtLoadInt(rtOffset(ch, 24)) < bound || rtLoadInt(rtOffset(ch, 40)) == 0
+}
+
+pub fn rtTaskBody<T>(s: ptr, sink f: once fn() -> T) {
+    const v = f!!()
+    rtWrite<T>(rtOffset(s, 80), sink v)
+    if rtLoadInt(rtOffset(s, 16)) == 1 {
+        rtDropAt<T>(rtOffset(s, 80))
+    }
+}
+
+//~ Whether the running task was asked to stop (`t.cancel()`). A task that wants to stop early looks at this between
+//~ steps; nothing is interrupted and nothing unwinds. Always false in `main`.
+pub fn cancelled() -> bool = rtCancelled()
+
+pub fn rtCancelled() -> bool {
+    if rtCur == 0 { return false }
+    rtLoadInt(rtOffset(rtCast<int, ptr>(rtCur), 48)) != 0
+}
+
+impl<T> task<T> {
+    //~ Asks the task to stop: it sees `cancelled()` become true. It still has to be joined (or dropped) as usual.
+    fn cancel(self) {
+        rtStoreInt(rtOffset(self.state, 48), 1)
+        rtEvents += 1
+    }
+
+    fn join(sink self) -> T {
+        const s = self.state
+        while rtLoadInt(s) != 1 {
+            rtWait("a task to finish")
+        }
+        const r = rtRead<T>(rtOffset(s, 80))
+        rtFree(s)
+        rtForgetTask<T>(sink self)
+        r
+    }
+}
+
+//~ Gives up a task handle without running its `deinit`.
+pub fn rtForgetTask<T>(sink t: task<T>) {
+    rtCast<task<T>, ptr>(sink t)
+}
+
+//~ Starts `f` as a task. What the closure uses must be copied or moved in (`sink x ~> ...`).
+pub fn spawn<T>(sink f: once fn() -> T) -> task<T> {
+    rtMainInit()
+    rtEvents += 1
+    const s = rtAlloc(80 + rtSizeOf<T>())
+    const stack = rtStackTake()
+    rtStorePtr(rtOffset(s, 24), stack)
+    const runner = [sink f, sink s] () ~> rtTaskBody<T>(s, sink f)
+    rtWrite<once fn()>(rtOffset(s, 32), sink runner)
+    rtStorePtr(rtOffset(s, 8), rtCtxInit(stack, RT_TASK_STACK, rtFnAddr(rtTaskEntry), rtNull()))
+    rtTasks.push!(rtAddrInt(s))
+    task<T> { state: s }
+}
+
+//~ What an `async fn` call does: starts the body, given as a closure, as a task. The task's address is the future's.
+pub fn rtAsyncSpawn<T>(sink f: once fn() -> T) -> ptr {
+    const t = spawn(sink f)
+    rtCast<task<T>, ptr>(sink t)
+}
+
+//~ The handle of `scope s { ... }`. `s.spawn(task)` starts a task that is finished when the scope ends.
+pub struct scope_handle {
+    id: int
+}
+
+impl scope_handle {
+    //~ Starts a task that belongs to the scope: the scope's end waits for it and `cancel()` reaches it.
+    fn spawn<T>(self, sink f: once fn() -> T) -> task<T> {
+        const t = spawn(sink f)
+        rtStoreInt(rtOffset(t.state, 56), self.id)
+        if rtScopeCancelled(self.id) { rtStoreInt(rtOffset(t.state, 48), 1) }
+        t
+    }
+
+    //~ Asks every task of the scope, also ones started later, to stop: they see `cancelled()` become true.
+    fn cancel(self) {
+        rtCancelledScopes.push!(self.id)
+        for t of rtTasks {
+            const b = rtCast<int, ptr>(t)
+            if rtLoadInt(rtOffset(b, 56)) == self.id { rtStoreInt(rtOffset(b, 48), 1) }
+        }
+        rtEvents += 1
+    }
+}
+
+fn rtScopeCancelled(id: int) -> bool {
+    for c of rtCancelledScopes {
+        if c == id { return true }
+    }
+    false
+}
+
+/// A channel block: [buffer][capacity in slots][head][length][senders][receiver alive][bound][slot size].
+/// The buffer is a ring of flat slots, one per value: `send` moves the value's bytes into a slot, `recv` moves them
+/// out, so nothing is shared between tasks. `bound` is the capacity asked for (0: unbounded, the ring grows).
+
+pub struct sender<T> {
+    ch: ptr
+
+    deinit {
+        const n = rtLoadInt(rtOffset(self.ch, 32)) - 1
+        rtStoreInt(rtOffset(self.ch, 32), n)
+        rtEvents += 1
+        if n == 0 && rtLoadInt(rtOffset(self.ch, 40)) == 0 { rtChanFree<T>(self.ch) }
+    }
+}
+
+pub struct receiver<T> {
+    ch: ptr
+
+    deinit {
+        rtStoreInt(rtOffset(self.ch, 40), 0)
+        rtEvents += 1
+        if rtLoadInt(rtOffset(self.ch, 32)) == 0 { rtChanFree<T>(self.ch) }
+    }
+}
+
+//~ The address of the n-th queued slot.
+fn rtChanSlot(ch: ptr, n: int) -> ptr {
+    const cap = rtLoadInt(rtOffset(ch, 8))
+    const at = (rtLoadInt(rtOffset(ch, 16)) + n) % cap
+    rtOffset(rtLoadPtr(ch), at * rtLoadInt(rtOffset(ch, 56)))
+}
+
+pub fn rtChanFree<T>(ch: ptr) {
+    var i = 0
+    const len = rtLoadInt(rtOffset(ch, 24))
+    while i < len {
+        rtDropAt<T>(rtChanSlot(ch, i))
+        i += 1
+    }
+    rtFree(rtLoadPtr(ch))
+    rtFree(ch)
+}
+
+//~ A channel: a sender end and a receiver end. With a capacity, `send` waits while that many values are queued;
+//~ a capacity of 0 means unbounded.
+pub fn chan<T>(capacity: int = 0) -> (sender<T>, receiver<T>) {
+    const ch = rtAlloc(64)
+    const slot = if rtSizeOf<T>() == 0 { 8 } else { rtSizeOf<T>() }
+    const cap = if capacity > 0 { capacity } else { 8 }
+    rtStorePtr(ch, rtAlloc(cap * slot))
+    rtStoreInt(rtOffset(ch, 8), cap)
+    rtStoreInt(rtOffset(ch, 32), 1)
+    rtStoreInt(rtOffset(ch, 40), 1)
+    rtStoreInt(rtOffset(ch, 48), capacity)
+    rtStoreInt(rtOffset(ch, 56), slot)
+    (sender<T> { ch: ch }, receiver<T> { ch: ch })
+}
+
+//~ Doubles the ring of an unbounded channel that is full, keeping the queued values in order.
+fn rtChanGrow(ch: ptr) {
+    const cap = rtLoadInt(rtOffset(ch, 8))
+    const slot = rtLoadInt(rtOffset(ch, 56))
+    const len = rtLoadInt(rtOffset(ch, 24))
+    const fresh = rtAlloc(cap * 2 * slot)
+    var i = 0
+    while i < len {
+        rtCopy(rtOffset(fresh, i * slot), rtChanSlot(ch, i), slot)
+        i += 1
+    }
+    rtFree(rtLoadPtr(ch))
+    rtStorePtr(ch, fresh)
+    rtStoreInt(rtOffset(ch, 8), cap * 2)
+    rtStoreInt(rtOffset(ch, 16), 0)
+}
+
+impl<T> sender<T> {
+    //~ Queues the value; waits while a bounded channel is full. `closed` when the receiver is gone.
+    fn send(self, sink value: T) -> void ! closed {
+        const ch = self.ch
+        var sent = false
+        while !sent && rtLoadInt(rtOffset(ch, 40)) != 0 {
+            const bound = rtLoadInt(rtOffset(ch, 48))
+            if bound == 0 || rtLoadInt(rtOffset(ch, 24)) < bound {
+                if rtLoadInt(rtOffset(ch, 24)) == rtLoadInt(rtOffset(ch, 8)) { rtChanGrow(ch) }
+                const len = rtLoadInt(rtOffset(ch, 24))
+                rtWrite<T>(rtChanSlot(ch, len), sink value)
+                rtStoreInt(rtOffset(ch, 24), len + 1)
+                rtEvents += 1
+                sent = true
+            } else {
+                rtWait("room in a channel")
+            }
+        }
+        if !sent {
+            return err(closed {})
+        }
+    }
+}
+
+//~ More senders: `copy tx`.
+impl<T> clone for sender<T> {
+    fn clone(self) -> sender<T> {
+        rtStoreInt(rtOffset(self.ch, 32), rtLoadInt(rtOffset(self.ch, 32)) + 1)
+        sender<T> { ch: self.ch }
+    }
+}
+
+impl<T> receiver<T> {
+    fn tryRecv(self) -> T? {
+        const ch = self.ch
+        const len = rtLoadInt(rtOffset(ch, 24))
+        if len == 0 { return none }
+        const v = rtRead<T>(rtChanSlot(ch, 0))
+        rtStoreInt(rtOffset(ch, 16), (rtLoadInt(rtOffset(ch, 16)) + 1) % rtLoadInt(rtOffset(ch, 8)))
+        rtStoreInt(rtOffset(ch, 24), len - 1)
+        rtEvents += 1
+        return v
+    }
+
+    //~ Waits for a value: other tasks run while the queue is empty. `none` when every sender is gone.
+    fn recv(self) -> T? {
+        while rtLoadInt(rtOffset(self.ch, 24)) == 0 {
+            if rtLoadInt(rtOffset(self.ch, 32)) == 0 { return none }
+            rtWait("a value")
+        }
+        return self.tryRecv()
+    }
+
+    fn iter(self) -> iter<T> {
+        var out: list<T> = []
+        var more = true
+        while more {
+            const v = self.recv()
+            switch v {
+                case some(x): out.push!(x)
+                case none: more = false
+            }
+        }
+        rtCast<list<T>, iter<T>>(sink out)
+    }
+}
+
+//~ Read-only data counted across threads: `shared(value)`, and `copy handle` for another handle.
+pub struct shared<T> {
+    p: ptr
+
+    init(sink value: T) {
+        const p = rtAlloc(8 + rtSizeOf<T>())
+        rtStoreInt(p, 1)
+        rtWrite<T>(rtOffset(p, 8), sink value)
+        self.p = p
+    }
+
+    deinit {
+        const n = rtLoadInt(self.p) - 1
+        rtStoreInt(self.p, n)
+        if n == 0 {
+            rtDropAt<T>(rtOffset(self.p, 8))
+            rtFree(self.p)
+        }
+    }
+}
+
+impl<T> shared<T> {
+    fn get(self) -> T = rtClone<T>(rtOffset(self.p, 8))
+}
+
+impl<T> clone for shared<T> {
+    fn clone(self) -> shared<T> {
+        rtStoreInt(self.p, rtLoadInt(self.p) + 1)
+        shared<T> { p: self.p }
+    }
+}
+
+//~ Data changed from several threads one at a time: `lock(value)`. Access is through `with`; `copy handle` for
+//~ another handle to the same lock, which another task can own.
+pub struct lock<T> {
+    p: ptr
+
+    init(sink value: T) {
+        /// The block: [held: 0 or 1][handles][value].
+        const p = rtAlloc(16 + rtSizeOf<T>())
+        rtStoreInt(rtOffset(p, 8), 1)
+        rtWrite<T>(rtOffset(p, 16), sink value)
+        self.p = p
+    }
+
+    deinit {
+        const n = rtLoadInt(rtOffset(self.p, 8)) - 1
+        rtStoreInt(rtOffset(self.p, 8), n)
+        if n == 0 {
+            rtDropAt<T>(rtOffset(self.p, 16))
+            rtFree(self.p)
+        }
+    }
+}
+
+impl<T> lock<T> {
+    //~ Runs `f` with the value, one task at a time: a task that finds the lock held waits, also when the holder
+    //~ itself waits inside `f` (on a channel, say).
+    fn with<R>(self, f: fn(inout T) -> R) -> R {
+        while rtLoadInt(self.p) != 0 {
+            rtWaitLock("a lock")
+        }
+        rtStoreInt(self.p, 1)
+        var v = rtRead<T>(rtOffset(self.p, 16))
+        const r = f(inout v)
+        rtWrite<T>(rtOffset(self.p, 16), sink v)
+        rtStoreInt(self.p, 0)
+        rtEvents += 1
+        r
+    }
+
+    //~ Like `with`, but waits until `ready` accepts the value (the lock is free while it waits): a condition
+    //~ variable without the separate type.
+    fn withWhen<R>(self, ready: fn(T) -> bool, f: fn(inout T) -> R) -> R {
+        while true {
+            while rtLoadInt(self.p) != 0 {
+                rtWaitLock("a lock")
+            }
+            rtStoreInt(self.p, 1)
+            var v = rtRead<T>(rtOffset(self.p, 16))
+            if ready(v) {
+                const r = f(inout v)
+                rtWrite<T>(rtOffset(self.p, 16), sink v)
+                rtStoreInt(self.p, 0)
+                rtEvents += 1
+                return r
+            }
+            rtWrite<T>(rtOffset(self.p, 16), sink v)
+            rtStoreInt(self.p, 0)
+            rtFreed += 1
+            rtWait("a lock condition")
+        }
+        panic("unreachable")
+    }
+}
+
+impl<T> clone for lock<T> {
+    fn clone(self) -> lock<T> {
+        rtStoreInt(rtOffset(self.p, 8), rtLoadInt(rtOffset(self.p, 8)) + 1)
+        lock<T> { p: self.p }
+    }
+}
+
+//~ A count of permits: `semaphore(n)`; `acquire` waits for one, `release` returns one. `copy handle` shares it.
+pub struct semaphore {
+    p: ptr
+
+    init(permits: int) {
+        /// The block: [permits][handles].
+        const p = rtAlloc(16)
+        rtStoreInt(p, permits)
+        rtStoreInt(rtOffset(p, 8), 1)
+        self.p = p
+    }
+
+    deinit {
+        const n = rtLoadInt(rtOffset(self.p, 8)) - 1
+        rtStoreInt(rtOffset(self.p, 8), n)
+        if n == 0 {
+            rtFree(self.p)
+        }
+    }
+}
+
+impl semaphore {
+    fn acquire(self) {
+        while rtLoadInt(self.p) <= 0 {
+            rtWait("a semaphore permit")
+        }
+        rtStoreInt(self.p, rtLoadInt(self.p) - 1)
+    }
+
+    fn release(self) {
+        rtStoreInt(self.p, rtLoadInt(self.p) + 1)
+        rtEvents += 1
+    }
+}
+
+impl clone for semaphore {
+    fn clone(self) -> semaphore {
+        rtStoreInt(rtOffset(self.p, 8), rtLoadInt(rtOffset(self.p, 8)) + 1)
+        semaphore { p: self.p }
+    }
+}
+
+//~ An `int` that can be read and changed by several tasks (and, later, threads) without a lock: `atomic(0)`;
+//~ `load`, `store`, `add` and `swap` give or take the whole value, `add` and `swap` return the old one, and
+//~ `compareSwap(expected, desired)` stores only if the value is still `expected` and says whether it did. Every
+//~ operation is sequentially consistent. `copy handle` shares it, as with `lock`.
+pub struct atomic {
+    p: ptr
+
+    init(value: int) {
+        /// The block: [value][handles].
+        const p = rtAlloc(16)
+        rtStoreInt(p, value)
+        rtStoreInt(rtOffset(p, 8), 1)
+        self.p = p
+    }
+
+    deinit {
+        if rtAtomicAdd(rtOffset(self.p, 8), -1) == 1 {
+            rtFree(self.p)
+        }
+    }
+}
+
+impl atomic {
+    fn load(self) -> int = rtAtomicAdd(self.p, 0)
+
+    fn store(self, v: int) {
+        rtAtomicSwap(self.p, v)
+    }
+
+    fn add(self, d: int) -> int = rtAtomicAdd(self.p, d)
+
+    fn swap(self, v: int) -> int = rtAtomicSwap(self.p, v)
+
+    fn compareSwap(self, expected: int, desired: int) -> bool = rtAtomicCas(self.p, expected, desired) == expected
+}
+
+impl clone for atomic {
+    fn clone(self) -> atomic {
+        rtAtomicAdd(rtOffset(self.p, 8), 1)
+        atomic { p: self.p }
+    }
+}
+
+//~ A meeting point for `n` tasks: `barrier(n)`; `wait` returns once all `n` have called it, and the barrier
+//~ can be used again. `copy handle` shares it.
+pub struct barrier {
+    p: ptr
+
+    init(n: int) {
+        /// The block: [n][arrived][generation][handles].
+        const p = rtAlloc(32)
+        rtStoreInt(p, n)
+        rtStoreInt(rtOffset(p, 8), 0)
+        rtStoreInt(rtOffset(p, 16), 0)
+        rtStoreInt(rtOffset(p, 24), 1)
+        self.p = p
+    }
+
+    deinit {
+        const n = rtLoadInt(rtOffset(self.p, 24)) - 1
+        rtStoreInt(rtOffset(self.p, 24), n)
+        if n == 0 {
+            rtFree(self.p)
+        }
+    }
+}
+
+impl barrier {
+    fn wait(self) {
+        const gen = rtLoadInt(rtOffset(self.p, 16))
+        const arrived = rtLoadInt(rtOffset(self.p, 8)) + 1
+        if arrived >= rtLoadInt(self.p) {
+            rtStoreInt(rtOffset(self.p, 8), 0)
+            rtStoreInt(rtOffset(self.p, 16), gen + 1)
+            rtEvents += 1
+            return
+        }
+        rtStoreInt(rtOffset(self.p, 8), arrived)
+        while rtLoadInt(rtOffset(self.p, 16)) == gen {
+            rtWait("a barrier")
+        }
+    }
+}
+
+impl clone for barrier {
+    fn clone(self) -> barrier {
+        rtStoreInt(rtOffset(self.p, 24), rtLoadInt(rtOffset(self.p, 24)) + 1)
+        barrier { p: self.p }
+    }
+}
+
+//~ The coroutine's block: [done][coroutine context][resumer context][stack][closure: 16 bytes][value ready][started]
+//~ [cancelled][value]. A coroutine runs on a stack of its own and only when its owner calls `next()`.
+pub var rtCoCur: int = 0
+
+const RT_CO_STACK = 65536
+
+//~ A function that produces values one at a time: `coroutine<int>(co ~> { co.emit(1) })`; `g.next()` runs it up to
+//~ its next `emit`. Dropping an unfinished one asks it to stop (`co.cancelled()`) and resumes it once; whatever it
+//~ still holds then is not dropped, since nothing unwinds.
+pub struct coroutine<T> {
+    p: ptr
+
+    init(sink f: once fn(yielder<T>)) {
+        const p = rtAlloc(72 + rtSizeOf<T>())
+        const stack = rtStackNew(RT_CO_STACK)
+        rtStorePtr(rtOffset(p, 24), stack)
+        const runner = [sink f, sink p] () ~> rtCoBody<T>(p, sink f)
+        rtWrite<once fn()>(rtOffset(p, 32), sink runner)
+        rtStorePtr(rtOffset(p, 8), rtCtxInit(stack, RT_CO_STACK, rtFnAddr(rtCoEntry), rtNull()))
+        self.p = p
+    }
+
+    deinit {
+        const p = self.p
+        if rtLoadInt(rtOffset(p, 56)) == 0 {
+            /// Never started: only the closure is left.
+            rtDropAt<once fn()>(rtOffset(p, 32))
+        } else if rtLoadInt(p) == 0 {
+            rtStoreInt(rtOffset(p, 56 + 8), 1)
+            if rtCoResume(p) { rtDropAt<T>(rtOffset(p, 72)) }
+        }
+        rtStackFree(rtLoadPtr(rtOffset(p, 24)), RT_CO_STACK)
+        rtFree(p)
+    }
+}
+
+//~ What a coroutine's body receives: `emit` hands a value out and waits for the next `next()`.
+pub struct yielder<T> {
+    p: ptr
+}
+
+pub fn rtCoBody<T>(p: ptr, sink f: once fn(yielder<T>)) {
+    f!!(yielder<T> { p: p })
+}
+
+fn rtCoEntry() {
+    const p = rtCast<int, ptr>(rtCoCur)
+    rtCoRunClosure(p)
+    rtStoreInt(p, 1)
+    rtCtxSwitch(rtOffset(p, 8), rtLoadPtr(rtOffset(p, 16)))
+    panic("a finished coroutine ran again")
+}
+
+//~ Its own function so the closure is dropped before the coroutine ends: `rtCoEntry` never returns.
+fn rtCoRunClosure(p: ptr) {
+    const g = rtRead<once fn()>(rtOffset(p, 32))
+    g!!()
+}
+
+//~ Runs the coroutine until it emits or ends; whether a value is waiting in its block.
+fn rtCoResume(p: ptr) -> bool {
+    const saved = rtCoCur
+    rtCoCur = rtAddrInt(p)
+    rtStoreInt(rtOffset(p, 56), 1)
+    rtCtxSwitch(rtOffset(p, 16), rtLoadPtr(rtOffset(p, 8)))
+    rtCoCur = saved
+    rtLoadInt(rtOffset(p, 48)) != 0
+}
+
+impl<T> yielder<T> {
+    fn emit(self, sink v: T) {
+        rtWrite<T>(rtOffset(self.p, 72), sink v)
+        rtStoreInt(rtOffset(self.p, 48), 1)
+        rtCtxSwitch(rtOffset(self.p, 8), rtLoadPtr(rtOffset(self.p, 16)))
+    }
+
+    //~ True once the coroutine's owner dropped it: finish up and return.
+    fn cancelled(self) -> bool = rtLoadInt(rtOffset(self.p, 64)) != 0
+}
+
+impl<T> coroutine<T> {
+    //~ Runs the coroutine to its next `emit`; `none` once it has ended.
+    fn next(self) -> T? {
+        const p = self.p
+        if rtLoadInt(p) == 1 { return none }
+        if !rtCoResume(p) { return none }
+        rtStoreInt(rtOffset(p, 48), 0)
+        return rtRead<T>(rtOffset(p, 72))
+    }
+
+    //~ Runs it to the end and collects what it emits.
+    fn iter(self) -> iter<T> {
+        var out: list<T> = []
+        var more = true
+        while more {
+            const v = self.next()
+            switch v {
+                case some(x): out.push!(x)
+                case none: more = false
+            }
+        }
+        rtCast<list<T>, iter<T>>(sink out)
+    }
+}

@@ -1,0 +1,39 @@
+/// `std.checksum`: CRCs against the catalogue's check values ("123456789"), Python's `zlib` and a bit-by-bit
+/// reference (see `gen_crypto.py`); Adler-32 against `zlib`.
+import std.checksum
+import std.hash
+import { adler32, crc } = std.checksum
+
+fn pattern(n: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * 7 + 3) & 255).wrapToByte()) }
+    out
+}
+
+fn text(s: str) -> [byte] = s.bytes().toList()
+
+fn all(m: [byte]) {
+    print(hash.hex(hash.digest(crc.crc32(), m)), hash.hex(hash.digest(crc.crc32c(), m)),
+        hash.hex(hash.digest(crc.crc64xz(), m)), hash.hex(hash.digest(crc.crc64ecma(), m)))
+    print(hash.hex(hash.digest(crc.crc16arc(), m)), hash.hex(hash.digest(crc.crc16ccitt(), m)),
+        hash.hex(hash.digest(crc.crc16xmodem(), m)), hash.hex(hash.digest(crc.crc8(), m)),
+        hash.hex(hash.digest(adler32.new(), m)))
+}
+
+fn main() {
+    all(text("123456789"))
+    all([])
+    all(pattern(1))
+    all(pattern(100))
+    all(pattern(5553))
+    /// A width that is not 32 or 64: CRC-24/OPENPGP-like and CRC-40/GSM.
+    print(hash.hex(hash.digest(crc.custom(24, 0x864cfb, 0xb704ce, false, 0), text("123456789"))))
+    print(hash.hex(hash.digest(crc.custom(40, 0x0004820009, 0, false, 0xffffffffff), text("123456789"))))
+    var c = crc.crc32()
+    c.update!(text("1234"))
+    c.update!(text("56789"))
+    print(c.value(), c.finish() == hash.digest(crc.crc32(), text("123456789")))
+    var a = adler32.new()
+    a.update!(text("Wikipedia"))
+    print(a.value())
+}

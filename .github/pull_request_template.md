@@ -21,7 +21,7 @@ Title: Conventional Commits, `type(scope): summary`, e.g. `perf(native): divide 
 - [ ] `fix` / `bug`: something was wrong, now it is right
 - [ ] `perf`: faster code, a faster compiler, or a smaller output
 - [ ] `refactor`: no change in behaviour
-- [ ] `docs`: docs, plans, comments only
+- [ ] `docs`: docs and comments only
 - [ ] `test`: tests only
 - [ ] `chore`: tooling and housekeeping
 - [ ] `ci` / `build`: workflows, `Cargo.toml`, packaging
@@ -29,7 +29,7 @@ Title: Conventional Commits, `type(scope): summary`, e.g. `perf(native): divide 
 
 ## Why
 
-<The problem or the card behind it. Link the plan card (`docs/plans/cards/...`), issue or earlier PR.>
+<The problem this solves. Link the issue or earlier PR.>
 
 ## How
 
@@ -53,7 +53,7 @@ cargo test
 
 ### Performance (`perf`, or anything that can change generated code)
 
-Run `python3 bench/harness/run.py --runs 7` from the repository root (see `bench/design.md`). Goal: every row at or below **both** C `-O2` and Rust `-O`.
+Run `python3 bench/harness/run.py --runs 7` from the repository root. Goal: every row at or below **both** C `-O2` and Rust `-O`.
 
 | program | before (s) | after (s) | C -O2 (s) | Rust -O (s) | vs -O2 | vs Rust |
 |---|---|---|---|---|---|---|
@@ -73,17 +73,16 @@ Run `python3 bench/harness/run.py --runs 7` from the repository root (see `bench
 <paste>
 ```
 
-- [ ] `cargo run -- check examples` is clean; `examples/tour.pel` updated if syntax changed
+- [ ] `cargo run -- check examples/programs` is clean; `examples/tour.pel` updated if syntax changed (the tour is a syntax sampler: it must lex, parse and format, not type check)
 - [ ] `BLESS=1 cargo test` run and the golden `.ast` diff reviewed (syntax changes only)
 
 ## Language and docs in step
 
 <!-- Delete if nothing here applies. -->
 
-- [ ] Decision recorded in the design doc under `docs/design/` and in the `ROADMAP.md` decisions table
-- [ ] `docs/design/keywords.md` and `compiler/src/keyword.rs` agree; editors regenerated (`BLESS=1 cargo test editors`)
+- [ ] Language decision recorded in the website's language reference
+- [ ] `compiler/src/keyword.rs` and the website's keyword reference agree; editors regenerated (`BLESS=1 cargo test editors`)
 - [ ] New syntax: parser, `ast_print.rs`, `visit.rs`, `check.rs`, `examples/tour.pel` and a parser test all done
-- [ ] Plan card and `docs/plans/BOARD.md` moved to the right column
 - [ ] No dropped word came back (`class`, `match`, `when`, `extern`, `comptime`, `inline`, `null`, word operators)
 - [ ] No new external dependency (or the owner agreed to it first)
 

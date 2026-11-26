@@ -245,6 +245,19 @@ fn become_cannot_lend_locals() {
 }
 
 #[test]
+fn a_strand_does_not_outlive_its_braid() {
+    flagged(
+        "fn t() -> strand<int> { const b: (int, int; 4) = (1, 2, 3, 4)\n b.firstStrand() }",
+        "points into `b`",
+    );
+    clean("fn t() -> int { const b: (int, int; 4) = (1, 2, 3, 4)\n b.firstStrand().len() }");
+    flagged(
+        "fn t() -> strand_mut<int> { var b: (int, int; 4) = (1, 2, 3, 4)\n b.firstStrandMut!() }",
+        "points into `b`",
+    );
+}
+
+#[test]
 fn views_do_not_outlive_their_source() {
     flagged(
         "fn t() -> str { const s = \"a\" + \"b\"\n s.trim() }",
@@ -434,4 +447,83 @@ fn scope_tasks_cannot_share_a_changed_variable() {
         "captured by two tasks",
     );
     clean("fn t() { var a = 0\n var b = 0\n scope s { s.spawn([inout a] ~> { a += 1 })\n s.spawn([inout b] ~> { b += 2 }) } }");
+}
+
+// ---- Names bound by patterns and closure parameters are views (VS3) ---------------------------------
+
+#[test]
+fn a_name_bound_over_a_variable_cannot_be_moved_out_without_copy() {
+    flagged(
+        "fn t() -> string? { const r: string? = \"a\" + \"b\"\n switch r { case some(x): return x\n case _: return none } }",
+        "is part of another value",
+    );
+    flagged(
+        "fn t() -> string { const r: string? = \"a\" + \"b\"\n switch r { case some(x): x\n case _: \"\" } }",
+        "write `copy x`",
+    );
+    clean(
+        "fn t() -> string { const r: string? = \"a\" + \"b\"\n switch r { case some(x): copy x\n case _: \"\" } }",
+    );
+    // Over a temporary the names own what they are given, and a `sink` scrutinee hands its parts over.
+    clean("fn f() -> string? = \"a\" + \"b\"\nfn t() -> string { switch f() { case some(x): x\n case _: \"\" } }");
+    clean(
+        "fn t() -> string { const r: string? = \"a\" + \"b\"\n switch sink r { case some(x): x\n case _: \"\" } }",
+    );
+    // Numbers are not owning: nothing to copy.
+    clean("fn t(r: int?) -> int { switch r { case some(x): x\n case _: 0 } }");
+}
+
+#[test]
+fn a_closure_parameter_is_read_only_like_a_function_parameter() {
+    flagged("fn t() { const f = (s: string) ~> s }", "read-only here");
+    clean("fn t() { const f = (s: string) ~> copy s }");
+    clean("fn t() { const f = (n: int) ~> n + 1 }");
+}
+
+#[test]
+fn a_window_cannot_change_its_length() {
+    flagged(
+        "fn t() { var xs = [3, 1, 2]\n xs[0..2].push!(9) }",
+        "only borrows part of a list",
+    );
+    flagged(
+        "fn t() { var xs = [3, 1, 2]\n xs[1..].clear!() }",
+        "changes the length",
+    );
+    clean("fn t() { var xs = [3, 1, 2]\n xs[0..2].sort!()\n xs[1..3].reverse!() }");
+    clean("fn t() { var xs = [3, 1, 2]\n xs.push!(4)\n xs[0..2].swap!(0, 1) }");
+}
+
+#[test]
+fn a_window_parameter_cannot_change_its_length() {
+    flagged(
+        "fn f(w!: [int..]) { w.push!(1) }\nfn t() { var xs = [1]\n f(xs!) }",
+        "only borrows part of a list",
+    );
+    clean("fn f(w!: [int..]) { w.sort!() }\nfn t() { var xs = [3, 1]\n f(xs!) }");
+}
+
+#[test]
+fn a_kept_str_view_stops_being_usable_when_its_text_changes() {
+    let stale = "points into `s`";
+    // Reassigning, changing in place and moving the source all end the view.
+    flagged(
+        "fn t() { var s = \"a\" + \"b\"\n const w = s[0..1]\n s = \"x\"\n print(w) }",
+        stale,
+    );
+    flagged(
+        "fn t() { var s = \"a\" + \"b\"\n const w = s[0..1]\n s.clear!()\n print(w) }",
+        stale,
+    );
+    flagged("fn take(sink s: string) { }\nfn t() { var s = \"ab\" + \"c\"\n const w = s.trim()\n take(sink s)\n print(w) }", stale);
+    // A view of a view follows the same text.
+    flagged("fn t() { var s = \"a\" + \"b\"\n const w = s[0..1]\n const v = w[0..1]\n s = \"x\"\n print(v) }", stale);
+    // A loop carries the change to the next round.
+    flagged("fn t() { var s = \"a\" + \"b\"\n const w = s[0..1]\n for i of 0..2 { print(w)\n s = \"x\" } }", stale);
+    // Using the view before the change, rebinding it, or changing other text is fine.
+    clean("fn t() { var s = \"a\" + \"b\"\n var w = s[0..1]\n print(w)\n s = \"x\"\n w = s[0..1]\n print(w) }");
+    clean("fn t() { var s = \"a\" + \"b\"\n var o = \"c\"\n const w = s[0..1]\n o = \"d\"\n print(w, o) }");
+    clean("struct p { a: string\n b: string }\nfn t() { var x = p { a: \"a\", b: \"b\" }\n const w = x.a[0..1]\n x.b = \"z\"\n print(w) }");
+    // Copying out a `string` keeps the text.
+    clean("fn t() { var s = \"a\" + \"b\"\n const w = copy s[0..1]\n s = \"x\"\n print(w) }");
 }

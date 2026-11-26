@@ -72,7 +72,7 @@ fn term_text(t: &Term) -> String {
         Term::Branch(c, a, b) => format!("branch {}, {}, {}", v(*c), target(a), target(b)),
         Term::Return(Some(x)) => format!("return {}", v(*x)),
         Term::Return(None) => "return".to_string(),
-        Term::Stop(msg) => format!("stop {msg:?}"),
+        Term::Stop(msg, _) => format!("stop {msg:?}"),
         Term::Unreachable => "unreachable".to_string(),
     }
 }
@@ -148,6 +148,11 @@ fn inst_text(f: &Func, i: &Inst, m: Option<&Module>) -> String {
         Op::Realloc(p, n) => format!("realloc {}, {}", v(*p), v(*n)),
         Op::CtxInit(b, n, c, e) => format!("ctxinit {}, {}, {}, {}", v(*b), v(*n), v(*c), v(*e)),
         Op::CtxSwitch(s, t) => format!("ctxswitch {}, {}", v(*s), v(*t)),
+        Op::Os(k, a, b, c) => {
+            let all = [*a, *b, *c];
+            let args: Vec<String> = all[..k.arity()].iter().map(|x| v(*x)).collect();
+            format!("{} {}", k.name(), args.join(", "))
+        }
     };
     let _ = f;
     match i.result {

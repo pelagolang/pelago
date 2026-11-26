@@ -1,4 +1,4 @@
-//! Copies out of constant data (card A-11): `s + "ab"` copies two bytes from the literal. When the
+//! Copies out of constant data: `s + "ab"` copies two bytes from the literal. When the
 //! length is 1, 2, 4 or 8 and the source is the address of static data, the bytes are known, so the
 //! copy becomes a store of one integer constant. That drops the load, and the address of the data
 //! no longer has to live in a register.
@@ -7,7 +7,7 @@ use crate::ir::*;
 
 pub fn run(m: &mut Module) -> bool {
     let mut changed = false;
-    let Module { funcs, data } = m;
+    let Module { funcs, data, .. } = m;
     for f in funcs.iter_mut() {
         changed |= copies_to_stores(f, data);
     }

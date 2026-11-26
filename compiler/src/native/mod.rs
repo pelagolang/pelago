@@ -1,4 +1,4 @@
-//! The native backend (card A-09, design in `docs/design/backend.md`): x86-64 machine code and
+//! The native backend: x86-64 machine code and
 //! an ELF executable, straight from the IR, with no assembler, linker or libc.
 //!
 //! * [`x86`] encodes instructions.
@@ -78,6 +78,22 @@ pub struct Uses {
     pub fmod: bool,
     /// Context switching (`CtxInit`, `CtxSwitch`).
     pub ctx: bool,
+    /// The OS memory calls (`Op::Os`).
+    pub os: bool,
+    /// `OsKind::ThreadStart`: the heap and the output buffer need their lock (AArch64 only; x86-64 always has it).
+    pub threads: bool,
+}
+
+/// What a program that talks to its process (arguments, descriptors, exit) cannot yet be built for.
+pub const PROCESS_REFUSED: &str = "the operating system layer is not built for this target";
+
+/// Whether the module uses `OsKind::Write`, `Read`, `Exit` or `Argv`.
+pub fn uses_process(m: &crate::ir::Module) -> bool {
+    use crate::ir::Op;
+    m.funcs
+        .iter()
+        .flat_map(|f| &f.insts)
+        .any(|i| matches!(&i.op, Op::Os(k, ..) if k.is_process()))
 }
 
 impl Uses {
@@ -91,6 +107,8 @@ impl Uses {
         memcpy: true,
         fmod: true,
         ctx: true,
+        os: true,
+        threads: true,
     };
 
     /// The routines the module's instructions can call (a little too many is fine, too few is not).
@@ -98,7 +116,14 @@ impl Uses {
         use crate::ir::{BinOp, Op};
         let mut u = Uses::default();
         for f in &m.funcs {
-            for i in &f.insts {
+            // Only the instructions a block still holds: the optimiser leaves the ones it removed in
+            // `insts`, and counting them linked a `free` routine into a program that never frees.
+            for i in f
+                .blocks
+                .iter()
+                .flat_map(|b| b.insts.iter())
+                .map(|&n| &f.insts[n])
+            {
                 match &i.op {
                     Op::Print(..) => u.print = true,
                     Op::Alloc(_) => u.alloc = true,
@@ -106,6 +131,17 @@ impl Uses {
                     Op::Realloc(..) => u.realloc = true,
                     Op::MemCopy(..) => u.memcpy = true,
                     Op::CtxInit(..) | Op::CtxSwitch(..) => u.ctx = true,
+                    Op::Os(k, ..) => {
+                        u.os = true;
+                        if *k == crate::ir::OsKind::ThreadStart {
+                            u.threads = true;
+                        }
+                        // Opening a file builds a block for the path on Windows.
+                        if *k == crate::ir::OsKind::Open {
+                            u.alloc = true;
+                            u.free = true;
+                        }
+                    }
                     Op::Bin(BinOp::Rem, a, _) if f.ty(*a).is_float() => u.fmod = true,
                     _ => {}
                 }
@@ -119,6 +155,7 @@ pub mod a64;
 pub mod a64_emit;
 pub mod a64_mir;
 pub mod a64_select;
+pub mod clobber;
 pub mod elf;
 pub mod exec;
 pub mod gen;
@@ -130,7 +167,6 @@ pub mod mir;
 pub mod pe;
 pub mod ralloc;
 pub mod regs;
-pub mod regs_a64;
 pub mod rt;
 pub mod rt_a64;
 pub mod x86;
@@ -146,3 +182,30 @@ mod ralloc_tests;
 mod tests;
 #[cfg(test)]
 mod x86_golden;
+
+/// Places the module's static data in the `.data` blob and gives the offset of each block. With `bss`, the blocks that are
+/// all zero go last and are left out of the blob (the loader gives zeroed memory right after it, ELF `.bss`): the
+/// executable is smaller by their size. Gives the offsets and the number of zeroed bytes that follow the blob.
+pub(super) fn place_module_data(
+    blocks: &[Vec<u8>],
+    data: &mut elf::Blob,
+    bss: bool,
+) -> (Vec<u32>, usize) {
+    let mut offs = vec![0u32; blocks.len()];
+    let zero = |b: &Vec<u8>| bss && b.iter().all(|&x| x == 0);
+    for (i, b) in blocks.iter().enumerate() {
+        if !zero(b) {
+            offs[i] = data.add(b, 16);
+        }
+    }
+    let start = data.add(&[], 16) as usize;
+    let mut end = start;
+    for (i, b) in blocks.iter().enumerate() {
+        if zero(b) {
+            end = end.div_ceil(16) * 16;
+            offs[i] = end as u32;
+            end += b.len();
+        }
+    }
+    (offs, end - start)
+}

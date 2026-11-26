@@ -1,7 +1,7 @@
 //! Stage 5 of the checker: value semantics. What the types cannot say: who may change what, and
 //! when a value is gone.
 //!
-//! The rules (see `docs/design/checker.md`):
+//! The rules:
 //!
 //! - **Changing needs permission.** A place can be changed (assigned to, passed as `inout`, used
 //!   as the receiver of `c.bump!()`) only when its root variable allows it: a `var`, an `inout` or
@@ -15,6 +15,9 @@
 //! - **Exclusive access.** A call may not change a place and also pass an overlapping place to
 //!   another argument: `swap(inout a[0], inout a[1])`, `xs.extend!(xs)`. Temporaries computed by
 //!   other arguments are evaluated first and do not count.
+//! - **Views follow their text.** A name that holds a `str` view (`const w = s[0..3]`, `s.trim()`) is unusable
+//!   once the text it points into is reassigned, changed in place or moved: `s = ...`, `s.clear!()`, `take(sink s)`.
+//!   Use the view before that, or keep a `string`. Views returned by ordinary calls are not tracked yet.
 //! - **Closures** change outer variables only when they capture them with `inout`.
 //!
 //! Moves are tracked through branches and loops: after an `if`, a variable is moved when either
@@ -57,6 +60,9 @@ enum Bind {
     Owned,
     /// A name bound by a pattern: a view into another value.
     View,
+    /// A name bound by a pattern over a variable or a part of one (`switch r { case some(x): ... }`): a view of
+    /// something that stays where it is, so an owning `x` cannot be taken out without `copy` (VS3).
+    Part,
     /// `inout x` in a pattern.
     ViewInout,
 }
@@ -84,6 +90,9 @@ struct State {
     moved: HashMap<DefId, Span>,
     /// `linear` variables that may still hold their value (not consumed on some path).
     held: HashSet<DefId>,
+    /// `str` views whose source was changed or moved since the view was made, and where. Using one is an
+    /// error: the text it points into may be gone.
+    stale: HashMap<DefId, Span>,
     /// After `return`, `break`, `continue` or a call that never returns.
     dead: bool,
 }
@@ -100,6 +109,9 @@ fn merge(a: State, b: State) -> State {
         out.moved.entry(d).or_insert(s);
     }
     out.held.extend(b.held);
+    for (d, s) in b.stale {
+        out.stale.entry(d).or_insert(s);
+    }
     out
 }
 
@@ -156,6 +168,8 @@ struct Walker<'a> {
     diags: Vec<Diagnostic>,
     seen: HashSet<(u32, &'static str)>,
     binds: HashMap<DefId, Bind>,
+    /// Names that hold a `str` view, with the place the text belongs to.
+    views: HashMap<DefId, PlaceKey>,
     state: State,
     loops: Vec<LoopFrame>,
     closures: Vec<ClosureFrame>,
@@ -178,6 +192,7 @@ impl<'a> Walker<'a> {
             diags: Vec::new(),
             seen: HashSet::new(),
             binds: HashMap::new(),
+            views: HashMap::new(),
             state: State::default(),
             loops: Vec::new(),
             closures: Vec::new(),
@@ -492,12 +507,15 @@ impl<'a> Walker<'a> {
                 }
             }
             _ => {
-                let is_str = self
+                let ty = self
                     .typed
                     .tys
                     .get(&(self.file, e.span.start, e.span.end))
-                    .is_some_and(|t| matches!(self.typed.types.kind_of(*t), TyKind::Str));
-                if !is_str {
+                    .map(|t| self.typed.types.kind_of(*t));
+                let is_str = matches!(ty, Some(TyKind::Str));
+                // A `strand` (a view of every other slot of a braid) points into the braid's own memory.
+                let is_strand = matches!(ty, Some(TyKind::Adt(d, _)) if matches!(self.res.def(*d).name.as_str(), "strand" | "strand_mut"));
+                if !is_str && !is_strand {
                     return;
                 }
                 let Some(root) = self.origin_root(e) else {
@@ -507,17 +525,24 @@ impl<'a> Walker<'a> {
                     self.binds.get(&root),
                     Some(Bind::Var | Bind::Const | Bind::Sink | Bind::Owned)
                 );
-                let owns = self
-                    .typed
-                    .local_tys
-                    .get(&root)
-                    .is_some_and(|t| self.typed.is_owning(*t));
+                let owns = is_strand
+                    || self
+                        .typed
+                        .local_tys
+                        .get(&root)
+                        .is_some_and(|t| self.typed.is_owning(*t));
                 if local && owns {
                     let n = self.name_of(root);
+                    let what = if is_strand { "strand" } else { "str" };
+                    let fix = if is_strand {
+                        "return a copy (`.toList()`) instead"
+                    } else {
+                        "return a `string` instead (`... to string`)"
+                    };
                     self.report(
                         e.span,
                         "escape",
-                        format!("this `str` points into `{n}`, which is gone when the function ends; return a `string` instead (`... to string`)"),
+                        format!("this `{what}` points into `{n}`, which is gone when the function ends; {fix}"),
                     );
                 }
             }
@@ -574,6 +599,11 @@ impl<'a> Walker<'a> {
             DeclKind::Const => Bind::Const,
         };
         self.bind_pattern(&d.pattern, kind);
+        if let (PatternKind::Binding { name, .. }, Some(init)) = (&d.pattern.kind, &d.init) {
+            if let Some(&def) = self.res.decls.get(&(self.file, name.span.start)) {
+                self.track_view(def, init);
+            }
+        }
     }
 
     /// Records how each name of a pattern was introduced. A new binding starts unmoved.
@@ -663,8 +693,90 @@ impl<'a> Walker<'a> {
             );
             return;
         }
+        if let Some(&at) = self.state.stale.get(&d) {
+            let (n, line) = (self.name_of(d), self.line_of(at));
+            let src = self
+                .views
+                .get(&d)
+                .map(|p| self.name_of(p.root))
+                .unwrap_or("its source");
+            self.report(
+                span,
+                "stale",
+                format!("`{n}` points into `{src}`, which was changed or moved on line {line}; use `{n}` before that, or keep a `string` (`... to string`)"),
+            );
+            return;
+        }
         if ctx == Ctx::Consume && owning {
             self.take(d, bind, span);
+        }
+    }
+
+    /// The text a `str` expression points into: `s` in `s[1..3]`, `s.trim()`, `p.name`. A name that holds a view
+    /// gives what that view points into.
+    fn origin_place(&self, e: &Expr) -> Option<PlaceKey> {
+        let e = Self::strip(e);
+        match &e.kind {
+            ExprKind::Name(_) | ExprKind::SelfValue => {
+                let p = self.place_of(e)?;
+                match self.views.get(&p.root) {
+                    Some(o) if p.segs.is_empty() => Some(o.clone()),
+                    _ => Some(p),
+                }
+            }
+            ExprKind::Field { base, .. }
+            | ExprKind::TupleIndex { base, .. }
+            | ExprKind::Index { base, .. } => match self.place_of(e) {
+                Some(p) => Some(self.views.get(&p.root).cloned().unwrap_or(p)),
+                None => self.origin_place(base),
+            },
+            ExprKind::Call { callee, .. } => match &Self::strip(callee).kind {
+                ExprKind::Field { base, .. } => self.origin_place(base),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// `name` now holds the `str` value of `init`: remember what it points into, so that changing that text
+    /// makes the view unusable.
+    fn track_view(&mut self, name: DefId, init: &Expr) {
+        self.views.remove(&name);
+        self.state.stale.remove(&name);
+        let is_str = self
+            .typed
+            .tys
+            .get(&(self.file, init.span.start, init.span.end))
+            .map(|t| self.typed.types.kind_of(*t))
+            .is_some_and(|k| matches!(k, TyKind::Str));
+        if !is_str {
+            return;
+        }
+        let Some(origin) = self.origin_place(init) else {
+            return;
+        };
+        // Read-only parameters and pattern names cannot change while the function runs.
+        if !matches!(
+            self.binds.get(&origin.root),
+            Some(
+                Bind::Var | Bind::Const | Bind::Sink | Bind::Owned | Bind::Inout | Bind::ViewInout
+            )
+        ) {
+            return;
+        }
+        self.views.insert(name, origin);
+    }
+
+    /// The text at `changed` is being changed or moved: views of it are no longer safe to use.
+    fn invalidate(&mut self, changed: &PlaceKey, span: Span) {
+        let hit: Vec<DefId> = self
+            .views
+            .iter()
+            .filter(|(v, o)| **v != changed.root && overlap(o, changed))
+            .map(|(v, _)| *v)
+            .collect();
+        for v in hit {
+            self.state.stale.entry(v).or_insert(span);
         }
     }
 
@@ -691,6 +803,11 @@ impl<'a> Walker<'a> {
                 "take",
                 format!("`{n}` is `inout`, so it cannot be moved out; write `copy {n}`"),
             ),
+            Bind::Part => self.report(
+                span,
+                "take",
+                format!("`{n}` is part of another value, so it cannot be moved out; write `copy {n}`"),
+            ),
             Bind::View | Bind::ViewInout => {}
             Bind::Var | Bind::Const | Bind::Sink | Bind::Owned => {
                 let captured_by_sink = self.closures.last().is_some_and(|c| {
@@ -704,6 +821,11 @@ impl<'a> Walker<'a> {
                     );
                 }
                 if !self.declared_outside_closure(d) || captured_by_sink {
+                    let whole = PlaceKey {
+                        root: d,
+                        segs: Vec::new(),
+                    };
+                    self.invalidate(&whole, span);
                     self.state.moved.insert(d, span);
                     self.state.held.remove(&d);
                 }
@@ -790,6 +912,7 @@ impl<'a> Walker<'a> {
     fn change_place(&mut self, e: &Expr) {
         if let Some(p) = self.place_of(e) {
             self.may_change(p.root, Self::strip(e).span);
+            self.invalidate(&p, Self::strip(e).span);
         }
     }
 
@@ -1092,6 +1215,8 @@ impl<'a> Walker<'a> {
             if let Some(p) = whole {
                 // A new value revives a moved variable.
                 self.may_change(p.root, Self::strip(lhs).span);
+                self.invalidate(&p, Self::strip(lhs).span);
+                self.track_view(p.root, rhs);
                 if self.state.held.contains(&p.root) {
                     let n = self.name_of(p.root);
                     self.report(
@@ -1135,6 +1260,8 @@ impl<'a> Walker<'a> {
             }
             _ => self.place_read(&s.scrutinee),
         }
+        // Over a variable the names view part of it; over a temporary they own what they are given.
+        let over_place = s.mode.is_none() && self.place_of(&s.scrutinee).is_some();
         let s0 = self.state.clone();
         let mut out: Option<State> = None;
         for arm in &s.arms {
@@ -1142,6 +1269,8 @@ impl<'a> Walker<'a> {
             for p in &arm.patterns {
                 let b = if s.mode == Some(Mode::Inout) {
                     Bind::ViewInout
+                } else if over_place {
+                    Bind::Part
                 } else {
                     Bind::View
                 };
@@ -1283,9 +1412,11 @@ impl<'a> Walker<'a> {
             })
             .unwrap_or_default();
         for (i, p) in c.params.iter().enumerate() {
+            // A closure's parameter is read-only unless its type says `inout` or `sink`, like a function's.
             let default = match modes.get(i).copied().flatten() {
                 Some(Mode::Inout) => Bind::ViewInout,
-                _ => Bind::View,
+                Some(Mode::Sink) => Bind::Sink,
+                _ => Bind::Let,
             };
             self.bind_pattern(&p.pattern, default);
         }
@@ -1508,6 +1639,7 @@ impl<'a> Walker<'a> {
         match receiver {
             Some(base) => match mark {
                 CallMark::Changes => {
+                    self.check_window_length(callee, base);
                     self.place_read(base);
                     self.change_place(base);
                     self.access(base, true, &mut accesses);
@@ -1548,6 +1680,45 @@ impl<'a> Walker<'a> {
     }
 
     /// Records the place an argument names. Reads of plain values are copies and do not count.
+    /// A window of a list (`xs[1..3]`) can change its elements but not its length: it does not own the buffer.
+    fn check_window_length(&mut self, callee: &Expr, base: &Expr) {
+        let b = Self::strip(base);
+        let is_range = matches!(&b.kind, ExprKind::Index { index, .. }
+            if matches!(Self::strip(index).kind, ExprKind::Range { .. }));
+        let is_slice = self
+            .typed
+            .tys
+            .get(&(self.file, b.span.start, b.span.end))
+            .is_some_and(|t| matches!(self.typed.types.kind_of(*t), TyKind::Slice(_)));
+        if !is_range && !is_slice {
+            return;
+        }
+        let ExprKind::Field { name, .. } = &Self::strip(callee).kind else {
+            return;
+        };
+        let m = self.text(name.span);
+        if matches!(
+            m,
+            "push"
+                | "pop"
+                | "insert"
+                | "remove"
+                | "clear"
+                | "extend"
+                | "retain"
+                | "truncate"
+                | "dedup"
+                | "reserve"
+        ) {
+            let m = m.to_string();
+            self.report(
+                Self::strip(base).span,
+                "window",
+                format!("`{m}!` changes the length, but a window (`xs[a..b]` or a `[T..]` parameter) only borrows part of a list; call it on the list itself"),
+            );
+        }
+    }
+
     fn access(&self, e: &Expr, changes: bool, out: &mut Vec<Access>) {
         let Some(place) = self.place_of(e) else {
             return;

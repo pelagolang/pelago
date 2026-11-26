@@ -34,6 +34,19 @@ impl<'a> Lowerer<'a> {
                 let Res::Val(h) = self.expr(e) else {
                     return Some(Res::Never);
                 };
+                // Inside a ternary or `if` arm the temporary owning the text must outlive the arm.
+                if let Some(idx) = self.f.hoist {
+                    if idx + 1 < self.f.scopes.len() {
+                        let last = self.f.scopes.len() - 1;
+                        let at = self.f.scopes[last]
+                            .iter()
+                            .position(|it| matches!(it, ScopeItem::Drop { ptr, .. } if *ptr == h));
+                        if let Some(at) = at {
+                            let item = self.f.scopes[last].remove(at);
+                            self.f.scopes[idx].push(item);
+                        }
+                    }
+                }
                 let p = self.load_at(h, 0, IrTy::Ptr);
                 let n = self.load_at(h, 8, IrTy::I64);
                 self.store_at(dst, 0, p);
@@ -78,6 +91,33 @@ impl<'a> Lowerer<'a> {
             let p = self.at(dst, f.off);
             if let Res::Never = self.into(x, p, f.ty) {
                 return Res::Never;
+            }
+        }
+        Res::Unit
+    }
+
+    /// `(a, b; 6)`: the items written again and again, in order, up to the length of the braid.
+    pub(crate) fn braid_repeat_lit(
+        &mut self,
+        e: &'a Expr,
+        es: &'a [Expr],
+        dst: Value,
+        t: Ty,
+    ) -> Res {
+        let fs = self.struct_fields(t);
+        if es.is_empty() {
+            return self.unsupported(e.span, "a braid without items");
+        }
+        // Each item is computed once; later rounds copy the finished slot.
+        for (i, f) in fs.iter().enumerate() {
+            let p = self.at(dst, f.off);
+            if i < es.len() {
+                if let Res::Never = self.into(&es[i], p, f.ty) {
+                    return Res::Never;
+                }
+            } else {
+                let src = self.at(dst, fs[i - es.len()].off);
+                self.clone_into(src, p, f.ty);
             }
         }
         Res::Unit

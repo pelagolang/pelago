@@ -589,6 +589,22 @@ impl Parser<'_> {
                 value,
             };
         }
+        // `n! ~> ...`: the same, with the short spelling.
+        if self.kind() == TokenKind::Ident
+            && matches!(
+                self.peek_sig(1).kind,
+                TokenKind::Punct(Punct::Bang | Punct::BangBang)
+            )
+            && self.peek_sig(2).kind == TokenKind::Punct(Punct::TildeArrow)
+        {
+            let value = self.parse_closure_from_params();
+            return Arg {
+                mode: None,
+                label: None,
+                spread: false,
+                value,
+            };
+        }
         let mode = match self.kind() {
             TokenKind::Keyword(Keyword::Inout | Keyword::Sink) => self.parse_mode(),
             _ => None,
@@ -604,6 +620,19 @@ impl Parser<'_> {
         };
         let spread = self.eat(Punct::DotDotDot);
         let value = self.parse_expr();
+        let after = match self.mode_mark_ahead() {
+            Some(m)
+                if matches!(
+                    self.peek_raw().kind,
+                    TokenKind::Punct(Punct::Comma | Punct::RParen)
+                ) =>
+            {
+                self.bump();
+                Some(m)
+            }
+            _ => None,
+        };
+        let mode = self.join_modes(mode, after);
         Arg {
             mode,
             label,
@@ -865,9 +894,24 @@ impl Parser<'_> {
                 self.bump();
             }
         }
+        // `(a, b; 6)`: the cycle repeated up to 6 slots, like `[0; 9]`.
+        let count = if !items.is_empty() && self.eat(Punct::Semi) {
+            Some(self.parse_expr())
+        } else {
+            None
+        };
         self.leave_brackets();
         let close = self.expect(Punct::RParen);
         let span = open.span.to(close);
+        if let Some(count) = count {
+            return Expr {
+                kind: ExprKind::BraidRepeat {
+                    items,
+                    count: Box::new(count),
+                },
+                span,
+            };
+        }
         if items.len() == 1 && !trailing_comma {
             if let Some(inner) = items.pop() {
                 return Expr {
@@ -1023,6 +1067,8 @@ impl Parser<'_> {
                 let before = self.pos;
                 let mode = self.parse_mode();
                 let name = self.ident("a captured name");
+                let after = self.parse_mode_mark();
+                let mode = self.join_modes(mode, after);
                 captures.push(Capture { mode, name });
                 if !self.eat(Punct::Comma) {
                     break;

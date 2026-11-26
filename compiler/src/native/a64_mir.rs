@@ -1,4 +1,4 @@
-//! The AArch64 side of the machine IR (design in `docs/design/mir.md`): the opcodes, the register file
+//! The AArch64 side of the machine IR: the opcodes, the register file
 //! the shared allocator sees, and the spill moves. [`super::a64_select`] makes MIR from the IR and
 //! [`super::a64_emit`] turns allocated MIR into bytes.
 //!
@@ -107,8 +107,12 @@ pub mod op {
     pub const RT_PRINT: i64 = 3;
     pub const RT_CTX_INIT: i64 = 4;
     pub const RT_CTX_SWITCH: i64 = 5;
+    /// The OS memory calls: `RT_OS + OsKind as i64`.
+    pub const RT_OS: i64 = 16;
     pub const RT_MEMCPY: i64 = 6;
     pub const RT_FMOD: i64 = 7;
+    /// `fmod` of two `f32` in `s0`, `s1`.
+    pub const RT_FMOD32: i64 = 8;
     /// Epilogue and `ret`; `[x0 Use]` or `[d0 Use]` when a value is returned.
     pub const RET: u16 = B + 31;
     /// Stop the program with the message number `Imm`: `[Imm n]`.
@@ -125,7 +129,41 @@ pub mod op {
     pub const FUNCADDR: u16 = B + 37;
     /// `cmp a, b; b.cc stop`: `[Imm cc, a Use, b Use|Imm, Sym]`.
     pub const CMPSTOP: u16 = B + 38;
-    pub const COUNT: u16 = B + 39;
+    /// `d = [mem]` of a float (`Imm 1`: 8 bytes, else 4): `[d Def, Mem, Imm dbl]`.
+    pub const FLD: u16 = B + 39;
+    /// `[mem] = s`: `[Mem, s Use, Imm dbl]`.
+    pub const FST: u16 = B + 40;
+    /// `d = the float whose bits are Imm`: `[d Def, Imm bits, Imm dbl]`.
+    pub const FCONST: u16 = B + 41;
+    /// `d = a op b` with the kinds add 0, sub 1, mul 2, div 3: `[d Def, a Use, b Use, Imm kind, Imm dbl]`.
+    pub const FARITH: u16 = B + 42;
+    /// `[d Def, s Use, Imm dbl]`.
+    pub const FNEG: u16 = B + 43;
+    /// `fcmp a, b; cset d, cc`: `[d Def, Imm cc, a Use, b Use, Imm dbl]`.
+    pub const FCMPSET: u16 = B + 44;
+    /// `fcmp a, b; b.cc target`: `[Imm cc, a Use, b Use, Block, Imm dbl]`.
+    pub const FCMPJCC: u16 = B + 45;
+    /// Signed integer to float: `[d Def, s Use, Imm dbl]`.
+    pub const ITOF: u16 = B + 46;
+    /// Float to integer (saturating, NaN is 0) cut to `Imm bits`: `[d Def, s Use, Imm dbl, Imm bits]`.
+    pub const FTOI: u16 = B + 47;
+    /// Float to the other width: `[d Def, s Use, Imm to_double]`.
+    pub const FRESIZE: u16 = B + 48;
+    /// `sqrt` 0, `floor` 1, `ceil` 2: `[d Def, s Use, Imm kind, Imm dbl]`.
+    pub const FUN: u16 = B + 49;
+    /// `d = a * b + c`, fused: `[d Def, a Use, b Use, c Use, Imm dbl]`.
+    pub const FFMA: u16 = B + 50;
+    /// A 16-byte vector: lane 0 set from an integer in each lane: `[d Def, s Use]`.
+    pub const VSPLAT: u16 = B + 51;
+    /// `[d UseDef, Imm left, Imm k]`: each lane shifted left (1) or logically right (0).
+    pub const VSHIFT: u16 = B + 52;
+    /// The wrapping sum of the lanes, an integer: `[d Def, s Use]`.
+    pub const VREDUCE: u16 = B + 53;
+    /// Two integers in lanes 0 and 1: `[d Def, a Use, b Use]`.
+    pub const VBUILD: u16 = B + 54;
+    /// `d = a op b` lane by lane, the kinds add 0, sub 1, and 2, or 3, xor 4: `[d Def, a Use, b Use, Imm kind]`.
+    pub const VALU: u16 = B + 55;
+    pub const COUNT: u16 = B + 56;
 }
 
 /// Symbols: the shared stop routines, then the functions of the module.
@@ -199,7 +237,10 @@ impl A64 {
             int,
             float,
             vec,
-            int_scratch: vec![x(9), x(10), x(11), x(12)],
+            // `x15` (the call target) is free except between the copy that sets it and the call, and a
+            // reload never lands between the two. The last one only counts when an instruction has
+            // more spilled registers than the others (a checked operation with a test: five).
+            int_scratch: vec![x(9), x(10), x(11), x(12), CALL_TARGET],
             float_scratch: vec![v(29), v(30), v(31)],
         }
     }
@@ -251,7 +292,7 @@ impl Target for A64 {
     }
 
     fn op_name(&self, o: u16) -> &'static str {
-        const NAMES: [&str; 39] = [
+        const NAMES: [&str; 56] = [
             "add",
             "sub",
             "and",
@@ -291,6 +332,23 @@ impl Target for A64 {
             "dataaddr",
             "funcaddr",
             "cmpstop",
+            "fld",
+            "fst",
+            "fconst",
+            "farith",
+            "fneg",
+            "fcmpset",
+            "fcmpjcc",
+            "itof",
+            "ftoi",
+            "fresize",
+            "fun",
+            "ffma",
+            "vsplat",
+            "vshift",
+            "vreduce",
+            "vbuild",
+            "valu",
         ];
         NAMES
             .get(o.wrapping_sub(op::ADD) as usize)
@@ -325,9 +383,8 @@ impl Target for A64 {
         let d = Operand::def(Reg::Phys(dst));
         match c {
             Class::Int => MInst::new(op::LOAD, vec![d, mem_frame(f), Operand::Imm(8)]),
-            Class::Float | Class::Vec => {
-                unreachable!("float spills arrive with the float selector")
-            }
+            Class::Float => MInst::new(op::FLD, vec![d, mem_frame(f), Operand::Imm(1)]),
+            Class::Vec => MInst::new(op::FLD, vec![d, mem_frame(f), Operand::Imm(2)]),
         }
     }
 
@@ -335,9 +392,8 @@ impl Target for A64 {
         let s = Operand::use_(Reg::Phys(src));
         match c {
             Class::Int => MInst::new(op::STORE, vec![mem_frame(f), s, Operand::Imm(8)]),
-            Class::Float | Class::Vec => {
-                unreachable!("float spills arrive with the float selector")
-            }
+            Class::Float => MInst::new(op::FST, vec![mem_frame(f), s, Operand::Imm(1)]),
+            Class::Vec => MInst::new(op::FST, vec![mem_frame(f), s, Operand::Imm(2)]),
         }
     }
 }

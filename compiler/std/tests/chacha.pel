@@ -1,0 +1,48 @@
+/// `std.chacha`: ChaCha20 blocks and streams against `cryptography`, and XChaCha20 against an independent
+/// reference checked on the draft's published HChaCha20 vector.
+import std.chacha
+import std.hash
+
+fn pattern(n: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * 7 + 3) & 255).wrapToByte()) }
+    out
+}
+
+fn key32(k: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..32 { out.push!(((i * k + 5) & 255).wrapToByte()) }
+    out
+}
+
+fn nonce12(nn: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..12 { out.push!(((i * 11 + nn) & 255).wrapToByte()) }
+    out
+}
+
+fn main() {
+    for kk of [1, 3, 9] {
+        for nn of [0, 7] {
+            for ctr of [0, 1, 255, 4294967295] {
+                print(kk, nn, ctr, hash.hex(chacha.block(key32(kk), ctr, nonce12(nn))))
+            }
+        }
+    }
+    var nonce: [byte] = []
+    for i of 0..12 { nonce.push!(i.wrapToByte()) }
+    for n of [0, 1, 63, 64, 65, 127, 128, 129, 300] {
+        print(n, hash.hex(chacha.xor(key32(2), nonce, 1, pattern(n))))
+    }
+    const msg = pattern(200)
+    print(chacha.xor(key32(2), nonce, 5, chacha.xor(key32(2), nonce, 5, msg)) == msg)
+    var n24: [byte] = []
+    for i of 0..24 { n24.push!(i.wrapToByte()) }
+    for n of [0, 5, 64, 100] {
+        print(n, hash.hex(chacha.xorExtended(key32(2), n24, 1, pattern(n))))
+    }
+    var k: [byte] = []
+    for i of 0..32 { k.push!(i.wrapToByte()) }
+    const n16 = hash.fromHex("000000090000004a0000000031415927") ?? []
+    print(hash.hex(chacha.subkey(k, n16)))
+}

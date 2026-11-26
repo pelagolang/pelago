@@ -1,0 +1,27 @@
+/// Float text: `inf`, `-inf`, `nan`, negative zero, the shortest text that reads back, exponent form,
+/// subnormals and the largest values, for `float` and `float32`.
+fn main() {
+    const zero = 0.0
+    const inf = 1.0 / zero
+    print(inf, -inf, zero / zero, -zero, zero)
+    print(0.1, 0.1 + 0.2, 1.5, 3.0, 100.0, 123456789012345678.0)
+    print(1.0e21, 1.0e22, 1.0e300, 1.0e-6, 1.0e-7, 1.0e-300)
+    print(5e-324, 2.2250738585072014e-308, 1.7976931348623157e308)
+    print(9223372036854775807.0, 9.5e18, 1.0e19, 0.0000004, 0.0000005)
+    const a: float32 = 0.1
+    const b: float32 = 16777216.0
+    print(a, b, a * 3.0, 3.4028235e38, 1.0e-45 to float32, (1.0 / zero) to float32, -zero to float32)
+    print("#(2.5) #(inf) #(1.0e22)")
+    roundTrip()
+}
+
+/// Reading the text back gives the same float.
+fn roundTrip() {
+    const texts = ["0.1", "1e300", "5e-324", "1.7976931348623157e308", "-0", "inf", "-inf", "nan", "+2.5", "1e-320", "123456789012345678"]
+    for t in texts {
+        const x = t.parseFloat().or(7.0)
+        const back = "#(x)".parseFloat().or(8.0)
+        print(x, back == x || x != x)
+    }
+    print("1e".parseFloat().isErr(), "".parseFloat().isErr(), "1.5x".parseFloat().isErr())
+}

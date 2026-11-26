@@ -1,0 +1,16 @@
+/// `abs`, `min`, `max` and `pow` on the wide integers; `sqrt`, `floor`, `ceil`, `round`, `trunc`, `abs`, `min`
+/// and `max` on the soft floats. The soft float results were checked bit for bit against exact rational arithmetic.
+fn main() {
+    const a: int128 = -170141183460469231731687303715884105727
+    print(a.abs(), a.min(5), a.max(5), (2 to int128).pow(100), (10 to uint256).pow(76))
+    const two: float128 = 2.0
+    print(two.sqrt(), (4.0 to float128).sqrt(), (-1.0 to float128).sqrt())
+    const e: float256 = 2.0
+    print(e.sqrt())
+    const h: float16 = 2.0
+    print(h.sqrt())
+    const x: float128 = 2.5
+    const y: float128 = -2.5
+    print(x.floor(), x.ceil(), x.round(), x.trunc(), y.floor(), y.ceil(), y.round(), y.trunc())
+    print((-0.4 to float128).round(), (0.5 to float128).round(), (1e40 to float128).floor(), y.abs(), x.min(1.0), x.max(1.0))
+}

@@ -1,0 +1,126 @@
+/// The ChaCha20 stream cipher (RFC 8439) and its extended-nonce form XChaCha20 (draft-irtf-cfrg-xchacha).
+///
+/// ```
+/// import std.chacha
+///
+/// fn main() {
+///     const key: [byte] = [0; 32]
+///     const nonce: [byte] = [0; 12]
+///     const sealed = chacha.xor(key, nonce, 1, "attack at dawn".bytes().toList())
+///     print(chacha.xor(key, nonce, 1, sealed).len())     /// xor again with the same key and nonce: the text is back
+/// }
+/// ```
+///
+/// A stream cipher only hides the bytes; it does not detect tampering. For messages use `std.aead`, which adds
+/// Poly1305. Never use one key and nonce for two messages. `xor` is its own inverse. `key` is 32 bytes, `nonce` 12 bytes
+/// (`xor`) or 24 bytes (`xorExtended`, safe to pick at random), `counter` is the first 64-byte block (1 for RFC 8439
+/// messages, 0 is the one-time Poly1305 key block). Conventional: the cipher is the standard one. Constant time: only
+/// `+%`, `^` and rotations touch the data. Checked against `cryptography`'s ChaCha20 and an independent reference
+/// (`compiler/std/tests/gen_crypto.py`).
+
+const magic: [uint32] = [0x61707865, 0x3320646e, 0x79622d32, 0x6b206574]
+
+fn rotl(x: uint32, n: int) -> uint32 = (x << n) | (x >> (32 - n))
+
+fn le32(data: [byte], at: int) -> uint32 {
+    var w: uint32 = 0
+    for i of 0..4 { w = w | ((data[at + i] to uint32) << (8 * i)) }
+    w
+}
+
+fn quarter(inout s: [uint32], a: int, b: int, c: int, d: int) {
+    s[a] = s[a] +% s[b]
+    s[d] = rotl(s[d] ^ s[a], 16)
+    s[c] = s[c] +% s[d]
+    s[b] = rotl(s[b] ^ s[c], 12)
+    s[a] = s[a] +% s[b]
+    s[d] = rotl(s[d] ^ s[a], 8)
+    s[c] = s[c] +% s[d]
+    s[b] = rotl(s[b] ^ s[c], 7)
+}
+
+fn twenty(inout x: [uint32]) {
+    for r of 0..10 {
+        quarter(x!, 0, 4, 8, 12)
+        quarter(x!, 1, 5, 9, 13)
+        quarter(x!, 2, 6, 10, 14)
+        quarter(x!, 3, 7, 11, 15)
+        quarter(x!, 0, 5, 10, 15)
+        quarter(x!, 1, 6, 11, 12)
+        quarter(x!, 2, 7, 8, 13)
+        quarter(x!, 3, 4, 9, 14)
+    }
+}
+
+/// The 16 state words: constants, key, counter, 12-byte nonce.
+fn setup(key: [byte], counter: int, nonce: [byte]) -> [uint32] {
+    assert(key.len() == 32 && nonce.len() == 12)
+    var s: [uint32] = []
+    for i of 0..4 { s.push!(magic[i]) }
+    for i of 0..8 { s.push!(le32(key, 4 * i)) }
+    s.push!((counter & 0xffffffff).wrapToUint32())
+    for i of 0..3 { s.push!(le32(nonce, 4 * i)) }
+    s
+}
+
+//~ The 64-byte keystream block number `counter` for a 32-byte `key` and a 12-byte `nonce`.
+pub fn block(key: [byte], counter: int, nonce: [byte]) -> [byte] {
+    const s = setup(key, counter, nonce)
+    var x: [uint32] = copy s
+    twenty(x!)
+    var out: [byte] = []
+    for i of 0..16 {
+        const w = x[i] +% s[i]
+        for j of 0..4 { out.push!(((w >> (8 * j)) to int).wrapToByte()) }
+    }
+    out
+}
+
+//~ `data` xor the keystream: encrypts, and decrypts what it encrypted. 32-byte `key`, 12-byte `nonce`, `counter` is the
+//~ block the stream starts at (RFC 8439 messages start at 1).
+pub fn xor(key: [byte], nonce: [byte], counter: int, data: [byte]) -> [byte] {
+    var out: [byte] = []
+    var at = 0
+    var c = counter
+    while at < data.len() {
+        const ks = block(key, c, nonce)
+        const n = data.len() - at < 64 ? data.len() - at : 64
+        for i of 0..n { out.push!(data[at + i] ^ ks[i]) }
+        at = at + 64
+        c = c + 1
+    }
+    out
+}
+
+//~ HChaCha20: a 32-byte subkey from a 32-byte `key` and the first 16 bytes of an extended nonce.
+pub fn subkey(key: [byte], nonce16: [byte]) -> [byte] {
+    assert(key.len() == 32 && nonce16.len() == 16)
+    var x: [uint32] = []
+    for i of 0..4 { x.push!(magic[i]) }
+    for i of 0..8 { x.push!(le32(key, 4 * i)) }
+    for i of 0..4 { x.push!(le32(nonce16, 4 * i)) }
+    twenty(x!)
+    var out: [byte] = []
+    for i of 0..8 {
+        const w = i < 4 ? x[i] : x[i + 8]
+        for j of 0..4 { out.push!(((w >> (8 * j)) to int).wrapToByte()) }
+    }
+    out
+}
+
+//~ The 32-byte key and 12-byte nonce that XChaCha20 uses inside for a 24-byte `nonce`: `key` becomes `subkey(key,
+//~ nonce[0..16])`, the nonce becomes four zero bytes then `nonce[16..24]`.
+pub fn extend(key: [byte], nonce: [byte]) -> ([byte], [byte]) {
+    assert(nonce.len() == 24)
+    var first: [byte] = []
+    for i of 0..16 { first.push!(nonce[i]) }
+    var small: [byte] = [0, 0, 0, 0]
+    for i of 16..24 { small.push!(nonce[i]) }
+    (subkey(key, first), small)
+}
+
+//~ XChaCha20: like `xor` with a 24-byte `nonce`, which is large enough to choose at random for every message.
+pub fn xorExtended(key: [byte], nonce: [byte], counter: int, data: [byte]) -> [byte] {
+    const k = extend(key, nonce)
+    xor(k.0, k.1, counter, data)
+}

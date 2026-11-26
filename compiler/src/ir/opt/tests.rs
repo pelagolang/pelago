@@ -752,6 +752,71 @@ fn a_sum_in_a_counted_loop_is_bounded_by_the_trip_count() {
     );
 }
 
+/// `i = 0; n = 0; while i < 1000 { if i & 1 == 0 { n += 1 }; i += 1 }; n`, the `if` as two sides
+/// that meet at a join block (`select` when the sides are `ifconv`ed). `through_select` builds the
+/// `select` by hand instead.
+fn conditional_counter(limit: i128, through_select: bool) -> Func {
+    let mut f = Func::new("main", &[], IrTy::I64);
+    let e = f.entry();
+    let head = f.new_block(&[IrTy::I64, IrTy::I64]);
+    let body = f.new_block(&[]);
+    let done = f.new_block(&[]);
+    let konst = |f: &mut Func, b, v: i128| {
+        f.emit(b, Op::Const(IrTy::I64, Const::Int(v)), Some(IrTy::I64))
+            .unwrap()
+    };
+    let to = |b, args| Target { block: b, args };
+    let (zero, lim) = (konst(&mut f, e, 0), konst(&mut f, e, limit));
+    f.terminate(e, Term::Jump(to(head, vec![zero, zero])));
+    let (i, n) = (f.block_params(head)[0], f.block_params(head)[1]);
+    let c = f
+        .emit(head, Op::Cmp(CmpOp::Lt, i, lim), Some(IrTy::Bool))
+        .unwrap();
+    f.terminate(head, Term::Branch(c, to(body, vec![]), to(done, vec![])));
+    let one = konst(&mut f, body, 1);
+    let low = f
+        .emit(body, Op::Bin(BinOp::And, i, one), Some(IrTy::I64))
+        .unwrap();
+    let even = f
+        .emit(body, Op::Cmp(CmpOp::Eq, low, zero), Some(IrTy::Bool))
+        .unwrap();
+    let n1 = f
+        .emit(body, Op::Checked(BinOp::Add, true, n, one), Some(IrTy::I64))
+        .unwrap();
+    let i2 = f
+        .emit(body, Op::Checked(BinOp::Add, true, i, one), Some(IrTy::I64))
+        .unwrap();
+    if through_select {
+        let pick = f
+            .emit(body, Op::Select(even, n1, n), Some(IrTy::I64))
+            .unwrap();
+        f.terminate(body, Term::Jump(to(head, vec![i2, pick])));
+    } else {
+        let (yes, no) = (f.new_block(&[]), f.new_block(&[]));
+        let join = f.new_block(&[IrTy::I64]);
+        f.terminate(body, Term::Branch(even, to(yes, vec![]), to(no, vec![])));
+        f.terminate(yes, Term::Jump(to(join, vec![n1])));
+        f.terminate(no, Term::Jump(to(join, vec![n])));
+        let x = f.block_params(join)[0];
+        f.terminate(join, Term::Jump(to(head, vec![i2, x])));
+    }
+    f.terminate(done, Term::Return(Some(n)));
+    f
+}
+
+#[test]
+fn a_counter_bumped_on_one_side_of_an_if_is_bounded_by_the_trip_count() {
+    // Both checks (the counter and `n += 1`) go for 1000 passes, with the bump in a `select`
+    // or behind a join block. (The answers and the traps are checked at the source level.)
+    for sel in [false, true] {
+        assert_eq!(
+            checks_left(conditional_counter(1000, sel)),
+            0,
+            "select {sel}"
+        );
+    }
+}
+
 #[test]
 fn a_counter_nothing_bounds_stays_checked() {
     // The test looks at another value, or the counter may start negative.
@@ -988,10 +1053,10 @@ fn blocks_that_stop_go_last() {
         args: vec![],
     };
     f.terminate(e, Term::Branch(c, to(bad), to(ok)));
-    f.terminate(bad, Term::Stop("no".into()));
+    f.terminate(bad, Term::Stop("no".into(), Span::default()));
     f.terminate(ok, Term::Return(Some(a)));
     assert!(layout::run(&mut f));
-    assert!(matches!(f.blocks[2].term, Some(Term::Stop(_))));
+    assert!(matches!(f.blocks[2].term, Some(Term::Stop(..))));
     assert!(verify_func(&f).is_empty(), "{}", print_func(&f, None));
     let m = module_of(f);
     assert_eq!(run_full(&m, "main", &[Val::Int(7)]).result, Ok(Val::Int(7)));
@@ -2050,4 +2115,45 @@ fn a_signed_comparison_of_small_values_is_decided() {
         .insts
         .iter()
         .any(|i| matches!(i.op, Op::Const(IrTy::Bool, Const::Bool(true)))));
+}
+
+#[test]
+fn a_local_heap_block_moves_to_the_stack() {
+    let mut f = Func::new("main", &[], IrTy::I64);
+    let e = f.entry();
+    let n = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(24)), Some(IrTy::I64))
+        .unwrap();
+    let p = f.emit(e, Op::Alloc(n), Some(IrTy::Ptr)).unwrap();
+    let c = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(7)), Some(IrTy::I64))
+        .unwrap();
+    let eight = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(8)), Some(IrTy::I64))
+        .unwrap();
+    let q = f.emit(e, Op::PtrAdd(p, eight), Some(IrTy::Ptr)).unwrap();
+    f.emit(e, Op::Store(q, c), None);
+    let x = f.emit(e, Op::Load(IrTy::I64, q), Some(IrTy::I64)).unwrap();
+    f.emit(e, Op::Free(p), None);
+    f.terminate(e, Term::Return(Some(x)));
+    let (o, before, after) = both(&module_of(f));
+    assert_eq!((before, after), (Val::int(7), Val::int(7)));
+    assert_eq!(
+        count(&o.funcs[0], |op| matches!(op, Op::Alloc(_) | Op::Free(_))),
+        0
+    );
+}
+
+#[test]
+fn a_heap_block_that_leaves_the_function_stays_on_the_heap() {
+    let mut f = Func::new("main", &[], IrTy::Ptr);
+    let e = f.entry();
+    let n = f
+        .emit(e, Op::Const(IrTy::I64, Const::Int(24)), Some(IrTy::I64))
+        .unwrap();
+    let p = f.emit(e, Op::Alloc(n), Some(IrTy::Ptr)).unwrap();
+    f.terminate(e, Term::Return(Some(p)));
+    let mut o = module_of(f);
+    optimize(&mut o, Options::default());
+    assert_eq!(count(&o.funcs[0], |op| matches!(op, Op::Alloc(_))), 1);
 }

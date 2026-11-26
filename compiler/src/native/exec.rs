@@ -100,6 +100,17 @@ pub fn run_image(os: Os, image: &[u8]) -> Result<Ran, String> {
 
 /// The same for an executable of the given processor.
 pub fn run_image_arch(arch: Arch, os: Os, image: &[u8]) -> Result<Ran, String> {
+    run_image_with(arch, os, image, &[], &[])
+}
+
+/// The same with command-line arguments and extra environment variables.
+pub fn run_image_with(
+    arch: Arch,
+    os: Os,
+    image: &[u8],
+    args: &[&str],
+    vars: &[(&str, &str)],
+) -> Result<Ran, String> {
     let a64 = arch == Arch::Aarch64;
     if (a64 && !can_run_a64_on(os)) || (!a64 && !can_run(os)) {
         return Err(format!(
@@ -118,7 +129,7 @@ pub fn run_image_arch(arch: Arch, os: Os, image: &[u8]) -> Result<Ran, String> {
             .map_err(|e| e.to_string())?;
     }
     let make = || {
-        if a64 && qemu_a64().is_some() {
+        let mut c = if a64 && qemu_a64().is_some() {
             let mut c = std::process::Command::new("qemu-aarch64");
             c.arg(&path);
             c
@@ -131,7 +142,12 @@ pub fn run_image_arch(arch: Arch, os: Os, image: &[u8]) -> Result<Ran, String> {
             c
         } else {
             std::process::Command::new(&path)
+        };
+        c.args(args);
+        for (k, v) in vars {
+            c.env(k, v);
         }
+        c
     };
     // "Text file busy" happens when another thread still holds the file open for writing.
     let mut tries = 0;
@@ -176,22 +192,22 @@ pub fn build_and_run_a64(m: &crate::ir::Module, leak_check: bool) -> Option<Ran>
     if std::env::var_os("PELAGO_SKIP_A64").is_some() || !can_run_a64_on(target) {
         return None;
     }
-    // Every configuration must give the same result: the frame only, the full register set, and (in
-    // tests) two registers, which pushes the sharing and the spills through ordinary programs.
+    // Every configuration must give the same result: the full register set and (in tests) four
+    // registers, which pushes the sharing and the spills through ordinary programs.
     #[allow(unused_mut)]
-    let mut configs: Vec<(bool, usize)> = vec![(false, usize::MAX), (true, usize::MAX)];
+    let mut configs: Vec<usize> = vec![usize::MAX];
     #[cfg(test)]
-    configs.push((true, 2));
+    configs.push(4);
     let mut first: Option<Ran> = None;
-    for (regalloc, limit) in configs {
+    for limit in configs {
         #[cfg(test)]
-        super::regs_a64::REG_LIMIT.with(|l| l.set(limit));
+        super::gen::REG_LIMIT.with(|l| l.set(limit));
         #[cfg(not(test))]
         let _ = limit;
         let opts = super::gen::Options {
             leak_check,
             target,
-            regalloc,
+            symbols: false,
         };
         let image = super::gen_a64::compile(m, "main", &opts)
             .unwrap_or_else(|e| panic!("the AArch64 build failed: {e}"));
@@ -201,11 +217,11 @@ pub fn build_and_run_a64(m: &crate::ir::Module, leak_check: bool) -> Option<Ran>
             Some(f) => assert_eq!(
                 (f.code, &f.out, &f.err),
                 (ran.code, &ran.out, &ran.err),
-                "AArch64 results differ with regalloc={regalloc} limit={limit}"
+                "AArch64 results differ with limit={limit}"
             ),
         }
     }
     #[cfg(test)]
-    super::regs_a64::REG_LIMIT.with(|l| l.set(usize::MAX));
+    super::gen::REG_LIMIT.with(|l| l.set(usize::MAX));
     first
 }

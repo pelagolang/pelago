@@ -1,4 +1,4 @@
-//! Unrolling of small counted loops (card A-11). `while i < n { body; i += s }` pays for the test,
+//! Unrolling of small counted loops. `while i < n { body; i += s }` pays for the test,
 //! the branch and the counter on every pass, which for a body of a handful of instructions is most
 //! of the time. The loop becomes two: a main loop that runs `K` copies of the body per pass and a
 //! test that covers all of them, and the original loop, which finishes the last `K - 1` passes or
@@ -180,6 +180,7 @@ fn unroll(f: &mut Func, h: BlockId, b: BlockId) -> bool {
                 | Op::CallPtr(..)
                 | Op::Alloc(_)
                 | Op::Realloc(..)
+                | Op::Os(..)
                 | Op::Free(_)
                 | Op::CtxInit(..)
                 | Op::CtxSwitch(..)

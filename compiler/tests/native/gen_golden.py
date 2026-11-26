@@ -107,6 +107,8 @@ CASES = [
  ("pshufd xmm0, xmm0, 0xee", "a.pshufd(Xmm(0), Xmm(0), 0xee)"), ("pshufd xmm8, xmm3, 0x44", "a.pshufd(Xmm(8), Xmm(3), 0x44)"),
  ("fld qword ptr [rax]", "a.x87_load(mem(RAX, 0), true)"), ("fld dword ptr [rbp-8]", "a.x87_load(mem(RBP, -8), false)"),
  ("fstp qword ptr [rsp+8]", "a.x87_store_pop(mem(RSP, 8), true)"), ("fstp dword ptr [rax]", "a.x87_store_pop(mem(RAX, 0), false)"),
+ ("lock cmpxchg [rdi], rdx", "a.lock_cmpxchg(mem(RDI, 0), RDX)"), ("lock xadd [rdi], rsi", "a.lock_xadd(mem(RDI, 0), RSI)"),
+ ("xchg [rdi], rsi", "a.xchg_mem(mem(RDI, 0), RSI)"), ("lock cmpxchg [r9+8], r10", "a.lock_cmpxchg(mem(R9, 8), R10)"),
  ("fprem", "a.x87_prem()"), ("fnstsw ax", "a.x87_status_ax()"), ("fstp st(1)", "a.x87_drop_second()"),
 ]
 

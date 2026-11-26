@@ -1,0 +1,275 @@
+/// BLAKE3: a fast, secure hash with a tree structure, a keyed mode, key derivation and extendable output, as a `hasher`.
+///
+/// ```
+/// import std.blake3
+/// import std.hash
+/// import { blake3hash } = std.blake3
+///
+/// fn main() {
+///     print(hash.hex(hash.digestText(blake3hash.new(), "abc")))     /// 6437b3ac38465133ffb63b75273a8db548c558465d79db03fd359c6cd5bd9d85
+///     var h = blake3hash.deriveKey("my app 2026-11-12 session keys")
+///     h.update!("master secret".bytes().toList())
+///     print(hash.hex(h.squeeze(64)))                            /// any length of output
+/// }
+/// ```
+///
+/// Three modes: `blake3hash.new()` (hash), `blake3hash.keyed(key)` (a MAC with a 32-byte key; no HMAC needed) and
+/// `blake3hash.deriveKey(context)` (a KDF; the context string should be hard-coded and unique to the application).
+/// `finish` gives the usual 32 bytes, `squeeze(n)` any number of bytes (the 32-byte digest is the start of the
+/// longer one). This is the same hash Islet uses for its store. Conventional: the algorithm is the specification's,
+/// serially: the tree is built with a chunk stack, one chunk at a time (no SIMD, no threads yet; the tree allows both
+/// later). Constant time: only `+%`, `^` and rotations touch the data; the tree shape depends on the length only.
+/// Checked against the known vectors for "", one byte and "abc" and a generated corpus from an independent Python port
+/// of the specification (`compiler/std/tests/blake3_ref.py`).
+
+import std.hash
+import { hasher } = std.hash
+
+const iv: [uint32] = [
+    0x6a09e667,
+    0xbb67ae85,
+    0x3c6ef372,
+    0xa54ff53a,
+    0x510e527f,
+    0x9b05688c,
+    0x1f83d9ab,
+    0x5be0cd19,
+]
+
+const perm: [int] = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8]
+
+const chunkStart = 1
+const chunkEnd = 2
+const parentFlag = 4
+const rootFlag = 8
+const keyedFlag = 16
+const deriveContextFlag = 32
+const deriveMaterialFlag = 64
+
+fn rotr32(x: uint32, n: int) -> uint32 = (x >> n) | (x << (32 - n))
+
+fn g(inout v: [uint32], m: [uint32], a: int, b: int, c: int, d: int, at: int) {
+    const x = m[at]
+    const y = m[at + 1]
+    v[a] = v[a] +% v[b] +% x
+    v[d] = rotr32(v[d] ^ v[a], 16)
+    v[c] = v[c] +% v[d]
+    v[b] = rotr32(v[b] ^ v[c], 12)
+    v[a] = v[a] +% v[b] +% y
+    v[d] = rotr32(v[d] ^ v[a], 8)
+    v[c] = v[c] +% v[d]
+    v[b] = rotr32(v[b] ^ v[c], 7)
+}
+
+/// The compression function: 16 output words from a chaining value, a block of 16 words, the block counter, the block
+/// length in bytes and the flags.
+fn compress(cv: [uint32], block: [uint32], counter: int, blockLen: int, flags: int) -> [uint32] {
+    var m: [uint32] = copy block
+    var v: [uint32] = []
+    for i of 0..8 { v.push!(cv[i]) }
+    for i of 0..4 { v.push!(iv[i]) }
+    v.push!((counter & 0xffffffff).wrapToUint32())
+    v.push!(((counter >> 32) & 0xffffffff).wrapToUint32())
+    v.push!(blockLen.wrapToUint32())
+    v.push!(flags.wrapToUint32())
+    for r of 0..7 {
+        g(v!, m, 0, 4, 8, 12, 0)
+        g(v!, m, 1, 5, 9, 13, 2)
+        g(v!, m, 2, 6, 10, 14, 4)
+        g(v!, m, 3, 7, 11, 15, 6)
+        g(v!, m, 0, 5, 10, 15, 8)
+        g(v!, m, 1, 6, 11, 12, 10)
+        g(v!, m, 2, 7, 8, 13, 12)
+        g(v!, m, 3, 4, 9, 14, 14)
+        if r < 6 {
+            var n: [uint32] = []
+            for i of 0..16 { n.push!(m[perm[i]]) }
+            m = n
+        }
+    }
+    for i of 0..8 {
+        v[i] = v[i] ^ v[i + 8]
+        v[i + 8] = v[i + 8] ^ cv[i]
+    }
+    v
+}
+
+/// Sixteen little-endian words from up to 64 bytes (zero padded).
+fn blockWords(b: [byte]) -> [uint32] {
+    var w: [uint32] = []
+    for i of 0..16 {
+        var x: uint32 = 0
+        for k of 0..4 {
+            const at = 4 * i + k
+            const byteValue: uint32 = at < b.len() ? (b[at] to uint32) : 0
+            x = x | (byteValue << (8 * k))
+        }
+        w.push!(x)
+    }
+    w
+}
+
+fn firstEight(w: [uint32]) -> [uint32] {
+    var out: [uint32] = []
+    for i of 0..8 { out.push!(w[i]) }
+    out
+}
+
+/// A BLAKE3 hasher (the module is `std.blake3`, the type `blake3hash`). Build one with `blake3hash.new()`, `blake3hash.keyed(key)` or `blake3hash.deriveKey(context)`.
+pub struct blake3hash {
+    key: [uint32]
+    flags: int
+    cv: [uint32]
+    chunkCounter: int
+    buf: [byte]
+    blocks: int
+    stack: [uint32]
+
+    //~ The plain hash.
+    fn new() -> blake3hash = blake3hash.build(copy iv, 0)
+    //~ The keyed hash (a MAC) with a 32-byte `key` (stops the program for any other length).
+    fn keyed(key: [byte]) -> blake3hash {
+        assert(key.len() == 32)
+        var k: [uint32] = []
+        for i of 0..8 {
+            var x: uint32 = 0
+            for j of 0..4 { x = x | ((key[4 * i + j] to uint32) << (8 * j)) }
+            k.push!(x)
+        }
+        blake3hash.build(k, keyedFlag)
+    }
+    //~ Key derivation: feed the key material with `update!`, read keys with `finish` or `squeeze(n)`. `context` is a
+    //~ hard-coded, application-unique text such as "myapp 2026-11-12 session keys".
+    fn deriveKey(context: str) -> blake3hash {
+        var c = blake3hash.build(copy iv, deriveContextFlag)
+        c.update!(context.bytes().toList())
+        const ck = c.squeeze(32)
+        var k: [uint32] = []
+        for i of 0..8 {
+            var x: uint32 = 0
+            for j of 0..4 { x = x | ((ck[4 * i + j] to uint32) << (8 * j)) }
+            k.push!(x)
+        }
+        blake3hash.build(k, deriveMaterialFlag)
+    }
+    fn build(key: [uint32], flags: int) -> blake3hash {
+        blake3hash { key: copy key, flags: flags, cv: copy key, chunkCounter: 0, buf: [], blocks: 0, stack: [] }
+    }
+}
+
+/// Feeds bytes into the current chunk; a full block is compressed only when more data follows (the last block of a
+/// chunk carries `chunkEnd`).
+fn feedChunk(inout h: blake3hash, data: [byte], from: int, to: int) {
+    var i = from
+    while i < to {
+        if h.buf.len() == 64 {
+            const start = h.blocks == 0 ? chunkStart : 0
+            h.cv = firstEight(compress(h.cv, blockWords(h.buf), h.chunkCounter, 64, h.flags | start))
+            h.blocks += 1
+            h.buf = []
+        }
+        h.buf.push!(data[i])
+        i += 1
+    }
+}
+
+/// The chaining value of the chunk in progress, as a non-root chunk.
+fn chunkCv(h: blake3hash) -> [uint32] {
+    const start = h.blocks == 0 ? chunkStart : 0
+    return firstEight(compress(h.cv, blockWords(h.buf), h.chunkCounter, h.buf.len(), h.flags | start | chunkEnd))
+}
+
+fn parentCv(key: [uint32], left: [uint32], right: [uint32], flags: int) -> [uint32] {
+    var block: [uint32] = copy left
+    for x of right { block.push!(x) }
+    return firstEight(compress(key, block, 0, 64, flags | parentFlag))
+}
+
+fn absorb(inout h: blake3hash, data: [byte]) {
+    var i = 0
+    while i < data.len() {
+        if h.buf.len() == 64 {
+            if h.blocks == 15 {
+                /// A full chunk (16 blocks, 1024 bytes) is closed only when more data follows: merge its chaining value
+                /// into the stack the way a binary counter carries.
+                var cv = chunkCv(h)
+                var total = h.chunkCounter + 1
+                while total % 2 == 0 {
+                    const n = h.stack.len()
+                    var left: [uint32] = []
+                    for k of (n - 8)..n { left.push!(h.stack[k]) }
+                    h.stack.truncate!(n - 8)
+                    cv = parentCv(h.key, left, cv, h.flags)
+                    total = total / 2
+                }
+                for x of cv { h.stack.push!(x) }
+                h.chunkCounter += 1
+                h.cv = copy h.key
+                h.blocks = 0
+                h.buf = []
+            } else {
+                const start = h.blocks == 0 ? chunkStart : 0
+                h.cv = firstEight(compress(h.cv, blockWords(h.buf), h.chunkCounter, 64, h.flags | start))
+                h.blocks += 1
+                h.buf = []
+            }
+        }
+        const space = 64 - h.buf.len()
+        const left = data.len() - i
+        const take = left < space ? left : space
+        for k of 0..take { h.buf.push!(data[i + k]) }
+        i += take
+    }
+}
+
+impl hasher for blake3hash {
+    fn update(inout self, data: [byte]) { absorb(self!, data) }
+    fn finish(self) -> [byte] = self.squeeze(32)
+    fn reset(inout self) {
+        self.cv = copy self.key
+        self.chunkCounter = 0
+        self.buf = []
+        self.blocks = 0
+        self.stack = []
+    }
+    fn fresh(self) -> blake3hash = blake3hash.build(copy self.key, self.flags)
+    fn outputSize(self) -> int = 32
+    fn blockSize(self) -> int = 64
+}
+
+impl blake3hash {
+    //~ The first `n` bytes of output (any length; `finish` is `squeeze(32)`). Works on a copy.
+    fn squeeze(self, n: int) -> [byte] {
+        /// The root node starts as the chunk in progress, then is merged with the finished subtrees from the right.
+        var input: [uint32] = copy self.cv
+        var block: [uint32] = blockWords(self.buf)
+        var blockLen = self.buf.len()
+        var flags = self.flags | (self.blocks == 0 ? chunkStart : 0) | chunkEnd
+        var counter = self.chunkCounter
+        var left = self.stack.len()
+        while left > 0 {
+            const below = firstEight(compress(input, block, counter, blockLen, flags))
+            var pb: [uint32] = []
+            for k of (left - 8)..left { pb.push!(self.stack[k]) }
+            left -= 8
+            for x of below { pb.push!(x) }
+            input = copy self.key
+            block = pb
+            blockLen = 64
+            flags = self.flags | parentFlag
+            counter = 0
+        }
+        var out: [byte] = []
+        var i = 0
+        while out.len() < n {
+            const w = compress(input, block, i, blockLen, flags | rootFlag)
+            for x of w {
+                for k of 0..4 {
+                    if out.len() < n { out.push!(((x >> (8 * k)) to int).wrapToByte()) }
+                }
+            }
+            i += 1
+        }
+        out
+    }
+}

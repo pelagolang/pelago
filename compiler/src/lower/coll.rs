@@ -1,5 +1,5 @@
 //! Maps and sets: literals and the glue (drop, copy, equality, printing). The table itself is written in
-//! the language (`rt_map_*` in the library); this file only calls it.
+//! the language (`rtMap*` in the library); this file only calls it.
 
 use super::*;
 
@@ -46,13 +46,13 @@ impl<'a> Lowerer<'a> {
                     if let Res::Never = self.into(val, vs, v) {
                         return Res::Never;
                     }
-                    self.call_core_g("rt_map_put", &[k, v], vec![dst, ks, vs]);
+                    self.call_core_g("rtMapPut", &[k, v], vec![dst, ks, vs]);
                 }
                 MapItem::Spread(x) => {
                     let Res::Val(src) = self.expr(x) else {
                         return Res::Never;
                     };
-                    self.call_core_g("rt_map_spread", &[k, v], vec![dst, src]);
+                    self.call_core_g("rtMapSpread", &[k, v], vec![dst, src]);
                 }
             }
         }
@@ -69,32 +69,28 @@ impl<'a> Lowerer<'a> {
                 let Res::Val(src) = self.expr(&it.value) else {
                     return Res::Never;
                 };
-                self.call_core_g("rt_set_spread", &[el], vec![dst, src]);
+                self.call_core_g("rtSetSpread", &[el], vec![dst, src]);
                 continue;
             }
             let ks = self.slot_for(el);
             if let Res::Never = self.into(&it.value, ks, el) {
                 return Res::Never;
             }
-            self.call_core_g("rt_set_put", &[el], vec![dst, ks]);
+            self.call_core_g("rtSetPut", &[el], vec![dst, ks]);
         }
         Res::Unit
     }
 
     pub(crate) fn drop_collection(&mut self, p: Value, ty: Ty) {
         if let Some((is_map, tys)) = self.collection_args(ty) {
-            let name = if is_map { "rt_map_drop" } else { "rt_set_drop" };
+            let name = if is_map { "rtMapDrop" } else { "rtSetDrop" };
             self.call_core_g(name, &tys, vec![p]);
         }
     }
 
     pub(crate) fn clone_collection(&mut self, s: Value, d: Value, ty: Ty) {
         if let Some((is_map, tys)) = self.collection_args(ty) {
-            let name = if is_map {
-                "rt_map_clone"
-            } else {
-                "rt_set_clone"
-            };
+            let name = if is_map { "rtMapClone" } else { "rtSetClone" };
             self.call_core_g(name, &tys, vec![s, d]);
         }
     }
@@ -103,7 +99,7 @@ impl<'a> Lowerer<'a> {
         let Some((is_map, tys)) = self.collection_args(ty) else {
             return false;
         };
-        let name = if is_map { "rt_map_eq" } else { "rt_set_eq" };
+        let name = if is_map { "rtMapEq" } else { "rtSetEq" };
         let Some(r) = self.call_core_g(name, &tys, vec![a, b]) else {
             return false;
         };
@@ -115,7 +111,7 @@ impl<'a> Lowerer<'a> {
 
     pub(crate) fn show_collection(&mut self, v: Value, out: Value, ty: Ty) {
         if let Some((is_map, tys)) = self.collection_args(ty) {
-            let name = if is_map { "rt_map_show" } else { "rt_set_show" };
+            let name = if is_map { "rtMapShow" } else { "rtSetShow" };
             self.call_core_g(name, &tys, vec![v, out]);
         }
     }
@@ -148,7 +144,7 @@ impl<'a> Lowerer<'a> {
         let Some(hash) = self.glue_addr(GlueKind::Hash, key) else {
             return Res::Never;
         };
-        match self.call_core("rt_map_has", vec![h, probe, sz, eq, hash]) {
+        match self.call_core("rtMapHas", vec![h, probe, sz, eq, hash]) {
             Some(v) => Res::Val(v),
             None => Res::Never,
         }

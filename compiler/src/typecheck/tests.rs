@@ -1413,7 +1413,7 @@ fn meta_code_has_rules() {
             .any(|m| m.contains("not available at compile time")),
         "{e:?}"
     );
-    let e = run("ext fn puts(s: ptr) -> int\nmeta fn f() -> int { puts(rt_null())\n 4 }").errors();
+    let e = run("ext fn puts(s: ptr) -> int\nmeta fn f() -> int { puts(rtNull())\n 4 }").errors();
     assert!(
         e.iter().any(|m| m.contains("defined outside the language")),
         "{e:?}"
@@ -1428,13 +1428,23 @@ fn meta_code_has_rules() {
 
 #[test]
 fn await_needs_a_future() {
-    clean("async fn f() -> int { 1 }\nasync fn g() -> int { await f() + 1 }\nfn t() -> int = block_on(g())");
+    clean("async fn f() -> int { 1 }\nasync fn g() -> int { await f() + 1 }\nfn t() -> int = blockOn(g())");
     let e = run("async fn g() -> int { await 5 }").errors();
     assert!(!e.is_empty(), "{e:?}");
     assert_eq!(
         run("async fn f() -> int { 1 }\nfn t() { const x = f() }").ty_of("x"),
         "future<int>"
     );
+}
+
+#[test]
+fn an_async_fn_cannot_borrow_inout() {
+    let e = run("async fn f(inout n: int) -> int { n }").errors();
+    assert!(
+        e.iter().any(|m| m.contains("cannot borrow `inout`")),
+        "{e:?}"
+    );
+    clean("async fn f(sink n: int) -> int { n }\nasync fn g(n: int) -> int { n }");
 }
 
 #[test]
@@ -1460,4 +1470,124 @@ fn naming_styles_find_each_other() {
     clean("fn big_sum(a: int, b: int) -> int = a + b\nfn t() -> int = bigSum(1, 2)");
     clean("fn t(xs: [int]) -> bool = xs.is_empty() || xs.isEmpty()");
     flagged("fn t() -> int = nothing_here()", "cannot find");
+}
+
+// ---- braids -----------------------------------------------------------
+
+#[test]
+fn a_braid_literal_is_decided_by_its_annotation() {
+    clean("fn t() { const a: (int, string; 3) = (7, \"s\", 8)\n const b: braid<int, string; 2> = (1, \"x\")\n const c: (int, string; 6) = (0, \"\"; 6) }");
+    assert_eq!(probe("const probe = (7, \"s\", 8)"), "(int, string, int)");
+    flagged(
+        "fn t() { const a: (int, string; 3) = (7, \"s\") }",
+        "slot 2 has no value",
+    );
+    flagged(
+        "fn t() { const a: (int, string; 3) = (7, 8, 9) }",
+        "slot 1 of this braid is `string`",
+    );
+    flagged(
+        "fn t() { const a: (int, string; 3) = (0, \"\"; 4) }",
+        "is expected",
+    );
+}
+
+#[test]
+fn braid_slots_have_the_type_of_their_position() {
+    assert_eq!(
+        probe("const x: (int, string; 4) = (1, \"a\", 2, \"b\")\nconst probe = x[3]"),
+        "string"
+    );
+    flagged(
+        "fn t(x: (int, string; 4), i: int) { x[i] }",
+        "depends on the position",
+    );
+    flagged("fn t(x: (int, string; 4)) { x[4] }", "no slot 4");
+    clean("fn t(x: (int, int; 4), i: int) { x[i] }");
+}
+
+#[test]
+fn a_strand_view_is_read_only_unless_made_with_inout() {
+    flagged(
+        "fn t(x: (int, string; 4)) { for inout a of x.firstStrand() { a += 1 } }",
+        "read-only view",
+    );
+    clean("fn t(inout x: (int, string; 4)) { for inout a of x.firstStrandMut!() { a += 1 }\n x.secondStrandMut!().set(0, \"s\") }");
+}
+
+#[test]
+fn braid_methods_follow_the_length_and_the_cycle() {
+    clean("fn t(x: (int, string; 5)) { x.tail()\n x.first(1)\n x.second(-1)\n x.split()\n x.evens() }");
+    clean("fn t(x: (int, string, bool; 6)) { x.first(0)\n x.third(1)\n x.rounds() }");
+    clean("fn t(x: (int, string, bool, float; 8)) { x.fourth(1)\n x.rounds()\n x.fourthStrand()\n x.asRounds() }");
+    clean("fn t(x: (int, string, bool, float, int, string; 6)) { x.sixth(0)\n x.fifthStrand() }");
+    flagged(
+        "fn t(x: (int, string, bool, float; 8)) { x.fifth(0) }",
+        "has no",
+    );
+    flagged("fn t(x: (int, string; 4)) { x.tail() }", "has no tail");
+    flagged(
+        "fn t(x: (int, string; 3)) { x.swap() }",
+        "needs an even length",
+    );
+    flagged(
+        "fn t(x: (int, string; 4)) { x.first(2) }",
+        "pair 2 is out of range",
+    );
+    flagged(
+        "fn t(x: (int, string, bool; 6)) { x.evens() }",
+        "cycle of 3 types",
+    );
+    clean("fn t(a: [int; 2], b: [string; 2]) { braid.zip(a, b) }");
+    flagged(
+        "fn t(a: [int; 2], b: [string; 3]) { braid.zip(a, b) }",
+        "is expected",
+    );
+}
+
+#[test]
+fn short_modes_in_function_types_check_like_the_words() {
+    clean("fn bump(n!: int) { n += 1 }\nfn twice(f: fn(int!), n!: int) { f(n!)\n f(n!) }\nfn t() { var x = 1\n twice(bump, x!) }");
+    clean("fn eat(s!!: string) {}\nfn t(f: fn(string!!)) { f(\"a\") }\nfn u() { t(eat) }");
+    assert!(
+        !run("fn bump(n!: int) { n += 1 }\nfn t(f: fn(int)) {}\nfn u() { t(bump) }")
+            .errors()
+            .is_empty()
+    );
+}
+
+#[test]
+fn wide_literals_must_fit() {
+    flagged(
+        "fn t() { const x: int128 = 170141183460469231731687303715884105728 }",
+        "does not fit",
+    );
+    flagged("fn t() { const x: uint128 = -1 }", "does not fit");
+    flagged(
+        "fn t() { const x: uint256 = 115792089237316195423570985008687907853269984665640564039457584007913129639936 }",
+        "this number is too large",
+    );
+    flagged(
+        "fn t() { const x: uint128 = 340282366920938463463374607431768211456 }",
+        "does not fit",
+    );
+    let c = run("fn t() { const x: uint256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935 }");
+    assert!(c.errors().is_empty(), "{:?}", c.errors());
+}
+
+#[test]
+fn window_types_borrow_part_of_a_list() {
+    clean("fn f(w: [int..]) -> int = w[0]\nfn t() { var xs = [1, 2]\n f(xs)\n f(xs[0..1]) }");
+    clean("fn f(w: slice<int>) -> int = w.len()\nfn t() { var a: [int; 2] = [1, 2]\n f(a) }");
+    clean("fn f(w: [int..]) -> [int] = copy w");
+    flagged(
+        "fn f(w: [int..]) -> [int..] { return w }",
+        "cannot be returned",
+    );
+    flagged("fn f(w!!: [int..]) { }", "cannot be taken with `sink`");
+    flagged(
+        "fn g(xs!: [int]) { xs.push!(1) }\nfn f(w!: [int..]) { g(w!) }",
+        "may change the list's length",
+    );
+    flagged("fn f(w: [int..]) { }\nfn t() { f([\"a\"]) }", "");
 }

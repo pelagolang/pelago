@@ -1,0 +1,387 @@
+/// Fast hashes for hash tables, caches and deduplication, **not for security**: FNV-1 and FNV-1a (32 and 64 bit),
+/// xxHash32, xxHash64 and SipHash-2-4 / SipHash-1-3, as `hasher`s.
+///
+/// ```
+/// import std.fasthash
+/// import std.hash
+/// import { xxh64, siphash } = std.fasthash
+///
+/// fn main() {
+///     var x = xxh64.new(0)                                   /// seed 0
+///     x.update!("Nobody inspects the spammish repetition".bytes().toList())
+///     print(hash.hex(x.finish()), x.value())                 /// fbcea83c8a378bf1, as bytes and as a number
+///     const key = hash.fromHex("000102030405060708090a0b0c0d0e0f") ?? []
+///     print(siphash.new24(key).value())                      /// keyed: safe against hash-flooding on untrusted keys
+/// }
+/// ```
+///
+/// None of these resists an attacker who can choose the input, except **SipHash**, which is a keyed pseudorandom
+/// function made exactly so a hash table can survive adversarial keys (use it, with a random key from
+/// `random.bytes(16)`, when keys come from outside); it is still not a collision-resistant hash. The digest of FNV and
+/// xxHash is the number in big-endian bytes (xxHash's canonical form); SipHash's is little-endian as in the paper.
+/// `value()` gives the number as a `uint64`. xxHash is seedable. Checked against the published values and a Python port
+/// of each specification (`compiler/std/tests/fast_ref.py`). Not yet here: XXH3 and XXH128, MurmurHash3, wyhash,
+/// CityHash, HighwayHash.
+
+import std.hash
+import { hasher } = std.hash
+
+fn rotl32(x: uint32, n: int) -> uint32 = (x << n) | (x >> (32 - n))
+fn rotl64(x: uint64, n: int) -> uint64 = (x << n) | (x >> (64 - n))
+
+fn word32(b: [byte], at: int) -> uint32 =
+    (b[at] to uint32) | ((b[at + 1] to uint32) << 8) | ((b[at + 2] to uint32) << 16) | ((b[at + 3] to uint32) << 24)
+
+fn word64(b: [byte], at: int) -> uint64 {
+    var w: uint64 = 0
+    for i of 0..8 { w = w | ((b[at + i] to uint64) << (8 * i)) }
+    w
+}
+
+fn bigEndian(v: uint64, bytes: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..bytes { out.push!(rtCast<uint64, int>(v >> (8 * (bytes - 1 - i))).wrapToByte()) }
+    out
+}
+
+/// FNV-1 and FNV-1a over 32 or 64 bits: one multiply and one xor per byte.
+pub struct fnv {
+    width: int
+    alt: bool
+    h: uint64
+
+    //~ FNV-1a, 32 bit (the better-mixing variant: xor, then multiply).
+    fn fnv1a32() -> fnv = fnv { width: 32, alt: true, h: 0x811c9dc5 }
+    //~ FNV-1a, 64 bit.
+    fn fnv1a64() -> fnv = fnv { width: 64, alt: true, h: 0xcbf29ce484222325 }
+    //~ FNV-1, 32 bit (multiply, then xor).
+    fn fnv132() -> fnv = fnv { width: 32, alt: false, h: 0x811c9dc5 }
+    //~ FNV-1, 64 bit.
+    fn fnv164() -> fnv = fnv { width: 64, alt: false, h: 0xcbf29ce484222325 }
+}
+
+fn fnvStart(width: int) -> uint64 = width == 32 ? 0x811c9dc5 : 0xcbf29ce484222325
+
+impl hasher for fnv {
+    fn update(inout self, data: [byte]) {
+        const prime: uint64 = self.width == 32 ? 0x01000193 : 0x00000100000001b3
+        var h = self.h
+        for b of data {
+            if self.alt {
+                h = (h ^ (b to uint64)) *% prime
+            } else {
+                h = (h *% prime) ^ (b to uint64)
+            }
+            if self.width == 32 { h = h & 0xffffffff }
+        }
+        self.h = h
+    }
+    fn finish(self) -> [byte] = bigEndian(self.h, self.width / 8)
+    fn reset(inout self) { self.h = fnvStart(self.width) }
+    fn fresh(self) -> fnv = fnv { width: self.width, alt: self.alt, h: fnvStart(self.width) }
+    fn outputSize(self) -> int = self.width / 8
+    fn blockSize(self) -> int = 1
+}
+
+impl fnv {
+    //~ The hash as a number.
+    fn value(self) -> uint64 = self.h
+}
+
+const p32a: uint32 = 2654435761
+const p32b: uint32 = 2246822519
+const p32c: uint32 = 3266489917
+const p32d: uint32 = 668265263
+const p32e: uint32 = 374761393
+
+/// xxHash32: 16-byte stripes, four accumulators. Build with a `seed`: `xxh32.new(0)`.
+pub struct xxh32 {
+    seed: uint32
+    v: [uint32]
+    buf: [byte]
+    total: int
+
+    //~ A new xxHash32 with `seed` (any 32-bit value; the `int` is narrowed to its low 32 bits).
+    fn new(seed: int) -> xxh32 {
+        const s = seed.wrapToUint32()
+        xxh32 { seed: s, v: xxh32Start(s), buf: [], total: 0 }
+    }
+}
+
+fn xxh32Start(s: uint32) -> [uint32] = [s +% p32a +% p32b, s +% p32b, s, s -% p32a]
+
+fn xxh32Round(acc: uint32, x: uint32) -> uint32 = rotl32(acc +% x *% p32b, 13) *% p32a
+
+fn xxh32Stripe(inout v: [uint32], b: [byte], at: int) {
+    for k of 0..4 { v[k] = xxh32Round(v[k], word32(b, at + 4 * k)) }
+}
+
+fn xxh32Absorb(inout h: xxh32, data: [byte]) {
+    h.total += data.len()
+    var i = 0
+    if h.buf.len() > 0 {
+        while i < data.len() && h.buf.len() < 16 {
+            h.buf.push!(data[i])
+            i += 1
+        }
+        if h.buf.len() < 16 { return }
+        xxh32Stripe(h.v!, h.buf, 0)
+        h.buf = []
+    }
+    while i + 16 <= data.len() {
+        xxh32Stripe(h.v!, data, i)
+        i += 16
+    }
+    while i < data.len() {
+        h.buf.push!(data[i])
+        i += 1
+    }
+}
+
+impl hasher for xxh32 {
+    fn update(inout self, data: [byte]) { xxh32Absorb(self!, data) }
+    fn finish(self) -> [byte] = bigEndian(self.value(), 4)
+    fn reset(inout self) {
+        self.v = xxh32Start(self.seed)
+        self.buf = []
+        self.total = 0
+    }
+    fn fresh(self) -> xxh32 = xxh32 { seed: self.seed, v: xxh32Start(self.seed), buf: [], total: 0 }
+    fn outputSize(self) -> int = 4
+    fn blockSize(self) -> int = 16
+}
+
+impl xxh32 {
+    //~ The hash as a number.
+    fn value(self) -> uint64 {
+        var h: uint32 = 0
+        if self.total >= 16 {
+            h = rotl32(self.v[0], 1) +% rotl32(self.v[1], 7) +% rotl32(self.v[2], 12) +% rotl32(
+                self.v[3],
+                18,
+            )
+        } else {
+            h = self.seed +% p32e
+        }
+        h = h +% self.total.wrapToUint32()
+        var i = 0
+        while i + 4 <= self.buf.len() {
+            h = rotl32(h +% word32(self.buf, i) *% p32c, 17) *% p32d
+            i += 4
+        }
+        while i < self.buf.len() {
+            h = rotl32(h +% (self.buf[i] to uint32) *% p32e, 11) *% p32a
+            i += 1
+        }
+        h = (h ^ (h >> 15)) *% p32b
+        h = (h ^ (h >> 13)) *% p32c
+        h = h ^ (h >> 16)
+        h to uint64
+    }
+}
+
+const p64a: uint64 = 11400714785074694791
+const p64b: uint64 = 14029467366897019727
+const p64c: uint64 = 1609587929392839161
+const p64d: uint64 = 9650029242287828579
+const p64e: uint64 = 2870177450012600261
+
+/// xxHash64: 32-byte stripes, four accumulators. Build with a `seed`: `xxh64.new(0)`.
+pub struct xxh64 {
+    seed: uint64
+    v: [uint64]
+    buf: [byte]
+    total: int
+
+    //~ A new xxHash64 with `seed` (an `int`; its 64 bits are used as they are).
+    fn new(seed: int) -> xxh64 {
+        const s = rtCast<int, uint64>(seed)
+        xxh64 { seed: s, v: xxh64Start(s), buf: [], total: 0 }
+    }
+}
+
+fn xxh64Start(s: uint64) -> [uint64] = [s +% p64a +% p64b, s +% p64b, s, s -% p64a]
+
+fn xxh64Round(acc: uint64, x: uint64) -> uint64 = rotl64(acc +% x *% p64b, 31) *% p64a
+
+fn xxh64Stripe(inout v: [uint64], b: [byte], at: int) {
+    for k of 0..4 { v[k] = xxh64Round(v[k], word64(b, at + 8 * k)) }
+}
+
+fn xxh64Absorb(inout h: xxh64, data: [byte]) {
+    h.total += data.len()
+    var i = 0
+    if h.buf.len() > 0 {
+        while i < data.len() && h.buf.len() < 32 {
+            h.buf.push!(data[i])
+            i += 1
+        }
+        if h.buf.len() < 32 { return }
+        xxh64Stripe(h.v!, h.buf, 0)
+        h.buf = []
+    }
+    while i + 32 <= data.len() {
+        xxh64Stripe(h.v!, data, i)
+        i += 32
+    }
+    while i < data.len() {
+        h.buf.push!(data[i])
+        i += 1
+    }
+}
+
+impl hasher for xxh64 {
+    fn update(inout self, data: [byte]) { xxh64Absorb(self!, data) }
+    fn finish(self) -> [byte] = bigEndian(self.value(), 8)
+    fn reset(inout self) {
+        self.v = xxh64Start(self.seed)
+        self.buf = []
+        self.total = 0
+    }
+    fn fresh(self) -> xxh64 = xxh64 { seed: self.seed, v: xxh64Start(self.seed), buf: [], total: 0 }
+    fn outputSize(self) -> int = 8
+    fn blockSize(self) -> int = 32
+}
+
+impl xxh64 {
+    //~ The hash as a number.
+    fn value(self) -> uint64 {
+        var h: uint64 = 0
+        if self.total >= 32 {
+            h = rotl64(self.v[0], 1) +% rotl64(self.v[1], 7) +% rotl64(self.v[2], 12) +% rotl64(
+                self.v[3],
+                18,
+            )
+            for k of 0..4 { h = (h ^ xxh64Round(0, self.v[k])) *% p64a +% p64d }
+        } else {
+            h = self.seed +% p64e
+        }
+        h = h +% rtCast<int, uint64>(self.total)
+        var i = 0
+        while i + 8 <= self.buf.len() {
+            h = h ^ xxh64Round(0, word64(self.buf, i))
+            h = rotl64(h, 27) *% p64a +% p64d
+            i += 8
+        }
+        if i + 4 <= self.buf.len() {
+            h = h ^ ((word32(self.buf, i) to uint64) *% p64a)
+            h = rotl64(h, 23) *% p64b +% p64c
+            i += 4
+        }
+        while i < self.buf.len() {
+            h = h ^ ((self.buf[i] to uint64) *% p64e)
+            h = rotl64(h, 11) *% p64a
+            i += 1
+        }
+        h = (h ^ (h >> 33)) *% p64b
+        h = (h ^ (h >> 29)) *% p64c
+        h ^ (h >> 32)
+    }
+}
+
+/// SipHash with a 128-bit key and a 64-bit output: `c` rounds per 8-byte word, `d` at the end. Build with
+/// `siphash.new24(key)` (the standard SipHash-2-4) or `siphash.new13(key)` (faster, used by some hash tables).
+pub struct siphash {
+    k0: uint64
+    k1: uint64
+    c: int
+    d: int
+    v: [uint64]
+    buf: [byte]
+    total: int
+
+    //~ SipHash-2-4 with a 16-byte `key` (stops the program for any other length).
+    fn new24(key: [byte]) -> siphash = siphash.build(key, 2, 4)
+    //~ SipHash-1-3 with a 16-byte `key`.
+    fn new13(key: [byte]) -> siphash = siphash.build(key, 1, 3)
+    fn build(key: [byte], c: int, d: int) -> siphash {
+        assert(key.len() == 16)
+        const k0 = word64(key, 0)
+        const k1 = word64(key, 8)
+        siphash { k0: k0, k1: k1, c: c, d: d, v: sipStart(k0, k1), buf: [], total: 0 }
+    }
+}
+
+fn sipStart(k0: uint64, k1: uint64) -> [uint64] =
+    [
+        k0 ^ 0x736f6d6570736575,
+        k1 ^ 0x646f72616e646f6d,
+        k0 ^ 0x6c7967656e657261,
+        k1 ^ 0x7465646279746573,
+    ]
+
+fn sipRound(inout v: [uint64]) {
+    v[0] = v[0] +% v[1]
+    v[1] = rotl64(v[1], 13)
+    v[1] = v[1] ^ v[0]
+    v[0] = rotl64(v[0], 32)
+    v[2] = v[2] +% v[3]
+    v[3] = rotl64(v[3], 16)
+    v[3] = v[3] ^ v[2]
+    v[0] = v[0] +% v[3]
+    v[3] = rotl64(v[3], 21)
+    v[3] = v[3] ^ v[0]
+    v[2] = v[2] +% v[1]
+    v[1] = rotl64(v[1], 17)
+    v[1] = v[1] ^ v[2]
+    v[2] = rotl64(v[2], 32)
+}
+
+fn sipWord(inout v: [uint64], c: int, m: uint64) {
+    v[3] = v[3] ^ m
+    for r of 0..c { sipRound(v!) }
+    v[0] = v[0] ^ m
+}
+
+fn sipAbsorb(inout h: siphash, data: [byte]) {
+    h.total += data.len()
+    var i = 0
+    if h.buf.len() > 0 {
+        while i < data.len() && h.buf.len() < 8 {
+            h.buf.push!(data[i])
+            i += 1
+        }
+        if h.buf.len() < 8 { return }
+        sipWord(h.v!, h.c, word64(h.buf, 0))
+        h.buf = []
+    }
+    while i + 8 <= data.len() {
+        sipWord(h.v!, h.c, word64(data, i))
+        i += 8
+    }
+    while i < data.len() {
+        h.buf.push!(data[i])
+        i += 1
+    }
+}
+
+impl hasher for siphash {
+    fn update(inout self, data: [byte]) { sipAbsorb(self!, data) }
+    fn finish(self) -> [byte] {
+        const r = self.value()
+        var out: [byte] = []
+        for i of 0..8 { out.push!(rtCast<uint64, int>(r >> (8 * i)).wrapToByte()) }
+        out
+    }
+    fn reset(inout self) {
+        self.v = sipStart(self.k0, self.k1)
+        self.buf = []
+        self.total = 0
+    }
+    fn fresh(self) -> siphash = siphash { k0: self.k0, k1: self.k1, c: self.c, d: self.d, v: sipStart(self.k0, self.k1), buf: [], total: 0 }
+    fn outputSize(self) -> int = 8
+    fn blockSize(self) -> int = 8
+}
+
+impl siphash {
+    //~ The hash as a number (the digest bytes are this number, little-endian).
+    fn value(self) -> uint64 {
+        var v: [uint64] = copy self.v
+        var last: uint64 = (rtCast<int, uint64>(self.total & 255)) << 56
+        for i of 0..self.buf.len() { last = last | ((self.buf[i] to uint64) << (8 * i)) }
+        sipWord(v!, self.c, last)
+        v[2] = v[2] ^ 0xff
+        for r of 0..self.d { sipRound(v!) }
+        v[0] ^ v[1] ^ v[2] ^ v[3]
+    }
+}

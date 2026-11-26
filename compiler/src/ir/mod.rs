@@ -1,4 +1,4 @@
-//! The intermediate representation (`docs/design/ir.md`): SSA in basic blocks.
+//! The intermediate representation: SSA in basic blocks.
 //!
 //! A [`Func`] is a list of blocks. A block has parameters (instead of phi nodes), a list of
 //! instructions and one terminator. Every value is assigned once. The entry block's parameters are
@@ -15,7 +15,7 @@ mod tests;
 mod verify;
 
 pub(crate) use interp::fold;
-pub use interp::{run, run_capture, run_full, Capture, Outcome, Val};
+pub use interp::{run, run_capture, run_full, run_os, Capture, OsEnv, Outcome, Val};
 pub use print::{print_func, print_module};
 pub use verify::{verify_func, verify_module};
 
@@ -318,6 +318,192 @@ impl FUn {
     }
 }
 
+/// The operating system memory calls. Each takes up to three `i64` or `ptr`
+/// operands and gives an `i64`: an address or `0` for success, a negative error otherwise
+/// (`OS_NOMEM`, `OS_BAD`, `OS_FAIL`).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum OsKind {
+    /// `(size)`: address-space only, no access (`mmap` `PROT_NONE`, `VirtualAlloc` `MEM_RESERVE`).
+    Reserve,
+    /// `(address, size)`: make a reserved range readable and writable.
+    Commit,
+    /// `(address, size)`: give the range back.
+    Release,
+    /// `(address, old size, new size)`: move or grow a block, the first bytes kept; gives the new address.
+    Remap,
+    /// `(address, size)`: ask the system not to use huge pages here (a hint; a no-op where there is none).
+    AdviseNoHuge,
+    /// `(fd, address, count)`: write to a file descriptor (standard output is flushed first); the count
+    /// written or a negative error number.
+    Write,
+    /// `(fd, address, count)`: read from a file descriptor; the count read, 0 at the end, or a negative error.
+    Read,
+    /// `(status)`: end the program at once.
+    Exit,
+    /// `()`: the address of the start-up block (argument count, argument pointers, 0, environment pointers, 0).
+    Argv,
+    /// `(path, mode)`: open the file at the zero-terminated path; mode 0 reads, 1 writes (created or
+    /// emptied), 2 appends. The descriptor (3 or more), or a negative `OS_*` error.
+    Open,
+    /// `(fd)`: close a descriptor from `Open`; 0, or a negative `OS_*` error.
+    Close,
+    /// `(which, address)`: read a clock into 16 bytes at `address` (seconds, then nanoseconds, two `i64`s);
+    /// `which` 0 is the wall clock (since 1970-01-01 UTC), 1 the monotonic clock (from some fixed point,
+    /// never going back). 0, or a negative `OS_*` error (`OS_FAIL` where the target has no clock call yet).
+    Clock,
+    /// `(op, path, aux)`: one file-system call on the zero-terminated path. `op` 0 asks whether it exists,
+    /// 1 removes a file, 2 removes an empty directory, 3 creates a directory, 4 renames it to the zero-
+    /// terminated path whose address is `aux`, 5 writes its `stat` (size and kind: two `i64`s, kind 1 file,
+    /// 2 directory, 3 other) at the address `aux`. 0, or a negative `OS_*` error (`OS_FAIL` where the target
+    /// has no such call yet, and for any other failure).
+    Fs,
+    /// `(fd, address, count)`: read directory entries from a descriptor opened on a directory, as
+    /// `getdents64` does on Linux (records of inode, offset, length (`u16`), type (`u8`), zero-terminated
+    /// name); the bytes written, 0 at the end, or a negative `OS_*` error.
+    Dents,
+    /// `(address, count)`: fill `count` bytes (1 to 256) at `address` with random bytes from the system's
+    /// generator; 0, or a negative `OS_*` error (`OS_BAD` for a bad count, `OS_FAIL` where the target has no
+    /// such call yet).
+    Random,
+    /// `(seconds, nanoseconds)`: let the process sleep for that long (`nanosleep`); it may return early,
+    /// so callers look at the clock again. 0, or a negative `OS_*` error (`OS_FAIL` where the target has
+    /// no such call yet).
+    Sleep,
+    /// `(address, expected, new)`: if the 8 bytes at the (8-aligned) address equal `expected`, store `new`
+    /// there; either way gives the value that was there. Sequentially consistent. Atomics are runtime
+    /// routines (`lock cmpxchg` on x86-64, a `ldaxr`/`stlxr` loop on AArch64), not IR instructions of their
+    /// own: they are rare, and the call keeps the optimiser and both back ends' instruction sets as they are.
+    AtomicCas,
+    /// `(address, delta)`: add `delta` to the 8 bytes at the address, wrapping; gives the old value.
+    /// `delta` 0 is an atomic load.
+    AtomicAdd,
+    /// `(address, new)`: store `new` at the address; gives the old value.
+    AtomicSwap,
+    /// `(code, arg, stack_top)`: start an operating system thread that calls `code(arg)` on the stack that
+    /// ends at `stack_top` (16-aligned, below it the memory is the thread's), and ends itself when `code`
+    /// returns. The 8 bytes at `stack_top - 8` are the thread's word: its id from the start, 0 once it has
+    /// ended (and a `FutexWake` on it), after which the stack may be freed. Gives the thread's id, or a negative `OS_*` error (`OS_FAIL` where the target has no threads
+    /// yet, and always in the interpreter, which runs one task at a time). The new thread must not use the
+    /// allocator until it is made safe for several threads.
+    ThreadStart,
+    /// `(address, expected, nanoseconds)`: if the 4 bytes at the address still equal `expected`, sleep until a
+    /// `FutexWake` on that address, or for at most `nanoseconds` (negative: no limit). Gives 0 after a wake, a
+    /// timeout or a spurious return alike, so the caller looks at its condition again; `OS_FAIL` where the
+    /// target has no such call.
+    FutexWait,
+    /// `(address, count)`: wake at most `count` threads waiting on the address; gives how many woke.
+    FutexWake,
+}
+
+impl OsKind {
+    pub const ALL: [OsKind; 22] = [
+        OsKind::Reserve,
+        OsKind::Commit,
+        OsKind::Release,
+        OsKind::Remap,
+        OsKind::AdviseNoHuge,
+        OsKind::Write,
+        OsKind::Read,
+        OsKind::Exit,
+        OsKind::Argv,
+        OsKind::Open,
+        OsKind::Close,
+        OsKind::Clock,
+        OsKind::Fs,
+        OsKind::Dents,
+        OsKind::Random,
+        OsKind::Sleep,
+        OsKind::AtomicCas,
+        OsKind::AtomicAdd,
+        OsKind::AtomicSwap,
+        OsKind::ThreadStart,
+        OsKind::FutexWait,
+        OsKind::FutexWake,
+    ];
+
+    /// Whether the call reaches the process (arguments, descriptors, exit) rather than memory.
+    pub fn is_process(self) -> bool {
+        matches!(
+            self,
+            OsKind::Write
+                | OsKind::Read
+                | OsKind::Exit
+                | OsKind::Argv
+                | OsKind::Open
+                | OsKind::Close
+                | OsKind::Clock
+                | OsKind::Fs
+                | OsKind::Dents
+                | OsKind::Random
+                | OsKind::Sleep
+        )
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            OsKind::Reserve => "os_reserve",
+            OsKind::Commit => "os_commit",
+            OsKind::Release => "os_release",
+            OsKind::Remap => "os_remap",
+            OsKind::AdviseNoHuge => "os_advise_nohuge",
+            OsKind::Write => "os_write",
+            OsKind::Read => "os_read",
+            OsKind::Exit => "os_exit",
+            OsKind::Argv => "os_argv",
+            OsKind::Open => "os_open",
+            OsKind::Close => "os_close",
+            OsKind::Clock => "os_clock",
+            OsKind::Fs => "os_fs",
+            OsKind::Dents => "os_dents",
+            OsKind::Random => "os_random",
+            OsKind::Sleep => "os_sleep",
+            OsKind::AtomicCas => "os_atomic_cas",
+            OsKind::AtomicAdd => "os_atomic_add",
+            OsKind::AtomicSwap => "os_atomic_swap",
+            OsKind::ThreadStart => "os_thread_start",
+            OsKind::FutexWait => "os_futex_wait",
+            OsKind::FutexWake => "os_futex_wake",
+        }
+    }
+
+    /// How many operands the call reads (the others are not looked at).
+    pub fn arity(self) -> usize {
+        match self {
+            OsKind::Argv => 0,
+            OsKind::Reserve | OsKind::Exit | OsKind::Close => 1,
+            OsKind::Commit
+            | OsKind::Release
+            | OsKind::AdviseNoHuge
+            | OsKind::Open
+            | OsKind::Clock
+            | OsKind::Random
+            | OsKind::Sleep
+            | OsKind::AtomicAdd
+            | OsKind::AtomicSwap
+            | OsKind::FutexWake => 2,
+            OsKind::Remap
+            | OsKind::Write
+            | OsKind::Read
+            | OsKind::Fs
+            | OsKind::Dents
+            | OsKind::AtomicCas
+            | OsKind::ThreadStart
+            | OsKind::FutexWait => 3,
+        }
+    }
+}
+
+/// The error values of an `OsKind` call.
+pub const OS_NOMEM: i64 = -1;
+pub const OS_BAD: i64 = -2;
+pub const OS_FAIL: i64 = -3;
+/// `Open` and `Fs` (and `Dents`): no such file or directory, and permission denied. Any other failure is the
+/// system's error number, negated (`-17` for "exists"; the interpreter gives the Linux numbers on every host).
+/// Windows still gives `OS_FAIL` for the others. (A directory opens for reading on Linux and
+/// fails at the first read with `EISDIR` (-21); on Windows it fails to open with `OS_ACCES`.)
+pub const OS_NOENT: i64 = -4;
+pub const OS_ACCES: i64 = -5;
+
 #[derive(Clone, PartialEq, Debug)]
 pub enum Op {
     Const(IrTy, Const),
@@ -370,6 +556,8 @@ pub enum Op {
     /// Saves the running context's handle at the address in the first value and continues the context
     /// whose handle is the second. Comes back when something switches to the saved handle.
     CtxSwitch(Value, Value),
+    /// An operating system memory call (see `OsKind`); the operands past its arity repeat the first.
+    Os(OsKind, Value, Value, Value),
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -392,8 +580,9 @@ pub enum Term {
     Jump(Target),
     Branch(Value, Target, Target),
     Return(Option<Value>),
-    /// Stop the program with a message (a bug was found: overflow, bounds, `panic`).
-    Stop(String),
+    /// Stop the program with a message (a bug was found: overflow, bounds, `panic`), and where in the source
+    /// (a location, see `Span::at`; the default span says nowhere).
+    Stop(String, Span),
     Unreachable,
 }
 
@@ -423,6 +612,18 @@ pub struct Func {
     /// optimiser keeps it a function of its own, and the build fails when an index test is left on
     /// its fast path (`opt::kept_checks`).
     pub checkfree: Option<(u32, Span)>,
+    /// Set for a function written `@inline_always`: the inliner copies it into every call whatever its
+    /// size; the build fails if a call to it is left (it is recursive).
+    pub inline_always: Option<(u32, Span)>,
+    /// Set for a function written `@leaf`: a promise that, once optimised, it makes no calls and keeps
+    /// no stack slot, so the code generator needs no frame for it; the build fails otherwise.
+    pub leaf: Option<(u32, Span)>,
+    /// The pointer parameters that are `let` parameters passed in memory: what they reach is not written during
+    /// the call. Set by lowering.
+    pub let_ptrs: Vec<Value>,
+    /// The loads (instruction numbers) whose address comes from a `let` pointer parameter through `ptradd` and
+    /// other such loads: frozen for the whole call. Set by `opt::frozen`; an inlined copy never has the mark.
+    pub frozen: std::collections::HashSet<usize>,
 }
 
 #[derive(Clone, Default, Debug)]
@@ -430,7 +631,15 @@ pub struct Module {
     pub funcs: Vec<Func>,
     /// Static data, such as string literals.
     pub data: Vec<Vec<u8>>,
+    /// The number of the zeroed data block that holds the words of `rtDataWord`, once a function asks.
+    pub words: Option<u32>,
+    /// The source files that locations (`Span::at`) name: file number `n` is `files[n - 1]`, written as a
+    /// diagnostic writes it (`core.rt`, `main`).
+    pub files: Vec<String>,
 }
+
+/// The words `rtDataWord` can name: the library keeps its own state there (the heap's chunk lists).
+pub const DATA_WORDS: usize = 64;
 
 impl Module {
     /// Adds static data and gives its number (equal data is shared).
@@ -440,6 +649,16 @@ impl Module {
         }
         self.data.push(bytes.to_vec());
         self.data.len() as u32 - 1
+    }
+
+    /// The block of writable words (made on first use).
+    pub fn word_block(&mut self) -> u32 {
+        if let Some(i) = self.words {
+            return i;
+        }
+        let i = self.add_zeroed_data(DATA_WORDS * 8);
+        self.words = Some(i);
+        i
     }
 
     /// Adds `size` bytes of zeroed static data of its own (for variables that live for the whole program).
@@ -465,6 +684,10 @@ impl Func {
             blocks: Vec::new(),
             insts: Vec::new(),
             checkfree: None,
+            inline_always: None,
+            leaf: None,
+            let_ptrs: Vec::new(),
+            frozen: std::collections::HashSet::new(),
         };
         let entry = f.new_block(params);
         debug_assert_eq!(entry, BlockId(0));

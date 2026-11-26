@@ -1,0 +1,36 @@
+/// Reading a configuration document into your own types with `@derive(fromJson)`.
+/// A wrong document is an error with a path and a position, not a half-filled value.
+import std.json
+import { json_error } = std.json
+
+@derive(fromJson)
+enum level { quiet, normal, loud }
+
+@derive(fromJson)
+struct limits {
+    connections: uint16
+    timeoutMs: int = 3000
+}
+
+@derive(fromJson)
+struct server {
+    host: string
+    port: uint16
+    tags: [string]
+    limits: limits
+    level: level = level.normal
+    banner: string?
+}
+
+fn report(text: str) {
+    switch serverDecode(text) {
+        case ok(s): print("#(s.host):#(s.port) tags=#(s.tags) connections=#(s.limits.connections) timeout=#(s.limits.timeoutMs)")
+        case err(e): print("config error: #e")
+    }
+}
+
+fn main() {
+    report("{\"host\": \"example.org\", \"port\": 8080, \"tags\": [\"a\", \"b\"], \"limits\": {\"connections\": 64}}")
+    report("{\"host\": \"example.org\", \"port\": 80800, \"tags\": [], \"limits\": {\"connections\": 64}}")
+    report("{\"host\": \"example.org\", \"port\": 8080, \"tags\": [], \"limits\": {}}")
+}

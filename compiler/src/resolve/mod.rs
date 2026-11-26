@@ -346,7 +346,11 @@ impl<'p> Resolver<'p> {
             let id = r.new_def(kind, name, None, Span::new(0, 0), Vis::Pub, None);
             r.prelude.insert(name.to_string(), id);
         };
-        for t in PRELUDE_TYPES.iter().chain(["list", "iter"].iter()) {
+        // `braid` is the namespace of the braid's constructors: `braid.zip(xs, ys)`.
+        for t in PRELUDE_TYPES
+            .iter()
+            .chain(["list", "slice", "iter", "braid"].iter())
+        {
             add(self, t, DefKind::BuiltinType);
         }
         for f in PRELUDE_FUNCTIONS.iter().chain(["ok", "err"].iter()) {
@@ -361,7 +365,17 @@ impl<'p> Resolver<'p> {
             return;
         };
         let root = self.package_roots[core.0 as usize];
-        let mods: Vec<usize> = self.scopes[root].children.values().copied().collect();
+        let Some(&index) = self.scopes[root].children.get("core") else {
+            return;
+        };
+        // The index module `core` and everything below it.
+        let mut mods = vec![index];
+        let mut at = 0;
+        while at < mods.len() {
+            let kids: Vec<usize> = self.scopes[mods[at]].children.values().copied().collect();
+            mods.extend(kids);
+            at += 1;
+        }
         let mut names: Vec<(String, DefId)> = Vec::new();
         for m in mods {
             names.extend(
@@ -376,6 +390,11 @@ impl<'p> Resolver<'p> {
         }
         for (n, d) in names {
             self.prelude.insert(n, d);
+        }
+        // `math` is a namespace too, in scope everywhere: `math.sqrt(x)`, `math.pi`.
+        if let Some(&m) = self.scopes[index].children.get("math") {
+            let def = self.scopes[m].def;
+            self.prelude.insert("math".to_string(), def);
         }
     }
 
@@ -655,6 +674,20 @@ impl<'p> Resolver<'p> {
                 self.define_members(scope, def, &d.members);
             }
             ItemKind::Impl(im) => {
+                // `impl braid { fn zip(...) }` in the library: functions without `self` that are called
+                // on the type, `braid.zip(...)`, as for a `struct`.
+                let namespace = match &im.target.kind {
+                    crate::ast::TypeKind::Path { path, args } if args.is_empty() => {
+                        let one = path.segments.len() == 1
+                            && self.text(file, &path.segments[0]) == "braid";
+                        if one {
+                            self.prelude.get("braid").copied()
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
                 // Methods of an `impl` belong to no type definition; the checker finds them
                 // through the impl.
                 for m in &im.members {
@@ -670,6 +703,9 @@ impl<'p> Resolver<'p> {
                                 None,
                             );
                             self.item_defs.insert((file, i.span.start), d);
+                            if let Some(ns) = namespace {
+                                self.add_member(ns, &name, d, f.name.span);
+                            }
                         }
                     }
                 }
@@ -997,12 +1033,25 @@ impl<'p> Resolver<'p> {
         if imp.levels == 0 {
             let own = self.package_roots[self.scopes[scope].package.0 as usize];
             let want = self.text(file, &segs[0]);
-            if let Some(&c) = self.scopes[scope].children.get(want) {
+            let deps = self.program.package(self.scopes[scope].package);
+            let major = segs.get(1).and_then(|s| {
+                deps.majors
+                    .get(&(want.to_string(), self.text(file, s).to_string()))
+            });
+            if let Some(&p) = major {
+                // `json.v2.decode`: a second major of the dependency `json` (this package's own table).
+                cur = self.package_roots[p.0 as usize];
+                first = 2;
+            } else if let Some(&c) = self.scopes[scope].children.get(want) {
                 // A module declared inside this one (`mod inner { ... }`).
                 cur = c;
                 first = 1;
             } else if let Some(&c) = self.scopes[own].children.get(want) {
                 cur = c;
+                first = 1;
+            } else if let Some(&p) = deps.imports.get(want) {
+                // A dependency installed by Islet, as this package sees it.
+                cur = self.package_roots[p.0 as usize];
                 first = 1;
             } else if let Some(p) = self.program.find_package(want) {
                 cur = self.package_roots[p.0 as usize];

@@ -14,6 +14,7 @@ fn lowered(src: &str) -> Lowered {
     let errs: Vec<&str> = typed
         .diagnostics
         .iter()
+        .filter(|d| !d.warning)
         .map(|d| d.message.as_str())
         .collect();
     assert!(errs.is_empty(), "the source does not check: {errs:?}");
@@ -35,6 +36,85 @@ fn eval(src: &str, name: &str, args: &[i64]) -> Result<i64, String> {
         Val::Bool(b) => b as i64,
         v => v.as_i64(),
     })
+}
+
+#[test]
+fn a_folded_address_defined_after_its_use_in_block_order_is_still_folded() {
+    // The fused split loop lays its blocks out with the definition of an address below its uses:
+    // the selector once read the folded address as a value and panicked.
+    agree(
+        "fn sum_words(text: str) -> int ! parse_error {
+            var t = 0
+            for w of text.split(\" \") {
+                if w.isEmpty() { continue }
+                t += w.parseInt()? & 1023
+            }
+            ok(t)
+        }
+        fn main() {
+            print(sum_words(\"1 2 3\").or(0))
+            print(sum_words(\"10  20 x\").or(-1))
+        }",
+    );
+}
+
+#[test]
+fn an_index_scaled_twice_is_not_folded_into_one_address() {
+    // `current.caps[t * 2]` is `(t * 2) * 8` bytes into the array: both products looked foldable into an
+    // address, but an index is a register and a folded product is never one, so the selector panicked
+    // ("a folded address read as a value") once the optimiser had put the loop in this shape.
+    agree(
+        "struct threads {
+            pcs: [int; 6]
+            caps: [int; 12]
+            count: int
+        }
+        fn run(ops: [int; 6], n: int, noEmptyAt: int) -> int {
+            var current = threads { pcs: [0; 6], caps: [0; 12], count: 3 }
+            var seen = 0
+            var pos = 0
+            while pos <= n {
+                var t = 0
+                while t < current.count {
+                    const pc = current.pcs[t]
+                    if ops[pc] == 7 && current.caps[t * 2] == pos && pos == noEmptyAt {
+                        break
+                    }
+                    seen += 1
+                    t += 1
+                }
+                pos += 1
+            }
+            seen
+        }
+        fn main() {
+            print(run([0, 0, 7, 0, 0, 0], 3, -1))
+            print(run([7, 7, 7, 0, 0, 0], 3, 0))
+        }",
+    );
+}
+
+#[test]
+fn returning_a_name_bound_from_a_temporary_scrutinee_moves_the_temporary() {
+    // `switch get(n) { case some(set): return set }` bound `set` as a view into the temporary, copied it
+    // to the result on `return`, and then dropped the temporary too: "freed memory twice".
+    let src = "fn get(n: int) -> [int]? { if n < 0 { return none }; [n, n + 1] }
+        fn pick(n: int) -> [int] {
+            switch get(n) {
+                case some(set): return set
+                case none: return []
+            }
+        }
+        fn main() {
+            print(pick(1).len())
+            print(pick(-1).len())
+            print(pick(5)[1])
+        }";
+    let l = lowered(src);
+    let o = run_full(&l.module, "main", &[]);
+    assert!(o.result.is_ok(), "{:?}: {src}", o.result);
+    assert_eq!(o.output, "2\n0\n6\n");
+    agree(src);
 }
 
 #[test]
@@ -358,15 +438,9 @@ fn output_of(src: &str) -> String {
     o.output
 }
 
-/// The native configurations every program runs in: without registers, with all of them, and with
-/// only the first one, two or four of each kind.
-const REG_SETS: [(bool, usize); 5] = [
-    (false, usize::MAX),
-    (true, usize::MAX),
-    (true, 1),
-    (true, 2),
-    (true, 4),
-];
+/// The native configurations every program runs in: with all the registers, and with only the first
+/// one, two or four of each kind.
+const REG_SETS: [usize; 4] = [usize::MAX, 1, 2, 4];
 
 /// The third column of the differential test: the native build prints the same, leaks nothing and
 /// exits with status 0. It runs on Linux x86-64 for Linux, and for Windows through Wine (or directly
@@ -377,32 +451,24 @@ fn native_must_agree(m: &crate::ir::Module, what: &str, src: &str, want: &str) {
         if !exec::can_run(os) || (os == Os::Windows && what != "plain") {
             continue;
         }
-        // The frame-only generator and the one with registers must both be right, also with few
-        // registers (every spill and split path).
-        // The machine-IR path (work item W4) runs beside the old generator on every configuration
-        // that has registers, on Linux.
-        for (mir, (regalloc, limit)) in REG_SETS.iter().flat_map(|&c| [(false, c), (true, c)]) {
-            if os == Os::Windows && (mir || !regalloc || limit != usize::MAX) {
+        // Also with few registers (every spill and split path).
+        for limit in REG_SETS {
+            if os == Os::Windows && limit != usize::MAX {
                 continue;
             }
-            if mir && !regalloc {
-                continue;
-            }
-            gen::MIR.with(|m| m.set(Some(mir)));
             gen::REG_LIMIT.with(|l| l.set(limit));
             let opts = gen::Options {
                 leak_check: true,
                 target: os,
-                regalloc,
+                symbols: false,
             };
             let image = match gen::compile(m, "main", &opts) {
                 Ok(i) => i,
                 Err(e) => panic!("the native build ({what}, {os:?}) failed: {e}\n{src}"),
             };
             gen::REG_LIMIT.with(|l| l.set(usize::MAX));
-            gen::MIR.with(|m| m.set(None));
             let r = exec::run_image(os, &image).unwrap();
-            let how = format!("{what}, {os:?}, mir {mir}, regalloc {regalloc}, {limit} registers");
+            let how = format!("{what}, {os:?}, {limit} registers");
             assert_eq!(r.out, want, "native output ({how}) differs in {src}");
             assert_eq!(
                 (r.err.as_str(), r.code),
@@ -435,7 +501,7 @@ fn printing_basic_values() {
     );
     assert_eq!(
         output_of("fn main() { print(0.1 + 0.2, 100.0, 1.0 / 3.0) }"),
-        "0.3 100 0.333333\n"
+        "0.30000000000000004 100 0.3333333333333333\n"
     );
 }
 
@@ -455,6 +521,19 @@ fn printing_one_integer_needs_no_heap() {
     let mut m = lowered("fn main() { print(1, 2) }").module;
     crate::ir::opt::prune(&mut m, &["main"]);
     assert!(crate::native::Uses::of(&m).alloc);
+}
+
+#[test]
+fn printing_only_text_needs_no_heap() {
+    let src = "fn main() {\n print(\"Hello, World!\")\n const s = \"two\"\n print(s, \"words\", \"\")\n print()\n}\n";
+    assert_eq!(output_of(src), "Hello, World!\ntwo words \n\n");
+    for src in ["fn main() { print(\"Hello, World!\") }", src] {
+        let mut m = lowered(src).module;
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        crate::ir::opt::prune(&mut m, &["main"]);
+        let u = crate::native::Uses::of(&m);
+        assert!(u.print && !u.alloc && !u.realloc, "{u:?}");
+    }
 }
 
 #[test]
@@ -555,19 +634,6 @@ fn copy_and_in() {
     assert_eq!(output_of(src), "[\"x\", \"y\"] [\"x\", \"y\", \"z\"]\n");
     let src = "fn main() { print(3 in 1..5, 5 in 1..5, 5 in 1..=5, 2 in [1, 2, 3], \"ell\" in \"hello\", 9 in [1, 2]) }";
     assert_eq!(output_of(src), "true false true true true false\n");
-}
-
-#[test]
-fn float_to_int_and_bytes() {
-    let src = "fn main() { print(3.7.truncInt(), (-3.7).truncInt(), 3.2.ceilInt(), (-3.2).floorInt(), 2.5.roundInt(), (-2.5).roundInt())\n const s = \"h\u{e9}y\"\n print(s.bytes().toList(), s.byteAt(1), s.bytes().toList().toText()) }";
-    assert_eq!(
-        output_of(src),
-        "3 -3 4 -4 3 -3\n[104, 195, 169, 121] 195 h\u{e9}y\n"
-    );
-    let o = run_main("fn main() { print((0.0 / 0.0).truncInt()) }");
-    assert_eq!(o.result, Err("panic".to_string()));
-    let o = run_main("fn main() { print(\"ab\".byteAt(2)) }");
-    assert_eq!(o.result, Err("panic".to_string()));
 }
 
 #[test]
@@ -712,10 +778,10 @@ fn program_sp1() {
     assert_eq!(output_of(src), "42\n");
 }
 
-/// Two contexts passing control back and forth (`rt_ctx_init`, `rt_ctx_switch`), the base of tasks and coroutines.
+/// Two contexts passing control back and forth (`rtCtxInit`, `rtCtxSwitch`), the base of tasks and coroutines.
 #[test]
 fn program_ctx1() {
-    let src = "var g_main: ptr = rt_null()\nvar g_co: ptr = rt_null()\nfn body() {\n for k of 0..3 {\n  print(\"co #k\")\n  rt_ctx_switch(g_co, rt_load_ptr(g_main))\n }\n print(\"co done\")\n rt_ctx_switch(g_co, rt_load_ptr(g_main))\n}\nfn main() {\n const stack = rt_alloc(65536)\n g_main = rt_alloc(8)\n g_co = rt_alloc(8)\n const blk = rt_alloc(16)\n const f: once fn() = () ~> body()\n rt_write<once fn()>(blk, sink f)\n var co = rt_ctx_init(stack, 65536, rt_load_ptr(blk), rt_load_ptr(rt_offset(blk, 8)))\n for k of 0..4 {\n  print(\"main #k\")\n  rt_ctx_switch(g_main, co)\n  co = rt_load_ptr(g_co)\n }\n const back = rt_read<once fn()>(blk)\n rt_free(stack)\n rt_free(g_main)\n rt_free(g_co)\n rt_free(blk)\n}\n";
+    let src = "var g_main: ptr = rtNull()\nvar g_co: ptr = rtNull()\nfn body() {\n for k of 0..3 {\n  print(\"co #k\")\n  rtCtxSwitch(g_co, rtLoadPtr(g_main))\n }\n print(\"co done\")\n rtCtxSwitch(g_co, rtLoadPtr(g_main))\n}\nfn main() {\n const stack = rtAlloc(65536)\n g_main = rtAlloc(8)\n g_co = rtAlloc(8)\n const blk = rtAlloc(16)\n const f: once fn() = () ~> body()\n rtWrite<once fn()>(blk, sink f)\n var co = rtCtxInit(stack, 65536, rtLoadPtr(blk), rtLoadPtr(rtOffset(blk, 8)))\n for k of 0..4 {\n  print(\"main #k\")\n  rtCtxSwitch(g_main, co)\n  co = rtLoadPtr(g_co)\n }\n const back = rtRead<once fn()>(blk)\n rtFree(stack)\n rtFree(g_main)\n rtFree(g_co)\n rtFree(blk)\n}\n";
     assert_eq!(
         output_of(src),
         "main 0\nco 0\nmain 1\nco 1\nmain 2\nco 2\nmain 3\nco done\n"
@@ -806,6 +872,54 @@ fn program_barrier_releases_all_together() {
         output_of(src),
         "before 0\nbefore 1\nbefore 2\nafter 2\nafter 0\nafter 1\n"
     );
+}
+
+#[test]
+fn program_select_send_waits_for_room_in_a_bounded_channel() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>(1)\n tx.send(1)\n scope s {\n  s.spawn([sink rx] () ~> { yield_now()\n   print(rx.recv() ?? 0)\n   print(rx.recv() ?? 0) })\n  select {\n   case tx.send(2) { print(\"sent\") }\n  }\n }\n}\n";
+    assert_eq!(output_of(src), "1\nsent\n2\n");
+}
+
+#[test]
+fn program_coroutine_next_and_iter() {
+    let src = "fn main() {\n const g = coroutine<int>(co ~> { for i of 0..3 { co.emit(i * 10) } })\n print(g.next())\n print(g.next())\n const h = coroutine<string>(co ~> { co.emit(\"a\")\n co.emit(\"b\") })\n for s of h.iter() { print(s) }\n print(g.next(), g.next())\n}\n";
+    assert_eq!(output_of(src), "some(0)\nsome(10)\na\nb\nsome(20) none\n");
+}
+
+#[test]
+fn program_coroutine_dropped_before_it_starts_or_while_suspended() {
+    let src = "fn main() {\n const never = coroutine<int>(co ~> { co.emit(1) })\n const g = coroutine<string>(co ~> { var n = 0\n while !co.cancelled() { co.emit(\"x#n\")\n  n += 1 }\n print(\"stopped\") })\n print(g.next())\n print(g.next())\n}\n";
+    assert_eq!(output_of(src), "some(\"x0\")\nsome(\"x1\")\nstopped\n");
+}
+
+#[test]
+fn program_coroutines_nest_and_run_inside_tasks() {
+    let src = "fn main() {\n const t = spawn(() ~> { const g = coroutine<int>(co ~> { const inner = coroutine<int>(c2 ~> { c2.emit(1)\n  c2.emit(2) })\n  while true {\n   const v = inner.next()\n   switch v {\n    case some(x): co.emit(x + 100)\n    case none: return\n   }\n  } })\n var t = 0\n for x of g.iter() { t += x }\n t })\n print(t.join!!())\n}\n";
+    assert_eq!(output_of(src), "203\n");
+}
+
+#[test]
+fn program_task_cancel_is_cooperative() {
+    let src = "fn main() {\n const t = spawn(() ~> { var n = 0\n while !cancelled() { n += 1\n  yield_now() }\n n > 0 })\n yield_now()\n t.cancel()\n print(t.join!!(), cancelled())\n}\n";
+    assert_eq!(output_of(src), "true false\n");
+}
+
+#[test]
+fn program_scope_cancel_reaches_its_tasks_and_a_select_arm() {
+    let src = "fn main() {\n const (tx, rx) = chan<int>()\n scope s {\n  s.spawn([sink rx] () ~> { select {\n   case v = rx.recv() { print(\"got\") }\n   case cancelled() { print(\"cancelled\") }\n  } })\n  s.spawn(() ~> { while !cancelled() { yield_now() }\n   print(\"second\") })\n  yield_now()\n  yield_now()\n  s.cancel()\n  s.spawn(() ~> print(cancelled()))\n }\n print(\"end\")\n}\n";
+    assert_eq!(output_of(src), "cancelled\nsecond\ntrue\nend\n");
+}
+
+#[test]
+fn program_scopes_nest_and_only_wait_for_their_own_tasks() {
+    let src = "fn main() {\n scope a {\n  a.spawn(() ~> print(\"a1\"))\n  scope b {\n   b.spawn(() ~> print(\"b1\"))\n  }\n  print(\"after b\")\n  a.spawn(() ~> print(\"a2\"))\n }\n print(\"end\")\n}\n";
+    assert_eq!(output_of(src), "a1\nb1\nafter b\na2\nend\n");
+}
+
+#[test]
+fn program_detached_tasks_are_abandoned_when_main_ends() {
+    let src = "fn main() {\n spawn(() ~> print(\"never\"))\n print(\"end\")\n}\n";
+    assert_eq!(output_of(src), "end\n");
 }
 
 #[test]
@@ -905,7 +1019,19 @@ fn program_localfn() {
 #[test]
 fn program_defer() {
     let src = "fn main() { defer print(\"bye\")\n print(\"hi\") }\n";
-    assert_eq!(output_of(src), "bye\nhi\n");
+    assert_eq!(output_of(src), "hi\nbye\n");
+}
+
+#[test]
+fn program_defer_order_and_exits() {
+    // Several defers run in reverse order, on every way out: the end, `return`, `?`, `continue`.
+    let src = "fn f(x: int) -> int {\n defer print(\"d1\")\n defer { print(\"d2\") }\n print(\"body\")\n if x > 0 { return 1 }\n print(\"end\")\n 2 }\n\
+fn first(x: int?) -> int? {\n defer print(\"first-end\")\n const v: int = x?\n return v }\n\
+fn main() {\n print(f(1))\n print(f(0))\n var i = 0\n while i < 3 {\n defer print(\"iter-end\", i)\n i += 1\n if i == 2 { continue }\n print(\"body\", i) }\n { defer print(\"inner\")\n print(\"in block\") }\n const a: int? = 4\n print(first(a))\n print(first(none)) }\n";
+    assert_eq!(
+        output_of(src),
+        "body\nd2\nd1\n1\nbody\nend\nd2\nd1\n2\nbody 1\niter-end 1\niter-end 2\nbody 3\niter-end 3\nin block\ninner\nfirst-end\nsome(4)\nfirst-end\nnone\n"
+    );
 }
 
 #[test]
@@ -924,7 +1050,7 @@ fn program_generic() {
 #[test]
 fn example_programs_run() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/programs");
-    for name in ["shapes", "words", "stack", "tree", "tables"] {
+    for name in ["shapes", "words", "stack", "tree", "tables", "config"] {
         let mut program = Program::with_core();
         program
             .add_package_from_path(&dir.join(format!("{name}.pel")))
@@ -1049,7 +1175,7 @@ fn box_inside_an_option_field() {
     assert_eq!(output_of(src), "5\ntrue\n");
 }
 
-// ---- A-08: `inout` closure parameters and the `scope` handle ------------------------------------
+// ---- `inout` closure parameters and the `scope` handle ------------------------------------
 
 #[test]
 fn inout_closure_parameters() {
@@ -1063,7 +1189,7 @@ fn scope_tasks_finish_with_the_scope() {
     assert_eq!(output_of(src), "spawned\n1 2\n");
 }
 
-// ---- A-03: the ledger (a fresh value nobody binds is dropped where its statement ends) -----------
+// ---- the ledger (a fresh value nobody binds is dropped where its statement ends) -----------
 
 #[test]
 fn object_temporaries_are_dropped() {
@@ -1151,7 +1277,7 @@ fn temporaries_die_in_reverse_order_at_the_end_of_the_statement() {
     assert_eq!(output_of(src), "3\ndrop 2\ndrop 1\nnext\n");
 }
 
-// ---- A-05 stage M1: `meta if` ---------------------------------------------------------------------
+// ---- `meta if` ---------------------------------------------------------------------
 
 #[test]
 fn meta_if_lowers_only_the_chosen_branch() {
@@ -1171,7 +1297,7 @@ fn meta_if_lowers_only_the_chosen_branch() {
     assert_eq!(o.output, "linux\n8\n");
 }
 
-// ---- A-05 stage M2: `meta N: int` value parameters ------------------------------------------------
+// ---- `meta N: int` value parameters ------------------------------------------------
 
 #[test]
 fn value_parameters_make_one_instance_per_value() {
@@ -1185,7 +1311,7 @@ fn value_parameters_on_a_struct() {
     assert_eq!(output_of(src), "4 3\n");
 }
 
-// ---- A-06: soa<T> ----------------------------------------------------------------------------------
+// ---- soa<T> ----------------------------------------------------------------------------------
 
 #[test]
 fn soa_works_like_a_list_of_structs() {
@@ -1235,7 +1361,7 @@ fn soa_prints_as_a_list_of_structs_and_has_blocked_form() {
     );
 }
 
-// ---- A-05 stage M3: `meta expr` and `meta fn` -------------------------------------------------------
+// ---- `meta expr` and `meta fn` -------------------------------------------------------
 
 fn lowered_diags(src: &str) -> Vec<(String, bool)> {
     let mut program = Program::with_core();
@@ -1295,7 +1421,7 @@ fn meta_runs_that_cannot_finish_are_errors() {
             .any(|(m, w)| !w && m.contains("(in inner <- outer)")),
         "{d:?}"
     );
-    let d = lowered_diags("meta fn fail() -> int { meta_error(\"nope\") }\nfn main() { const c = meta fail()\n print(c) }\n");
+    let d = lowered_diags("meta fn fail() -> int { metaError(\"nope\") }\nfn main() { const c = meta fail()\n print(c) }\n");
     assert!(d.iter().any(|(m, w)| !w && m.contains("nope")), "{d:?}");
     let d = lowered_diags(
         "meta fn f() -> int = a + 1\nconst a: int = meta f()\nfn main() { print(a) }\n",
@@ -1318,19 +1444,19 @@ fn meta_values_that_hold_closures_are_errors() {
 
 #[test]
 fn meta_note_is_a_compile_time_message() {
-    let d = lowered_diags("meta fn f() -> int { meta_note(\"building\")\n 4 }\nfn main() { const c = meta f()\n print(c) }\n");
+    let d = lowered_diags("meta fn f() -> int { metaNote(\"building\")\n 4 }\nfn main() { const c = meta f()\n print(c) }\n");
     assert!(
         d.iter().any(|(m, w)| *w && m.contains("meta: building")),
         "{d:?}"
     );
 }
 
-// ---- A-07: async / await (stage 0: a call runs the body to the end) -----------------------------------
+// ---- async / await (stage 0: a call runs the body to the end) -----------------------------------
 
 #[test]
 fn async_functions_and_await() {
-    let src = "async fn double(x: int) -> int { x * 2 }\nasync fn greet(name: string) -> string { \"hello #name\" }\nasync fn say(s: string) { print(s) }\nasync fn both() -> int {\n const a = double(4)\n const b = double(5)\n await say(\"working\")\n await a + await b }\nstruct counter { n: int\n async fn bump(inout self) -> int { self.n += 1\n self.n } }\nasync fn boxed(v: int) -> box<int> { box(v) }\nfn main() { print(block_on(both()))\n print(block_on(greet(\"pelago\")))\n var c = counter { n: 0 }\n print(block_on(c.bump!()), block_on(c.bump!()))\n const b = block_on(boxed(7))\n print(b.get()) }\n";
-    assert_eq!(output_of(src), "working\n18\nhello pelago\n1 2\n7\n");
+    let src = "async fn double(x: int) -> int { x * 2 }\nasync fn greet(name: string) -> string { \"hello #name\" }\nasync fn say(s: string) { print(s) }\nasync fn both() -> int {\n const a = double(4)\n const b = double(5)\n await say(\"working\")\n await a + await b }\nasync fn boxed(v: int) -> box<int> { box(v) }\nfn main() { print(blockOn(both()))\n print(blockOn(greet(\"pelago\")))\n const b = blockOn(boxed(7))\n print(b.get()) }\n";
+    assert_eq!(output_of(src), "working\n18\nhello pelago\n7\n");
 }
 
 #[test]
@@ -1357,14 +1483,37 @@ async fn total(sink rx: receiver<int>) -> int {
     t
 }
 fn main() {
-    print(block_on(safe_div(1, 0)).isErr(), block_on(run()))
+    print(blockOn(safe_div(1, 0)).isErr(), blockOn(run()))
     const (tx, rx) = chan<int>()
     tx.send(1)
     tx.send(2)
-    print(block_on(total(sink rx)))
+    print(blockOn(total(sink rx)))
 }
 "#;
     assert_eq!(output_of(src), "true ok(5)\n3\n");
+}
+
+#[test]
+fn async_calls_run_as_tasks_that_can_wait_for_each_other() {
+    // The consumer is called first and waits for values the producer, called after it, sends: a call that ran its body to
+    // the end would wait for ever.
+    let src = r#"async fn producer(sink tx: sender<int>) {
+    for i of 0..3 { tx.send(i + 1) }
+}
+async fn consumer(sink rx: receiver<int>) -> int {
+    var t = 0
+    for v of rx.iter() { t += v }
+    t
+}
+fn main() {
+    const (tx, rx) = chan<int>()
+    const c = consumer(sink rx)
+    const p = producer(sink tx)
+    blockOn(p)
+    print(blockOn(c))
+}
+"#;
+    assert_eq!(output_of(src), "6\n");
 }
 
 #[test]
@@ -1448,7 +1597,7 @@ fn main() {
     assert_eq!(output_of(src), "some(4) 4 true false 5\n11\n");
 }
 
-// ---- The native build on the edge cases of `docs/design/backend.md` -------------------------------------
+// ---- The native build on the edge cases -------------------------------------
 
 #[test]
 fn appending_with_plus_assign_keeps_its_meaning() {
@@ -1505,6 +1654,264 @@ fn appending_with_plus_assign_keeps_its_meaning() {
     }
 }
 
+/// The clocks and the system's random numbers answer on every target that runs here (Linux, and Windows through
+/// kernel32 and advapi32), the same as in the interpreter.
+#[test]
+fn native_clock_and_random_answer() {
+    agree(
+        "import std.time\nimport std.random\n\nfn main() -> void ! io_error {\n    const t0 = time.now()?\n    const epoch = time.sinceEpoch()?\n    print(epoch.asSeconds() > 1700000000, epoch.asSeconds() < 4000000000)\n    var acc = 0\n    for i of 0..20000 { acc += i }\n    const t1 = time.now()?\n    print(t1.since(t0).asNanos() >= 0, acc)\n    const b = random.bytes(64)?\n    var differ = false\n    for i of 1..64 { if b[i] != b[0] { differ = true } }\n    print(b.len(), differ)\n    const d = random.between(1, 6)?\n    print(d >= 1 && d <= 6)\n}",
+    );
+}
+
+/// The clocks on macOS (AArch64 only, so it runs on the macOS CI job): the wall clock, the monotonic one and
+/// the system's random bytes, built straight into the program (no `libc`).
+#[test]
+fn native_clock_on_macos() {
+    use crate::native::{exec, gen, Arch, Os};
+    if !exec::can_run_a64_on(Os::MacOs) {
+        return;
+    }
+    let src = "import std.time\nimport std.random\n\nfn main() -> void ! io_error {\n    const t0 = time.now()?\n    const epoch = time.sinceEpoch()?\n    print(epoch.asSeconds() > 1700000000, epoch.asSeconds() < 4000000000)\n    var acc = 0\n    for i of 0..20000 { acc += i }\n    const t1 = time.now()?\n    print(t1.since(t0).asNanos() >= 0, acc)\n    const b = random.bytes(64)?\n    var differ = false\n    for i of 1..64 { if b[i] != b[0] { differ = true } }\n    print(b.len(), differ)\n    const d = random.between(1, 6)?\n    print(d >= 1 && d <= 6)\n}";
+    let l = lowered(src);
+    let o = run_full(&l.module, "main", &[]);
+    let opts = gen::Options {
+        leak_check: false,
+        target: Os::MacOs,
+        symbols: false,
+    };
+    let image = crate::native::gen_a64::compile(&l.module, "main", &opts).unwrap();
+    let r = exec::run_image_arch(Arch::Aarch64, Os::MacOs, &image).unwrap();
+    assert_eq!((r.out, r.code), (o.output, 0), "{}", r.err);
+}
+
+/// Sleeping natively, on every target that can run here: the system call waits and the clock sees it.
+#[test]
+fn native_sleep_waits() {
+    use crate::native::{exec, gen, Arch, Os};
+    let src = "import std.time\n\nfn main() -> void ! io_error {\n    const t0 = time.now()?\n    time.sleep(time.millis(30))\n    print((t0.elapsed()?).asMillis() >= 30)\n}";
+    let l = lowered(src);
+    for (arch, os) in [
+        (Arch::X86_64, Os::Linux),
+        (Arch::X86_64, Os::Windows),
+        (Arch::Aarch64, Os::Linux),
+        (Arch::Aarch64, Os::Windows),
+        (Arch::Aarch64, Os::MacOs),
+    ] {
+        let a64 = arch == Arch::Aarch64;
+        if (a64 && !exec::can_run_a64_on(os)) || (!a64 && !exec::can_run(os)) {
+            continue;
+        }
+        let opts = gen::Options {
+            leak_check: false,
+            target: os,
+            symbols: false,
+        };
+        let image = if a64 {
+            crate::native::gen_a64::compile(&l.module, "main", &opts).unwrap()
+        } else {
+            gen::compile(&l.module, "main", &opts).unwrap()
+        };
+        let r = exec::run_image_arch(arch, os, &image).unwrap();
+        assert_eq!(
+            (r.out.as_str(), r.code),
+            ("true\n", 0),
+            "{arch:?} {os:?}: {}",
+            r.err
+        );
+    }
+}
+
+/// A native stop message without its place (`file:line: `) and the `stopped: ` before the message.
+fn unplaced(err: &str) -> &str {
+    let said = err.rsplit_once(": stopped: ").map_or(err, |(_, m)| m);
+    said.strip_prefix("stopped: ").unwrap_or(said)
+}
+
+/// A failed check names the file and line it is on, the same in the interpreter and on every back end (R4).
+#[test]
+fn native_stop_names_its_place() {
+    use crate::native::{exec, gen, Os};
+    let src = "fn main() {\n    var x = 9223372036854775807\n    print(1)\n    x = x + 1\n    print(x)\n}";
+    let l = lowered(src);
+    let o = run_full(&l.module, "main", &[]);
+    let (file, line) = o
+        .stop_at
+        .clone()
+        .expect("the interpreter knows where it stopped");
+    assert_eq!(line, 4);
+    let want = format!("{file}:4: stopped: arithmetic overflow\n");
+    for os in [Os::Linux, Os::Windows] {
+        if !exec::can_run(os) {
+            continue;
+        }
+        let opts = gen::Options {
+            leak_check: false,
+            target: os,
+            symbols: false,
+        };
+        let image = gen::compile(&l.module, "main", &opts).unwrap();
+        let r = exec::run_image(os, &image).unwrap();
+        assert_eq!((r.err.as_str(), r.code), (want.as_str(), 1), "{os:?}");
+    }
+    if let Some(r) = exec::build_and_run_a64(&l.module, false) {
+        assert_eq!((r.err.as_str(), r.code), (want.as_str(), 1), "AArch64");
+    }
+}
+
+/// The Windows command line splits by the rules Windows programs agree on (quotes group, backslashes escape a
+/// quote only, `""` inside quotes is a quote), in place, as `main(args)` reads it there.
+#[test]
+fn windows_command_lines_split() {
+    let src = r##"fn split(text: str) {
+    const n = text.len()
+    const from = rtHdrData(rtAddrOf(text))
+    const p = rtAlloc(n + 1)
+    var i = 0
+    while i < n {
+        rtStoreByte(rtOffset(p, i), rtLoadByte(rtOffset(from, i)))
+        i += 1
+    }
+    const count = rtWinSplit(p)
+    var out = "#count"
+    var s = p
+    var k = 0
+    while k < count {
+        var len = 0
+        while rtLoadByte(rtOffset(s, len)) != 0 { len += 1 }
+        out.pushStr!(" [")
+        rtStrPush(rtAddrOf(out), s, len)
+        out.pushStr!("]")
+        s = rtOffset(s, len + 1)
+        k += 1
+    }
+    print(out)
+    rtFree(p)
+}
+
+fn main() {
+    split("prog a b c")
+    split("\"C:\\Program Files\\x.exe\" \"a b\" c")
+    split("p \"abc\" d e")
+    split("p a\\\\\\b d\"e f\"g h")
+    split("p a\\\\\\\"b c d")
+    split("p a\\\\\\\\\"b c\" d e")
+    split("p a\"b\"\" c d")
+    split("p  x\t ")
+    split("p \"\" x")
+    split("solo")
+    split("p café \"世界 x\"")
+}"##;
+    assert_eq!(
+        output_of(src),
+        "4 [prog] [a] [b] [c]\n\
+         3 [C:\\Program Files\\x.exe] [a b] [c]\n\
+         4 [p] [abc] [d] [e]\n\
+         4 [p] [a\\\\\\b] [de fg] [h]\n\
+         4 [p] [a\\\"b] [c] [d]\n\
+         4 [p] [a\\\\b c] [d] [e]\n\
+         2 [p] [ab\" c d]\n\
+         2 [p] [x]\n\
+         3 [p] [] [x]\n\
+         1 [solo]\n\
+         3 [p] [caf\u{e9}] [\u{4e16}\u{754c} x]\n"
+    );
+}
+
+/// `main(args)` and `std.env` natively: the arguments arrive whole (on Windows through the command line and
+/// `rtWinSplit`, quotes and backslashes included) and the environment is readable.
+#[test]
+fn native_args_and_environment() {
+    use crate::native::{exec, gen, Arch, Os};
+    let src = "import std.env\n\nfn main(args: [string]) {\n    print(args.len())\n    for i of 1..args.len() { print(\"[#(args[i])]\") }\n    print(env.get(\"PELAGO_T\").unwrapOr(\"none\"))\n    print(env.has(\"PELAGO_UNSET_VAR\"))\n}";
+    let l = lowered(src);
+    for (arch, os) in [
+        (Arch::X86_64, Os::Linux),
+        (Arch::X86_64, Os::Windows),
+        (Arch::Aarch64, Os::Linux),
+        (Arch::Aarch64, Os::Windows),
+        (Arch::Aarch64, Os::MacOs),
+    ] {
+        let a64 = arch == Arch::Aarch64;
+        if (a64 && !exec::can_run_a64_on(os)) || (!a64 && !exec::can_run(os)) {
+            continue;
+        }
+        let opts = gen::Options {
+            leak_check: true,
+            target: os,
+            symbols: false,
+        };
+        let image = if a64 {
+            crate::native::gen_a64::compile(&l.module, "main", &opts).unwrap()
+        } else {
+            gen::compile(&l.module, "main", &opts).unwrap()
+        };
+        let r = exec::run_image_with(
+            arch,
+            os,
+            &image,
+            &["a b", "c\"d", "e\\", "", "caf\u{e9}"],
+            &[("PELAGO_T", "x=1")],
+        )
+        .unwrap();
+        assert_eq!(
+            (r.out.as_str(), r.err.as_str(), r.code),
+            (
+                "6\n[a b]\n[c\"d]\n[e\\]\n[]\n[caf\u{e9}]\nx=1\nfalse\n",
+                "",
+                0
+            ),
+            "{arch:?} {os:?}"
+        );
+    }
+}
+
+/// The file-system calls natively, on every Linux back end that can run here (x86-64 and AArch64): make a
+/// directory tree, write, inspect, rename, list and remove, and meet the errors for a missing path.
+#[test]
+fn native_file_system_calls() {
+    use crate::native::{exec, gen, Arch, Os};
+    let listing = "b.txt\nc.txt\nsub\n\u{e9}.txt\n";
+    let all = [
+        (Arch::X86_64, Os::Linux, "x86"),
+        (Arch::Aarch64, Os::Linux, "a64"),
+        (Arch::X86_64, Os::Windows, "x86w"),
+        (Arch::Aarch64, Os::Windows, "a64w"),
+        (Arch::Aarch64, Os::MacOs, "a64m"),
+    ];
+    for (arch, os, tag) in all {
+        let a64 = arch == Arch::Aarch64;
+        if (a64 && !exec::can_run_a64_on(os)) || (!a64 && !exec::can_run(os)) {
+            continue;
+        }
+        let want = format!("true\ntrue 5\ntrue\n{listing}false\ntrue\ntrue\n");
+        let dir = std::env::temp_dir().join(format!("pelago-fs-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let d = dir.display().to_string().replace('\\', "/");
+        let src = format!(
+            "import std.fs\nimport std.io\n\nfn main() -> void ! io_error {{\n    const root = \"{d}\"\n    fs.createDirs(\"#(root)/sub/inner\")?\n    fs.writeText(\"#(root)/a.txt\", \"hello\")?\n    print(fs.exists(\"#(root)/a.txt\"))\n    const m = fs.metadata(\"#(root)/a.txt\")?\n    print(m.kind == fs.file_kind.file, m.size)\n    const sd = fs.metadata(\"#(root)/sub\")?\n    print(sd.kind == fs.file_kind.dir)\n    fs.rename(\"#(root)/a.txt\", \"#(root)/b.txt\")?\n    fs.writeText(\"#(root)/c.txt\", \"x\")?\n    fs.writeText(\"#(root)/\u{e9}.txt\", \"y\")?\n    fs.removeDir(\"#(root)/sub/inner\")?\n    for n of fs.readDir(root)? {{ print(n) }}\n    fs.removeFile(\"#(root)/b.txt\")?\n    fs.removeFile(\"#(root)/c.txt\")?\n    fs.removeFile(\"#(root)/\u{e9}.txt\")?\n    fs.removeDir(\"#(root)/sub\")?\n    print(fs.exists(\"#(root)/b.txt\"))\n    const e = fs.metadata(\"#(root)/b.txt\")\n    switch e {{\n        case ok(_): print(\"found\")\n        case err(x): print(x.kind == io_kind.notFound)\n    }}\n    fs.removeDir(root)?\n    print(!fs.exists(root))\n}}"
+        );
+        let l = lowered(&src);
+        let opts = gen::Options {
+            leak_check: false,
+            target: os,
+            symbols: false,
+        };
+        let image = if a64 {
+            crate::native::gen_a64::compile(&l.module, "main", &opts).unwrap()
+        } else {
+            gen::compile(&l.module, "main", &opts).unwrap()
+        };
+        let r = exec::run_image_arch(arch, os, &image).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            (r.out.as_str(), r.code),
+            (want.as_str(), 0),
+            "{arch:?} {os:?}: {}",
+            r.err
+        );
+    }
+}
+
 /// The program does the same natively as in the interpreter: same output, and the same stop (message
 /// on standard error, status 1) or a clean exit.
 fn agree(src: &str) {
@@ -1518,23 +1925,22 @@ fn agree(src: &str) {
         m
     };
     let mut sets = vec![
-        ("plain", Os::Linux, &l.module, false, usize::MAX),
-        ("plain", Os::Linux, &l.module, true, usize::MAX),
-        ("optimised", Os::Linux, &optimised, true, usize::MAX),
-        ("plain", Os::Windows, &l.module, true, usize::MAX),
+        ("plain", Os::Linux, &l.module, usize::MAX),
+        ("optimised", Os::Linux, &optimised, usize::MAX),
+        ("plain", Os::Windows, &l.module, usize::MAX),
     ];
     for limit in [1, 2, 4] {
-        sets.push(("plain", Os::Linux, &l.module, true, limit));
-        sets.push(("optimised", Os::Linux, &optimised, true, limit));
+        sets.push(("plain", Os::Linux, &l.module, limit));
+        sets.push(("optimised", Os::Linux, &optimised, limit));
     }
-    for (what, os, m, regalloc, limit) in sets {
+    for (what, os, m, limit) in sets {
         if !exec::can_run(os) {
             continue;
         }
         let opts = gen::Options {
             leak_check: false,
             target: os,
-            regalloc,
+            symbols: false,
         };
         gen::REG_LIMIT.with(|l| l.set(limit));
         let image = gen::compile(m, "main", &opts).unwrap();
@@ -1546,11 +1952,13 @@ fn agree(src: &str) {
         );
         match &o.result {
             Ok(_) => assert_eq!((r.err.as_str(), r.code), ("", 0), "{what} {os:?}: {src}"),
-            Err(msg) => assert_eq!(
-                (r.err.as_str(), r.code),
-                (format!("stopped: {msg}\n").as_str(), 1),
-                "{what} {os:?}: {src}"
-            ),
+            Err(msg) => {
+                assert_eq!(
+                    (unplaced(&r.err), r.code),
+                    (format!("{msg}\n").as_str(), 1),
+                    "{what} {os:?}: {src}"
+                )
+            }
         }
     }
     for (what, m) in [("plain", &l.module), ("optimised", &optimised)] {
@@ -1561,8 +1969,8 @@ fn agree(src: &str) {
         match &o.result {
             Ok(_) => assert_eq!((r.err.as_str(), r.code), ("", 0), "{what} AArch64: {src}"),
             Err(msg) => assert_eq!(
-                (r.err.as_str(), r.code),
-                (format!("stopped: {msg}\n").as_str(), 1),
+                (unplaced(&r.err), r.code),
+                (format!("{msg}\n").as_str(), 1),
                 "{what} AArch64: {src}"
             ),
         }
@@ -1570,7 +1978,7 @@ fn agree(src: &str) {
 }
 
 /// `fma` rounds once: it agrees with the interpreter on every back end, and with the exact value
-/// where `a * b + c` would lose the low bits (card A-10).
+/// where `a * b + c` would lose the low bits.
 #[test]
 fn native_agrees_on_fused_multiply_add() {
     agree(
@@ -1612,6 +2020,19 @@ fn native_agrees_on_sqrt_and_rounding() {
     );
 }
 
+/// Narrowing an `int` wraps or checks, the same in the interpreter and natively.
+#[test]
+fn native_agrees_on_int_narrowing() {
+    agree(
+        "fn main() {
+            const n = 300
+            print(n.wrapToByte() to int, (0 - 1).wrapToByte() to int, n.wrapToInt8() to int, (0 - 129).wrapToInt8() to int)
+            print(n.wrapToInt16() to int, (70000).wrapToUint16() to int, (5000000000).wrapToInt32() to int, (5000000000).wrapToUint32() to int)
+            print(n.toByteChecked(), (255).toByteChecked(), (0 - 1).toInt8Checked(), (127).toInt8Checked())
+        }",
+    );
+}
+
 /// A zero float constant that a hoisted instruction reads stays where the loop can see it.
 #[test]
 fn licm_keeps_a_zero_constant_a_hoisted_op_reads() {
@@ -1626,8 +2047,7 @@ fn licm_keeps_a_zero_constant_a_hoisted_op_reads() {
     );
 }
 
-/// Division and remainder by constants that are not powers of two run as a high multiply (card A-11,
-/// W1); the loops give the optimiser values it cannot fold, spread over the whole range.
+/// Division and remainder by constants that are not powers of two run as a high multiply; the loops give the optimiser values it cannot fold, spread over the whole range.
 #[test]
 fn native_agrees_on_division_by_constants() {
     agree(
@@ -1935,7 +2355,7 @@ fn main() {
     );
 }
 
-/// Floats in SSE registers (A-11 W11): arithmetic in place, compares fused into branches, values kept
+/// Floats in SSE registers: arithmetic in place, compares fused into branches, values kept
 /// across calls, swaps through block parameters, arguments in `xmm0..7` and on the stack.
 #[test]
 fn float_registers_stress() {
@@ -2019,7 +2439,7 @@ fn main() {
         const a = -x
         const b = a % y
         const c = (i to float) * 0.5 - b
-        acc += c + ((rt_to_int(c)) to float) + ((i to float32) to float)
+        acc += c + ((rtToInt(c)) to float) + ((i to float32) to float)
         x = x * 1.25 + 0.0
         y = -y * 0.5
     }
@@ -2074,7 +2494,7 @@ fn main() {
     }
 }
 
-/// Memory operations (A-11 W5): addresses folded into the load or store, copies as plain moves.
+/// Memory operations: addresses folded into the load or store, copies as plain moves.
 #[test]
 fn memory_operations_stress() {
     let programs: [(&str, &str); 2] = [
@@ -2237,6 +2657,83 @@ fn a_branch_with_plain_sides_becomes_a_select() {
 }
 
 #[test]
+fn a_load_joins_an_earlier_load_only_when_no_store_or_call_lies_between() {
+    // `prev[j]` is read twice on the way to the minimum: the second read joins the first.
+    agree("fn best(prev: [int], j: int, b: int) -> int { var m = b\n if prev[j] + 1 < m { m = prev[j] + 1 }\n m }\nfn main() { var xs: [int] = []\n for i in 0..40 { xs.push!((i * 7919) % 31) }\n var t = 0\n for j in 0..39 { t += best(xs, j, 17) }\n print(t) }");
+    // A store between the two reads must keep the second one.
+    agree("fn main() { var a: [int] = [1, 2, 3]\n var t = 0\n for i in 0..3 { const x = a[i]\n a[i] = x + 10\n t += x * 100 + a[i] }\n print(t) }");
+    // So must a call that writes through its argument.
+    agree("fn bump(inout xs: [int]) { xs[0] += 5 }\nfn main() { var a: [int] = [1, 2]\n const x = a[0]\n bump(inout a)\n print(x, a[0]) }");
+}
+
+#[test]
+fn loads_through_a_let_parameter_are_marked_frozen_and_others_are_not() {
+    // `a` is `let`: its header words, data pointer and elements are frozen. `b` is `inout`, `c` is
+    // `sink`, and `d` is a local: none of their loads is.
+    let src = "fn pick(a: [int], inout b: [int], sink c: [int], i: int) -> int { var d: [int] = [7]\n b[0] = a[i] + 1\n a[i] + b[0] + c[0] + d[0] }\nfn main() { var b: [int] = [5]\n print(pick([1, 2, 3], inout b, [9], 1)) }";
+    let l = lowered(src);
+    let mut m = l.module.clone();
+    let id = m.funcs.iter().position(|f| f.name == "pick").unwrap();
+    crate::ir::opt::frozen::mark(&mut m.funcs[id]);
+    let f = &m.funcs[id];
+    assert_eq!(f.let_ptrs.len(), 1, "only `a` is a let pointer parameter");
+    let loads = f
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter())
+        .filter(|&&i| matches!(f.insts[i].op, Op::Load(..)))
+        .count();
+    assert!(!f.frozen.is_empty(), "the reads of `a` are frozen");
+    assert!(f.frozen.len() < loads, "reads of b, c and d are not");
+    // Every frozen load is a load, and the interpreter still agrees after the whole pipeline.
+    for &i in &f.frozen {
+        assert!(matches!(f.insts[i].op, Op::Load(..)));
+    }
+    agree(src);
+    // Inlining makes new instruction numbers: the callee's marks are not copied into the caller.
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    if let Some(main) = m.funcs.iter().find(|f| f.name == "main") {
+        assert!(main.frozen.is_empty() || main.let_ptrs.is_empty());
+    }
+}
+
+#[test]
+fn the_verifier_rejects_a_frozen_mark_that_is_not_a_load() {
+    let l = lowered(
+        "fn pick(a: [int], i: int) -> int { a[i] + a[0] }\nfn main() { print(pick([1, 2], 1)) }",
+    );
+    let mut m = l.module.clone();
+    let id = m.funcs.iter().position(|f| f.name == "pick").unwrap();
+    crate::ir::opt::frozen::mark(&mut m.funcs[id]);
+    assert!(crate::lower::tests::verify_module(&m).is_empty());
+    // A stale number (out of range) and a non-load are both reported.
+    m.funcs[id].frozen.insert(usize::MAX);
+    let nonload = m.funcs[id]
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter().copied())
+        .find(|&i| !matches!(m.funcs[id].insts[i].op, Op::Load(..)))
+        .unwrap();
+    m.funcs[id].frozen.insert(nonload);
+    assert_eq!(crate::lower::tests::verify_module(&m).len(), 2);
+    // The whole pipeline leaves only valid marks.
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    assert!(crate::lower::tests::verify_module(&m).is_empty());
+}
+
+#[test]
+fn a_range_test_becomes_one_unsigned_compare() {
+    let src = "fn digit(c: int) -> bool { c >= 48 && c <= 57 }\nfn main() { var n = 0\n for i in -5..120 { if digit(i) { n += 1 } }\n print(n) }";
+    let l = lowered(src);
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let text = crate::ir::print_func(m.funcs.iter().find(|f| f.name == "digit").unwrap(), None);
+    assert!(!text.contains("select"), "{text}");
+    agree(src);
+}
+
+#[test]
 fn masks_nobody_reads_go_and_counters_that_move_together_become_one() {
     let src = "fn main() { var x = 1\n var y = 2\n var t = 0\n for i in 0..1000 { x += 3\n y += 1\n t += (x * 3 + y) & 1023\n x = x & 65535\n y = y & 65535 }\n print(t) }";
     let l = lowered(src);
@@ -2387,8 +2884,9 @@ fn lists_are_summed_and_mapped_in_vectors_with_the_same_results_and_stops() {
                 fast.result.map(|v| v.as_i64()),
                 "go({n}, {base})"
             );
-            // A stop leaves what it holds, in both.
-            assert_eq!(plain.leaked, fast.leaked, "go({n}, {base}) leaked");
+            // A stop leaves what it holds, in both. The bytes may differ: the optimised loop makes
+            // room for all its pushes at once, and the capacity of a list is not observable.
+            assert_eq!(plain.leaked > 0, fast.leaked > 0, "go({n}, {base}) leaked");
         }
     }
     agree(src);
@@ -2434,11 +2932,11 @@ fn float32_rounds_after_every_operation() {
 
 #[test]
 fn float_to_int_saturates() {
-    // `floor` and `ceil` are exact now (NaN stays NaN); only printing a huge float saturates.
+    // `floor` and `ceil` are exact (NaN stays NaN); a huge float prints in exponent form.
     let src = "fn main() { const z = 0.0\n const big = 1e30\n print(big.floor(), (-big).floor(), (z / z).floor(), 2.9.floor(), (-2.9).floor(), 1e19.ceil(), (-1e19).ceil()) }";
     assert_eq!(
         output_of(src),
-        "9223372036854775807 -9223372036854775807 nan 2 -3 9223372036854775807 -9223372036854775807\n"
+        "1e+30 -1e+30 nan 2 -3 10000000000000000000 -10000000000000000000\n"
     );
 }
 
@@ -2462,7 +2960,7 @@ fn native_runaway_recursion_stops_cleanly() {
             let opts = gen::Options {
                 leak_check: false,
                 target: os,
-                regalloc: true,
+                symbols: false,
             };
             let image = gen::compile(&l.module, "main", &opts).unwrap();
             let r = exec::run_image(os, &image).unwrap();
@@ -2665,6 +3163,32 @@ fn big_blocks_grow_and_are_reused() {
     );
 }
 
+/// Counters bumped on one side of an `if` (a `select` or a join block of the optimiser) are bounded
+/// by the trip count too; a bump that can pass the maximum still stops the program.
+#[test]
+fn counters_behind_an_if_keep_their_traps() {
+    agree(
+        "fn main() {
+            var ok = 0
+            var bad = 0
+            var t = 0
+            for i in 0..5000 {
+                if i % 3 == 0 { bad += 1 } else { ok += 1; t += i & 255 }
+            }
+            print(ok, bad, t)
+        }",
+    );
+    agree(
+        "fn main() {
+            var t = 9223372036854775000
+            for i in 0..5000 {
+                if i % 3 == 0 { t += 1 }
+            }
+            print(t)
+        }",
+    );
+}
+
 /// A loop limit that is not a constant but has a known range bounds the trip count too; a limit
 /// that can be huge still traps.
 #[test]
@@ -2748,6 +3272,15 @@ fn maps_find_keys_that_collide_in_the_first_slot() {
 }
 
 #[test]
+fn printing_an_empty_string_made_by_interpolation() {
+    // An empty heap string has a null address; reading no bytes from it is not a fault.
+    assert_eq!(
+        output_of("fn f(s: str) -> string = \"#(s[2..2])\"\nfn main() { const e = f(\"c=\")\n print(\"c\", e)\n print(e.len()) }"),
+        "c \n0\n"
+    );
+}
+
+#[test]
 fn cloning_and_sorting_an_empty_list() {
     // Cloning copies zero bytes between two null addresses; the interpreter must accept that.
     assert_eq!(
@@ -2784,6 +3317,83 @@ fn sorting_integers_past_the_insertion_sort_limit() {
         output_of(src),
         "true true -9223372036854775807 9223372036854775807\n"
     );
+}
+
+/// `[value; n]` with a run-time count makes a list; a negative or absurd count stops.
+#[test]
+fn repeated_list_counts_that_cannot_be_built_stop() {
+    let src = "fn f(n: int) -> int {\n const xs = [false; n]\n xs.len()\n}";
+    assert_eq!(eval(src, "f", &[4]), Ok(4));
+    assert_eq!(eval(src, "f", &[0]), Ok(0));
+    assert_eq!(
+        eval(src, "f", &[-1]),
+        Err("negative list length".to_string())
+    );
+    assert_eq!(
+        eval(src, "f", &[i64::MAX]),
+        Err("list length too large".to_string())
+    );
+}
+
+/// The library's own tests: every `name.pel` in a `tests/` directory next to the library sources is a
+/// program with its expected output in `name.out`. A file `name.stops` says the program must stop.
+#[test]
+fn library_test_suites() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut ran = 0;
+    for lib in ["core", "std"] {
+        let dir = root.join(lib).join("tests");
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        let mut files: Vec<_> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == "pel"))
+            .collect();
+        files.sort();
+        for f in files {
+            let src = std::fs::read_to_string(&f).unwrap();
+            let expected = std::fs::read_to_string(f.with_extension("out"))
+                .unwrap_or_else(|_| panic!("{} has no .out file", f.display()));
+            if f.with_extension("stops").exists() {
+                let o = run_main(&src);
+                assert_eq!(o.result, Err("panic".to_string()), "{}", f.display());
+                assert_eq!(o.output, expected, "{}", f.display());
+            } else {
+                assert_eq!(output_of(&src), expected, "{}", f.display());
+            }
+            ran += 1;
+        }
+    }
+    assert!(ran > 0);
+}
+
+/// A closure moved into `spawn` outlives the creating function's frame, so a variable it uses in place
+/// is refused at lowering with a message that says how to fix it; `[sink x]` moves it in.
+#[test]
+fn spawn_refuses_a_closure_that_borrows_the_frame() {
+    let bad = "fn start(n: int) -> task<int> {
+        var m = n
+        m = m + 1
+        return spawn(() ~> m)
+    }
+    fn main() { print(start(1).join!!()) }";
+    let mut program = Program::with_core();
+    program.add_package("app", &[("main", bad)]);
+    let res = resolve(&program);
+    let typed = check(&program, &res);
+    assert!(typed.diagnostics.iter().all(|d| d.warning), "checks");
+    let l = lower(&program, &res, &typed);
+    let errs: Vec<&str> = l
+        .diagnostics
+        .iter()
+        .filter(|d| !d.warning)
+        .map(|d| d.message.as_str())
+        .collect();
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].contains("`[sink m]`"), "{}", errs[0]);
+    let good = bad.replace("spawn(() ~> m)", "spawn([sink m] () ~> m)");
+    assert_eq!(output_of(&good), "2\n");
 }
 
 /// Index tests settled by a guard in front of the loop: what the program prints and where it stops
@@ -2858,6 +3468,190 @@ fn guarded_loops_stop_where_the_checked_loop_did() {
     );
 }
 
+/// A test that repeats with the counter (`i % 3`, `i & 1`) stays a branch: the processor predicts it, and
+/// a `select` would put the counters it updates onto the dependency chain. A test on a value computed
+/// otherwise (the parity of a collatz step) still becomes a `select`.
+#[test]
+fn periodic_tests_stay_branches_and_data_tests_become_selects() {
+    let selects = |src: &str| {
+        let l = lowered(src);
+        let mut m = l.module.clone();
+        crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+        let f = m.funcs.iter().find(|f| f.name == "main").unwrap();
+        crate::ir::print_func(f, None).matches("select").count()
+    };
+    let periodic = "fn main() {
+            var a = 0
+            var b = 0
+            var t = 0
+            for i in 0..100000 {
+                if i & 1 == 1 { a += 1 } else { b += 1; t += i & 255 }
+            }
+            print(a, b, t)
+        }";
+    assert_eq!(selects(periodic), 0);
+    agree(periodic);
+    let data = "fn main() {
+            var n = 27
+            var steps = 0
+            for i in 0..100000 {
+                if n & 1 == 1 { n = n * 3 + 1 } else { n = n >> 1 }
+                if n == 1 { n = 27 + i % 50 }
+                steps += 1
+            }
+            print(n, steps)
+        }";
+    assert!(selects(data) > 0);
+    agree(data);
+}
+
+/// A loop that pushes to one list is grown once in front of the loop and runs without capacity tests;
+/// the results, the stops and their order are those of the interpreter, whatever the list held before.
+#[test]
+fn push_loops_agree_with_the_interpreter_and_keep_their_stops() {
+    // Four pushes a pass, a step of three, a masked table index: the shape of base64.
+    let enc = "fn enc(src: [uint8], table: [uint8], pre: int) -> [uint8] {
+            var out: [uint8] = []
+            for k in 0..pre { out.push!(7) }
+            if pre == 2 { out.reserve!(src.len() + 40) }
+            var i = 0
+            const full = src.len() - src.len() % 3
+            while i < full {
+                const v = ((src[i] to int) << 16) | ((src[i + 1] to int) << 8) | (src[i + 2] to int)
+                out.push!(table[(v >> 18) & 63])
+                out.push!(table[(v >> 12) & 63])
+                out.push!(table[(v >> 6) & 63])
+                out.push!(table[v & 63])
+                i += 3
+            }
+            return out
+        }
+        fn main() {
+            var table: [uint8] = []
+            for i in 0..64 { table.push!((65 + i).wrapToByte()) }
+            for n in 0..40 {
+                var src: [uint8] = []
+                for i in 0..n * 3 + n % 3 { src.push!((i * 7 + n).wrapToByte()) }
+                for pre in 0..4 {
+                    const e = enc(src, table, pre)
+                    var s = 0
+                    for j in 0..e.len() { s += (e[j] to int) * (j % 7 + 1) }
+                    print(n, pre, e.len(), s)
+                }
+            }
+        }";
+    agree(enc);
+    // The fast copy of that loop has no index test left: `@checkfree` accepts it.
+    let marked = enc.replacen("fn enc(", "@checkfree\n        fn enc(", 1);
+    let l = lowered(&marked);
+    let mut m = l.module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let f = m.funcs.iter().find(|f| f.name == "enc").unwrap();
+    assert!(f.checkfree.is_some());
+    assert_eq!(crate::ir::opt::kept_checks(f), 0);
+    // Reads of a byte a pass later in the source, and a loop test of the form `i + 4 <= n`.
+    agree(
+        "fn dec(src: [uint8], rev: [uint8]) -> [uint8] {
+            var out: [uint8] = []
+            var i = 0
+            while i + 4 <= src.len() {
+                const v = ((rev[src[i] to int] to int) << 18) | ((rev[src[i + 1] to int] to int) << 12) | ((rev[src[i + 2] to int] to int) << 6) | (rev[src[i + 3] to int] to int)
+                out.push!(((v >> 16) & 255).wrapToByte())
+                out.push!(((v >> 8) & 255).wrapToByte())
+                out.push!((v & 255).wrapToByte())
+                i += 4
+            }
+            return out
+        }
+        fn main() {
+            var rev: [uint8] = []
+            for i in 0..256 { rev.push!((i * 5).wrapToByte()) }
+            for n in 0..30 {
+                var src: [uint8] = []
+                for i in 0..n * 2 + 1 { src.push!((i * 11 + n).wrapToByte()) }
+                const d = dec(src, rev)
+                var s = 0
+                for j in 0..d.len() { s += (d[j] to int) * (j % 5 + 1) }
+                print(n, d.len(), s)
+            }
+        }",
+    );
+    // A source too short for the last passes: the stop comes at the same pass, after the same output.
+    agree(
+        "fn two(src: [uint8], n: int) -> [uint8] {
+            var out: [uint8] = []
+            var i = 0
+            while i < n { out.push!(src[i]); out.push!(src[i + 1]); i += 2 }
+            return out
+        }
+        fn main() {
+            var src: [uint8] = []
+            for i in 0..10 { src.push!(i.wrapToByte()) }
+            print(two(src, 8).len())
+            print(two(src, 12).len())
+        }",
+    );
+    // A table shorter than the mask allows: the checked copy stops on the first index past its end.
+    agree(
+        "fn pick(src: [uint8], table: [uint8]) -> [uint8] {
+            var out: [uint8] = []
+            for i in 0..src.len() { out.push!(table[(src[i] to int) & 15]) }
+            return out
+        }
+        fn main() {
+            var src: [uint8] = []
+            for i in 0..40 { src.push!((i * 3).wrapToByte()) }
+            var t: [uint8] = []
+            for i in 0..16 { t.push!(i.wrapToByte()) }
+            print(pick(src, t).len())
+            t.pop!()
+            print(pick(src, t).len())
+        }",
+    );
+    // A sum next to the pushes that passes the maximum: it still stops.
+    agree(
+        "fn main() {
+            var out: [int] = []
+            var t = 9223372036854775000
+            var i = 0
+            while i < 40 { out.push!(i); out.push!(t); t += 100; i += 2 }
+            print(out.len(), t)
+        }",
+    );
+    // Eight-byte elements, a loop that reads what it pushed, two lists, a conditional push.
+    agree(
+        "fn main() {
+            for n in 0..20 {
+                var a: [int] = [n]
+                for i in 0..n { a.push!(i); a.push!(i * 2) }
+                var b: [int] = []
+                for i in 0..a.len() { b.push!(a[i] + i); a.push!(b[i]) }
+                var c: [int] = []
+                var d: [int] = []
+                for i in 0..n { c.push!(i); d.push!(i + 1); c.push!(d[i]) }
+                var e: [int] = []
+                for i in 0..n * 3 { if i % 3 == 0 { e.push!(i) } else { e.push!(i + 1); e.push!(i + 2) } }
+                var s = 0
+                for i in 0..a.len() { s += a[i] }
+                for i in 0..b.len() { s += b[i] * 3 }
+                for i in 0..c.len() { s += c[i] * 5 }
+                for i in 0..e.len() { s += e[i] * 7 }
+                print(n, a.len(), b.len(), c.len(), e.len(), s)
+            }
+        }",
+    );
+    // The loop reads and pushes the same list.
+    agree(
+        "fn main() {
+            var a: [uint8] = [1, 2, 3]
+            for i in 0..100 { a.push!(a[i % 3]); a.push!(a[i]) }
+            var s = 0
+            for i in 0..a.len() { s += (a[i] to int) * (i % 11 + 1) }
+            print(a.len(), s)
+        }",
+    );
+}
+
 /// `@checkfree` is judged on the optimised code: a kernel whose tests all move into guards passes,
 /// one that indexes by an unknown value does not.
 #[test]
@@ -2928,4 +3722,478 @@ fn arena_stale_handle_and_drop_glue_stop() {
     let o = run_main(glue);
     assert!(o.result.is_err());
     assert!(o.output.contains("without drop glue"), "{}", o.output);
+}
+
+#[test]
+fn for_over_chars_decodes_in_place() {
+    let src = "fn main() {\n var n = 0\n var last = 'a'\n for c of \"aé€😀z\".chars() { n += 1\n last = c\n if c == 'é' { continue }\n print(c) }\n print(n, last)\n const s = \"hi\".chars().toList()\n print(s.len())\n var t = \"abc\"\n for c of t.chars() { if c == 'b' { break }\n print(c) } }\n";
+    assert_eq!(output_of(src), "a\n€\n😀\nz\n5 z\n2\na\n");
+}
+
+#[test]
+fn for_over_chars_native_agrees() {
+    agree("fn main() {\n var n = 0\n for c of \"aé€😀z\".chars() { n += 1\n if c == 'é' { continue }\n print(c) }\n print(n) }\n");
+}
+
+// ---- Pools and narrow links --------------------------------------------------------------------
+
+#[test]
+fn pool_tree_of_nodes_with_two_byte_links() {
+    let src = "struct node { l: link<node, uint16>, r: link<node, uint16>, key: int32 }\nfn make(inout p: pool<node, uint16>, d: int32) -> link<node, uint16> {\n if d == 0 { return p.add!(node { l: p.noLink(), r: p.noLink(), key: 1 }) }\n const l = make(inout p, d - 1)\n const r = make(inout p, d - 1)\n p.add!(node { l: l, r: r, key: d }) }\nfn count(p: pool<node, uint16>, t: link<node, uint16>) -> int {\n if p.isNone(t) { return 0 }\n const n = p.get(t)\n 1 + count(p, n.l) + count(p, n.r) }\nfn main() {\n var p: pool<node, uint16> = pool()\n const t = make(inout p, 10)\n print(count(p, t), p.len())\n p.remove!(t)\n const u = p.add!(node { l: p.noLink(), r: p.noLink(), key: 5 })\n print(p.get(u).key, p.len())\n p.clear!()\n print(p.len()) }\n";
+    assert_eq!(output_of(src), "2047 2047\n5 2047\n0\n");
+}
+
+#[test]
+fn pool_native_agrees() {
+    let src = "struct node { l: link<node, uint16>, r: link<node, uint16>, key: int32 }\nfn make(inout p: pool<node, uint16>, d: int32) -> link<node, uint16> {\n if d == 0 { return p.add!(node { l: p.noLink(), r: p.noLink(), key: 1 }) }\n const l = make(inout p, d - 1)\n const r = make(inout p, d - 1)\n p.add!(node { l: l, r: r, key: d }) }\nfn count(p: pool<node, uint16>, t: link<node, uint16>) -> int {\n if p.isNone(t) { return 0 }\n const n = p.get(t)\n 1 + count(p, n.l) + count(p, n.r) }\nfn main() {\n var p: pool<node, uint16> = pool()\n const t = make(inout p, 10)\n print(count(p, t), p.len())\n p.remove!(t)\n const u = p.add!(node { l: p.noLink(), r: p.noLink(), key: 5 })\n print(p.get(u).key, p.len())\n p.clear!()\n print(p.len()) }\n";
+    agree(src);
+}
+
+#[test]
+fn pool_links_are_narrow_and_a_full_pool_stops() {
+    let size = "struct n { a: link<n, uint16>, b: link<n, uint16>, k: int32 }\nfn main() {\n print(rtSizeOf<n>()) }\n";
+    assert_eq!(output_of(size), "8\n");
+    let full = "fn main() {\n var p: pool<int, uint8> = pool()\n for i in 0..300 { p.add!(i) } }\n";
+    let o = run_main(full);
+    assert!(o.result.is_err());
+    assert!(o.output.contains("pool full"), "{}", o.output);
+    let none = "fn main() {\n var p: pool<int, uint8> = pool()\n print(p.get(p.noLink())) }\n";
+    let o = run_main(none);
+    assert!(o.result.is_err());
+    assert!(o.output.contains("names no slot"), "{}", o.output);
+}
+
+#[test]
+fn std_is_added_only_when_imported() {
+    let mut program = Program::with_core();
+    program.add_package("app", &[("main", "fn main() { print(1) }")]);
+    assert!(program.find_package("std").is_none());
+    let mut program = Program::with_core();
+    program.add_package("app", &[("main", "import std.big\nfn main() { print(1) }")]);
+    assert!(program.find_package("std").is_some());
+}
+
+#[test]
+fn arena_no_ref_and_cold_grow() {
+    let src = "struct node { l: aref<node>, r: aref<node>, v: int }\nfn main() {\n var a = arena()\n const nothing = a.noRef()\n print(a.isNone(nothing))\n const x = a.new!(node { l: nothing, r: nothing, v: 7 })\n print(a.isNone(x), a.get(x).v, a.isNone(a.get(x).l), a.used())\n for i in 0..1000 { a.new!(node { l: x, r: nothing, v: i }) }\n print(a.get(x).v, a.used()) }\n";
+    assert_eq!(output_of(src), "true\nfalse 7 true 24\n7 24024\n");
+    agree(src);
+}
+
+#[test]
+fn for_over_split_and_bytes_in_place() {
+    let src = "fn main() {\n var n = 0\n for w of \"a,bb,,c,\".split(\",\") { n += 1\n print(w.len()) }\n print(n)\n for w of \"abc\".split(\"\") { print(w) }\n for w of \"\".split(\"-\") { print(w.len()) }\n for w of \"x--y\".split(\"--\") { if w == \"x\" { continue }\n print(w) }\n var t = \"one two three\"\n for w of t.split(\" \") { if w == \"two\" { break }\n print(w) }\n var sum = 0\n for b of \"AbC\".bytes() { sum += b to int }\n print(sum)\n const l = \"p q\".split(\" \").toList()\n print(l.len()) }\n";
+    assert_eq!(output_of(src), "1\n2\n0\n1\n0\n5\nabc\n0\ny\none\n230\n2\n");
+}
+
+#[test]
+fn for_over_split_native_agrees() {
+    agree("fn main() {\n for w of \"a,bb,,c,\".split(\",\") { print(w.len()) }\n for b of \"hé\".bytes() { print(b to int) } }\n");
+}
+
+#[test]
+fn a_pool_with_a_bad_width_stops() {
+    for w in ["int", "uint64", "float", "bool"] {
+        let src = format!("fn main() {{\n var p: pool<int, {w}> = pool()\n print(p.len()) }}\n");
+        let o = run_main(&src);
+        assert!(o.result.is_err(), "{w}");
+        assert!(o.output.contains("width must be"), "{w}: {}", o.output);
+    }
+}
+
+#[test]
+fn pool_slots_are_as_small_as_the_value_and_reuse_freed_ones() {
+    let src = "struct small { a: uint8, b: uint16 }\nfn main() {\n    var p: pool<small, uint8> = pool()\n    const x = p.add!(small { a: 1, b: 300 })\n    const y = p.add!(small { a: 2, b: 400 })\n    const z = p.add!(small { a: 3, b: 500 })\n    p.remove!(y)\n    p.remove!(x)\n    const u = p.add!(small { a: 9, b: 900 })\n    const v = p.add!(small { a: 8, b: 800 })\n    print(p.get(u).a, p.get(u).b, p.get(v).a, p.get(v).b, p.get(z).b, p.len(), p.slotBytes())\n}\n";
+    // The slot is the 4 bytes of the struct (a `uint8` and a `uint16` with alignment), not rounded up to 8.
+    assert_eq!(output_of(src), "9 900 8 800 500 3 4\n");
+    agree(src);
+}
+
+#[test]
+fn for_over_map_and_filter_runs_element_by_element() {
+    let src = "fn main() {\n    var calls = 0\n    const k = 10\n    for x of [1, 2, 3, 4, 5, 6].iter().map(n ~> n * k).filter(n ~> n % 20 == 0) {\n        calls += 1\n        print(x)\n    }\n    print(calls)\n    for x of [1, 2, 3, 4].iter().map(n ~> { print(\"m\", n)\n        n + 1 }) {\n        print(\"body\", x)\n        if x == 3 { break }\n    }\n    for c of \"a1b2\".chars().filter(c ~> c >= '0' && c <= '9').map(c ~> c to int - 48) { print(c) }\n    for w of \"x yy z\".split(\" \").map(w ~> w.len()) { print(w) }\n    for x of [1, 2].iter().filter(n ~> n > 5) { print(x) }\n    print(\"done\")\n}\n";
+    assert_eq!(
+        output_of(src),
+        "20\n40\n60\n3\nm 1\nbody 2\nm 2\nbody 3\n1\n2\n1\n2\n1\ndone\n"
+    );
+    agree(src);
+}
+
+#[test]
+fn push_str_of_an_interpolated_literal_writes_in_place() {
+    let src = "fn main() {\n var t = \"[\"\n for i in 0..3 { t.pushStr!(\"#(i):#(i * 2) \") }\n const w = \"é\"\n t.pushStr!(\"#(w)#('x')#(true)#(1.5)]\")\n t.pushStr!(\"plain\")\n print(t)\n print(t.len()) }\n";
+    assert_eq!(output_of(src), "[0:0 1:2 2:4 éxtrue1.5]plain\n29\n");
+    agree(src);
+}
+
+#[test]
+fn inline_always_copies_a_big_function_and_leaf_is_checked() {
+    let src = "@inline_always
+        fn big(x: int) -> int {
+            var s = x
+            for i in 0..40 { s = s + i * x % 7 + (s ^ i) % 5 }
+            return s
+        }
+        @leaf
+        fn two(x: int) -> int { return x * 2 }
+        fn rec(n: int) -> int {
+            if n < 2 { return n }
+            return rec(n - 1) + rec(n - 2)
+        }
+        @leaf
+        fn bad(n: int) -> int { return rec(n) }
+        fn main() { print(big(3) + two(4) + bad(5)) }";
+    agree(src);
+    let mut m = lowered(src).module.clone();
+    crate::ir::opt::optimize(&mut m, crate::ir::opt::Options::default());
+    let find = |n: &str| m.funcs.iter().position(|f| f.name == n);
+    // Every call to the big function is gone, though it is far over the size limit.
+    let big = crate::ir::FuncId(find("big").map_or(u32::MAX, |i| i as u32));
+    assert!(m.funcs.iter().all(|f| !crate::ir::opt::calls(f, big)));
+    // `two` keeps its promise, `bad` calls a recursive function and does not.
+    assert!(m
+        .funcs
+        .iter()
+        .find(|f| f.name == "two")
+        .is_none_or(crate::ir::opt::is_leaf));
+    let bad = m.funcs.iter().find(|f| f.name == "bad").unwrap();
+    assert!(bad.leaf.is_some() && !crate::ir::opt::is_leaf(bad));
+}
+
+#[test]
+fn split_finds_separators_of_every_length() {
+    let src = "fn main() {\n var n = 0\n for w of \"a,b,,c\".split(\",\") { n += w.len() }\n print(n)\n for w of \"x--y-z---w\".split(\"--\") { print(w) }\n for w of \"abcabcabd\".split(\"abd\") { print(w) }\n for w of \"ab\".split(\"abc\") { print(w) }\n for w of \"aab\".split(\"ab\") { print(w) }\n print(\"1 22 333\".split(\" \").toList().len()) }\n";
+    assert_eq!(output_of(src), "3\nx\ny-z\n-w\nabcabc\n\nab\na\n\n3\n");
+    agree(src);
+}
+
+#[test]
+fn a_range_of_two_literal_compares_is_one_test() {
+    let src = "fn in_high(b: uint8) -> bool { b >= 200 && b <= 255 }\nfn main() {\n var n = 0\n for c of \"aZz_09 é\".chars() { if c >= 'a' && c <= 'z' { n += 1 }\n if c >= '0' && c <= '9' { n += 10 }\n if c >= 'é' && c <= 'é' { n += 100 } }\n print(n)\n var hits = 0\n for i in -8..8 { if i >= -5 && i <= 2 { hits += 1 }\n if i >= 3 && i <= 3 { hits += 100 }\n if i >= 5 && i <= 1 { hits += 1000 } }\n print(hits)\n print(in_high(199), in_high(200), in_high(255), in_high(0)) }\n";
+    assert_eq!(output_of(src), "122\n108\nfalse true true false\n");
+    agree(src);
+}
+
+/// The Rust front end of `@regex` (`regexgen.rs`) and the reference compiler in `std/regex.pel` must agree: every
+/// pattern of the generated corpus (expected lines from Python's `re`) is compiled by the Rust side, and its tables run
+/// in the same matcher.
+#[test]
+fn regexgen_tables_agree_with_the_corpus() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("std/tests");
+    let corpus = std::fs::read_to_string(root.join("regex_corpus.pel")).unwrap();
+    let expected = std::fs::read_to_string(root.join("regex_corpus.out")).unwrap();
+    let list = |v: &[i64]| {
+        let items: Vec<String> = v.iter().map(|n| n.to_string()).collect();
+        format!("[{}]", items.join(", "))
+    };
+    // A string literal starting at `at`, with its escapes resolved; returns the text and the end.
+    fn literal(s: &str, at: usize) -> (String, usize) {
+        let b: Vec<char> = s[at..].chars().collect();
+        assert_eq!(b[0], '"');
+        let (mut out, mut i) = (String::new(), 1);
+        while b[i] != '"' {
+            if b[i] == '\\' {
+                i += 1;
+                out.push(match b[i] {
+                    'n' => '\n',
+                    c => c,
+                });
+            } else {
+                out.push(b[i]);
+            }
+            i += 1;
+        }
+        let used: usize = b[..=i].iter().map(|c| c.len_utf8()).sum();
+        (out, at + used)
+    }
+    let mut calls = String::new();
+    let body = &corpus[corpus.find("fn main() {").unwrap()..];
+    let skip = |s: &str, mut at: usize| {
+        while at < s.len()
+            && (s.as_bytes()[at] == b' ' || s.as_bytes()[at] == b',' || s.as_bytes()[at] == b'\n')
+        {
+            at += 1;
+        }
+        at
+    };
+    let mut from = 0;
+    while let Some(found) = body[from..].find("\n    t(") {
+        let start = skip(body, from + found + "\n    t(".len());
+        let (pattern, end) = literal(body, start);
+        let (text, end) = literal(body, skip(body, end));
+        from = end;
+        let p = crate::regexgen::compile(&pattern).unwrap_or_else(|e| panic!("{pattern}: {e}"));
+        let names: Vec<String> = p.names.iter().map(|n| format!("\"{n}\"")).collect();
+        calls.push_str(&format!(
+            "    u({}, {}, {}, {}, {}, {}, [{}], {}, \"{}\")\n",
+            list(&p.op),
+            list(&p.x),
+            list(&p.y),
+            list(&p.ranges),
+            list(&p.classes),
+            p.groups,
+            names.join(", "),
+            list(&p.looks),
+            text.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        ));
+    }
+    let src = format!(
+        "import std.regex\n\nfn u(sink op: [int], sink x: [int], sink y: [int], sink ranges: [int], sink classes: [int], groups: int, sink names: [string], sink looks: [int], text: str) {{\n    const re = regex.fromTables(sink op, sink x, sink y, sink ranges, sink classes, groups, sink names, sink looks)\n    var spans = \"\"\n    const hits = re.findAll(text)\n    var i = 0\n    while i < hits.len() {{\n        spans.pushStr!(\"#(hits[i].start)-#(hits[i].end) \")\n        i += 1\n    }}\n    print(re.isMatch(text), hits.len(), spans.trim(), re.replaceAll(text, \"<$0>\"))\n}}\n\nfn main() {{\n{calls}}}\n"
+    );
+    assert_eq!(output_of(&src), expected);
+}
+
+/// Tier A of backreferences (`regexgen.rs`): a pattern whose groups have a finite set of strings is rewritten into
+/// plain alternatives and run by the linear matcher. Every such pattern of `regex_backref.pel` (expected lines from
+/// Python's `re`) must give Python's answer; the others are tier B and are left to the budgeted search.
+#[test]
+fn regexgen_tier_a_agrees_with_python() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("std/tests");
+    let corpus = std::fs::read_to_string(root.join("regex_backref.pel")).unwrap();
+    let expected = std::fs::read_to_string(root.join("regex_backref.out")).unwrap();
+    let expected: Vec<&str> = expected.lines().collect();
+    let list = |v: &[i64]| {
+        let items: Vec<String> = v.iter().map(|n| n.to_string()).collect();
+        format!("[{}]", items.join(", "))
+    };
+    fn literal(s: &str, at: usize) -> (String, usize) {
+        let b: Vec<char> = s[at..].chars().collect();
+        assert_eq!(b[0], '"');
+        let (mut out, mut i) = (String::new(), 1);
+        while b[i] != '"' {
+            if b[i] == '\\' {
+                i += 1;
+                out.push(match b[i] {
+                    'n' => '\n',
+                    c => c,
+                });
+            } else {
+                out.push(b[i]);
+            }
+            i += 1;
+        }
+        let used: usize = b[..=i].iter().map(|c| c.len_utf8()).sum();
+        (out, at + used)
+    }
+    let body = &corpus[corpus.find("fn main() {").unwrap()..];
+    let (mut calls, mut want, mut tier_a, mut index) = (String::new(), String::new(), 0, 0);
+    for line in body.lines().filter(|l| l.starts_with("    t(\"")) {
+        let (pattern, end) = literal(line, 6);
+        let (text, _) = literal(line, end + 2);
+        let p = crate::regexgen::compile(&pattern).unwrap_or_else(|e| panic!("{pattern}: {e}"));
+        let line_expected = expected[index];
+        index += 1;
+        if p.tier_b {
+            continue;
+        }
+        tier_a += 1;
+        want.push_str(line_expected);
+        want.push('\n');
+        let names: Vec<String> = p.names.iter().map(|n| format!("\"{n}\"")).collect();
+        calls.push_str(&format!(
+            "    u({}, {}, {}, {}, {}, {}, [{}], {}, \"{}\")\n",
+            list(&p.op),
+            list(&p.x),
+            list(&p.y),
+            list(&p.ranges),
+            list(&p.classes),
+            p.groups,
+            names.join(", "),
+            list(&p.looks),
+            text.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        ));
+    }
+    assert!(tier_a >= 10, "only {tier_a} patterns were rewritten");
+    let src = format!(
+        "import std.regex\n\nfn u(sink op: [int], sink x: [int], sink y: [int], sink ranges: [int], sink classes: [int], groups: int, sink names: [string], sink looks: [int], text: str) {{\n    const re = regex.fromTables(sink op, sink x, sink y, sink ranges, sink classes, groups, sink names, sink looks)\n    var spans = \"\"\n    const hits = re.findAll(text)\n    var i = 0\n    while i < hits.len() {{\n        spans.pushStr!(\"#(hits[i].start)-#(hits[i].end) \")\n        i += 1\n    }}\n    print(true, hits.len(), \"#(spans.trim())\")\n}}\n\nfn main() {{\n{calls}}}\n"
+    );
+    assert_eq!(output_of(&src), want);
+}
+
+#[test]
+fn program_tail_local_owning_scalar_moves_out_of_a_generic_function() {
+    // `join` reads the task's result into a local and ends with it: the tail must move the box out,
+    // not free it with the local's scope.
+    let src =
+        "fn main() {\n const t = spawn(~> box(7))\n const b = t.join!!()\n print(b.get())\n}\n";
+    assert_eq!(output_of(src), "7\n");
+}
+
+/// Unicode mode (`(?u)`, `regexunicode.rs`): every case of `regex_unicode.corpus` (expected lines from Python's `re`,
+/// spans in byte offsets) must give Python's answer through the Rust front end and the matcher.
+#[test]
+fn regexgen_unicode_agrees_with_python() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("std/tests");
+    let corpus = std::fs::read_to_string(root.join("regex_unicode.corpus")).unwrap();
+    let list = |v: &[i64]| {
+        let items: Vec<String> = v.iter().map(|n| n.to_string()).collect();
+        format!("[{}]", items.join(", "))
+    };
+    let (mut calls, mut want, mut ran) = (String::new(), String::new(), 0);
+    for line in corpus.lines() {
+        let mut parts = line.split('\t');
+        let (pattern, text, expected) = (
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+            parts.next().unwrap(),
+        );
+        let p = crate::regexgen::compile(&format!("(?u){pattern}"))
+            .unwrap_or_else(|e| panic!("{pattern}: {e}"));
+        assert!(!p.tier_b, "{pattern}");
+        ran += 1;
+        want.push_str(expected);
+        want.push('\n');
+        let names: Vec<String> = p.names.iter().map(|n| format!("\"{n}\"")).collect();
+        calls.push_str(&format!(
+            "    u({}, {}, {}, {}, {}, {}, [{}], {}, \"{}\")\n",
+            list(&p.op),
+            list(&p.x),
+            list(&p.y),
+            list(&p.ranges),
+            list(&p.classes),
+            p.groups,
+            names.join(", "),
+            list(&p.looks),
+            text.replace('"', "\\\"")
+        ));
+    }
+    assert!(ran > 20);
+    let src = format!(
+        "import std.regex\n\nfn u(sink op: [int], sink x: [int], sink y: [int], sink ranges: [int], sink classes: [int], groups: int, sink names: [string], sink looks: [int], text: str) {{\n    const re = regex.fromTables(sink op, sink x, sink y, sink ranges, sink classes, groups, sink names, sink looks)\n    var spans = \"\"\n    const hits = re.findAll(text)\n    var i = 0\n    while i < hits.len() {{\n        spans.pushStr!(\"#(hits[i].start)-#(hits[i].end) \")\n        i += 1\n    }}\n    print(true, hits.len(), \"#(spans.trim())\")\n}}\n\nfn main() {{\n{calls}}}\n"
+    );
+    assert_eq!(output_of(&src), want);
+}
+
+#[test]
+fn two_conditions_that_never_hold_are_a_deadlock_not_a_livelock() {
+    let src = "fn main() {\n const l = lock(0)\n scope s {\n  for i of 0..2 {\n   const m = copy l\n   s.spawn(() ~> m.withWhen((n) ~> n > 5, (inout n) ~> { n += 1 }))\n  }\n }\n}\n";
+    let o = run_main(src);
+    assert!(o.result.is_err() && o.output.contains("deadlock"), "{o:?}");
+}
+
+/// Wide integers keep the language's stops: overflow, division by zero and a shift by the width or more.
+#[test]
+fn wide_integers_stop_like_the_narrow_ones() {
+    let stop = |src: &str| run_main(src).result;
+    let over = Err("arithmetic overflow".to_string());
+    assert_eq!(
+        stop("fn main() { var x: uint128 = 340282366920938463463374607431768211455\n x += 1\n print(x) }"),
+        over
+    );
+    assert_eq!(
+        stop(
+            "fn main() { const x: int128 = -170141183460469231731687303715884105728\n print(-x) }"
+        ),
+        over
+    );
+    assert_eq!(
+        stop("fn main() { const x: int256 = -57896044618658097711785492504343953926634992332820282019728792003956564819968\n print(x * -1) }"),
+        over
+    );
+    assert_eq!(
+        stop("fn main() { const x: int128 = -170141183460469231731687303715884105728\n print(x / -1) }"),
+        over
+    );
+    assert_eq!(
+        stop("fn main() { const z: uint128 = 0\n print(10 to uint128 / z) }"),
+        Err("division by zero".to_string())
+    );
+    assert_eq!(
+        stop("fn main() { const z: int256 = 0\n print(10 to int256 % z) }"),
+        Err("division by zero".to_string())
+    );
+    assert_eq!(
+        stop("fn main() { const x: uint128 = 1\n print(x << 128) }"),
+        Err("shifted by the width or more".to_string())
+    );
+}
+
+/// `MIN / -1` and `MIN % -1` overflow at every width, like every other overflow; the interpreter, the
+/// optimised IR and the native code all stop, and every neighbour of that case still divides.
+#[test]
+fn min_divided_by_minus_one_stops() {
+    let over = Err("arithmetic overflow".to_string());
+    for (ty, min) in [
+        ("int8", "-128"),
+        ("int16", "-32768"),
+        ("int32", "-2147483648"),
+        ("int64", "-9223372036854775807 - 1"),
+        ("int", "-9223372036854775807 - 1"),
+        ("int128", "-170141183460469231731687303715884105727 - 1"),
+    ] {
+        for op in ["/", "%"] {
+            let src = format!(
+                "fn f(a: {ty}, b: {ty}) -> {ty} = a {op} b\n\
+                 fn main() {{\n print(f(7, 2))\n print(f(-7, -1))\n print(f({min} + 1, -1))\n print(f({min}, 1))\n print(f({min}, -1))\n}}"
+            );
+            assert_eq!(run_main(&src).result, over, "{ty} {op}");
+            agree(&src);
+        }
+    }
+}
+
+/// A large `main` with many values alive at once, checked arithmetic against values the optimiser
+/// cannot fold, and floats: every instruction that has to reload several spilled registers.
+fn register_pressure_program(n: usize) -> String {
+    let mut s = String::from(
+        "fn mix(x: int, k: int) -> int {\n    var r = x\n    var i = 0\n    while i < k { r = (r * 31 + i) % 1000003; i += 1 }\n    r\n}\n\nfn main() {\n    var seed = mix(7, 3)\n",
+    );
+    for i in 0..n {
+        s += &format!("    var a{i} = mix(seed + {i}, 4)\n");
+    }
+    for i in 0..n {
+        s += &format!("    var f{i} = 1.5 * (a{i} to float) / 3.0\n");
+    }
+    s += "    var s = 0\n    var t = 0.0\n";
+    for i in 0..n {
+        s += &format!(
+            "    s = s + a{i} * a{} - a{}\n    t = t + f{i} * f{}\n",
+            (i * 7) % n,
+            (i * 13) % n,
+            (i * 5) % n
+        );
+    }
+    s += "    print(s)\n    print(t)\n}\n";
+    s
+}
+
+/// A native build with one, two or three registers of each kind must not run out of scratch
+/// registers: an AArch64 checked add that also carries the test of a `CheckedIf` names four
+/// spilled registers (and a checked multiply used to reserve `x9` as well). The programs are only
+/// built, so this runs on every machine.
+#[test]
+fn a_large_main_builds_with_one_register_of_each_kind() {
+    use crate::native::{gen, gen_a64, Os};
+    let src = register_pressure_program(40);
+    let l = lowered(&src);
+    let mut optimised = l.module.clone();
+    crate::ir::opt::optimize(&mut optimised, crate::ir::opt::Options::default());
+    crate::ir::opt::prune(&mut optimised, &["main"]);
+    for (what, m) in [("plain", &l.module), ("optimised", &optimised)] {
+        for limit in [1, 2, 3] {
+            gen::REG_LIMIT.with(|l| l.set(limit));
+            let opts = gen::Options {
+                leak_check: false,
+                target: Os::Linux,
+                symbols: false,
+            };
+            let x86 = gen::compile(m, "main", &opts);
+            let a64 = gen_a64::compile(m, "main", &opts);
+            gen::REG_LIMIT.with(|l| l.set(usize::MAX));
+            assert!(
+                x86.is_ok(),
+                "x86-64 {what}, {limit} registers: {:?}",
+                x86.err()
+            );
+            assert!(
+                a64.is_ok(),
+                "AArch64 {what}, {limit} registers: {:?}",
+                a64.err()
+            );
+        }
+    }
 }

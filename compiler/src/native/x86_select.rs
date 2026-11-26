@@ -1,4 +1,4 @@
-//! From the IR to x86-64 MIR (design in `docs/design/mir.md`, opcodes in [`super::x86_mir`]).
+//! From the IR to x86-64 MIR (opcodes in [`super::x86_mir`]).
 //!
 //! Every IR value that is not a constant or a folded address becomes a virtual register. All integers,
 //! booleans and pointers are 64 bits wide in a register and zero-extended from their type, as in
@@ -19,7 +19,9 @@ use super::regs::{folds, fused_cmp, small_copy, Base, Fold};
 use super::x86_mir::{self as x, call_clobbers, cc_num, op, Cc, INT_ARGS, SYM_FUNC};
 use super::x86_mir::{RAX, RCX, RDX, RSI};
 use crate::ir::Target as JumpTarget;
-use crate::ir::{BinOp, CastKind, CmpOp, Const, FUn, Func, IrTy, Op, Term, Test, VBin, VUn, Value};
+use crate::ir::{
+    BinOp, CastKind, CmpOp, Const, FUn, Func, IrTy, Op, OsKind, Term, Test, VBin, VUn, Value,
+};
 use std::collections::HashMap;
 
 fn bits(t: IrTy) -> u32 {
@@ -50,6 +52,23 @@ fn widen(n: i64, t: IrTy, signed: bool) -> i64 {
 }
 
 /// The integer or boolean constants of a function, by value.
+/// The values made by `x & c` with a constant `c >= 0`, with `c`: such a value cannot exceed `c`, so a shift by it
+/// needs no test against the width when `c` is below the width.
+fn and_masks(f: &Func, imms: &[Option<i64>]) -> Vec<Option<i64>> {
+    let mut out = vec![None; f.values.len()];
+    for b in &f.blocks {
+        for &i in &b.insts {
+            if let (Op::Bin(BinOp::And, x, y), Some(r)) = (&f.insts[i].op, f.insts[i].result) {
+                let c = imms[y.0 as usize]
+                    .or(imms[x.0 as usize])
+                    .filter(|c| *c >= 0);
+                out[r.0 as usize] = c;
+            }
+        }
+    }
+    out
+}
+
 fn const_values(f: &Func) -> Vec<Option<i64>> {
     let mut out = vec![None; f.values.len()];
     for b in &f.blocks {
@@ -96,11 +115,15 @@ struct Sel<'m> {
     f: &'m Func,
     mf: MFunc,
     imms: Vec<Option<i64>>,
+    /// For a value made by `x & c` with a constant `c >= 0`: `c` (the value is at most that).
+    and_max: Vec<Option<i64>>,
     uses: Vec<u32>,
     folds: Vec<Fold>,
     vreg: Vec<Option<Reg>>,
     slot_frame: HashMap<usize, FrameId>,
     cur: u32,
+    /// The location of the instruction being selected: every machine instruction it makes carries it.
+    cur_loc: u32,
     out_area: Option<FrameId>,
     out_size: u32,
     /// Comparisons whose only readers are selects in their own block: each select compares again.
@@ -126,10 +149,6 @@ fn supported(f: &Func) -> bool {
     if vec(f.ret) || f.block_params(f.entry()).iter().any(|p| vec(f.ty(*p))) {
         return false;
     }
-    let fills = crate::ir::opt::fill_loops(f, FILL_BYTES);
-    if fills.iter().any(|l| class_of(f.ty(l.value)) != Class::Int) {
-        return false;
-    }
     f.blocks
         .iter()
         .flat_map(|b| &b.insts)
@@ -152,6 +171,7 @@ pub fn select(f: &Func) -> Option<MFunc> {
     let fills = crate::ir::opt::fill_loops(f, FILL_BYTES);
     let filled = crate::ir::opt::filled_slots(f);
     let imms = const_values(f);
+    let and_max = and_masks(f, &imms);
     let uses = f.use_counts();
     let fl = folds(f, &uses, &imms);
     let mut s = Sel {
@@ -161,11 +181,13 @@ pub fn select(f: &Func) -> Option<MFunc> {
             ..MFunc::default()
         },
         imms,
+        and_max,
         uses,
         folds: fl,
         vreg: vec![None; f.values.len()],
         slot_frame: HashMap::new(),
         cur: 0,
+        cur_loc: 0,
         out_area: None,
         out_size: 0,
         deferred: HashMap::new(),
@@ -178,7 +200,10 @@ pub fn select(f: &Func) -> Option<MFunc> {
 }
 
 impl<'m> Sel<'m> {
-    fn emit(&mut self, i: MInst) {
+    fn emit(&mut self, mut i: MInst) {
+        if i.loc == 0 {
+            i.loc = self.cur_loc;
+        }
         let b = self.cur as usize;
         self.mf.blocks[b].insts.push(i);
     }
@@ -473,7 +498,10 @@ impl<'m> Sel<'m> {
                 .filter(|&&j| matches!(&f.insts[j].op, Op::Select(c, ..) if *c == r))
                 .count();
             // A select reads its condition once; `uses` counts every read.
-            if selects > 0 && selects == self.uses[r.0 as usize] as usize {
+            // A fused compare-and-move names four registers (result, true value and both compared values); with
+            // fewer than four registers to spare it is written as a compare into a register and a test-and-move.
+            let too_many = super::gen::reg_limit() <= 4 && self.imms[y.0 as usize].is_none();
+            if selects > 0 && selects == self.uses[r.0 as usize] as usize && !too_many {
                 self.deferred.insert(r, (*op, *x, *y));
             }
         }
@@ -641,10 +669,16 @@ impl<'m> Sel<'m> {
                     );
                 }
             }
-            Term::Stop(msg) => {
+            Term::Stop(msg, at) => {
                 self.mf.strings.push(msg.clone());
                 let n = self.mf.strings.len() as i64 - 1;
-                self.emit(MInst::new(op::STOP, vec![Operand::Imm(n)]).nofall());
+                self.emit(
+                    MInst::new(
+                        op::STOP,
+                        vec![Operand::Imm(n), Operand::Imm(i64::from(at.start))],
+                    )
+                    .nofall(),
+                );
             }
             Term::Unreachable => {
                 self.emit(MInst::new(op::JMPSYM, vec![Operand::Sym(x::SYM_UNREACHABLE)]).nofall())
@@ -739,6 +773,7 @@ impl<'m> Sel<'m> {
     fn inst(&mut self, id: usize, bi: usize) {
         let f = self.f;
         let inst = &f.insts[id];
+        self.cur_loc = inst.span.start;
         let _ = bi;
         let res = inst.result;
         // A folded pointer or index is never computed (a `Slot` still clears its memory).
@@ -1031,6 +1066,13 @@ impl<'m> Sel<'m> {
                 let (a, b) = (self.src(*p), self.src(*n));
                 self.runtime(op::RT_REALLOC, vec![(x::RDI, a), (RSI, b)], res);
             }
+            Op::Os(k, a, b, c) => {
+                let ops = [self.src(*a), self.src(*b), self.src(*c)];
+                let regs = [x::RDI, RSI, RDX];
+                let args = (0..k.arity()).map(|i| (regs[i], ops[i].clone())).collect();
+                let which = op::RT_OS + OsKind::ALL.iter().position(|x| x == k).unwrap() as i64;
+                self.runtime(which, args, res);
+            }
             Op::Print(p, n) => {
                 let (a, b) = (self.src(*p), self.src(*n));
                 self.runtime(op::RT_PRINT, vec![(RSI, a), (RDX, b)], None);
@@ -1167,7 +1209,19 @@ impl<'m> Sel<'m> {
         let m = self.mem_of(base);
         let a = self.new_vreg();
         self.emit(MInst::new(op::LEA, vec![Operand::def(a), m]));
-        let v = self.src(value);
+        let v = if class_of(self.f.ty(value)) == Class::Float {
+            // The bits of the float go to `rax` for the string store.
+            let s = self.vr(value);
+            let t = self.new_vreg();
+            let dbl = i64::from(self.f.ty(value) == IrTy::F64);
+            self.emit(MInst::new(
+                op::FBITS,
+                vec![Operand::def(t), Operand::use_(s), Operand::Imm(dbl)],
+            ));
+            Operand::use_(t)
+        } else {
+            self.src(value)
+        };
         let regs = [x::RDI, RAX, RCX].map(Reg::Phys);
         self.copies(vec![
             (regs[0], Operand::use_(a)),
@@ -1477,6 +1531,8 @@ impl<'m> Sel<'m> {
                     self.emit(MInst::copy(d, Operand::use_(ra)));
                     let s = self.src(b);
                     self.emit(MInst::copy(Reg::Phys(RCX), s));
+                    // A count made by `& c` with `c` below the width cannot reach it: no test (width 0).
+                    let checked = !self.and_max[b.0 as usize].is_some_and(|c| c < w as i64);
                     let k = match o {
                         BinOp::Shl => 0,
                         BinOp::Shr => 2,
@@ -1488,7 +1544,7 @@ impl<'m> Sel<'m> {
                             Operand::use_def(d),
                             Operand::use_(Reg::Phys(RCX)),
                             Operand::Imm(k),
-                            Operand::Imm(w as i64),
+                            Operand::Imm(if checked { w as i64 } else { 0 }),
                         ],
                     ));
                 }
@@ -1511,10 +1567,12 @@ impl<'m> Sel<'m> {
         let d = self.reg_of(r);
         if w == 64 && (matches!(o, BinOp::Add | BinOp::Sub) || (o == BinOp::Mul && signed)) {
             let (mut a, mut b) = (a, b);
+            // A constant goes to the right (`imul d, s, k`, `add d, k`); otherwise the operand that
+            // dies here is the one the result starts as.
             if o != BinOp::Sub
                 && self.imms[b.0 as usize].is_none()
-                && self.uses[b.0 as usize] == 1
-                && self.uses[a.0 as usize] != 1
+                && (self.imms[a.0 as usize].is_some()
+                    || (self.uses[b.0 as usize] == 1 && self.uses[a.0 as usize] != 1))
             {
                 std::mem::swap(&mut a, &mut b);
             }

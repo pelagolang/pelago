@@ -1,0 +1,79 @@
+/// The braid: literals, slots, pair access, strands, map, swap, zip and the long spellings.
+
+fn main() {
+    /// The annotation decides: a list where a braid is expected is a braid, anywhere else a tuple.
+    const t: (int, string; 3) = (7, "seven", 8)
+    const plain = (7, "seven", 8)
+    const w: braid<int, string; 4> = (1, "a", 2, "b")
+    const z: (int, string; 6) = (0, ""; 6)
+    print(t, plain, w, z)
+
+    /// Constant positions have the type of their slot.
+    print(t[0], t[1], t.2, w[3])
+
+    /// A cycle of one type accepts a run-time position.
+    var m: (int, int; 4) = (1, 2, 3, 4)
+    var i = 2
+    m[i] = 30
+    print(m, m[i], m.toArray())
+
+    /// A cycle of three types.
+    const c: (int, string, bool; 6) = (1, "a", true, 2, "b", false)
+    print(c, c[4], c[5])
+
+    /// Pairs, from either end.
+    const o: (int, string; 5) = (7, "seven", 8, "eight", 9)
+    print(o.len(), o.pairs(), o.first(0), o.second(1), o.first(-1), o.second(-2), o.tail())
+    for (a, b) of o.pairIter() { print(a, b) }
+
+    /// Strands: copies, in order.
+    print(o.evens().toList(), o.odds().toList())
+    const (es, os) = o.strands()
+    print(es.toList(), os.toList())
+    const (xs, ys) = o.split()
+    print(xs, ys)
+    const (ux, uy) = o.unbraid()
+    print(ux == xs, uy == ys)
+
+    /// Changing slots drops what was there.
+    var e = copy o
+    e.setFirst!(0, 70)
+    e.setSecond!(1, "EIGHT")
+    print(e, o)
+
+    /// New braids from old ones.
+    const f: (int, string; 4) = (1, "a", 2, "b")
+    print(f.swap())
+    print(f.mapPairs((a, b) ~> (a * 2, b + b)))
+    print(f.mapEvens(a ~> "n#a"))
+    print(f.mapOdds(b ~> b.len()))
+    print(o.mapPairs((a, b) ~> (a + 100, copy b)))
+
+    /// zip and its inverse.
+    const zipped = braid.zip([1, 2, 3], [4.5, 5.5, 6.5])
+    print(zipped, zipped.unbraid())
+    const (back_a, back_b) = zipped.split()
+    print(braid.zip(back_a, back_b) == zipped)
+
+    /// A braid of strings is owned: copies are independent and everything is freed.
+    var s1: (string, string; 4) = ("a", "b", "c", "d")
+    const s2 = copy s1
+    s1.setFirst!(1, "C")
+    print(s1, s2)
+
+    /// A braid is a value: it compares, orders and hashes slot by slot.
+    const g: (int, string; 4) = (1, "a", 2, "c")
+    print(f == g, f != g, f < g, f > g)
+    var seen: set<(int, string; 4)> = set {}
+    seen.insert!(copy f)
+    seen.insert!(copy g)
+    seen.insert!(copy f)
+    print(seen.len(), f in seen)
+    const l: [(int, string; 2)] = [(1, "x"), (2, "y")]
+    print(l)
+
+    /// `[(A, B); N]` is a different type with the same memory.
+    const pairs: [(int, string); 2] = [(1, "x"), (2, "y")]
+    print(pairs, rtSizeOf<[(int, string); 2]>() == rtSizeOf<(int, string; 4)>())
+    print(rtSizeOf<[(uint8, uint16); 3]>() == rtSizeOf<(uint8, uint16; 6)>())
+}

@@ -1,0 +1,33 @@
+/// Lookahead stays linear: a body that scans to the end of the text is run once, backwards, not once per position.
+/// Each pattern runs over a text of 800 bytes.
+import std.regex
+
+@regex("(?<w>a)(?=.*x)")
+struct lead {
+    w: string
+}
+
+@regex("(?<w>b)(?!.*x)")
+struct trail {
+    w: string
+}
+
+fn show(pattern: str, one: str, two: str) -> int ! parse_error {
+    const re = regex.compile(pattern)?
+    print(re.findAll(one).len(), re.findAll(two).len())
+    ok(0)
+}
+
+fn main() {
+    var text = ""
+    var i = 0
+    while i < 400 {
+        text.pushStr!("ab")
+        i += 1
+    }
+    const withX = "#(text)x"
+    show("a(?=.*x)", withX, text).or(1)
+    print(leadFindAll(withX).len(), leadFindAll(text).len())
+    print(trailFindAll(withX).len(), trailFindAll(text).len())
+    show("a(?=b(?=a(?=.*x)))", withX, text).or(1)
+}

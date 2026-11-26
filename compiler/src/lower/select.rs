@@ -1,7 +1,8 @@
 //! `select { case v = rx.recv() { ... } case tx.send(x) { ... } default { ... } }`.
 //!
 //! Tasks here run one after another, so `select` looks at its arms in order and takes the first that is
-//! ready: a `recv` whose channel has a value (or has no senders left), or any `send`. When none is
+//! ready: a `recv` whose channel has a value (or has no senders left), or a `send` whose channel has room
+//! (or has no receiver, so the send reports `closed`), or `cancelled()` once the task was asked to stop. When none is
 //! ready it takes `default`; with no `default` it lets one waiting task run and looks again; when no task
 //! is left it takes the `timeout` arm, or stops (a deadlock).
 
@@ -9,7 +10,8 @@ use super::*;
 
 enum ArmKind<'a> {
     Recv(&'a Expr),
-    Send,
+    Send(&'a Expr),
+    Cancelled,
     Timeout,
     Default,
 }
@@ -25,18 +27,59 @@ impl<'a> Lowerer<'a> {
         match &callee.kind {
             ExprKind::Field { base, name, .. } => match self.src_text(name.span) {
                 "recv" | "tryRecv" | "try_recv" => Some(ArmKind::Recv(base)),
-                "send" => Some(ArmKind::Send),
+                "send" => Some(ArmKind::Send(base)),
                 _ => None,
             },
             ExprKind::Name(id) if self.src_text(id.span) == "timeout" => Some(ArmKind::Timeout),
+            ExprKind::Name(id) if self.src_text(id.span) == "cancelled" => Some(ArmKind::Cancelled),
             _ => None,
         }
+    }
+
+    /// The moment a `timeout(d)` arm gives up, on the monotonic clock (0 when there is no such arm). `d` is evaluated
+    /// once, when the `select` starts; it is a `duration` (or any one-word value counting nanoseconds).
+    fn select_deadline(&mut self, arms: &'a [SelectArm]) -> Result<Value, Res> {
+        let none = self.konst(IrTy::I64, Const::Int(0), Span::new(0, 0));
+        for arm in arms {
+            if !matches!(self.arm_kind(arm), Some(ArmKind::Timeout)) {
+                continue;
+            }
+            let Some(ExprKind::Call { args, .. }) = arm.op.as_ref().map(|o| &o.kind) else {
+                continue;
+            };
+            let [arg] = args.as_slice() else {
+                return Err(self.unsupported(arm.span, "`timeout` with other than one argument"));
+            };
+            let Some(t) = self.ty_of(&arg.value) else {
+                return Err(self.unsupported(arm.span, "a `timeout` of unknown type"));
+            };
+            let slot = self.slot_for(t);
+            if matches!(self.into(&arg.value, slot, t), Res::Never) {
+                return Err(Res::Never);
+            }
+            let v = match self.repr(t) {
+                Repr::Scalar(s) => match self.emit(Op::Load(s, slot), Some(s), arm.span) {
+                    Some(v) => v,
+                    None => return Err(Res::Never),
+                },
+                _ => slot,
+            };
+            return match self.call_core_g("rtTimeoutAt", &[t], vec![v]) {
+                Some(d) => Ok(d),
+                None => Err(Res::Never),
+            };
+        }
+        Ok(none)
     }
 
     pub(crate) fn select_expr(&mut self, e: &'a Expr, arms: &'a [SelectArm]) -> Res {
         let sp = e.span;
         let void = self.types.void;
         let done = self.new_block(&[]);
+        let deadline = match self.select_deadline(arms) {
+            Ok(d) => d,
+            Err(r) => return r,
+        };
         let head = self.new_block(&[]);
         self.jump(head, vec![]);
         self.start(head);
@@ -50,19 +93,27 @@ impl<'a> Lowerer<'a> {
             match kind {
                 ArmKind::Default => default_arm = Some(arm),
                 ArmKind::Timeout => timeout_arm = Some(arm),
-                ArmKind::Send => {
+                ArmKind::Cancelled => {
+                    let Some(ready) = self.call_core("rtCancelled", vec![]) else {
+                        return Res::Never;
+                    };
                     let go = self.new_block(&[]);
-                    self.jump(go, vec![]);
+                    let next = self.new_block(&[]);
+                    self.branch(ready, go, next);
                     ready_arms.push((arm, go));
-                    // Nothing after a send arm can be reached.
-                    break;
+                    self.start(next);
                 }
-                ArmKind::Recv(base) => {
+                ArmKind::Recv(base) | ArmKind::Send(base) => {
                     let Some((p, _)) = self.scrutinee(base) else {
                         return Res::Never;
                     };
                     let ch = self.load_at(p, 0, IrTy::Ptr);
-                    let Some(ready) = self.call_core("rt_chan_ready", vec![ch]) else {
+                    let check = if matches!(kind, ArmKind::Send(_)) {
+                        "rtChanRoom"
+                    } else {
+                        "rtChanReady"
+                    };
+                    let Some(ready) = self.call_core(check, vec![ch]) else {
                         return Res::Never;
                     };
                     let go = self.new_block(&[]);
@@ -80,7 +131,7 @@ impl<'a> Lowerer<'a> {
                     self.select_body(d, done, void);
                 }
                 _ => {
-                    let Some(ran) = self.call_core("rt_run_one_pending", vec![]) else {
+                    let Some(ran) = self.call_core("rtSelectWait", vec![deadline]) else {
                         return Res::Never;
                     };
                     let retry = self.new_block(&[]);
@@ -93,6 +144,7 @@ impl<'a> Lowerer<'a> {
                         Some(t) => self.select_body(t, done, void),
                         None => self.terminate(Term::Stop(
                             "deadlock: every `select` arm is waiting".to_string(),
+                            Span::default(),
                         )),
                     }
                 }

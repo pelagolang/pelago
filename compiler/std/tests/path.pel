@@ -1,0 +1,65 @@
+/// `std.path`: components, join, parent, extension and lexical clean-up (POSIX and Windows spellings).
+import std.path
+
+fn parts() {
+    print(
+        path.join("src", "main.pel"),
+        path.join("src/", "main.pel"),
+        path.join("", "x"),
+        path.join("a", ""),
+        path.join("a", "/b"),
+    )
+    print(
+        path.fileName("a/b.txt"),
+        path.fileName("a/b/"),
+        path.fileName("/"),
+        path.fileName(""),
+        path.fileName("C:\\x\\y.pel"),
+    )
+    print(
+        path.parent("a/b/c.txt"),
+        path.parent("a"),
+        path.parent("/a"),
+        path.parent("/"),
+        path.parent(""),
+        path.parent("a//b"),
+    )
+}
+
+fn names() {
+    print(path.stem("a/b.tar.gz"), path.stem(".bashrc"), path.stem("noext"))
+    print(
+        path.extension("a/b.tar.gz"),
+        path.extension(".bashrc"),
+        path.extension("noext"),
+        path.extension("trail."),
+    )
+    print(
+        path.withExtension("a/b.txt", "md"),
+        path.withExtension("a/b", "md"),
+        path.withExtension("a/b.txt", ""),
+    )
+    print(
+        path.isAbsolute("/x"),
+        path.isAbsolute("C:\\x"),
+        path.isAbsolute("C:x"),
+        path.isAbsolute("x/y"),
+    )
+}
+
+fn cleaning() {
+    print(path.components("/a//b/./c/").toList())
+    print(
+        path.normalise("a/./b/../c"),
+        path.normalise("../a/../.."),
+        path.normalise("/a/../.."),
+        path.normalise("./"),
+        path.normalise("a//b\\c"),
+    )
+}
+
+fn main() {
+    parts()
+    names()
+    cleaning()
+}

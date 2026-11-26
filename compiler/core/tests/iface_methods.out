@@ -1,0 +1,6 @@
+true false -1 0 1
+true true false
+true true -1
+true -1 true false
+["a"] ["a", "b"] false true -1 true
+true true true 1

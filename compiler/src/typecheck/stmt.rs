@@ -234,6 +234,26 @@ impl<'p> Checker<'p> {
             ForHead::Of { pats, iter } => {
                 let it = self.check_expr(iter, Exp::Any);
                 let tys = self.iteration_types(it, pats.len(), false, iter.span);
+                let readonly = match self.kind_of(it) {
+                    TyKind::Adt(d, _) => self.def(d).name == "strand",
+                    _ => false,
+                };
+                if readonly
+                    && pats.iter().any(|p| {
+                        matches!(
+                            p.kind,
+                            PatternKind::Binding {
+                                mode: Some(Mode::Inout),
+                                ..
+                            }
+                        )
+                    })
+                {
+                    self.err(
+                        iter.span,
+                        "a `strand` is a read-only view; use `firstStrandMut!()` (or `secondStrandMut!()`) to change the slots",
+                    );
+                }
                 for (p, t) in pats.iter().zip(tys.iter()) {
                     self.check_irrefutable(p, *t);
                 }

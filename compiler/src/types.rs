@@ -18,10 +18,14 @@ pub enum IntKind {
     I16,
     I32,
     I64,
+    I128,
+    I256,
     U8,
     U16,
     U32,
     U64,
+    U128,
+    U256,
 }
 
 impl IntKind {
@@ -31,13 +35,20 @@ impl IntKind {
             IntKind::I16 | IntKind::U16 => 16,
             IntKind::I32 | IntKind::U32 => 32,
             IntKind::I64 | IntKind::U64 => 64,
+            IntKind::I128 | IntKind::U128 => 128,
+            IntKind::I256 | IntKind::U256 => 256,
         }
     }
 
     pub const fn signed(self) -> bool {
         matches!(
             self,
-            IntKind::I8 | IntKind::I16 | IntKind::I32 | IntKind::I64
+            IntKind::I8
+                | IntKind::I16
+                | IntKind::I32
+                | IntKind::I64
+                | IntKind::I128
+                | IntKind::I256
         )
     }
 
@@ -51,12 +62,26 @@ impl IntKind {
             IntKind::U16 => "uint16",
             IntKind::U32 => "uint32",
             IntKind::U64 => "uint64",
+            IntKind::I128 => "int128",
+            IntKind::U128 => "uint128",
+            IntKind::I256 => "int256",
+            IntKind::U256 => "uint256",
+        }
+    }
+
+    /// How many 64-bit words a value of this type takes when it is wider than a machine word, else 0.
+    pub const fn words(self) -> u32 {
+        if self.bits() > 64 {
+            self.bits() / 64
+        } else {
+            0
         }
     }
 
     /// Does the value `magnitude` (negated if `negative`) fit?
     pub fn fits(self, magnitude: u128, negative: bool) -> bool {
-        let bits = self.bits();
+        // Literals are read as `u128`, so 256-bit types accept what a `u128` can hold.
+        let bits = self.bits().min(128);
         if self.signed() {
             let max = (1u128 << (bits - 1)) - 1;
             if negative {
@@ -65,15 +90,59 @@ impl IntKind {
                 magnitude <= max
             }
         } else {
-            (!negative || magnitude == 0) && magnitude < (1u128 << bits)
+            (!negative || magnitude == 0) && (bits == 128 || magnitude < (1u128 << bits))
         }
     }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum FloatKind {
+    F16,
     F32,
     F64,
+    F128,
+    F256,
+}
+
+impl FloatKind {
+    pub const fn bits(self) -> u32 {
+        match self {
+            FloatKind::F16 => 16,
+            FloatKind::F32 => 32,
+            FloatKind::F64 => 64,
+            FloatKind::F128 => 128,
+            FloatKind::F256 => 256,
+        }
+    }
+
+    /// Floats the machine has no instructions for: they are done in software (`softfloat.pel`).
+    pub const fn soft(self) -> bool {
+        matches!(self, FloatKind::F16 | FloatKind::F128 | FloatKind::F256)
+    }
+
+    /// `(exponent bits, fraction bits)` of the IEEE 754 binary format.
+    pub const fn format(self) -> (u32, u32) {
+        match self {
+            FloatKind::F16 => (5, 10),
+            FloatKind::F32 => (8, 23),
+            FloatKind::F64 => (11, 52),
+            FloatKind::F128 => (15, 112),
+            FloatKind::F256 => (19, 236),
+        }
+    }
+
+    /// Bytes in memory, and 64-bit words in the working copy.
+    pub const fn bytes(self) -> u32 {
+        self.bits() / 8
+    }
+
+    pub const fn words(self) -> u32 {
+        if self.bits() <= 64 {
+            1
+        } else {
+            self.bits() / 64
+        }
+    }
 }
 
 /// The length of a fixed array: known, a `meta` parameter, or not worked out.
@@ -115,6 +184,9 @@ pub enum TyKind {
     /// Arithmetic on compile-time numbers (`N + 1`, `N * 2`); folds to a `Const` once both sides are known.
     ConstOp(u8, Ty, Ty),
     List(Ty),
+    /// `[T..]` or `slice<T>`: a window onto part of a list or array. It owns nothing and cannot be stored
+    /// or returned; it has the layout of a list header, and its length cannot change.
+    Slice(Ty),
     Array(Ty, ArrayLen),
     /// `soa<T>`: one column per field of `T` (the length is the block size of `soa<T, N>`, or unknown).
     Soa(Ty, ArrayLen),
@@ -301,6 +373,7 @@ impl TypeTable {
                 args.iter().any(|a| self.occurs(v, *a))
             }
             TyKind::List(a)
+            | TyKind::Slice(a)
             | TyKind::Option(a)
             | TyKind::Set(a)
             | TyKind::Range(a)
@@ -383,6 +456,7 @@ impl TypeTable {
             (_, TyKind::Var(w)) => self.bind_var(*w, a),
             (TyKind::Adt(d1, a1), TyKind::Adt(d2, a2)) => d1 == d2 && self.unify_all(a1, a2),
             (TyKind::List(x), TyKind::List(y))
+            | (TyKind::Slice(x), TyKind::Slice(y))
             | (TyKind::Option(x), TyKind::Option(y))
             | (TyKind::Set(x), TyKind::Set(y))
             | (TyKind::Range(x), TyKind::Range(y))
@@ -451,6 +525,9 @@ impl TypeTable {
                 b'+' => x.checked_add(*y),
                 b'-' => x.checked_sub(*y),
                 b'*' => x.checked_mul(*y),
+                // Division and remainder of known numbers, for lengths such as `N / 2`.
+                b'/' if *y > 0 && *x >= 0 => Some(x / y),
+                b'%' if *y > 0 && *x >= 0 => Some(x % y),
                 _ => None,
             };
             if let Some(r) = r {
@@ -514,6 +591,7 @@ impl TypeTable {
                 TyKind::AltTuple(ts.into_iter().map(|a| self.zonk(a)).collect(), n)
             }
             TyKind::List(a) => TyKind::List(self.zonk(a)),
+            TyKind::Slice(a) => TyKind::Slice(self.zonk(a)),
             TyKind::Array(a, n) => {
                 let n = self.norm_len(n, |c, t| c.zonk(t));
                 TyKind::Array(self.zonk(a), n)
@@ -568,6 +646,7 @@ impl TypeTable {
                 TyKind::AltTuple(ts.into_iter().map(|a| self.subst(a, map)).collect(), n)
             }
             TyKind::List(a) => TyKind::List(self.subst(a, map)),
+            TyKind::Slice(a) => TyKind::Slice(self.subst(a, map)),
             TyKind::Array(a, n) => {
                 let n = self.norm_len(n, |c, t| c.subst(t, map));
                 TyKind::Array(self.subst(a, map), n)
@@ -607,6 +686,7 @@ impl TypeTable {
                 args.iter().any(|a| self.has_vars(*a))
             }
             TyKind::List(a)
+            | TyKind::Slice(a)
             | TyKind::Option(a)
             | TyKind::Set(a)
             | TyKind::Range(a)
@@ -670,6 +750,9 @@ impl TypeTable {
             TyKind::Int(k) => k.name().to_string(),
             TyKind::Float(FloatKind::F32) => "float32".to_string(),
             TyKind::Float(FloatKind::F64) => "float".to_string(),
+            TyKind::Float(FloatKind::F16) => "float16".to_string(),
+            TyKind::Float(FloatKind::F128) => "float128".to_string(),
+            TyKind::Float(FloatKind::F256) => "float256".to_string(),
             TyKind::Bool => "bool".to_string(),
             TyKind::Char => "char".to_string(),
             TyKind::String => "string".to_string(),
@@ -694,6 +777,7 @@ impl TypeTable {
             TyKind::Const(k) => k.to_string(),
             TyKind::ConstOp(op, a, b) => format!("{} {} {}", d(*a), *op as char, d(*b)),
             TyKind::List(e) => format!("[{}]", d(*e)),
+            TyKind::Slice(e) => format!("[{}..]", d(*e)),
             TyKind::Array(e, n) => match n {
                 ArrayLen::Known(n) => format!("[{}; {n}]", d(*e)),
                 ArrayLen::Term(t) => format!("[{}; {}]", d(*e), d(*t)),
@@ -715,7 +799,7 @@ impl TypeTable {
                     ArrayLen::Unknown => "_".to_string(),
                 };
                 format!(
-                    "({}; {len})",
+                    "braid<{}; {len}>",
                     ts.iter().map(|a| d(*a)).collect::<Vec<_>>().join(", ")
                 )
             }

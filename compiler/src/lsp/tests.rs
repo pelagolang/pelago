@@ -332,6 +332,24 @@ fn a_workspace_package_sees_other_files() {
 }
 
 #[test]
+fn definition_reaches_library_and_modules() {
+    let mut s = started();
+    let src = "const m = max(1, 2)\nconst t = \"a\".replace(\"a\", \"b\")\n";
+    open(&mut s, URI, src);
+    // `max` is declared in the library: the answer is a readable file that holds it.
+    let r = result(s.handle(&request(2, "textDocument/definition", at(URI, 0, 11))));
+    let uri = r.get("uri").and_then(Json::str).expect("a uri").to_string();
+    assert!(uri.ends_with("/core/core/math.pel"), "{uri}");
+    let path = uri_to_path(&uri).expect("a path");
+    let file = std::fs::read_to_string(path).expect("the library file");
+    assert!(file.contains("fn max"));
+    // A method of a library type.
+    let r = result(s.handle(&request(3, "textDocument/definition", at(URI, 1, 17))));
+    let uri = r.get("uri").and_then(Json::str).expect("a uri");
+    assert!(uri.ends_with("/core/core/strings.pel"), "{uri}");
+}
+
+#[test]
 fn unknown_requests_get_an_error_and_exit_works() {
     let mut s = started();
     let r = s.handle(&request(9, "workspace/whatever", Json::Null));
@@ -455,6 +473,27 @@ fn code_actions(
 }
 
 #[test]
+fn completion_after_a_dot_on_built_in_types_lists_only_their_methods() {
+    let labels = |src: &str, line: i64, ch: i64| -> Vec<String> {
+        let mut s = started();
+        open(&mut s, URI, src);
+        let r = result(s.handle(&request(2, "textDocument/completion", at(URI, line, ch))));
+        let items = r.arr().or_else(|| r.get("items").and_then(Json::arr));
+        items
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|i| i.get("label").and_then(Json::str).map(str::to_string))
+            .collect()
+    };
+    let list = labels("fn main() {\n    var xs = [1]\n    xs.\n}\n", 2, 7);
+    assert!(list.contains(&"push".to_string()) && list.contains(&"len".to_string()));
+    assert!(!list.contains(&"trim".to_string()), "{list:?}");
+    let text = labels("fn main() {\n    const s = \"a\"\n    s.\n}\n", 2, 6);
+    assert!(text.contains(&"trim".to_string()) && !text.contains(&"push".to_string()));
+    assert!(text.len() < 80, "{}", text.len());
+}
+
+#[test]
 fn code_action_changes_a_misspelt_name_to_the_suggestion() {
     let mut s = started();
     let src = "fn total() -> int { 1 }\nfn main() {\n    const x = totl()\n    print(x)\n}\n";
@@ -519,6 +558,40 @@ fn rename_params(uri: &str, line: i64, ch: i64, new: &str) -> Json {
 }
 
 #[test]
+fn semantic_tokens_call_library_methods_methods() {
+    let mut s = started();
+    let src =
+        "fn main() {\n    const xs = [1]\n    const n = xs.len()\n    const m = max(1, 2)\n}\n";
+    open(&mut s, URI, src);
+    let r = result(s.handle(&request(
+        2,
+        "textDocument/semanticTokens/full",
+        obj(vec![("textDocument", doc(URI))]),
+    )));
+    let data: Vec<i64> = r
+        .get("data")
+        .and_then(Json::arr)
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(Json::int)
+        .collect();
+    let (mut line, mut col) = (0, 0);
+    let mut kinds = Vec::new();
+    for t in data.chunks(5) {
+        line += t[0];
+        col = if t[0] == 0 { col + t[1] } else { t[1] };
+        let word =
+            &src.lines().nth(line as usize).unwrap_or("")[col as usize..(col + t[2]) as usize];
+        kinds.push((word.to_string(), TOKEN_TYPES[t[3] as usize]));
+    }
+    assert!(kinds.contains(&("len".to_string(), "method")), "{kinds:?}");
+    assert!(
+        kinds.contains(&("max".to_string(), "function")),
+        "{kinds:?}"
+    );
+}
+
+#[test]
 fn rename_changes_declaration_and_uses() {
     let mut s = started();
     open(&mut s, URI, SRC);
@@ -580,6 +653,43 @@ fn rename_reaches_other_files_of_the_package() {
     assert_eq!(util.map(|u| u.len()), Some(1), "{r:?}");
     assert!(changes.get(&main_uri).and_then(Json::arr).unwrap().len() >= 2);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn debounced_edits_show_syntax_errors_now_and_check_the_package_on_flush() {
+    let mut s = started();
+    s.debounce = true;
+    let change = |s: &mut Server, text_: &str| {
+        s.handle(&note(
+            "textDocument/didChange",
+            obj(vec![
+                ("textDocument", doc(URI)),
+                (
+                    "contentChanges",
+                    Json::Arr(vec![obj(vec![("text", text(text_))])]),
+                ),
+            ]),
+        ))
+    };
+    // A type error waits for the check; nothing is published by the edit itself.
+    let type_error = "fn main() {\n    const a: int = \"x\"\n}\n";
+    assert!(change(&mut s, type_error).is_empty());
+    assert!(s.has_pending());
+    // A syntax error is shown at once.
+    let d = diagnostics(&change(&mut s, "fn main( {\n"));
+    assert!(d.iter().any(|(_, m)| !m.is_empty()), "{d:?}");
+    // Two more edits, one check: the last text is what gets checked.
+    change(&mut s, type_error);
+    let d = diagnostics(&s.flush());
+    assert!(
+        d.iter().any(|(_, m)| m.iter().any(|x| x.contains("int"))),
+        "{d:?}"
+    );
+    assert!(!s.has_pending());
+    // Fixing the text clears the diagnostics on the next flush.
+    change(&mut s, "fn main() {\n}\n");
+    let d = diagnostics(&s.flush());
+    assert!(d.iter().all(|(_, m)| m.is_empty()), "{d:?}");
 }
 
 #[test]
@@ -698,4 +808,25 @@ fn formatting_replaces_the_document_or_returns_nothing() {
     open(&mut s, URI, "fn main() {\n    print(1)\n}\n");
     let r = result(s.handle(&request(6, "textDocument/formatting", params)));
     assert!(r.arr().unwrap().is_empty());
+}
+
+#[test]
+fn hover_shows_field_types_and_signature_help_handles_bang_calls() {
+    let mut s = started();
+    let src = "struct p {\n    x: int\n}\nfn main() {\n    var xs = [1]\n    xs.push!(2)\n    const q = p { x: 1 }\n    const y = q.x\n}\n";
+    open(&mut s, URI, src);
+    let r = result(s.handle(&request(2, "textDocument/hover", at(URI, 7, 17))));
+    let v = r
+        .get("contents")
+        .and_then(|c| c.get("value"))
+        .and_then(Json::str);
+    assert!(v.is_some_and(|v| v.contains("(field) x: int")), "{v:?}");
+    let r = result(s.handle(&request(3, "textDocument/signatureHelp", at(URI, 5, 13))));
+    let label = r
+        .get("signatures")
+        .and_then(Json::arr)
+        .and_then(|a| a.first())
+        .and_then(|x| x.get("label"))
+        .and_then(Json::str);
+    assert!(label.is_some_and(|l| l.contains("push")), "{label:?}");
 }

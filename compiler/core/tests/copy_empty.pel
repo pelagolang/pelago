@@ -1,0 +1,21 @@
+/// A copy of an empty list or string owns a block it can grow into.
+fn main() {
+    var a: [int] = []
+    var c = copy a
+    c.push!(3)
+    c.push!(4)
+    const b = copy c
+    var d = copy b
+    d.push!(5)
+    print(a.len(), c, b, d)
+    var s = ""
+    var t = copy s
+    t.pushStr!("hi")
+    var u = copy t
+    u.pushStr!("!")
+    print(s.len(), t, u)
+    var e: [string] = []
+    var f = copy e
+    f.push!("x")
+    print(f)
+}

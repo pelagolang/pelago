@@ -1,33 +1,165 @@
 //! Packages and modules: the source files of a program, parsed.
 //!
-//! A file is a module and its file name is the module name (`docs/design/modules.md`). A directory
+//! A file is a module and its file name is the module name. A directory
 //! is a parent module: `geometry.pel` is `geometry`, `geometry/shapes.pel` is `geometry.shapes`,
 //! and a front file `geometry.pel` next to the directory `geometry/` is the parent of what is
 //! inside it. A parent without a front file is an empty module made up for the occasion.
 
-use crate::ast::File;
+use crate::ast::{File, ItemKind, StmtKind};
 use crate::parser::{parse_and_check_with, ParseOptions};
 use crate::span::Span;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
-/// The modules of the `core` package: `(module name, source)`. The files live in `compiler/core/`.
+/// The modules of the `core` package: `(module path, source)`. `core.pel` is the front file (the index) of
+/// the modules in `compiler/core/core/`, which are its children (`core.lists`, ...).
 pub const CORE_MODULES: &[(&str, &str)] = &[
     ("core", include_str!("../core/core.pel")),
-    ("rt", include_str!("../core/rt.pel")),
-    ("lists", include_str!("../core/lists.pel")),
-    ("text", include_str!("../core/text.pel")),
-    ("maps", include_str!("../core/maps.pel")),
-    ("strings", include_str!("../core/strings.pel")),
-    ("iters", include_str!("../core/iters.pel")),
-    ("results", include_str!("../core/results.pel")),
-    ("numbers", include_str!("../core/numbers.pel")),
-    ("tasks", include_str!("../core/tasks.pel")),
-    ("boxes", include_str!("../core/boxes.pel")),
-    ("arena", include_str!("../core/arena.pel")),
-    ("columns", include_str!("../core/columns.pel")),
-    ("objects", include_str!("../core/objects.pel")),
+    ("core.rt", include_str!("../core/core/rt.pel")),
+    ("core.lists", include_str!("../core/core/lists.pel")),
+    ("core.text", include_str!("../core/core/text.pel")),
+    ("core.maps", include_str!("../core/core/maps.pel")),
+    ("core.strings", include_str!("../core/core/strings.pel")),
+    ("core.iters", include_str!("../core/core/iters.pel")),
+    ("core.results", include_str!("../core/core/results.pel")),
+    ("core.numbers", include_str!("../core/core/numbers.pel")),
+    ("core.wide", include_str!("../core/core/wide.pel")),
+    ("core.softfloat", include_str!("../core/core/softfloat.pel")),
+    ("core.tasks", include_str!("../core/core/tasks.pel")),
+    ("core.boxes", include_str!("../core/core/boxes.pel")),
+    ("core.arena", include_str!("../core/core/arena.pel")),
+    ("core.pool", include_str!("../core/core/pool.pel")),
+    ("core.heap", include_str!("../core/core/heap.pel")),
+    ("core.columns", include_str!("../core/core/columns.pel")),
+    ("core.objects", include_str!("../core/core/objects.pel")),
+    ("core.braid", include_str!("../core/core/braid.pel")),
+    ("core.math", include_str!("../core/core/math.pel")),
 ];
+
+/// The modules of the `std` package: `(module name, source)`. The files live in `compiler/std/`.
+/// Unlike `core`, the package is added only when a program imports `std.<module>`.
+pub const STD_MODULES: &[(&str, &str)] = &[
+    ("big", include_str!("../std/big.pel")),
+    ("io", include_str!("../std/io.pel")),
+    ("fs", include_str!("../std/fs.pel")),
+    ("os", include_str!("../std/os.pel")),
+    ("env", include_str!("../std/env.pel")),
+    ("time", include_str!("../std/time.pel")),
+    ("calendar", include_str!("../std/calendar.pel")),
+    ("tzdata", include_str!("../std/tzdata.pel")),
+    ("zone", include_str!("../std/zone.pel")),
+    ("timefmt", include_str!("../std/timefmt.pel")),
+    ("random", include_str!("../std/random.pel")),
+    ("hash", include_str!("../std/hash.pel")),
+    ("sha2", include_str!("../std/sha2.pel")),
+    ("mac", include_str!("../std/mac.pel")),
+    ("kdf", include_str!("../std/kdf.pel")),
+    ("sha3", include_str!("../std/sha3.pel")),
+    ("legacy", include_str!("../std/legacy.pel")),
+    ("checksum", include_str!("../std/checksum.pel")),
+    ("blake2", include_str!("../std/blake2.pel")),
+    ("blake3", include_str!("../std/blake3.pel")),
+    ("fasthash", include_str!("../std/fasthash.pel")),
+    ("ripemd", include_str!("../std/ripemd.pel")),
+    ("sm3", include_str!("../std/sm3.pel")),
+    ("chacha", include_str!("../std/chacha.pel")),
+    ("poly1305", include_str!("../std/poly1305.pel")),
+    ("aead", include_str!("../std/aead.pel")),
+    ("csprng", include_str!("../std/csprng.pel")),
+    ("password", include_str!("../std/password.pel")),
+    ("bcrypt", include_str!("../std/bcrypt.pel")),
+    ("path", include_str!("../std/path.pel")),
+    ("json", include_str!("../std/json.pel")),
+    ("regex", include_str!("../std/regex.pel")),
+    ("regexunicode", include_str!("../std/regexunicode.pel")),
+];
+
+/// How the `std` modules are grouped for people: `(group id, title, what it holds, module paths)`, in the
+/// order the website's foldable "std" tree shows them. This is the one list the sidebar and `pelago std`
+/// print. Every path in `STD_MODULES` must be in exactly one group (a test checks it), so a new module
+/// cannot be forgotten. A module path may be nested (`collections.deque` is `import std.collections.deque`);
+/// the older modules keep their flat names.
+pub const STD_GROUPS: &[(&str, &str, &str, &[&str])] = &[
+    (
+        "hashes",
+        "Hashes and checksums",
+        "cryptographic hashes, checksums, fast hashes, the legacy ones",
+        &[
+            "hash", "sha2", "sha3", "blake2", "blake3", "ripemd", "sm3", "fasthash", "legacy",
+            "checksum",
+        ],
+    ),
+    (
+        "crypto",
+        "Keys, MACs and passwords",
+        "message authentication, key derivation, password hashing",
+        &["mac", "poly1305", "kdf", "password", "bcrypt"],
+    ),
+    (
+        "ciphers",
+        "Ciphers and AEAD",
+        "stream ciphers and authenticated encryption",
+        &["chacha", "aead"],
+    ),
+    (
+        "io",
+        "Input, output and files",
+        "standard streams, files, paths",
+        &["io", "fs", "path"],
+    ),
+    (
+        "time",
+        "Time",
+        "clocks, durations, calendar dates, time zones and formatting",
+        &["time", "calendar", "zone", "timefmt", "tzdata"],
+    ),
+    (
+        "random",
+        "Random numbers",
+        "seeded generators and the secure random generator",
+        &["random", "csprng"],
+    ),
+    (
+        "system",
+        "System",
+        "the process and its environment",
+        &["os", "env"],
+    ),
+    (
+        "data",
+        "Text and data formats",
+        "JSON and regular expressions",
+        &["json", "regex", "regexunicode"],
+    ),
+    ("math", "Math", "numbers beyond the machine's", &["big"]),
+];
+
+/// The `std` tree as text: each group with its modules, one per line.
+pub fn std_tree_text() -> String {
+    let mut out = String::new();
+    for (id, title, about, mods) in STD_GROUPS {
+        out.push_str(&format!("{id}: {title} ({about})\n"));
+        for m in *mods {
+            out.push_str(&format!("  std.{m}\n"));
+        }
+    }
+    out
+}
+
+/// The `std` tree as JSON: `[{"group":..,"title":..,"about":..,"modules":["std.io",..]},..]`.
+pub fn std_tree_json() -> String {
+    let groups: Vec<String> = STD_GROUPS
+        .iter()
+        .map(|(id, title, about, mods)| {
+            let list: Vec<String> = mods.iter().map(|m| format!("\"std.{m}\"")).collect();
+            format!(
+                "{{\"group\":\"{id}\",\"title\":\"{title}\",\"about\":\"{about}\",\"modules\":[{}]}}",
+                list.join(",")
+            )
+        })
+        .collect();
+    format!("[{}]", groups.join(","))
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleId(pub u32);
@@ -65,6 +197,13 @@ pub struct Package {
     pub name: String,
     /// The top-level modules.
     pub roots: Vec<ModuleId>,
+    /// What the first segment of an import means inside this package: an installed dependency
+    /// (`json` is the package `json@1.5.0`). Each package has its own table, so two packages may
+    /// use different versions of one dependency.
+    pub imports: BTreeMap<String, PackageId>,
+    /// A second major of a dependency, by the first two segments: `("json", "v2")` is what
+    /// `import json.v2.decode` reaches.
+    pub majors: BTreeMap<(String, String), PackageId>,
 }
 
 /// Everything being compiled: the packages and all their modules.
@@ -116,6 +255,8 @@ impl Program {
             id: pid,
             name: name.to_string(),
             roots: Vec::new(),
+            imports: BTreeMap::new(),
+            majors: BTreeMap::new(),
         });
         let mut by_path: HashMap<String, ModuleId> = HashMap::new();
         // Real files first, so a front file is never replaced by a made-up parent.
@@ -127,7 +268,31 @@ impl Program {
         for (path, src) in &ordered {
             self.ensure_module(pid, path, Some(src), &mut by_path);
         }
+        if name != "std" && self.find_package("std").is_none() && self.imports_std(pid) {
+            self.add_package("std", STD_MODULES);
+        }
         pid
+    }
+
+    /// Whether a top-level import of the package starts at `std`.
+    fn imports_std(&self, pid: PackageId) -> bool {
+        self.modules
+            .iter()
+            .filter(|m| m.package == pid)
+            .flat_map(|m| m.file.stmts.iter().map(move |s| (m, s)))
+            .any(|(m, s)| match &s.kind {
+                StmtKind::Item(item) => match &item.kind {
+                    ItemKind::Import(i) => {
+                        i.levels == 0
+                            && i.path
+                                .segments
+                                .first()
+                                .is_some_and(|seg| seg.text(&m.src) == "std")
+                    }
+                    _ => false,
+                },
+                _ => false,
+            })
     }
 
     fn ensure_module(
@@ -201,8 +366,51 @@ impl Program {
                 warning: false,
             });
         }
+        let mut src = src;
+        let mut file = out.file;
+        // `@derive(fromJson)` appends the decoders it writes and the module is read again.
+        let mut derived = crate::derive::expand(&src, &file);
+        // `@regex("...")` appends the compiled pattern and its functions the same way.
+        let patterns = crate::regexgen::expand(&src, &file);
+        derived.errors.extend(patterns.errors);
+        for (span, message) in patterns.warnings {
+            self.diagnostics.push(Diagnostic {
+                module: id,
+                span,
+                message,
+                warning: true,
+            });
+        }
+        derived.text.push_str(&patterns.text);
+        for (span, message) in derived.errors {
+            self.diagnostics.push(Diagnostic {
+                module: id,
+                span,
+                message,
+                warning: false,
+            });
+        }
+        if !derived.text.is_empty() {
+            let original = src.len() as u32;
+            src.push('\n');
+            src.push_str(&derived.text);
+            let (again, _) = parse_and_check_with(&src, ParseOptions::compile());
+            for e in again
+                .errors
+                .into_iter()
+                .filter(|e| e.span.start >= original)
+            {
+                self.diagnostics.push(Diagnostic {
+                    module: id,
+                    span: e.span,
+                    message: e.message,
+                    warning: false,
+                });
+            }
+            file = again.file;
+        }
         let m = &mut self.modules[id.0 as usize];
-        m.file = out.file;
+        m.file = file;
         m.src = src;
     }
 
@@ -236,7 +444,9 @@ impl Program {
             .iter()
             .map(|(p, s)| (p.as_str(), s.as_str()))
             .collect();
-        Ok(self.add_package(&name, &refs))
+        let pid = self.add_package(&name, &refs);
+        self.add_dependencies(root, pid)?;
+        Ok(pid)
     }
 }
 
@@ -250,6 +460,10 @@ pub(crate) fn collect_files(
     for entry in entries {
         let path = entry.map_err(|e| e.to_string())?.path();
         if path.is_dir() {
+            // `deps/` is where Islet links installed packages; they are not part of this one.
+            if path.file_name().is_some_and(|n| n == "deps") && path.join("map.yaml").is_file() {
+                continue;
+            }
             collect_files(root, &path, out)?;
         } else if path.extension().and_then(|e| e.to_str()) == Some("pel") {
             let rel = path.strip_prefix(root).unwrap_or(&path).with_extension("");

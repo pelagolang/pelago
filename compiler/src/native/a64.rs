@@ -1,4 +1,4 @@
-//! An AArch64 instruction encoder: only the forms the code generator uses (card A-10, stage R1).
+//! An AArch64 instruction encoder: only the forms the code generator uses.
 //!
 //! Every instruction is one 32-bit word. `Asm` collects the words and labels; branches to labels and
 //! references to the data sections are patched when the final layout is known ([`Asm::finish`]).
@@ -693,6 +693,26 @@ impl Asm {
         self.mem_op(size.trailing_zeros(), 2, false, rt.0, base, off);
     }
 
+    /// `ldaxr rt, [base]`: load-acquire exclusive, 64 bits.
+    pub fn ldaxr(&mut self, rt: Reg, base: Reg) {
+        self.word(0xC85F_FC00 | (base.0 as u32) << 5 | rt.0 as u32);
+    }
+
+    /// `stlxr ws, rt, [base]`: store-release exclusive, 64 bits; `ws` is 0 when the store happened.
+    pub fn stlxr(&mut self, ws: Reg, rt: Reg, base: Reg) {
+        self.word(0xC800_FC00 | (ws.0 as u32) << 16 | (base.0 as u32) << 5 | rt.0 as u32);
+    }
+
+    /// `dmb ish`: a full barrier.
+    pub fn dmb_ish(&mut self) {
+        self.word(0xD503_3BBF);
+    }
+
+    /// `clrex`
+    pub fn clrex(&mut self) {
+        self.word(0xD503_3F5F);
+    }
+
     pub fn str(&mut self, rt: Reg, base: Reg, off: i32, size: u8) {
         self.mem_op(size.trailing_zeros(), 0, false, rt.0, base, off);
     }
@@ -715,9 +735,29 @@ impl Asm {
         self.idx_op(0, rt, base, index, size, scaled);
     }
 
+    /// `ldr vt, [base, index, lsl #shift]` of a 4- or 8-byte float.
+    pub fn ldr_f_idx(&mut self, vt: V, base: Reg, index: Reg, size: u8, scaled: bool) {
+        self.idx_op(1 | 0x10, Reg(vt.0), base, index, size, scaled);
+    }
+
+    pub fn str_f_idx(&mut self, vt: V, base: Reg, index: Reg, size: u8, scaled: bool) {
+        self.idx_op(0x10, Reg(vt.0), base, index, size, scaled);
+    }
+
+    /// `opc` bit 4 (0x10) selects the vector register file.
     fn idx_op(&mut self, opc: u32, rt: Reg, base: Reg, index: Reg, size: u8, scaled: bool) {
+        let v = if opc & 0x10 != 0 { 0x0400_0000 } else { 0 };
+        let mut opc = opc & 0xF;
+        // A 128-bit `q` register: size 00 and opc 1x.
+        let log = if size == 16 {
+            opc |= 2;
+            0
+        } else {
+            size.trailing_zeros()
+        };
         self.word(
-            size.trailing_zeros() << 30
+            log << 30
+                | v
                 | 0x3820_6800
                 | opc << 22
                 | (index.0 as u32) << 16

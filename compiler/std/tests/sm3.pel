@@ -1,0 +1,20 @@
+/// `std.sm3` against Python's `hashlib.new("sm3")`.
+import std.hash
+import std.sm3
+import { sm3hash } = std.sm3
+
+fn pattern(n: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * 7 + 3) & 255).wrapToByte()) }
+    out
+}
+
+fn main() {
+    for n of [0, 1, 3, 55, 56, 57, 63, 64, 65, 119, 120, 128, 200, 1000] {
+        print(n, hash.hex(hash.digest(sm3hash.new(), pattern(n))))
+    }
+    print(hash.hex(hash.digestText(sm3hash.new(), "abc")))
+    var h = sm3hash.new()
+    for i of 0..20 { h.update!(pattern(33)) }
+    print(hash.hex(h.finish()), h.outputSize(), h.blockSize())
+}

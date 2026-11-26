@@ -1,4 +1,4 @@
-//! Syntax highlighting for `.pel` (card B-03): `pelago highlight`.
+//! Syntax highlighting for `.pel`: `pelago highlight`.
 //!
 //! The classification uses the real lexer, so strings, numbers, comments and every hard keyword are
 //! exact. Soft keywords and the roles of plain names (type, function) are decided by the tokens around
@@ -767,10 +767,16 @@ mod tests {
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| p.extension().is_some_and(|x| x == "pel"))
             .collect();
-        for e in std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("core"))
-            .unwrap()
-        {
-            files.push(e.unwrap().path());
+        let mut stack = vec![std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("core")];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(d).unwrap() {
+                let path = e.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|x| x == "pel") {
+                    files.push(path);
+                }
+            }
         }
         assert!(files.len() > 5);
         for f in files {

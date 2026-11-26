@@ -1,0 +1,121 @@
+/// The heap, written in the language. It is small on purpose, for chips with little room.
+///
+/// One reserved range is cut into lanes, one lane per block size: 16 bytes, 32, 64, and so on (each the double of the one
+/// before). A block's address says which lane, and so which size, it is in: no header, no table, no search. Each lane has a
+/// free list and a bump position, kept in the 64 words of static data the library owns: word `2 * lane` is the list head,
+/// word `2 * lane + 1` the bytes handed out by bumping, word 60 the start of the range, word 61 the lane size as a shift.
+/// Fresh memory is zero; a reused block is zeroed when it is handed out, so every block starts zero.
+
+const HEAP_LANES: int = 24
+const HEAP_SHIFT: int = 32
+const HEAP_SHIFT_MIN: int = 24
+
+pub fn heap_ld(a: int) -> int = rtLoadInt(rtIntAddr(a))
+
+pub fn heap_st(a: int, v: int) {
+    rtStoreInt(rtIntAddr(a), v)
+}
+
+fn heap_words() -> int = rtAddrInt(rtDataWord(0))
+
+//~ The lane (size class) for `n` bytes: the smallest `k` with `16 << k` at least `n`.
+pub fn heap_class(n: int) -> int {
+    var k = 0
+    var s = 16
+    while s < n {
+        s = s << 1
+        k = k +% 1
+    }
+    k
+}
+
+//~ Out of memory: stops the program with a store through the null address (no message yet).
+fn heap_stop() {
+    rtStoreInt(rtNull(), 1)
+}
+
+//~ Reserves the range on first use (no access): as much as the system grants, halving the lane size until it agrees. Lanes are made usable one MiB step at a time as they grow (see `heap_alloc`).
+fn heap_init_slow() {
+    var shift = HEAP_SHIFT
+    var r = rtOsReserve(HEAP_LANES << (shift & 63))
+    while r <= 0 && shift > HEAP_SHIFT_MIN {
+        shift = shift -% 1
+        r = rtOsReserve(HEAP_LANES << (shift & 63))
+    }
+    const size = HEAP_LANES << (shift & 63)
+    if r <= 0 { heap_stop() }
+    rtOsAdviseNohuge(rtIntAddr(r), size)
+    heap_st(heap_words() +% 480, r)
+    heap_st(heap_words() +% 488, shift)
+}
+
+//~ Zeroed memory of `n` bytes, 16-byte aligned; stops when there is none.
+pub fn heap_alloc(n: int) -> int {
+    const w = heap_words()
+    if heap_ld(w +% 480) == 0 { heap_init_slow() }
+    var k = 0
+    var size = 16
+    while size < n {
+        size = size << 1
+        k = k +% 1
+    }
+    const e = w +% k *% 16
+    const head = heap_ld(e)
+    if head != 0 {
+        heap_st(e, heap_ld(head))
+        var i = 0
+        while i < size {
+            heap_st(head +% i, 0)
+            i = i +% 8
+        }
+        return head
+    }
+    const r = heap_ld(w +% 480)
+    const shift = heap_ld(w +% 488)
+    const used = heap_ld(e +% 8)
+    if k >= HEAP_LANES || used +% size > 1 << (shift & 63) { heap_stop() }
+    heap_st(e +% 8, used +% size)
+    const at = r +% (k << (shift & 63))
+    const lo = (used +% 1048575) & -1048576
+    const hi = (used +% size +% 1048575) & -1048576
+    if hi > lo && rtOsCommit(rtIntAddr(at +% lo), hi -% lo) != 0 { heap_stop() }
+    at +% used
+}
+
+//~ The lane (size class) of the block at `p`.
+fn heap_lane(p: int) -> int {
+    const w = heap_words()
+    (p -% heap_ld(w +% 480)) >> (heap_ld(w +% 488) & 63)
+}
+
+//~ Gives a block back (`p` is a block from `heap_alloc` or `0`).
+pub fn heap_free(p: int) {
+    if p == 0 { return }
+    const e = heap_words() +% heap_lane(p) *% 16
+    heap_st(p, heap_ld(e))
+    heap_st(e, p)
+}
+
+//~ A block of `n` bytes holding the first bytes of `p` (`0` allocates), the rest zero; `p` is dead afterwards.
+pub fn heap_realloc(p: int, n: int) -> int {
+    if p == 0 { return heap_alloc(n) }
+    const size = 16 << (heap_lane(p) & 63)
+    if n <= size { return p }
+    const q = heap_alloc(n)
+    rtCopy(rtIntAddr(q), rtIntAddr(p), size)
+    heap_free(p)
+    q
+}
+
+//~ Gives the whole range back and forgets the state (for the end of a program or a test). Blocks in it are dead.
+pub fn heap_trim() {
+    const w = heap_words()
+    const r = heap_ld(w +% 480)
+    if r == 0 { return }
+    rtOsRelease(rtIntAddr(r), HEAP_LANES << (heap_ld(w +% 488) & 63))
+    var i = 0
+    while i < 496 {
+        heap_st(w +% i, 0)
+        i = i +% 8
+    }
+}

@@ -100,7 +100,7 @@ impl<'a> Lowerer<'a> {
                     .emit(Op::Bin(BinOp::Add, len, one), Some(IrTy::I64), sp)
                     .unwrap_or(len);
                 let sz = self.i64c(esize);
-                self.call_core("rt_grow", vec![dst, sz, need]);
+                self.call_core("rtGrow", vec![dst, sz, need]);
                 let data = self.load_at(dst, 0, IrTy::Ptr);
                 let off = self
                     .emit(Op::Bin(BinOp::Mul, len, sz), Some(IrTy::I64), sp)
@@ -119,7 +119,7 @@ impl<'a> Lowerer<'a> {
                 if let Res::Never = self.builder_value(b, slot, elem) {
                     return Res::Never;
                 }
-                self.call_core_g("rt_set_put", &[elem], vec![dst, slot]);
+                self.call_core_g("rtSetPut", &[elem], vec![dst, slot]);
                 Res::Unit
             }
             TyKind::Map(k, v) => {
@@ -134,7 +134,7 @@ impl<'a> Lowerer<'a> {
                 if let Res::Never = self.into(val, vs, v) {
                     return Res::Never;
                 }
-                self.call_core_g("rt_map_put", &[k, v], vec![dst, ks, vs]);
+                self.call_core_g("rtMapPut", &[k, v], vec![dst, ks, vs]);
                 Res::Unit
             }
             _ => self.unsupported(sp, "a builder of this type"),

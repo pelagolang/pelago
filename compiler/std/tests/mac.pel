@@ -1,0 +1,45 @@
+/// `std.mac` and `std.kdf`: HMAC, HKDF and PBKDF2 against Python (`gen_crypto.py`) and the RFC 4231 / 5869 vectors.
+import std.hash
+import std.kdf
+import std.mac
+import std.sha2
+import { sha256, sha512 } = std.sha2
+
+fn text(s: str) -> [byte] = s.bytes().toList()
+
+fn pattern(n: int, k: int) -> [byte] {
+    var out: [byte] = []
+    for i of 0..n { out.push!(((i * k + 11) & 255).wrapToByte()) }
+    out
+}
+
+fn main() {
+    /// Key sizes below, at and above the block size (64 and 128), message sizes around the block edges.
+    for kl of [0, 20, 64, 65, 129] {
+        for ml of [0, 5, 100, 130] {
+            const key = pattern(kl, 3)
+            const msg = pattern(ml, 5)
+            print(
+                kl,
+                ml,
+                hash.hex(mac.sign(sha256.new(), key, msg)),
+                hash.hex(mac.sign(sha512.new(), key, msg)),
+            )
+        }
+    }
+    /// RFC 4231 test case 2.
+    print(hash.hex(mac.sign(sha256.new(), text("Jefe"), text("what do ya want for nothing?"))))
+    print(mac.verify(sha256.new(), text("Jefe"), text("what do ya want for nothing?"), mac.sign(sha256.new(), text("Jefe"), text("what do ya want for nothing?"))))
+    print(mac.verify(sha256.new(), text("Jefe"), text("what do ya want for nothing!"), mac.sign(sha256.new(), text("Jefe"), text("what do ya want for nothing?"))))
+    /// RFC 5869 test case 1.
+    const ikm = hash.fromHex("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b") ?? []
+    const salt = hash.fromHex("000102030405060708090a0b0c") ?? []
+    const info = hash.fromHex("f0f1f2f3f4f5f6f7f8f9") ?? []
+    print(hash.hex(kdf.hkdfExtract(sha256.new(), salt, ikm)))
+    print(hash.hex(kdf.hkdf(sha256.new(), salt, ikm, info, 42)))
+    print(hash.hex(kdf.hkdf(sha256.new(), [], ikm, [], 42)))
+    print(hash.hex(kdf.hkdf(sha512.new(), salt, ikm, info, 100)))
+    print(hash.hex(kdf.pbkdf2(sha256.new(), text("password"), text("salt"), 1, 32)))
+    print(hash.hex(kdf.pbkdf2(sha256.new(), text("password"), text("salt"), 2, 40)))
+    print(hash.hex(kdf.pbkdf2(sha512.new(), text("passwordPASSWORDpassword"), text("saltSALTsaltSALTsaltSALTsaltSALTsalt"), 3, 70)))
+}

@@ -1,0 +1,30 @@
+/// The same program with the nodes in a pool: a node is a 12 byte slot named by a 4 byte link, and freeing a tree is one clear.
+struct node {
+    l: link<node, uint32>
+    r: link<node, uint32>
+}
+
+fn make(inout p: pool<node, uint32>, d: int) -> link<node, uint32> {
+    if d == 0 { return p.add!(node { l: p.noLink(), r: p.noLink() }) }
+    const l = make(inout p, d - 1)
+    const r = make(inout p, d - 1)
+    p.add!(node { l: l, r: r })
+}
+
+fn check(p: pool<node, uint32>, t: link<node, uint32>) -> int {
+    const n = p.get(t)
+    var c = 0
+    if !p.isNone(n.l) { c += 1 + check(p, n.l) }
+    if !p.isNone(n.r) { c += check(p, n.r) }
+    c
+}
+
+fn main() {
+    var p: pool<node, uint32> = pool()
+    var total = 0
+    for it in 0..20 {
+        total += check(p, make(inout p, 16))
+        p.clear!()
+    }
+    print(total)
+}

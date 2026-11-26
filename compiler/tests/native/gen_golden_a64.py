@@ -109,6 +109,8 @@ CASES = [
  ("addp d0, v1.2d", "a.vaddp(V(0), V(1))"), ("mov v0.d[1], x2", "a.vins(V(0), 1, X2)"), ("mov v0.d[0], x2", "a.vins(V(0), 0, X2)"),
  ("mov x1, v2.d[1]", "a.vmov_to_gp(X1, V(2), 1)"), ("mov x1, v2.d[0]", "a.vmov_to_gp(X1, V(2), 0)"),
  ("mov v3.16b, v4.16b", "a.vmov(V(3), V(4))"),
+ ("ldaxr x9, [x0]", "a.ldaxr(X9, X0)"), ("ldaxr x10, [x1]", "a.ldaxr(X10, X1)"),
+ ("stlxr w11, x2, [x0]", "a.stlxr(X11, X2, X0)"), ("dmb ish", "a.dmb_ish()"), ("clrex", "a.clrex()"),
 ]
 
 # Instructions that reach a label: the label is bound at the end, a fixed distance away.

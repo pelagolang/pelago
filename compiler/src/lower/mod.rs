@@ -1,4 +1,4 @@
-//! Lowering the checked program to the IR (`docs/design/ir.md`).
+//! Lowering the checked program to the IR.
 //!
 //! The lowering works function by function, starting from the functions that have no type parameters
 //! and from `main`; every call to a generic function (or a method of a generic type) asks for an
@@ -25,6 +25,7 @@ mod expr;
 mod func;
 mod glue;
 mod intr;
+mod memnum;
 mod meta;
 mod obj;
 mod ops;
@@ -32,7 +33,9 @@ mod pat;
 mod select;
 mod seq;
 mod soa;
+mod softf;
 mod ty;
+mod wide;
 
 use crate::ast::*;
 use crate::ir::{
@@ -144,6 +147,13 @@ pub(crate) struct Lowerer<'a> {
     pub types: TypeTable,
     pub module: Module,
     pub diags: Vec<Diagnostic>,
+    /// The program's `main` was written `fn main(args: [string])`. (Its IR shape alone does not say: a
+    /// `main` that returns a `T ! E` also has one pointer parameter, the place for the result.)
+    pub main_takes_args: bool,
+    /// The program's `main` returns a `T ! E`: the type, for the entry that checks it.
+    pub main_result: Option<Ty>,
+    /// Set while the end of a function with an expression body is lowered: the body's value is in place.
+    pub body_placed: bool,
     pub fns: HashMap<DefId, FnEntry<'a>>,
     pub globals: HashMap<DefId, GlobalEntry<'a>>,
     pub core_fns: HashMap<String, DefId>,
@@ -168,9 +178,23 @@ pub(crate) struct Lowerer<'a> {
     pub meta_stack: Vec<(ModuleId, u32, u32)>,
     /// `@meta_limit(n)`: the item it is written on, and the step budget.
     pub meta_limits: Vec<(ModuleId, Span, u64)>,
+    /// The number each source file has in `Module::files` (locations name files by it), and each file's lines.
+    pub file_nums: HashMap<ModuleId, u32>,
+    pub line_idx: HashMap<ModuleId, crate::span::LineIndex>,
 }
 
 pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
+    lower_with(program, res, typed, false)
+}
+
+/// Like `lower`; with `language_heap` the library's `heap_alloc`, `heap_free` and `heap_realloc` are lowered too, for
+/// `opt::expand_heap` to call.
+pub fn lower_with(
+    program: &Program,
+    res: &Resolved,
+    typed: &Typed,
+    language_heap: bool,
+) -> Lowered {
     let types = typed.types.clone();
     let void = types.void;
     let mut lw = Lowerer {
@@ -180,6 +204,9 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         types,
         module: Module::default(),
         diags: Vec::new(),
+        main_takes_args: false,
+        main_result: None,
+        body_placed: false,
         fns: HashMap::new(),
         globals: HashMap::new(),
         core_fns: HashMap::new(),
@@ -202,6 +229,8 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         meta_cache: HashMap::new(),
         meta_stack: Vec::new(),
         meta_limits: Vec::new(),
+        file_nums: HashMap::new(),
+        line_idx: HashMap::new(),
     };
     lw.index();
     // Roots: every function of the program that needs no type arguments.
@@ -209,8 +238,11 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         .fns
         .iter()
         .filter(|(d, e)| {
-            let in_core = program.package(program.module(e.file).package).name == "core";
-            !in_core
+            // The libraries (`core`, `std`) are lowered where the program uses them, not all at once:
+            // a program that imports `std.big` must not carry `std.io` along.
+            let name = &program.package(program.module(e.file).package).name;
+            let in_library = name == "core" || name == "std";
+            !in_library
                 && !e.mods.is_meta
                 && !matches!(e.decl.body, FnBody::None)
                 && lw.is_plain_fn(**d)
@@ -222,9 +254,111 @@ pub fn lower(program: &Program, res: &Resolved, typed: &Typed) -> Lowered {
         lw.request_fn(d, &HashMap::new());
     }
     lw.run_jobs();
+    if language_heap {
+        for name in crate::ir::opt::HEAP_FNS {
+            if let Some(def) = lw.core_fn(name) {
+                lw.request_fn(def, &HashMap::new());
+            }
+        }
+        lw.run_jobs();
+    }
+    lw.add_entry();
     Lowered {
         module: lw.module,
         diagnostics: lw.diags,
+    }
+}
+
+impl Lowerer<'_> {
+    /// `fn main(args: [string])` takes the argument list; the process starts `main` with nothing. So the
+    /// function gets another name and a new `main` builds the list from the start-up block
+    /// (`core`'s `rtArgsInto`), calls it and frees the list's buffer (the texts are borrowed).
+    fn add_entry(&mut self) {
+        if !self.main_takes_args && self.main_result.is_none() {
+            return;
+        }
+        // The user's `main`: the result place comes first when there is one, then the argument list.
+        let params: Vec<IrTy> = [
+            self.main_result.map(|_| IrTy::Ptr),
+            self.main_takes_args.then_some(IrTy::Ptr),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let Some(idx) = self
+            .module
+            .funcs
+            .iter()
+            .position(|f| f.name == "main" && f.params == params && f.ret == IrTy::Void)
+        else {
+            return;
+        };
+        self.module.funcs[idx].name = "main$user".to_string();
+        let user = FuncId(idx as u32);
+        let void = self.types.void;
+        let mut state = FnState::empty(void);
+        state.func = Func::new("main", &[], IrTy::Void);
+        state.cur = Some(state.func.entry());
+        self.f = state;
+        let sp = Span::new(0, 0);
+        let mut call_args = Vec::new();
+        // `main` returns a `T ! E`: it writes the result into a place the entry provides.
+        let mut result = None;
+        if let Some(rt) = self.main_result {
+            let Some(info) = self.enum_info(rt) else {
+                return;
+            };
+            let (size, align) = (info.layout.size, info.layout.align.max(8));
+            let err_off = info.variants[1].first().map(|f| f.off);
+            let err_is_string = match self.types.kind_of(rt) {
+                TyKind::Result(_, e) => self.types.shallow(*e) == self.types.string,
+                _ => false,
+            };
+            let off = if err_is_string {
+                err_off.unwrap_or(0) as i128
+            } else {
+                -1
+            };
+            let Some(slot) = self.emit(Op::Slot(size, align), Some(IrTy::Ptr), sp) else {
+                return;
+            };
+            call_args.push(slot);
+            result = Some((slot, off));
+        }
+        let mut args_slot = None;
+        if self.main_takes_args {
+            let Some(slot) = self.emit(Op::Slot(24, 8), Some(IrTy::Ptr), sp) else {
+                return;
+            };
+            self.call_core("rtArgsInto", vec![slot]);
+            call_args.push(slot);
+            args_slot = Some(slot);
+        }
+        self.emit(Op::Call(user, call_args), None, sp);
+        if let Some(slot) = args_slot {
+            if let Some(buf) = self.emit(Op::Load(IrTy::Ptr, slot), Some(IrTy::Ptr), sp) {
+                self.emit(Op::Free(buf), None, sp);
+            }
+        }
+        if let Some((slot, off)) = result {
+            // An error goes to standard error (its text, when it is a string) and the exit code is 1.
+            let off = self.emit(
+                Op::Const(IrTy::Int(64), Const::Int(off)),
+                Some(IrTy::Int(64)),
+                sp,
+            );
+            let Some(off) = off else { return };
+            self.call_core("rtMainDone", vec![slot, off]);
+        }
+        self.terminate(Term::Return(None));
+        let st = std::mem::replace(&mut self.f, FnState::empty(void));
+        if st.fail.is_none() {
+            let mut func = st.func;
+            func.compact();
+            self.module.add(func);
+        }
+        // `rtArgsInto` and `rtMainDone` were asked for just now.
+        self.run_jobs();
     }
 }
 
@@ -572,7 +706,10 @@ impl<'a> Lowerer<'a> {
         let name = self.unique_name(base);
         let mut func = Func::new(&name, &sig.ir_params, sig.ir_ret);
         let e = func.entry();
-        func.terminate(e, Term::Stop("not lowered yet".to_string()));
+        func.terminate(
+            e,
+            Term::Stop("not lowered yet".to_string(), Span::default()),
+        );
         let id = self.module.add(func);
         self.instances.insert(key, id);
         self.jobs.push(Job::Fn {
@@ -638,17 +775,18 @@ impl<'a> Lowerer<'a> {
                 if attrs.iter().any(|a| a.name.text(src) == "checkfree") {
                     func.checkfree = Some((file.0, decl.name.span));
                 }
+                if attrs.iter().any(|a| a.name.text(src) == "inline_always") {
+                    func.inline_always = Some((file.0, decl.name.span));
+                }
+                if attrs.iter().any(|a| a.name.text(src) == "leaf") {
+                    func.leaf = Some((file.0, decl.name.span));
+                }
                 self.module.funcs[id.0 as usize] = func;
             }
             (_, fail) => {
                 let (span, msg) =
                     fail.unwrap_or((decl.name.span, "an internal problem".to_string()));
-                self.diags.push(Diagnostic {
-                    module: file,
-                    span,
-                    message: format!("not lowered yet: {msg} (in `{name}`)"),
-                    warning: true,
-                });
+                self.diags.push(fail_diag(file, span, &msg, &name));
             }
         }
     }
@@ -694,11 +832,17 @@ impl<'a> Lowerer<'a> {
         if !in_core
             && decl.kind == FnKind::Fn
             && info.self_ty.is_none()
-            && decl.params.is_empty()
+            && decl.params.len() <= 1
             && self.src_text(decl.name.span) == "main"
         {
             if let Some(s) = self.f.scopes.last_mut() {
-                s.push(ScopeItem::CoreCall("rt_run_pending"));
+                s.push(ScopeItem::CoreCall("rtRunPending"));
+            }
+            if matches!(self.types.kind_of(self.f.ret_ty), TyKind::Result(..)) {
+                self.main_result = Some(self.f.ret_ty);
+            }
+            if decl.params.len() == 1 {
+                self.main_takes_args = true;
             }
         }
         // The parameters: the receiver, then the declared ones.
@@ -753,6 +897,10 @@ impl<'a> Lowerer<'a> {
                     } else {
                         None
                     };
+                    // A `let` value in memory is not written while the call runs.
+                    if !matches!(mode, Some(Mode::Inout | Mode::Sink)) {
+                        self.f.func.let_ptrs.push(p);
+                    }
                     self.f.locals.insert(def, Local::Slot { ptr: p, ty, flag });
                 }
             }
@@ -785,10 +933,20 @@ impl<'a> Lowerer<'a> {
         }
         // The body.
         let ret = sig.ret;
-        let body_res = match &decl.body {
-            FnBody::Block(b) => self.block_value(b, sig.ret_pass, ret),
-            FnBody::Expr(e) => self.body_expr(e, sig.ret_pass, ret),
-            FnBody::None => Res::Unit,
+        let async_inner = self
+            .res
+            .decls
+            .get(&(file, decl.name.span.start))
+            .and_then(|d| self.typed.async_fns.get(d))
+            .copied();
+        let body_res = if let Some(inner) = async_inner {
+            self.async_fn_body(decl, sig, inner, &decl_params)
+        } else {
+            match &decl.body {
+                FnBody::Block(b) => self.block_value(b, sig.ret_pass, ret),
+                FnBody::Expr(e) => self.body_expr(e, sig.ret_pass, ret),
+                FnBody::None => Res::Unit,
+            }
         };
         if self.f.fail.is_some() {
             return Err(());
@@ -798,7 +956,10 @@ impl<'a> Lowerer<'a> {
                 self.write_ok_value(sig.ret, tmp, st);
             }
         }
+        // An expression body writes its `void ! E` value straight into the place of the result.
+        self.body_placed = matches!(decl.body, FnBody::Expr(_)) && sig.ret_pass == RetPass::Sret;
         self.finish_return(body_res, sig, decl.name.span);
+        self.body_placed = false;
         if self.f.fail.is_some() {
             return Err(());
         }
@@ -822,8 +983,11 @@ impl<'a> Lowerer<'a> {
                 self.terminate(Term::Return(None));
             }
             (RetPass::Sret, Res::Unit) | (RetPass::Sret, Res::Val(_)) => {
-                // `void ! E` ends with success.
-                self.write_ok_void(sig.ret);
+                // `void ! E` ends with success, unless the body is itself a call that gave a `void ! E`
+                // (`fn g() -> void ! E = f()`): that value is already in place, error or not.
+                if !self.body_placed {
+                    self.write_ok_void(sig.ret);
+                }
                 self.pop_scope();
                 self.terminate(Term::Return(None));
             }
@@ -857,5 +1021,24 @@ impl<'a> Lowerer<'a> {
                 }
             }
         }
+    }
+}
+
+/// The diagnostic for a function that could not be lowered. A message that starts with `error: ` is a
+/// mistake in the program (it stops the build); any other is a feature not built yet (a note).
+pub(crate) fn fail_diag(module: ModuleId, span: Span, msg: &str, name: &str) -> Diagnostic {
+    match msg.strip_prefix("error: ") {
+        Some(rest) => Diagnostic {
+            module,
+            span,
+            message: rest.to_string(),
+            warning: false,
+        },
+        None => Diagnostic {
+            module,
+            span,
+            message: format!("not lowered yet: {msg} (in `{name}`)"),
+            warning: true,
+        },
     }
 }

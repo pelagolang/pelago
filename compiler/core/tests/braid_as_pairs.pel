@@ -1,0 +1,10 @@
+/// `asPairs` and `asSlots` change how a braid is seen, not what it holds: `(A, B; 2N)` and `[(A, B); N]` have the same memory.
+fn main() {
+    const b: (int, string; 4) = (1, "a", 2, "b")
+    const ps = b.asPairs()
+    print(ps.len(), ps[0], ps[1])
+    const back = ps.asSlots()
+    print(back, back == b)
+    const rows: [(int, string); 3] = [(1, "x"), (2, "y"), (3, "z")]
+    print(rows.asSlots().len(), rows.asSlots().pairs())
+}

@@ -1,0 +1,62 @@
+/// `std.random`: the seeded generator is fixed (checked against Python's splitmix64); the system's generator is
+/// checked by what must hold, not by its values.
+import std.random
+
+fn seeded() {
+    var r = random.seeded(42)
+    print(r.next!(), r.next!())
+    print(r.between!(1, 6), r.between!(1, 6), r.between!(-5, 5), r.between!(7, 7))
+    print(r.fraction!())
+    var a = random.seeded(7)
+    var b = random.seeded(7)
+    var same = true
+    for i of 0..100 { if a.next!() != b.next!() { same = false } }
+    print(same)
+}
+
+fn spread() {
+    /// A die rolled many times reaches every face and never leaves the range.
+    var r = random.seeded(1)
+    var seen = [0, 0, 0, 0, 0, 0, 0]
+    for i of 0..6000 {
+        const d = r.between!(1, 6)
+        seen[d] += 1
+    }
+    var ok = seen[0] == 0
+    for f of 1..7 { if seen[f] < 800 || seen[f] > 1200 { ok = false } }
+    print(ok)
+    var low = 0.0
+    var high = 1.0
+    for i of 0..1000 {
+        const x = r.fraction!()
+        if x < low { low = x }
+        if x > high { high = x }
+    }
+    print(low >= 0.0, high <= 1.0)
+}
+
+fn system() -> void ! io_error {
+    var inRange = true
+    for i of 0..200 {
+        const d = random.between(1, 6)?
+        if d < 1 || d > 6 { inRange = false }
+    }
+    print(inRange)
+    const b = random.bytes(300)?
+    print(b.len())
+    var distinct = false
+    for i of 1..300 { if b[i] != b[0] { distinct = true } }
+    print(distinct)
+    const f = random.fraction()?
+    print(f >= 0.0, f < 1.0)
+    var g = random.fresh()?
+    print(g.next!() != g.next!())
+    const w = random.between(-4611686018427387904, 4611686018427387902)?
+    print(w < 4611686018427387903)
+}
+
+fn main() -> void ! io_error {
+    seeded()
+    spread()
+    system()?
+}

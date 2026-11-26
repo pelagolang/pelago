@@ -43,7 +43,10 @@ impl<'a> Lowerer<'a> {
         let name = self.unique_name(format!("{label}<{}>", self.show_ty(ty)));
         let mut func = Func::new(&name, &params, ret);
         let e = func.entry();
-        func.terminate(e, Term::Stop("not lowered yet".to_string()));
+        func.terminate(
+            e,
+            Term::Stop("not lowered yet".to_string(), Span::default()),
+        );
         let id = self.module.add(func);
         self.glue.insert((kind, ty), Some(id));
         self.jobs.push(Job::Glue { id, kind, ty });
@@ -283,7 +286,7 @@ impl<'a> Lowerer<'a> {
                 let nv = self.i64c(n);
                 self.each_elem(p, nv, esize, |s, ep, _| s.drop_at(ep, e));
             }
-            TyKind::Tuple(_) => self.drop_fields(p, ty),
+            TyKind::Tuple(_) | TyKind::AltTuple(..) => self.drop_fields(p, ty),
             TyKind::Adt(d, args) => match self.res.def(d).kind {
                 DefKind::Obj => self.drop_object(p, ty),
                 DefKind::Enum => {
@@ -377,13 +380,7 @@ impl<'a> Lowerer<'a> {
             TyKind::String => {
                 let len = self.load_at(src, 8, IrTy::I64);
                 let data = self.load_at(src, 0, IrTy::Ptr);
-                let buf = self
-                    .emit(Op::Alloc(len), Some(IrTy::Ptr), Span::new(0, 0))
-                    .unwrap_or(data);
-                self.emit(Op::MemCopy(buf, data, len), None, Span::new(0, 0));
-                self.store_at(dst, 0, buf);
-                self.store_at(dst, 8, len);
-                // An empty copy still owns its (zero-size) block; a capacity of at least 1 says so.
+                // An empty copy still owns a block of one byte; a capacity of at least 1 says so.
                 let one = self.i64c(1);
                 let big = self.emit(
                     Op::Cmp(CmpOp::Lt, len, one),
@@ -397,6 +394,12 @@ impl<'a> Lowerer<'a> {
                     },
                     None => len,
                 };
+                let buf = self
+                    .emit(Op::Alloc(cap), Some(IrTy::Ptr), Span::new(0, 0))
+                    .unwrap_or(data);
+                self.emit(Op::MemCopy(buf, data, len), None, Span::new(0, 0));
+                self.store_at(dst, 0, buf);
+                self.store_at(dst, 8, len);
                 self.store_at(dst, 16, cap);
             }
             TyKind::List(e) | TyKind::Iter(e) => {
@@ -411,11 +414,7 @@ impl<'a> Lowerer<'a> {
                         Span::new(0, 0),
                     )
                     .unwrap_or(len);
-                let buf = self
-                    .emit(Op::Alloc(bytes), Some(IrTy::Ptr), Span::new(0, 0))
-                    .unwrap_or(data);
-                self.store_at(dst, 0, buf);
-                self.store_at(dst, 8, len);
+                // An empty copy owns a block of one element; a capacity of at least 1 says so.
                 let one = self.i64c(1);
                 let small = self.emit(
                     Op::Cmp(CmpOp::Lt, len, one),
@@ -429,6 +428,18 @@ impl<'a> Lowerer<'a> {
                     },
                     None => len,
                 };
+                let block = self
+                    .emit(
+                        Op::Bin(BinOp::Mul, cap, sz),
+                        Some(IrTy::I64),
+                        Span::new(0, 0),
+                    )
+                    .unwrap_or(bytes);
+                let buf = self
+                    .emit(Op::Alloc(block), Some(IrTy::Ptr), Span::new(0, 0))
+                    .unwrap_or(data);
+                self.store_at(dst, 0, buf);
+                self.store_at(dst, 8, len);
                 self.store_at(dst, 16, cap);
                 if self.needs_drop(e) {
                     // Element by element.
@@ -467,7 +478,7 @@ impl<'a> Lowerer<'a> {
                     s.clone_into(sp, dp, e);
                 });
             }
-            TyKind::Tuple(_) => self.clone_fields(src, dst, ty),
+            TyKind::Tuple(_) | TyKind::AltTuple(..) => self.clone_fields(src, dst, ty),
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Obj => self.clone_object(src, dst, ty),
                 DefKind::Enum => self.clone_enum(src, dst, ty),
@@ -590,10 +601,28 @@ impl<'a> Lowerer<'a> {
     /// The copy function of one concrete object type: the type's own `clone`.
     fn obj_clone_body(&mut self, o: Value, d: Value, ty: Ty) {
         let sp = Span::new(0, 0);
-        let Some((m, map)) = self.find_impl_method(ty, "clone") else {
-            // Only reachable through a `copy` the checker would have rejected.
-            self.terminate(Term::Stop("this object has no `clone`".to_string()));
-            self.f.cur = Some(self.f.func.entry());
+        let own = self.find_impl_method(ty, "clone").filter(|(m, _)| {
+            self.fns
+                .get(m)
+                .is_some_and(|e| !matches!(e.decl.body, FnBody::None))
+        });
+        let Some((m, map)) = own else {
+            // `@derive(clone)`: a new block of this type with every field copied.
+            let Some(n) = self.obj_new(ty) else {
+                return;
+            };
+            let size = self.obj_size(ty) - super::obj::OBJ_HEADER;
+            let src = self.addr(o, super::obj::OBJ_HEADER);
+            let dst = self.addr(n, super::obj::OBJ_HEADER);
+            self.copy_bytes(dst, src, size);
+            for f in self.struct_fields(ty) {
+                if self.needs_drop(f.ty) {
+                    let s = self.addr(src, f.off);
+                    let t = self.addr(dst, f.off);
+                    self.clone_into(s, t, f.ty);
+                }
+            }
+            self.store_at(d, 0, n);
             return;
         };
         let Some(f) = self.request_fn(m, &map) else {

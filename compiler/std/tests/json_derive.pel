@@ -1,0 +1,51 @@
+/// `@derive(fromJson)`: a struct, nested structs, lists, options, defaults, narrow numbers and enums.
+import std.json
+import { json_error } = std.json
+
+@derive(fromJson)
+struct point { x: int, y: int }
+
+@derive(fromJson)
+enum shape {
+    dot
+    circle(radius: float)
+    rect(corner: point, w: uint16, h: uint16)
+    label(string)
+}
+
+@derive(fromJson)
+enum colour { red, green, blue }
+
+@derive(fromJson)
+struct server {
+    host: string
+    port: uint16
+    tags: [string]
+    tls: bool = false
+    note: string?
+    origin: point
+    shapes: [shape]
+    colour: colour = colour.green
+}
+
+fn describe(r: server ! json_error) -> string {
+    switch r {
+        case ok(s): "ok #(s.host):#(s.port) tags=#(s.tags) tls=#(s.tls) note=#(s.note) origin=#(s.origin.x),#(s.origin.y) shapes=#(s.shapes.len())"
+        case err(e): "error #e"
+    }
+}
+
+fn main() {
+    print(describe(serverDecode("{\"host\": \"a\", \"port\": 80, \"tags\": [\"x\", \"y\"], \"origin\": {\"x\": 1, \"y\": -2}, \"shapes\": [\"dot\", {\"circle\": {\"radius\": 2}}, {\"rect\": {\"corner\": {\"x\": 0, \"y\": 0}, \"w\": 3, \"h\": 4}}, {\"label\": \"hi\"}], \"tls\": true, \"note\": \"n\", \"extra\": 1}")))
+    print(describe(serverDecode("{\"host\": \"a\", \"port\": 80, \"tags\": [], \"origin\": {\"x\": 1, \"y\": 2}, \"shapes\": [], \"note\": null}")))
+    print(describe(serverDecode("{\"host\": \"a\", \"port\": 70000, \"tags\": [], \"origin\": {\"x\": 1, \"y\": 2}, \"shapes\": []}")))
+    print(describe(serverDecode("{\"host\": \"a\", \"port\": 1,\n \"tags\": [\"x\", 3], \"origin\": {\"x\": 1, \"y\": 2}, \"shapes\": []}")))
+    print(describe(serverDecode("{\"host\": \"a\", \"port\": 1, \"tags\": [], \"origin\": {\"x\": 1}, \"shapes\": []}")))
+    print(describe(serverDecode("{\"host\": \"a\", \"port\": 1, \"tags\": [], \"origin\": {\"x\": 1, \"y\": 2}, \"shapes\": [\"square\"]}")))
+    print(describe(serverDecode("{\"host\": \"a\", \"port\": 1, \"tags\": [], \"origin\": {\"x\": 1, \"y\": 2}, \"shapes\": [{\"circle\": {\"radius\": \"big\"}}]}")))
+    print(describe(serverDecode("[1, 2]")))
+    switch colourDecode("\"blue\"") {
+        case ok(c): print("colour ok")
+        case err(e): print("error #e")
+    }
+}

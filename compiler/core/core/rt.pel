@@ -1,0 +1,281 @@
+/// The intrinsics the compiler expands in place.
+
+/// ---- Intrinsics: what the compiler expands in place ---------------------------------------------------
+///
+/// The library below is written in the language over these few operations. `ptr` is a raw address;
+/// nothing here is checked, so only this file uses them.
+
+pub ext fn rtNull() -> ptr
+pub ext fn rtAlloc(size: int) -> ptr
+pub ext fn rtFree(p: ptr)
+//~ A block of `size` bytes holding the first bytes of `p` (null allocates), the rest zero; `p` is dead afterwards.
+pub ext fn rtRealloc(p: ptr, size: int) -> ptr
+//~ The operating system's memory, for allocators. Each gives an address or `0`, or a negative
+//~ error: -1 out of memory, -2 a bad argument (a size or address that is not a whole number of 4096-byte pages), -3 another failure.
+//~ Address space of `size` bytes with no access.
+pub ext fn rtOsReserve(size: int) -> int
+//~ Makes a reserved range readable and writable.
+pub ext fn rtOsCommit(p: ptr, size: int) -> int
+//~ Gives a range back.
+pub ext fn rtOsRelease(p: ptr, size: int) -> int
+//~ Moves or grows a block from `old` to `new` bytes, keeping the first bytes; gives the new address (the old one is dead).
+pub ext fn rtOsRemap(p: ptr, old: int, new: int) -> int
+//~ Asks the system not to use huge pages for a range (only a hint; does nothing where there are none).
+pub ext fn rtOsAdviseNohuge(p: ptr, size: int) -> int
+//~ The address a number names, for the results of the calls above.
+pub ext fn rtIntAddr(n: int) -> ptr
+//~ The address of the k-th (0 to 63, a literal) word of a zeroed, writable block of static data the compiler keeps for the library's own state.
+pub ext fn rtDataWord(k: int) -> ptr
+//~ A context: a stack at `base` of `size` bytes that starts by calling `code(env)` (a closure's two words), which must never return.
+//~ Nothing runs until something switches to the handle it returns.
+pub ext fn rtCtxInit(base: ptr, size: int, code: ptr, env: ptr) -> ptr
+//~ Saves where this context stands at `save` and continues the context `to`; comes back when something switches to the saved handle.
+pub ext fn rtCtxSwitch(save: ptr, to: ptr)
+//~ The address of a function declared with no parameters, for `rtCtxInit`.
+pub ext fn rtFnAddr<F>(f: F) -> ptr
+pub ext fn rtOffset(p: ptr, bytes: int) -> ptr
+pub ext fn rtCopy(dst: ptr, src: ptr, bytes: int)
+pub ext fn rtIsNull(p: ptr) -> bool
+pub ext fn rtAddrInt(p: ptr) -> int
+pub ext fn rtLoadInt(p: ptr) -> int
+pub ext fn rtStoreInt(p: ptr, v: int)
+pub ext fn rtLoadByte(p: ptr) -> uint8
+pub ext fn rtStoreByte(p: ptr, v: uint8)
+pub ext fn rtLoadPtr(p: ptr) -> ptr
+pub ext fn rtStorePtr(p: ptr, v: ptr)
+pub ext fn rtLoadFloat(p: ptr) -> float
+pub ext fn rtStoreFloat(p: ptr, v: float)
+pub ext fn rtLoadChar(p: ptr) -> char
+pub ext fn rtStoreChar(p: ptr, v: char)
+pub ext fn rtLoadBool(p: ptr) -> bool
+pub ext fn rtStoreBool(p: ptr, v: bool)
+pub ext fn rtPrint(p: ptr, n: int)
+//~ The operating system layer. `rtOsWrite` flushes standard output first and
+//~ writes once: it gives the count written or a negative error number; `rtOsRead` gives the count read,
+//~ 0 at the end, or a negative error number. `rtOsArgv` is the start-up block: the count, that many
+//~ pointers to zero-terminated texts, a zero, then the environment the same way (on Windows the count is
+//~ negative and there is one text, the command line: see `rtWinSplit`).
+pub ext fn rtOsWrite(fd: int, p: ptr, n: int) -> int
+pub ext fn rtOsRead(fd: int, p: ptr, n: int) -> int
+pub ext fn rtOsExit(code: int)
+pub ext fn rtOsArgv() -> int
+//~ Files: `rtOsOpen(path, mode)` opens the zero-terminated path (mode 0 reads, 1 writes and creates or empties
+//~ the file, 2 appends) and gives a descriptor of 3 or more, or a negative error (-4 no such file, -5 permission
+//~ denied, other values: some other failure). `rtOsClose(fd)` gives 0 or a negative error.
+pub ext fn rtOsOpen(path: ptr, mode: int) -> int
+pub ext fn rtOsClose(fd: int) -> int
+//~ `rtOsClock(which, p)` writes a clock as two `int`s at `p` (seconds, nanoseconds): `which` 0 is the wall clock
+//~ (since 1970-01-01 UTC), 1 the monotonic clock. 0 on success, a negative error otherwise (-3 where the
+//~ target has no clock call yet: Windows, macOS).
+pub ext fn rtOsClock(which: int, p: ptr) -> int
+//~ `rtOsSleep(seconds, nanoseconds)` lets the process sleep (`nanosleep`); it may return early. 0, or a negative
+//~ error (-3 where the target has no such call yet: Windows, macOS).
+pub ext fn rtOsSleep(secs: int, nanos: int) -> int
+//~ Atomics on the 8 bytes at an 8-aligned address, all sequentially consistent, all giving the old value:
+//~ `rtAtomicCas(p, expected, desired)` stores `desired` only when the word equals `expected`; `rtAtomicAdd(p, d)`
+//~ adds (`d` 0 loads); `rtAtomicSwap(p, v)` stores. Runtime routines, not IR instructions.
+pub ext fn rtAtomicCas(p: ptr, expected: int, desired: int) -> int
+pub ext fn rtAtomicAdd(p: ptr, delta: int) -> int
+pub ext fn rtAtomicSwap(p: ptr, v: int) -> int
+//~ Threads and futexes (Linux x86-64; elsewhere -3, and in the interpreter `rtThreadStart` always fails because it runs
+//~ one task at a time). `rtThreadStart(code, arg, stackTop)` (the stack top as an `int`, `rtAddrInt`) starts an operating system thread that calls `code(arg)`
+//~ (`code` from `rtFnAddr` takes no parameters, so `arg` is left in `rdi` unused) on the stack that ends at
+//~ `stackTop`, and gives its id or a negative error. The thread must not allocate yet (the allocator is single threaded).
+//~ `rtFutexWait(p, expected, nanos)` sleeps while the 4 bytes at `p` equal `expected` (until a wake or `nanos`, negative:
+//~ no limit); it also returns early now and then, so look at the condition again. `rtFutexWake(p, n)` wakes up to `n`.
+//~ The thread's word is the 8 bytes at `stackTop - 8`: its id while it runs, 0 once it has ended (`rtFutexWait` on it
+//~ to join; free the stack after that).
+pub ext fn rtThreadStart(code: ptr, arg: int, stackTop: int) -> int
+pub ext fn rtFutexWait(p: ptr, expected: int, nanos: int) -> int
+pub ext fn rtFutexWake(p: ptr, n: int) -> int
+pub ext fn rtOsFs(op: int, path: ptr, aux: int) -> int
+pub ext fn rtOsDents(fd: int, buf: ptr, n: int) -> int
+//~ `rtOsRandom(p, n)` fills `n` bytes (1 to 256) at `p` from the system's random generator: 0, or a negative error
+//~ (-3 where the target has no such call yet: Windows).
+pub ext fn rtOsRandom(p: ptr, n: int) -> int
+pub ext fn rtToByte(n: int) -> uint8
+pub ext fn rtWrap<T>(n: int) -> T
+pub ext fn rtToInt(x: float) -> int
+//~ The 64-bit words of the wide integers as unsigned numbers: `rtULt(a, b)` is `a < b`, `rtUShr` a logical shift
+//~ right (0 to 63), `rtUMulHi` the high 64 bits of the 128-bit product, `rtUDiv` and `rtURem` the quotient and remainder.
+pub ext fn rtULt(a: int, b: int) -> bool
+pub ext fn rtUShr(a: int, n: int) -> int
+pub ext fn rtUMulHi(a: int, b: int) -> int
+pub ext fn rtUDiv(a: int, b: int) -> int
+pub ext fn rtURem(a: int, b: int) -> int
+pub ext fn rtFma(a: float, b: float, c: float) -> float
+pub ext fn rtSqrt(a: float) -> float
+pub ext fn rtFloor(a: float) -> float
+pub ext fn rtCeil(a: float) -> float
+pub ext fn rtToChar(n: int) -> char
+pub ext fn rtShowTo<T>(src: ptr, out: ptr)
+pub ext fn rtShowItemTo<T>(src: ptr, out: ptr)
+pub ext fn rtSizeOf<T>() -> int
+//~ The byte offset of slot `i` (a number written in the source) in a tuple, braid or struct type `T`.
+pub ext fn rtSlotOff<T>(i: int) -> int
+pub ext fn rtIsInt<T>() -> bool
+//~ Whether `T` is `uint8`, `uint16` or `uint32`.
+pub ext fn rtIsSmallUint<T>() -> bool
+//~ Whether a `T` has drop glue (owns memory or has a `deinit`).
+pub ext fn rtNeedsDrop<T>() -> bool
+pub ext fn rtAddrOf<T>(x: T) -> ptr
+pub ext fn rtWrite<T>(dst: ptr, sink value: T)
+pub ext fn rtRead<T>(src: ptr) -> T
+pub ext fn rtClone<T>(src: ptr) -> T
+pub ext fn rtCloneTo<T>(src: ptr, dst: ptr)
+pub ext fn rtDropAt<T>(p: ptr)
+pub ext fn rtCast<A, B>(sink x: A) -> B
+pub ext fn rtDropFn<T>() -> ptr
+pub ext fn rtCloneFn<T>() -> ptr
+pub ext fn rtEqFn<T>() -> ptr
+pub ext fn rtCmpFn<T>() -> ptr
+pub ext fn rtHashFn<T>() -> ptr
+pub ext fn rtShowFn<T>() -> ptr
+//~ The `show` slot of an `any show` table for a type that has no `show` method of its own (numbers, lists, ...).
+pub fn rtAnyShow<T>(out: ptr, src: ptr) {
+    rtShowTo<T>(src, out)
+}
+pub ext fn rtCallVoid1(f: ptr, a: ptr)
+pub ext fn rtCallVoid2(f: ptr, a: ptr, b: ptr)
+pub ext fn rtCallBool2(f: ptr, a: ptr, b: ptr) -> bool
+pub ext fn rtCallInt2(f: ptr, a: ptr, b: ptr) -> int
+pub ext fn rtCallInt1(f: ptr, a: ptr) -> int
+
+//~ Windows has no start-up block of texts: its runtime makes one whose count is -1, with the whole command line
+//~ (UTF-8) as the one text; `rtWinSplit` turns it into the arguments. Splitting lives here, not in the runtime,
+//~ so both Windows back ends share it and the interpreter can test it.
+//~
+//~ The rules are the ones Windows programs agree on: the program name ends at the first blank, and quotes in it
+//~ only group. After it, blanks separate arguments outside quotes; 2n backslashes before a quote give n
+//~ backslashes and the quote groups, 2n+1 give n and a literal quote; `""` inside quotes is a literal quote;
+//~ other backslashes are themselves. The arguments are written in place over the text (never longer than what
+//~ they came from), each ending in a zero, one after another; the result is their count.
+pub fn rtWinSplit(s: ptr) -> int {
+    var r = 0
+    var w = 0
+    var q = false
+    /// The program name.
+    while true {
+        const c = rtLoadByte(rtOffset(s, r))
+        if c == 0 { break }
+        r += 1
+        if c == 34 {
+            q = !q
+        } else if !q && (c == 32 || c == 9) {
+            break
+        } else {
+            rtStoreByte(rtOffset(s, w), c)
+            w += 1
+        }
+    }
+    rtStoreByte(rtOffset(s, w), 0)
+    w += 1
+    var n = 1
+    while true {
+        while rtLoadByte(rtOffset(s, r)) == 32 || rtLoadByte(rtOffset(s, r)) == 9 { r += 1 }
+        if rtLoadByte(rtOffset(s, r)) == 0 { return n }
+        q = false
+        var going = true
+        while going {
+            var b = 0
+            while rtLoadByte(rtOffset(s, r)) == 92 {
+                b += 1
+                r += 1
+            }
+            const c = rtLoadByte(rtOffset(s, r))
+            if c == 34 {
+                var k = 0
+                while k < b / 2 {
+                    rtStoreByte(rtOffset(s, w), 92)
+                    w += 1
+                    k += 1
+                }
+                if b % 2 == 1 {
+                    rtStoreByte(rtOffset(s, w), 34)
+                    w += 1
+                    r += 1
+                } else if q && rtLoadByte(rtOffset(s, r + 1)) == 34 {
+                    rtStoreByte(rtOffset(s, w), 34)
+                    w += 1
+                    r += 2
+                } else {
+                    q = !q
+                    r += 1
+                }
+            } else {
+                var k = 0
+                while k < b {
+                    rtStoreByte(rtOffset(s, w), 92)
+                    w += 1
+                    k += 1
+                }
+                if c == 0 {
+                    going = false
+                } else if !q && (c == 32 || c == 9) {
+                    r += 1
+                    going = false
+                } else {
+                    rtStoreByte(rtOffset(s, w), c)
+                    w += 1
+                    r += 1
+                }
+            }
+        }
+        rtStoreByte(rtOffset(s, w), 0)
+        w += 1
+        n += 1
+    }
+    n
+}
+
+//~ The start-up block with its arguments as zero-terminated texts: on Windows, the first call splits the
+//~ command line and records the count as -2 - count. The count, and the first text (the rest follow it).
+fn rtArgsBlock(blk: ptr) -> int {
+    var raw = rtLoadInt(blk)
+    if raw == -1 {
+        raw = -2 - rtWinSplit(rtLoadPtr(rtOffset(blk, 8)))
+        rtStoreInt(blk, raw)
+    }
+    if raw < 0 { -2 - raw } else { raw }
+}
+
+//~ Writes the program's arguments as a `[string]` header (pointer, length, capacity) at `dst`. The texts stay
+//~ in the start-up block (capacity 0: borrowed); only the array of headers is allocated, and its owner frees it.
+pub fn rtArgsInto(dst: ptr) {
+    const blk = rtIntAddr(rtOsArgv())
+    const n = rtArgsBlock(blk)
+    const packed = rtLoadInt(blk) < 0
+    const buf = rtAlloc(n * 24)
+    var s = rtLoadPtr(rtOffset(blk, 8))
+    var i = 0
+    while i < n {
+        if !packed { s = rtLoadPtr(rtOffset(blk, 8 + 8 * i)) }
+        var len = 0
+        while rtLoadByte(rtOffset(s, len)) != 0 { len += 1 }
+        const h = rtOffset(buf, i * 24)
+        rtStorePtr(h, s)
+        rtStoreInt(rtOffset(h, 8), len)
+        rtStoreInt(rtOffset(h, 16), 0)
+        s = rtOffset(s, len + 1)
+        i += 1
+    }
+    rtStorePtr(dst, buf)
+    rtStoreInt(rtOffset(dst, 8), n)
+    rtStoreInt(rtOffset(dst, 16), n)
+}
+
+//~ The end of a program whose `main` returns a `T ! E`: `res` is the result it wrote. An error (tag 1) puts
+//~ "error: " and its text on standard error and the process exits with 1. `off` is where the error's text
+//~ starts when the error is a `string`, and -1 when it is another type (then the line says only "error").
+pub fn rtMainDone(res: ptr, off: int) {
+    if rtLoadByte(res) == 0 { return }
+    rtOsWrite(2, rtLoadPtr(rtAddrOf("error: ")), 7)
+    if off >= 0 {
+        const h = rtOffset(res, off)
+        rtOsWrite(2, rtLoadPtr(h), rtHdrLen(h))
+    } else {
+        rtOsWrite(2, rtLoadPtr(rtAddrOf("main returned an error")), 22)
+    }
+    rtOsWrite(2, rtLoadPtr(rtAddrOf("\n")), 1)
+    rtOsExit(1)
+}

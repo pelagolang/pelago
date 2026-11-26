@@ -1,0 +1,6 @@
+(1, "a", 2, "b") (7, "x", 9) [(1, "p"), (2, "q")] (4, true) (1, "a", true, 2, "b", false)
+1 9 $.ops expected 4 elements, found 3
+1 21 $.ops[3] expected text, found an integer
+1 43 $.odd[2] 900 does not fit in uint8 (0 to 255)
+1 55 $.rows expected 2 elements, found 1
+[7,"seven",8]

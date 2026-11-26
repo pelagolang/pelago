@@ -1,0 +1,79 @@
+/// Spreading into literals and the object tag test.
+
+/// ---- Spreading into literals ------------------------------------------------------------------
+
+//~ Appends copies of the elements of the list at `src` to the list at `h`.
+pub fn rtListSpread<T>(h: ptr, src: ptr) {
+    const size = rtSizeOf<T>()
+    var i = 0
+    const n = rtHdrLen(src)
+    while i < n {
+        const len = rtHdrLen(h)
+        rtGrow(h, size, len + 1)
+        rtCloneTo<T>(rtOffset(rtHdrData(src), i * size), rtOffset(rtHdrData(h), len * size))
+        rtHdrSetLen(h, len + 1)
+        i += 1
+    }
+}
+
+pub fn rtSetSpread<T>(h: ptr, src: ptr) {
+    const size = rtSizeOf<T>()
+    const tmp = rtAlloc(size + 1)
+    var i = 0
+    const n = rtHdrLen(src)
+    while i < n {
+        rtCloneTo<T>(rtMapKeyAt(src, i, size), tmp)
+        rtSetPut<T>(h, tmp)
+        i += 1
+    }
+    rtFree(tmp)
+}
+
+pub fn rtMapSpread<K, V>(h: ptr, src: ptr) {
+    const ks = rtSizeOf<K>()
+    const vs = rtSizeOf<V>()
+    const kt = rtAlloc(ks + 1)
+    const vt = rtAlloc(vs + 1)
+    var i = 0
+    const n = rtHdrLen(src)
+    while i < n {
+        rtCloneTo<K>(rtMapKeyAt(src, i, ks), kt)
+        rtCloneTo<V>(rtMapValAt(src, i, ks, vs), vt)
+        rtMapPut<K, V>(h, kt, vt)
+        i += 1
+    }
+    rtFree(kt)
+    rtFree(vt)
+}
+
+//~ The address of the value stored under the key at `key`; a missing key stops the program.
+pub fn rtMapAt<K, V>(h: ptr, key: ptr) -> ptr {
+    const ks = rtSizeOf<K>()
+    const i = rtMapFind(h, key, ks, rtEqFn<K>(), rtHashFn<K>())
+    if i < 0 { panic("key not found") }
+    rtMapValAt(h, i, ks, rtSizeOf<V>())
+}
+
+//~ Is there an entry whose key equals the one at `key`?
+pub fn rtMapHas(h: ptr, key: ptr, ksize: int, eq: ptr, hash: ptr) -> bool = rtMapFind(
+    h,
+    key,
+    ksize,
+    eq,
+    hash,
+) >= 0
+
+/// ---- Objects ---------------------------------------------------------------------------------
+
+//~ Is the object at `o` of the type with this id, or of a type that extends it? The table of an object
+//~ points (in its third slot) to the number of ancestors and then their ids, the object's own first.
+pub fn rtObjIs(o: ptr, id: int) -> bool {
+    const table = rtLoadPtr(rtOffset(rtLoadPtr(o), 16))
+    const n = rtLoadInt(table)
+    var i = 0
+    while i < n {
+        if rtLoadInt(rtOffset(table, 8 + i * 8)) == id { return true }
+        i += 1
+    }
+    false
+}

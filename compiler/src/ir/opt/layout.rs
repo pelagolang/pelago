@@ -1,4 +1,4 @@
-//! Block order (card A-11, W9). The native code generator writes the blocks in the order they have
+//! Block order. The native code generator writes the blocks in the order they have
 //! in the function and jumps unless the target is the next block, so the order decides how many
 //! jumps run. This pass chooses it:
 //!
@@ -93,7 +93,7 @@ fn run_order(f: &mut Func) -> bool {
     let cold = |b: &BlockId| {
         matches!(
             f.blocks[b.0 as usize].term,
-            Some(Term::Stop(_) | Term::Unreachable)
+            Some(Term::Stop(..) | Term::Unreachable)
         ) || (guarded[b.0 as usize]
             && preds[b.0 as usize].iter().all(|p| {
                 let ps = f.successors(*p);

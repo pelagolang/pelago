@@ -17,6 +17,15 @@ impl<'a> Lowerer<'a> {
         body.then_some((m, map))
     }
 
+    /// An `obj` is passed to its methods as the object's address, which the glue holds a slot for.
+    fn method_arg(&mut self, slot: Value, ty: Ty) -> Value {
+        if self.obj_def(ty).is_some() {
+            self.load_at(slot, 0, IrTy::Ptr)
+        } else {
+            slot
+        }
+    }
+
     fn require_true(&mut self, c: Value, fail: BlockId) {
         let ok = self.new_block(&[]);
         self.branch(c, ok, fail);
@@ -72,10 +81,26 @@ impl<'a> Lowerer<'a> {
             let Some(f) = self.request_fn(m, &map) else {
                 return false;
             };
+            let (a, b) = (self.method_arg(a, ty), self.method_arg(b, ty));
             let Some(r) = self.emit(Op::Call(f, vec![a, b]), Some(IrTy::Bool), sp) else {
                 return false;
             };
             self.require_true(r, fail);
+            return true;
+        }
+        if let Some((n, _)) = self.wide_of(ty) {
+            if let Some(c) = self.wide_eq_glue(a, b, n) {
+                self.require_true(c, fail);
+            }
+            return true;
+        }
+        if let Some(k) = self.soft_of(ty) {
+            if let Some(r) = self.soft_cmp_glue(a, b, k) {
+                let z = self.i64c(0);
+                if let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, r, z), Some(IrTy::Bool), sp) {
+                    self.require_true(c, fail);
+                }
+            }
             return true;
         }
         match self.kind(ty) {
@@ -89,16 +114,25 @@ impl<'a> Lowerer<'a> {
                 true
             }
             TyKind::String | TyKind::Str => {
-                if let Some(c) = self.call_core("rt_str_eq", vec![a, b]) {
+                if let Some(c) = self.call_core("rtStrEq", vec![a, b]) {
                     self.require_true(c, fail);
                 }
                 true
             }
             TyKind::Void | TyKind::Never => true,
-            TyKind::Tuple(_) | TyKind::Range(_) => self.eq_fields(a, b, ty, fail),
+            TyKind::Tuple(_) | TyKind::AltTuple(..) | TyKind::Range(_) => {
+                self.eq_fields(a, b, ty, fail)
+            }
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Enum => self.eq_enum(a, b, ty, fail),
-                DefKind::Obj => false,
+                DefKind::Obj => {
+                    // `@derive(eq)`: the fields of the two objects, one by one.
+                    let x = self.load_at(a, 0, IrTy::Ptr);
+                    let y = self.load_at(b, 0, IrTy::Ptr);
+                    let bx = self.addr(x, super::obj::OBJ_HEADER);
+                    let by = self.addr(y, super::obj::OBJ_HEADER);
+                    self.eq_fields(bx, by, ty, fail)
+                }
                 _ => self.eq_fields(a, b, ty, fail),
             },
             TyKind::Option(_) | TyKind::Result(..) => self.eq_enum(a, b, ty, fail),
@@ -209,10 +243,22 @@ impl<'a> Lowerer<'a> {
             let Some(f) = self.request_fn(m, &map) else {
                 return false;
             };
+            let (a, b) = (self.method_arg(a, ty), self.method_arg(b, ty));
             let Some(r) = self.emit(Op::Call(f, vec![a, b]), Some(IrTy::I64), sp) else {
                 return false;
             };
             self.return_if_nonzero(r);
+            return true;
+        }
+        if let Some((n, signed)) = self.wide_of(ty) {
+            let r = self.wide_cmp_glue(a, b, n, signed);
+            self.return_if_nonzero(r);
+            return true;
+        }
+        if let Some(k) = self.soft_of(ty) {
+            if let Some(r) = self.soft_cmp_glue(a, b, k) {
+                self.return_if_nonzero(r);
+            }
             return true;
         }
         match self.kind(ty) {
@@ -226,16 +272,23 @@ impl<'a> Lowerer<'a> {
                 true
             }
             TyKind::String | TyKind::Str => {
-                if let Some(r) = self.call_core("rt_str_cmp", vec![a, b]) {
+                if let Some(r) = self.call_core("rtStrCmp", vec![a, b]) {
                     self.return_if_nonzero(r);
                 }
                 true
             }
             TyKind::Void | TyKind::Never => true,
-            TyKind::Tuple(_) => self.cmp_fields(a, b, ty),
+            TyKind::Tuple(_) | TyKind::AltTuple(..) => self.cmp_fields(a, b, ty),
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Enum => self.cmp_enum(a, b, ty),
-                DefKind::Obj => false,
+                DefKind::Obj => {
+                    // `@derive(order)`: the fields of the two objects, in order.
+                    let x = self.load_at(a, 0, IrTy::Ptr);
+                    let y = self.load_at(b, 0, IrTy::Ptr);
+                    let bx = self.addr(x, super::obj::OBJ_HEADER);
+                    let by = self.addr(y, super::obj::OBJ_HEADER);
+                    self.cmp_fields(bx, by, ty)
+                }
                 _ => self.cmp_fields(a, b, ty),
             },
             TyKind::Option(_) | TyKind::Result(..) => self.cmp_enum(a, b, ty),
@@ -370,10 +423,23 @@ impl<'a> Lowerer<'a> {
             let Some(f) = self.request_fn(m, &map) else {
                 return false;
             };
+            let a = self.method_arg(a, ty);
             let Some(r) = self.emit(Op::Call(f, vec![a]), Some(IrTy::I64), sp) else {
                 return false;
             };
             self.mix(acc, r);
+            return true;
+        }
+        if let Some((n, _)) = self.wide_of(ty) {
+            for w in self.wide_words(a, n) {
+                self.mix(acc, w);
+            }
+            return true;
+        }
+        if let Some(k) = self.soft_of(ty) {
+            if let Some(h) = self.soft_key_glue(a, k) {
+                self.mix(acc, h);
+            }
             return true;
         }
         match self.kind(ty) {
@@ -398,12 +464,33 @@ impl<'a> Lowerer<'a> {
                 true
             }
             TyKind::String | TyKind::Str => {
-                if let Some(h) = self.call_core("rt_str_hash", vec![a]) {
+                if let Some(h) = self.call_core("rtStrHash", vec![a]) {
                     self.mix(acc, h);
                 }
                 true
             }
-            TyKind::Tuple(_) => {
+            TyKind::List(e) => {
+                let len = self.load_at(a, 8, IrTy::I64);
+                self.mix(acc, len);
+                let data = self.load_at(a, 0, IrTy::Ptr);
+                let esize = self.layout(e).size;
+                let mut ok = true;
+                self.each_elem(data, len, esize, |s, p, _| {
+                    ok &= s.hash_part(p, e, acc);
+                });
+                ok
+            }
+            TyKind::Array(e, len) => {
+                let n = self.array_len(len);
+                let nv = self.i64c(n);
+                let esize = self.layout(e).size;
+                let mut ok = true;
+                self.each_elem(a, nv, esize, |s, p, _| {
+                    ok &= s.hash_part(p, e, acc);
+                });
+                ok
+            }
+            TyKind::Tuple(_) | TyKind::AltTuple(..) => {
                 for f in self.struct_fields(ty) {
                     let p = self.addr(a, f.off);
                     if !self.hash_part(p, f.ty, acc) {
@@ -414,7 +501,18 @@ impl<'a> Lowerer<'a> {
             }
             TyKind::Adt(d, _) => match self.res.def(d).kind {
                 DefKind::Enum => self.hash_enum(a, ty, acc),
-                DefKind::Obj => false,
+                DefKind::Obj => {
+                    // `@derive(hash)`: the fields of the object, in order.
+                    let o = self.load_at(a, 0, IrTy::Ptr);
+                    let body = self.addr(o, super::obj::OBJ_HEADER);
+                    for f in self.struct_fields(ty) {
+                        let p = self.addr(body, f.off);
+                        if !self.hash_part(p, f.ty, acc) {
+                            return false;
+                        }
+                    }
+                    true
+                }
                 _ => {
                     for f in self.struct_fields(ty) {
                         let p = self.addr(a, f.off);
@@ -495,7 +593,7 @@ impl<'a> Lowerer<'a> {
             self.emit(Op::Call(f, vec![tmp, arg]), None, sp);
             let d = self.load_at(tmp, 0, IrTy::Ptr);
             let n = self.load_at(tmp, 8, IrTy::I64);
-            self.call_core("rt_str_push", vec![out, d, n]);
+            self.call_core("rtStrPush", vec![out, d, n]);
             self.drop_at(tmp, string);
             return;
         }
@@ -609,7 +707,7 @@ impl<'a> Lowerer<'a> {
                     self.start(done);
                 }
             }
-            TyKind::Tuple(_) => {
+            TyKind::Tuple(_) | TyKind::AltTuple(..) => {
                 self.push_static(out, b"(");
                 for (i, f) in self.struct_fields(ty).into_iter().enumerate() {
                     if i > 0 {

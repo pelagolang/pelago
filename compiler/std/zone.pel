@@ -1,0 +1,794 @@
+/// Time zones: fixed offsets and the IANA time zone database (`Europe/Paris`), with the offset and abbreviation in
+/// force at any moment, and local times that are ambiguous or missing handled as values, never guessed.
+///
+/// ```
+/// import std.time
+/// import std.calendar
+/// import std.zone
+///
+/// fn main() -> void ! time_error {
+///     const paris = zone.named("Europe/Paris")?
+///     const z = paris.zoned(time.fromUnix(1700000000))
+///     print(z, z.abbreviation(), z.offsetSeconds())     /// 2023-11-14T23:13:20+01:00 CET 3600
+///     const r = paris.resolve(calendar.dateTimeOf(calendar.dateOf(2026, 3, 29)?, calendar.timeOf(2, 30, 0, 0)?))
+///     print(r.kind, r.forward())                        /// never (the clocks skip 02:00 to 03:00): 2026-03-29T01:30:00Z
+/// }
+/// ```
+///
+/// A `zone` is a plain value you can keep and copy. Its data comes from TZif files (RFC 8536, versions 1 to 4:
+/// the transition list and the POSIX rule that carries on after the last transition) read from `$TZDIR` or the
+/// usual directories (`/usr/share/zoneinfo` and the like), and from the copy bundled in `std.tzdata` where a system
+/// has none (Windows); `bundled(name)` asks for the bundled copy on any machine. `local()` reads `TZ`, then
+/// `/etc/localtime`, and falls back to UTC. A day has 86400 seconds: there are no leap seconds.
+///
+/// A local time can be missing (the clocks jump forward) or happen twice (they go back), so `resolve` returns a
+/// `local_result` and you choose: `earliest`, `latest` or `forward`.
+
+import std.time
+import std.calendar
+import std.fs
+import std.env
+import std.tzdata
+import { duration, moment, time_error, time_kind } = std.time
+import { date_time } = std.calendar
+
+/// How a local time maps onto the timeline: one moment, two (the clocks went back) or none (they jumped forward).
+pub enum local_kind {
+    one,
+    twice,
+    never
+}
+
+/// One rule of a POSIX TZ string (`M3.5.0/2`): when daylight time starts or ends in a year.
+struct tz_edge {
+    /// 0 for `Mm.w.d`, 1 for `Jn` (1 to 365, no leap day), 2 for `n` (0 to 365, with leap day).
+    form: int,
+    month: int,
+    week: int,
+    dow: int,
+    day: int,
+    /// Seconds after local midnight (can be negative or more than a day).
+    at: int
+}
+
+/// A POSIX TZ string read apart: names and offsets (seconds east of UTC) and, with daylight time, its two edges.
+struct tz_rule {
+    stdName: string,
+    stdOff: int,
+    hasDst: bool,
+    dstName: string,
+    dstOff: int,
+    start: tz_edge,
+    end: tz_edge
+}
+
+/// A time zone: a fixed offset, or a database zone (transitions plus the rule that follows them).
+pub struct time_zone {
+    name: string,
+    /// Transition instants (seconds since the epoch, ascending) and the type that starts at each.
+    trans: [int],
+    kinds: [int],
+    /// The types: offset east of UTC in seconds, daylight flag (0 or 1) and abbreviation.
+    offs: [int],
+    isdst: [int],
+    abbrs: [string],
+    hasRule: bool,
+    rule: tz_rule
+}
+
+/// What is in force at a moment.
+pub struct zone_info {
+    pub offset: int,
+    pub abbreviation: string,
+    pub isDst: bool
+}
+
+/// A moment seen in a zone: the instant, the zone, the offset in force and what the wall clock reads.
+pub struct zoned {
+    inst: moment,
+    zn: time_zone,
+    info: zone_info
+}
+
+/// The answer to "which moments is this local time?": `kind` says how many, `first` and `second` are the moments
+/// (for `one`, both are the same; for `never`, `first` is the local time read with the offset before the gap, which
+/// lands after it, and `second` with the offset after the gap, which lands before it).
+pub struct local_result {
+    pub kind: local_kind,
+    pub first: moment,
+    pub second: moment
+}
+
+fn floorDiv(a: int, b: int) -> int {
+    const q = a / b
+    if a % b < 0 { return q - 1 }
+    q
+}
+
+fn pad(n: int, width: int) -> string {
+    var s = "#(n)"
+    while s.len() < width { s = "0" + s }
+    s
+}
+
+fn zoneError(sink message: string) -> time_error = time.timeError(time_kind.zone, sink message)
+
+fn emptyEdge() -> tz_edge = tz_edge { form: 0, month: 1, week: 1, dow: 0, day: 0, at: 7200 }
+
+fn emptyRule() -> tz_rule = tz_rule {
+    stdName: "UTC",
+    stdOff: 0,
+    hasDst: false,
+    dstName: "",
+    dstOff: 0,
+    start: emptyEdge(),
+    end: emptyEdge()
+}
+
+fn emptyZone(sink name: string) -> time_zone = time_zone {
+    name: name,
+    trans: [],
+    kinds: [],
+    offs: [],
+    isdst: [],
+    abbrs: [],
+    hasRule: false,
+    rule: emptyRule()
+}
+
+//~ UTC itself.
+pub fn utc() -> time_zone {
+    var z = emptyZone("UTC")
+    z.offs.push!(0)
+    z.isdst.push!(0)
+    z.abbrs.push!("UTC")
+    z
+}
+
+/// `+hh:mm` (or `+hh:mm:ss`) for an offset in seconds, `Z` is not used here.
+fn offsetText(secs: int, colon: bool) -> string {
+    const a = secs.abs()
+    var s = (secs < 0 ? "-" : "+") + pad(a / 3600, 2) + (colon ? ":" : "") + pad(a % 3600 / 60, 2)
+    if a % 60 != 0 { s = s + (colon ? ":" : "") + pad(a % 60, 2) }
+    s
+}
+
+//~ A zone with a constant offset of `seconds` east of UTC (`-86399` to `86399`), named like `+02:00`.
+pub fn fixed(seconds: int) -> time_zone ! time_error {
+    if seconds <= -86400 || seconds >= 86400 {
+        return err(time.timeError(time_kind.range, "an offset of #(seconds) seconds is not within a day"))
+    }
+    var z = emptyZone(seconds == 0 ? "UTC" : offsetText(seconds, true))
+    z.offs.push!(seconds)
+    z.isdst.push!(0)
+    z.abbrs.push!(seconds == 0 ? "UTC" : offsetText(seconds, false))
+    ok(z)
+}
+
+/// ---------------------------------------------------------------------------------------------
+/// POSIX TZ strings
+
+/// A cursor over the bytes of a TZ string.
+struct cur {
+    b: [byte],
+    i: int
+}
+
+fn peek(c: cur) -> int = c.i < c.b.len() ? (c.b[c.i] to int) : -1
+
+fn isDigit(x: int) -> bool = x >= 48 && x <= 57
+
+/// An abbreviation: three or more letters, or anything but `>` between `<` and `>`.
+fn readName(inout c: cur) -> string? {
+    var s = ""
+    if peek(c) == 60 {
+        c.i += 1
+        while peek(c) != 62 {
+            if peek(c) < 0 { return none }
+            s.pushByte!(c.b[c.i])
+            c.i += 1
+        }
+        c.i += 1
+        return s
+    }
+    while peek(c) >= 65 && peek(c) <= 90 || peek(c) >= 97 && peek(c) <= 122 {
+        s.pushByte!(c.b[c.i])
+        c.i += 1
+    }
+    if s.len() < 3 { return none }
+    s
+}
+
+fn readNum(inout c: cur) -> int? {
+    if !isDigit(peek(c)) { return none }
+    var n = 0
+    while isDigit(peek(c)) {
+        n = n * 10 + peek(c) - 48
+        c.i += 1
+        if n > 100000 { return none }
+    }
+    n
+}
+
+/// `[+-]hh[:mm[:ss]]` as seconds (the sign as written).
+fn readClock(inout c: cur) -> int? {
+    var sign = 1
+    if peek(c) == 45 {
+        sign = -1
+        c.i += 1
+    } else if peek(c) == 43 {
+        c.i += 1
+    }
+    const h = readNum(c!)
+    if h == none { return none }
+    var secs = (h ?? 0) * 3600
+    if peek(c) == 58 {
+        c.i += 1
+        const m = readNum(c!)
+        if m == none { return none }
+        secs += (m ?? 0) * 60
+        if peek(c) == 58 {
+            c.i += 1
+            const s = readNum(c!)
+            if s == none { return none }
+            secs += s ?? 0
+        }
+    }
+    sign * secs
+}
+
+fn readEdge(inout c: cur) -> tz_edge? {
+    var e = emptyEdge()
+    if peek(c) == 77 {
+        c.i += 1
+        const m = readNum(c!)
+        if m == none || peek(c) != 46 { return none }
+        c.i += 1
+        const w = readNum(c!)
+        if w == none || peek(c) != 46 { return none }
+        c.i += 1
+        const d = readNum(c!)
+        if d == none { return none }
+        if (m ?? 0) < 1 ||
+            (m ?? 0) > 12 ||
+            (w ?? 0) < 1 ||
+            (w ?? 0) > 5 ||
+            (d ?? 0) > 6 { return none }
+        e.form = 0
+        e.month = m ?? 1
+        e.week = w ?? 1
+        e.dow = d ?? 0
+    } else if peek(c) == 74 {
+        c.i += 1
+        const n = readNum(c!)
+        if n == none || (n ?? 0) < 1 || (n ?? 0) > 365 { return none }
+        e.form = 1
+        e.day = n ?? 1
+    } else {
+        const n = readNum(c!)
+        if n == none || (n ?? 0) > 365 { return none }
+        e.form = 2
+        e.day = n ?? 0
+    }
+    if peek(c) == 47 {
+        c.i += 1
+        const t = readClock(c!)
+        if t == none { return none }
+        e.at = t ?? 7200
+    }
+    e
+}
+
+/// Reads a POSIX TZ string such as `CET-1CEST,M3.5.0,M10.5.0/3`.
+fn readRuleSlow(text: str) -> tz_rule? {
+    var c = cur { b: text.bytes().toList(), i: 0 }
+    var r = emptyRule()
+    const n1 = readName(c!)
+    if n1 == none { return none }
+    r.stdName = n1 ?? ""
+    const o1 = readClock(c!)
+    if o1 == none { return none }
+    r.stdOff = 0 - (o1 ?? 0)
+    if peek(c) < 0 { return r }
+    const n2 = readName(c!)
+    if n2 == none { return none }
+    r.hasDst = true
+    r.dstName = n2 ?? ""
+    r.dstOff = r.stdOff + 3600
+    if peek(c) != 44 && peek(c) >= 0 {
+        const o2 = readClock(c!)
+        if o2 == none { return none }
+        r.dstOff = 0 - (o2 ?? 0)
+    }
+    if peek(c) != 44 { return none }
+    c.i += 1
+    const a = readEdge(c!)
+    if a == none || peek(c) != 44 { return none }
+    c.i += 1
+    const b = readEdge(c!)
+    if b == none || peek(c) >= 0 { return none }
+    r.start = a ?? emptyEdge()
+    r.end = b ?? emptyEdge()
+    r
+}
+
+/// Days since 1970-01-01 of the day an edge falls on in `year`.
+fn edgeDay(e: tz_edge, year: int) -> int {
+    if e.form == 0 {
+        const first = calendar.dateOf(year, e.month, 1).or(calendar.fromDays(0)).days()
+        const dow1 = (first + 4) % 7
+        var day = 1 + (e.dow - dow1 + 7) % 7 + (e.week - 1) * 7
+        if day > calendar.daysInMonth(year, e.month) { day -= 7 }
+        return first + day - 1
+    }
+    const jan1 = calendar.dateOf(year, 1, 1).or(calendar.fromDays(0)).days()
+    if e.form == 1 {
+        return jan1 + e.day - 1 + (calendar.isLeap(year) && e.day >= 60 ? 1 : 0)
+    }
+    jan1 + e.day
+}
+
+/// What the rule says at UTC second `t`.
+fn ruleAt(r: tz_rule, t: int) -> zone_info {
+    if !r.hasDst {
+        return zone_info { offset: r.stdOff, abbreviation: copy r.stdName, isDst: false }
+    }
+    const year = calendar.fromDays(floorDiv(t + r.stdOff, 86400)).year()
+    const start = edgeDay(r.start, year) * 86400 + r.start.at - r.stdOff
+    const end = edgeDay(r.end, year) * 86400 + r.end.at - r.dstOff
+    const dst = start < end ? (t >= start && t < end) : !(t >= end && t < start)
+    if dst { return zone_info { offset: r.dstOff, abbreviation: copy r.dstName, isDst: true } }
+    zone_info { offset: r.stdOff, abbreviation: copy r.stdName, isDst: false }
+}
+
+//~ A zone from a POSIX TZ string, e.g. `CET-1CEST,M3.5.0,M10.5.0/3` or `EST5EDT,M3.2.0,M11.1.0` (names, the offset
+//~ west of UTC as POSIX writes it, and the rules for daylight time). A `time_error` when the text is not one.
+pub fn parseRule(text: str) -> time_zone ! time_error {
+    const r = readRuleSlow(text)
+    if r == none { return err(zoneError("not a POSIX time zone rule: #(text)")) }
+    var z = emptyZone("#(text)")
+    z.hasRule = true
+    z.rule = r ?? emptyRule()
+    ok(z)
+}
+
+/// ---------------------------------------------------------------------------------------------
+/// TZif
+
+fn be32(b: [byte], at: int) -> int {
+    const v = ((b[at] to int) << 24) | ((b[at + 1] to int) << 16) | ((b[at + 2] to int) << 8) | (b[at + 3] to int)
+    v >= 2147483648 ? v - 4294967296 : v
+}
+
+fn be64(b: [byte], at: int) -> int {
+    var v = 0
+    for i of 0..8 { v = (v << 8) | (b[at + i] to int) }
+    v
+}
+
+fn isTzif(b: [byte], at: int) -> bool {
+    at + 44 <= b.len() && b[at] == 84 && b[at + 1] == 90 && b[at + 2] == 105 && b[at + 3] == 102
+}
+
+/// Reads a TZif file (any version) into a zone named `name`.
+fn readTzifSlow(b: [byte], name: str) -> time_zone ! time_error {
+    if !isTzif(b, 0) { return err(zoneError("#(name): not a TZif file")) }
+    const version = b[4] to int
+    var at = 0
+    var wide = false
+    var counts = [be32(b, 20), be32(b, 24), be32(b, 28), be32(b, 32), be32(b, 36), be32(b, 40)]
+    if version >= 50 {
+        /// Skip the 32-bit block and read the 64-bit one that follows.
+        at = 44 + counts[3] * 5 + counts[4] * 6 + counts[5] + counts[2] * 8 + counts[1] + counts[0]
+        if !isTzif(b, at) { return err(zoneError("#(name): damaged TZif file")) }
+        counts = [
+            be32(b, at + 20),
+            be32(b, at + 24),
+            be32(b, at + 28),
+            be32(b, at + 32),
+            be32(b, at + 36),
+            be32(b, at + 40),
+        ]
+        wide = true
+    }
+    const isutcnt = counts[0]
+    const isstdcnt = counts[1]
+    const leapcnt = counts[2]
+    const timecnt = counts[3]
+    const typecnt = counts[4]
+    const charcnt = counts[5]
+    const tsize = wide ? 8 : 4
+    const need = at +
+        44 +
+        timecnt * (tsize + 1) +
+        typecnt * 6 +
+        charcnt +
+        leapcnt * (tsize + 4) +
+        isstdcnt +
+        isutcnt
+    if need > b.len() || typecnt < 1 { return err(zoneError("#(name): damaged TZif file")) }
+    var z = emptyZone("#(name)")
+    var p = at + 44
+    for i of 0..timecnt { z.trans.push!(wide ? be64(b, p + i * 8) : be32(b, p + i * 4)) }
+    p += timecnt * tsize
+    for i of 0..timecnt { z.kinds.push!(b[p + i] to int) }
+    p += timecnt
+    const typesAt = p
+    p += typecnt * 6
+    for i of 0..typecnt {
+        z.offs.push!(be32(b, typesAt + i * 6))
+        z.isdst.push!(b[typesAt + i * 6 + 4] to int)
+        const start = p + (b[typesAt + i * 6 + 5] to int)
+        var s = ""
+        var k = start
+        while k < p + charcnt && b[k] != 0 {
+            s.pushByte!(b[k])
+            k += 1
+        }
+        z.abbrs.push!(sink s)
+    }
+    for i of 0..timecnt {
+        if z.kinds[i] >= typecnt { return err(zoneError("#(name): damaged TZif file")) }
+    }
+    p += charcnt + leapcnt * (tsize + 4) + isstdcnt + isutcnt
+    if wide && p < b.len() && b[p] == 10 {
+        var foot = ""
+        var k = p + 1
+        while k < b.len() && b[k] != 10 {
+            foot.pushByte!(b[k])
+            k += 1
+        }
+        if foot.len() > 0 {
+            const r = readRuleSlow(foot)
+            if r != none {
+                z.hasRule = true
+                z.rule = r ?? emptyRule()
+            }
+        }
+    }
+    ok(z)
+}
+
+/// The directories searched for zone files.
+fn zoneDirs() -> [string] {
+    var out: [string] = []
+    const d = env.get("TZDIR")
+    if d != none && (d ?? "").len() > 0 { out.push!(d ?? "") }
+    out.push!("/usr/share/zoneinfo")
+    out.push!("/usr/lib/zoneinfo")
+    out.push!("/usr/share/lib/zoneinfo")
+    out.push!("/etc/zoneinfo")
+    out
+}
+
+fn safeName(name: str) -> bool {
+    if name.len() == 0 || name.len() > 64 { return false }
+    for b of name.bytes() {
+        const x = b to int
+        const ok = (x >= 65 && x <= 90) ||
+            (x >= 97 && x <= 122) ||
+            (x >= 48 && x <= 57) ||
+            x == 47 ||
+            x == 95 ||
+            x == 45 ||
+            x == 43
+        if !ok { return false }
+    }
+    if name.contains("..") || name.contains("//") || name.bytes().toList()[0] == 47 { return false }
+    true
+}
+
+//~ The database zone called `name` (`Europe/Paris`, `America/New_York`, `UTC`), or a `time_error` when the name is
+//~ not a zone or the system has no database.
+pub fn named(name: str) -> time_zone ! time_error {
+    if name == "UTC" || name == "Z" { return ok(utc()) }
+    if !safeName(name) { return err(zoneError("unknown time zone: #(name)")) }
+    var found = false
+    for d of zoneDirs() {
+        const path = "#(d)/#(name)"
+        if fs.exists(path) {
+            found = true
+            const bytes = fs.readBytes(path)
+            if bytes.isOk() {
+                const z = readTzifSlow(bytes.or([]), name)
+                if z.isOk() { return z }
+            }
+        }
+    }
+    if !found {
+        const b = bundled(name)
+        if b.isOk() { return b }
+    }
+    err(zoneError(found ? "unreadable time zone file: #(name)" : "unknown time zone: #(name)"))
+}
+
+/// The value of one base64 character, or -1.
+fn b64(c: int) -> int {
+    if c >= 65 && c <= 90 { return c - 65 }
+    if c >= 97 && c <= 122 { return c - 71 }
+    if c >= 48 && c <= 57 { return c + 4 }
+    if c == 43 { return 62 }
+    if c == 47 { return 63 }
+    -1
+}
+
+/// Unzigzags a decoded number.
+fn unzig(n: int) -> int = (n & 1) == 0 ? n >> 1 : 0 - ((n + 1) >> 1)
+
+/// The varintsSlow in `raw`, as a list of numbers (one loop, so the code that reads a zone stays small).
+fn varintsSlow(raw: [byte]) -> [int] {
+    var out: [int] = []
+    var n = 0
+    var shift = 0
+    for b of raw {
+        const x = b to int
+        n = n | ((x & 127) << shift)
+        if x < 128 {
+            out.push!(n)
+            n = 0
+            shift = 0
+        } else {
+            shift += 7
+        }
+    }
+    out
+}
+
+//~ The zone called `name` from the database bundled with the library (`std.tzdata`, generated from the IANA release
+//~ named in that file), whatever the system has. `named` uses it when the system has no file of that name; call this
+//~ to get the same answer on every machine. A `time_error` for a name that is not in it.
+pub fn bundled(name: str) -> time_zone ! time_error = bundledSlow(name)
+
+/// Named `...Slow` so the optimiser keeps it a call: a big function copied into every caller made compiling a program
+/// that uses zones several times slower.
+fn bundledSlow(name: str) -> time_zone ! time_error {
+    if name == "UTC" || name == "Z" { return ok(utc()) }
+    if !safeName(name) { return err(zoneError("unknown time zone: #(name)")) }
+    const index = "\n" + tzdata.index()
+    const hit = index.find("\n#(name) ")
+    if hit == none { return err(zoneError("unknown time zone: #(name)")) }
+    /// The line is `name offset length`.
+    var p = (hit ?? 0) + 1 + name.len() + 1
+    var at = 0
+    var len = 0
+    while index.byteAt(p) != 32 {
+        at = at * 10 + (index.byteAt(p) to int) - 48
+        p += 1
+    }
+    p += 1
+    while p < index.len() && index.byteAt(p) != 10 {
+        len = len * 10 + (index.byteAt(p) to int) - 48
+        p += 1
+    }
+    /// Decode `len` bytes of base64 starting at character `at`.
+    const text = tzdata.data()
+    var raw: [byte] = []
+    var k = at
+    while raw.len() < len {
+        const v = (b64(text.byteAt(k) to int) << 18) | (b64(text.byteAt(k + 1) to int) << 12) | (b64(text.byteAt(k + 2) to int) << 6) | b64(text.byteAt(k + 3) to int)
+        raw.push!((v >> 16 & 255).wrapToByte())
+        raw.push!((v >> 8 & 255).wrapToByte())
+        raw.push!((v & 255).wrapToByte())
+        k += 4
+    }
+    const v = varintsSlow(raw)
+    var z = emptyZone("#(name)")
+    var i = 0
+    const ntypes = v[i]
+    i += 1
+    for t of 0..ntypes {
+        z.offs.push!(unzig(v[i]))
+        z.isdst.push!(v[i + 1])
+        i += 2
+        var ab = ""
+        for q of 0..v[i] { ab.pushByte!(v[i + 1 + q].wrapToByte()) }
+        i += 1 + v[i]
+        z.abbrs.push!(sink ab)
+    }
+    const ntrans = v[i]
+    i += 1
+    var prev = 0
+    for t of 0..ntrans {
+        prev += unzig(v[i])
+        z.trans.push!(prev)
+        z.kinds.push!(v[i + 1])
+        i += 2
+    }
+    if v[i] > 0 {
+        var foot = ""
+        for q of 0..v[i] { foot.pushByte!(v[i + 1 + q].wrapToByte()) }
+        const rule = readRuleSlow(foot)
+        if rule != none {
+            z.hasRule = true
+            z.rule = rule ?? emptyRule()
+        }
+    }
+    ok(z)
+}
+
+//~ The system's local zone: `TZ` (a zone name or a POSIX rule), else `/etc/localtime`, else UTC.
+pub fn local() -> time_zone {
+    const tz = env.get("TZ")
+    if tz != none && (tz ?? "").len() > 0 {
+        var name = tz ?? ""
+        if name.bytes().toList()[0] == 58 { name = name.replace(":", "") }
+        const z = named(name)
+        if z.isOk() { return z.or(utc()) }
+        const p = parseRule(name)
+        if p.isOk() { return p.or(utc()) }
+        return utc()
+    }
+    const bytes = fs.readBytes("/etc/localtime")
+    if bytes.isOk() {
+        const z = readTzifSlow(bytes.or([]), "Local")
+        if z.isOk() { return z.or(utc()) }
+    }
+    utc()
+}
+
+/// ---------------------------------------------------------------------------------------------
+/// Lookups
+
+/// The type that applies before the first transition: the first type that is not daylight time, else type 0.
+fn firstType(z: time_zone) -> int {
+    for i of 0..z.offs.len() {
+        if z.isdst[i] == 0 { return i }
+    }
+    0
+}
+
+fn infoOf(z: time_zone, kind: int) -> zone_info = zone_info {
+    offset: z.offs[kind],
+    abbreviation: copy z.abbrs[kind],
+    isDst: z.isdst[kind] != 0
+}
+
+/// Index of the last transition at or before `t`, or -1.
+fn lastBefore(z: time_zone, t: int) -> int {
+    var lo = 0
+    var hi = z.trans.len()
+    while lo < hi {
+        const mid = (lo + hi) / 2
+        if z.trans[mid] <= t { lo = mid + 1 } else { hi = mid }
+    }
+    lo - 1
+}
+
+/// What is in force at UTC second `t`.
+fn infoAt(z: time_zone, t: int) -> zone_info {
+    const n = z.trans.len()
+    if n == 0 {
+        if z.hasRule { return ruleAt(z.rule, t) }
+        return infoOf(z, 0)
+    }
+    const i = lastBefore(z, t)
+    if i < 0 { return infoOf(z, firstType(z)) }
+    if i == n - 1 && z.hasRule { return ruleAt(z.rule, t) }
+    infoOf(z, z.kinds[i])
+}
+
+fn atSecond(m: moment) -> int = m.unixSeconds()
+
+impl time_zone {
+    //~ The zone's name (`Europe/Paris`, `UTC`, `+02:00`).
+    fn name(self) -> string = copy self.name
+
+    //~ The offset, abbreviation and daylight flag in force at `m`.
+    fn infoAt(self, m: moment) -> zone_info = infoAt(self, atSecond(m))
+
+    //~ `m` as seen in this zone.
+    fn zoned(
+        self,
+        m: moment,
+    ) -> zoned = zoned { inst: m, zn: copy self, info: infoAt(self, atSecond(m)) }
+
+    //~ Which moments the local time `dt` is in this zone: one, two (the clocks went back) or none (they jumped forward).
+    fn resolve(self, dt: date_time) -> local_result {
+        const local = dt.atUtc()
+        const l = local.unixSeconds()
+        const before = infoAt(self, l - 86400).offset
+        const after = infoAt(self, l + 86400).offset
+        var first = local
+        var second = local
+        var count = 0
+        var o1 = before
+        var o2 = after
+        for pass of 0..2 {
+            const o = pass == 0 ? before : after
+            if pass == 1 && after == before { continue }
+            if infoAt(self, l - o).offset == o {
+                const m = local.minus(time.seconds(o))
+                if count == 0 { first = m } else { second = m }
+                count += 1
+            }
+        }
+        if count == 0 {
+            /// A gap: the local time never shows. Read with the offset before it (lands after) and after it.
+            return local_result {
+                kind: local_kind.never,
+                first: local.minus(time.seconds(before)),
+                second: local.minus(time.seconds(after))
+            }
+        }
+        if count == 1 { return local_result { kind: local_kind.one, first: first, second: first } }
+        /// Two: order them by time.
+        if second < first {
+            const t = first
+            first = second
+            second = t
+        }
+        local_result { kind: local_kind.twice, first: first, second: second }
+    }
+}
+
+impl local_result {
+    //~ The first moment the local time happens (the daylight-time reading when it happens twice), or `none` in a gap.
+    fn earliest(self) -> moment? = self.kind == local_kind.never ? none : self.first
+
+    //~ The last moment the local time happens (the standard-time reading when it happens twice), or `none` in a gap.
+    fn latest(self) -> moment? = self.kind == local_kind.never ? none : self.second
+
+    //~ A moment always: the one reading, the first of two, or, in a gap, the local time read with the offset before the
+    //~ gap (so `02:30` in a spring-forward gap becomes `03:30`).
+    fn forward(self) -> moment = self.first
+}
+
+impl zoned {
+    fn moment(self) -> moment = self.inst
+
+    //~ Seconds east of UTC in force.
+    fn offsetSeconds(self) -> int = self.info.offset
+
+    //~ The zone's abbreviation at this moment (`CET`, `CEST`, `+02`).
+    fn abbreviation(self) -> string = copy self.info.abbreviation
+
+    fn isDst(self) -> bool = self.info.isDst
+
+    fn zone(self) -> time_zone = copy self.zn
+
+    //~ What the wall clock reads.
+    fn dateTime(self) -> date_time = calendar.fromMoment(self.inst.plus(time.seconds(self.info.offset)))
+
+    //~ `d` later by exact time (24 hours is a day here); the offset can change on the way.
+    fn plus(self, d: duration) -> zoned = self.zn.zoned(self.inst.plus(d))
+
+    //~ `n` calendar days later at the same wall-clock time; when that time does not exist the clock jumps forward
+    //~ past the gap, and when it happens twice the earlier one is used.
+    fn plusDays(self, n: int) -> zoned {
+        const dt = self.dateTime()
+        return self.zn.zoned(self.zn.resolve(calendar.dateTimeOf(dt.date().plusDays(n), dt.timeOfDay())).forward())
+    }
+
+    //~ `n` calendar months later at the same wall-clock time (the day stops at the end of a shorter month).
+    fn plusMonths(self, n: int) -> zoned {
+        const dt = self.dateTime()
+        return self.zn.zoned(self.zn.resolve(calendar.dateTimeOf(dt.date().plusMonths(n), dt.timeOfDay())).forward())
+    }
+}
+
+impl eq for zoned {
+    fn eq(self, other: zoned) -> bool = self.inst == other.inst
+}
+
+impl order for zoned {
+    fn cmp(self, other: zoned) -> int = self.inst.cmp(other.inst)
+}
+
+impl show for zoned {
+    //~ `2026-11-17T09:47:23+01:00` (RFC 3339 with the offset; `Z` for UTC itself).
+    fn show(self) -> string {
+        const dt = self.dateTime()
+        if self.info.offset == 0 && self.zn.name == "UTC" { return "#(dt)Z" }
+        "#(dt)#(offsetText(self.info.offset, true))"
+    }
+}
+
+impl show for local_kind {
+    fn show(self) -> string {
+        switch self {
+            case .one: "one"
+            case .twice: "twice"
+            case .never: "never"
+        }
+    }
+}

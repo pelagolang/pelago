@@ -1,4 +1,4 @@
-//! The IR optimiser (card A-04, `docs/design/ir.md` IR23).
+//! The IR optimiser.
 //!
 //! The lowering is simple on purpose: every variable is a stack slot, every owner has a drop flag in a
 //! slot, small library functions are real calls. These passes clean that up. Every pass works on one
@@ -25,19 +25,23 @@ mod divconst;
 mod dom;
 mod fill;
 mod fneg;
+pub mod frozen;
 pub(crate) mod fx;
+mod heapcalls;
 mod ifconv;
 mod inline;
 mod ivopt;
 mod ivtest;
-pub use inline::COLD_SUFFIX;
+pub use inline::is_cold;
 mod layout;
 mod licm;
 mod loops;
 mod peel;
 mod promote;
+mod rangecheck;
 mod ranges;
 mod sccp;
+mod scratch;
 mod split;
 mod stats;
 mod tailrec;
@@ -51,6 +55,8 @@ mod vectorise;
 pub use bce::kept_checks;
 pub use fill::{fill_loops, filled_slots, FillLoop};
 pub use fx::{HashMap as FxHashMap, HashSet as FxHashSet};
+pub use heapcalls::{expand_heap, HEAP_FNS};
+pub use inline::{calls, is_leaf};
 pub use inline::{drop_idle_task_drain, prune};
 pub use stats::{stats_of, Stats};
 
@@ -75,9 +81,18 @@ pub fn optimize(m: &mut Module, opts: Options) {
         return;
     }
     drop_idle_task_drain(m);
+    bce::set_grow(Some(m));
+    optimize_passes(m, opts);
+    bce::set_grow(None);
+}
+
+fn optimize_passes(m: &mut Module, opts: Options) {
     // Divisions by constants become multiplications only after inlining: a callee's `n / 10` may
     // turn out to have a dividend known to be non-negative, which makes a cheaper sequence.
     let inlining = opts.level >= 2;
+    for f in &mut m.funcs {
+        frozen::mark(f);
+    }
     for i in 0..m.funcs.len() {
         passes(&mut m.funcs[i], !inlining);
     }
@@ -120,6 +135,8 @@ pub fn optimize(m: &mut Module, opts: Options) {
                 changed |= inline::recursive_once(&mut m.funcs[i], me);
             }
             if changed {
+                // A tail call turned into a loop passes new arguments each time round: the marks are about one call.
+                m.funcs[i].frozen.clear();
                 optimize_func(&mut m.funcs[i]);
             }
         }
@@ -160,6 +177,7 @@ fn rounds(f: &mut Func, divs: bool) {
         let mut changed = false;
         changed |= step(f, "simplify", cfg::run);
         changed |= step(f, "dce", dce::run);
+        changed |= step(f, "scratch", scratch::run);
         changed |= step(f, "promote", promote::run);
         changed |= step(f, "split", split::run);
         changed |= step(f, "sccp", sccp::run);
@@ -176,6 +194,7 @@ fn rounds(f: &mut Func, divs: bool) {
             changed |= step(f, "bce", bce::run);
             changed |= step(f, "thread", thread::run);
             changed |= step(f, "ifconv", ifconv::run);
+            changed |= step(f, "rangecheck", rangecheck::run);
         }
         changed |= step(f, "simplify", cfg::run);
         changed |= step(f, "dce", dce::run);
@@ -225,6 +244,17 @@ fn step(f: &mut Func, name: &'static str, pass: fn(&mut Func) -> bool) -> bool {
             }
         });
     }
+    if changed && !f.frozen.is_empty() {
+        // A pass may delete or rewrite a marked load: its mark goes with it.
+        let placed: std::collections::HashSet<usize> = f
+            .blocks
+            .iter()
+            .flat_map(|b| b.insts.iter().copied())
+            .collect();
+        let insts = &f.insts;
+        f.frozen
+            .retain(|i| placed.contains(i) && matches!(insts[*i].op, Op::Load(..)));
+    }
     #[cfg(debug_assertions)]
     if changed {
         let errs = verify_func(f);
@@ -273,6 +303,10 @@ impl Op {
                 f(*c);
                 f(*d);
             }
+            Op::Os(k, a, b, c) => {
+                let all = [*a, *b, *c];
+                all[..k.arity()].iter().for_each(|v| f(*v));
+            }
             Op::Neg(a)
             | Op::FUn(_, a)
             | Op::Not(a)
@@ -320,6 +354,11 @@ impl Op {
                 *b = f(*b);
                 *c = f(*c);
                 *d = f(*d);
+            }
+            Op::Os(_, a, b, c) => {
+                *a = f(*a);
+                *b = f(*b);
+                *c = f(*c);
             }
             Op::Neg(a)
             | Op::FUn(_, a)

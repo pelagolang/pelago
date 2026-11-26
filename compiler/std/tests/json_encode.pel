@@ -1,0 +1,24 @@
+/// `@derive(toJson)` writes a value as JSON text; read back with `@derive(fromJson)` it gives the same value.
+import std.json
+
+@derive(fromJson, toJson)
+struct point { x: int, y: int }
+
+@derive(fromJson, toJson)
+struct table { name: string, small: uint8, ratio: float, on: bool, tags: [string], pts: [point], pair: (int, string), ops: (int, string; 4), rows: [(int, string); 2], note: string? }
+
+@derive(fromJson, toJson)
+enum shape { dot, circle(int), rect(w: int, h: int) }
+
+fn main() {
+    const t = table { name: "a\"b", small: 7, ratio: 1.5, on: true, tags: ["x", "y"], pts: [point { x: 1, y: 2 }], pair: (3, "c"), ops: (1, "a", 2, "b"), rows: [(1, "p"), (2, "q")], note: none }
+    const text = tableEncode(t)
+    print(text)
+    switch tableDecode(text) {
+        case ok(u): print(tableEncode(u) == text)
+        case err(e): print(e.message)
+    }
+    print(shapeEncode(shape.dot))
+    print(shapeEncode(shape.circle(4)))
+    print(shapeEncode(shape.rect(w: 2, h: 3)))
+}

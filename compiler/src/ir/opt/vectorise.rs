@@ -1,4 +1,4 @@
-//! The loop vectoriser (card A-11, `docs/design/vectorise.md`). A counted loop whose body is plain
+//! The loop vectoriser. A counted loop whose body is plain
 //! wrapping integer arithmetic over its counters and over the elements of arrays runs two iterations
 //! per vector (SSE2 has two 64-bit lanes) and `U` vectors per pass, so `2 * U` iterations per pass:
 //!
@@ -319,7 +319,7 @@ fn vectorise(f: &mut Func, h: BlockId, b: BlockId) -> Option<BlockId> {
             Op::PtrAdd(base, off)
                 if idx_muls.contains(off)
                     && !inside.contains(base)
-                    && uses.get(&inst.result?) == Some(&1) =>
+                    && uses.get(&inst.result?).is_some_and(|&n| n <= 2) =>
             {
                 addrs.insert(inst.result?);
                 bases.insert(*base);

@@ -1,0 +1,198 @@
+/// Text building and showing: `str`/`string` helpers and `show` for scalars.
+
+/// ---- Text: strings are a pointer, a length and a capacity (0 means borrowed or static) ---------
+
+pub fn rtBytesEq(a: ptr, b: ptr, n: int) -> bool {
+    var i = 0
+    while i < n {
+        if rtLoadByte(rtOffset(a, i)) != rtLoadByte(rtOffset(b, i)) { return false }
+        i += 1
+    }
+    true
+}
+
+//~ Equal text. Both arguments are headers (`string` or `str`: pointer, then length).
+pub fn rtStrEq(a: ptr, b: ptr) -> bool {
+    const n = rtHdrLen(a)
+    if n != rtHdrLen(b) { return false }
+    rtBytesEq(rtHdrData(a), rtHdrData(b), n)
+}
+
+//~ Orders text by bytes: negative, zero or positive.
+pub fn rtStrCmp(a: ptr, b: ptr) -> int {
+    const na = rtHdrLen(a)
+    const nb = rtHdrLen(b)
+    var i = 0
+    while i < na && i < nb {
+        const x = rtLoadByte(rtOffset(rtHdrData(a), i)) to int
+        const y = rtLoadByte(rtOffset(rtHdrData(b), i)) to int
+        if x != y { return x < y ? -1 : 1 }
+        i += 1
+    }
+    if na == nb { return 0 }
+    na < nb ? -1 : 1
+}
+
+pub fn rtStrHash(a: ptr) -> int {
+    var h = 1469598103934665603
+    var i = 0
+    const n = rtHdrLen(a)
+    while i < n {
+        h = (h ^ (rtLoadByte(rtOffset(rtHdrData(a), i)) to int)) *% 1099511628211
+        i += 1
+    }
+    h
+}
+
+//~ Appends bytes to the string whose header is `dst`.
+pub fn rtStrPush(dst: ptr, data: ptr, n: int) {
+    if n == 0 { return }
+    const len = rtHdrLen(dst)
+    rtGrow(dst, 1, len + n)
+    rtCopy(rtOffset(rtHdrData(dst), len), data, n)
+    rtHdrSetLen(dst, len + n)
+}
+
+pub fn rtStrConcat(dst: ptr, a: ptr, b: ptr) {
+    rtStorePtr(dst, rtNull())
+    rtStoreInt(rtOffset(dst, 8), 0)
+    rtStoreInt(rtOffset(dst, 16), 0)
+    rtStrPush(dst, rtHdrData(a), rtHdrLen(a))
+    rtStrPush(dst, rtHdrData(b), rtHdrLen(b))
+}
+
+pub fn rtPushByte(out: ptr, b: int) {
+    const len = rtHdrLen(out)
+    rtGrow(out, 1, len + 1)
+    rtStoreByte(rtOffset(rtHdrData(out), len), rtToByte(b))
+    rtHdrSetLen(out, len + 1)
+}
+
+//~ Appends a character as UTF-8.
+pub fn rtPushChar(out: ptr, c: char) {
+    const n = c to int
+    if n < 128 {
+        rtPushByte(out, n)
+    } else if n < 2048 {
+        rtPushByte(out, 192 | (n >> 6))
+        rtPushByte(out, 128 | (n & 63))
+    } else if n < 65536 {
+        rtPushByte(out, 224 | (n >> 12))
+        rtPushByte(out, 128 | ((n >> 6) & 63))
+        rtPushByte(out, 128 | (n & 63))
+    } else {
+        rtPushByte(out, 240 | (n >> 18))
+        rtPushByte(out, 128 | ((n >> 12) & 63))
+        rtPushByte(out, 128 | ((n >> 6) & 63))
+        rtPushByte(out, 128 | (n & 63))
+    }
+}
+
+pub fn rtShowInt(out: ptr, n: int) {
+    if n == 0 {
+        rtPushByte(out, 48)
+        return
+    }
+    /// Digits are produced from the end, using negative numbers so the smallest int works.
+    var digits = rtAlloc(24)
+    var count = 0
+    var m = n > 0 ? 0 - n : n
+    while m != 0 {
+        const d = 0 - (m % 10)
+        rtStoreByte(rtOffset(digits, count), rtToByte(48 + d))
+        count += 1
+        m = m / 10
+    }
+    if n < 0 { rtPushByte(out, 45) }
+    while count > 0 {
+        count -= 1
+        rtPushByte(out, rtLoadByte(rtOffset(digits, count)) to int)
+    }
+    rtFree(digits)
+}
+
+//~ Writes the digits of `n` and a newline into `buf`, right-aligned in 32 bytes (a number takes at
+//~ most 21 with the sign); gives the offset of the first one. Used by `print` of one integer, which
+//~ then needs no heap.
+pub fn rtFmtIntLine(buf: ptr, n: int) -> int {
+    var at = 31
+    rtStoreByte(rtOffset(buf, at), rtToByte(10))
+    if n == 0 {
+        at -= 1
+        rtStoreByte(rtOffset(buf, at), rtToByte(48))
+        return at
+    }
+    /// From the end, using negative numbers so the smallest int works.
+    var m = n > 0 ? 0 - n : n
+    while m != 0 {
+        const d = 0 - (m % 10)
+        at -= 1
+        rtStoreByte(rtOffset(buf, at), rtToByte(48 + d))
+        m = m / 10
+    }
+    if n < 0 {
+        at -= 1
+        rtStoreByte(rtOffset(buf, at), rtToByte(45))
+    }
+    at
+}
+
+//~ `rtShowInt` for an unsigned 64-bit value (`uint`, `uint64`): the bits are read as unsigned.
+pub fn rtShowUInt(out: ptr, n: int) {
+    if n >= 0 {
+        rtShowInt(out, n)
+        return
+    }
+    /// At or above 2^63: split off the last digit with unsigned division.
+    const q = rtUDiv(n, 10)
+    rtShowInt(out, q)
+    rtPushByte(out, 48 + rtURem(n, 10))
+}
+
+//~ `rtFmtIntLine` for an unsigned 64-bit value.
+pub fn rtFmtUIntLine(buf: ptr, n: int) -> int {
+    if n >= 0 {
+        return rtFmtIntLine(buf, n)
+    }
+    var at = 31
+    rtStoreByte(rtOffset(buf, at), rtToByte(10))
+    var m = n
+    while m != 0 {
+        const q = rtUDiv(m, 10)
+        at -= 1
+        rtStoreByte(rtOffset(buf, at), rtToByte(48 + rtURem(m, 10)))
+        m = q
+    }
+    at
+}
+
+pub fn rtShowBool(out: ptr, b: bool) {
+    if b {
+        rtPushChar(out, 't')
+        rtPushChar(out, 'r')
+        rtPushChar(out, 'u')
+        rtPushChar(out, 'e')
+    } else {
+        rtPushChar(out, 'f')
+        rtPushChar(out, 'a')
+        rtPushChar(out, 'l')
+        rtPushChar(out, 's')
+        rtPushChar(out, 'e')
+    }
+}
+
+impl list<string> {
+    fn join(self, separator: str) -> string {
+        var out = ""
+        const h = rtAddrOf(self)
+        var i = 0
+        const n = rtHdrLen(h)
+        while i < n {
+            if i > 0 { rtStrPush(rtAddrOf(out), rtHdrData(rtAddrOf(separator)), rtHdrLen(rtAddrOf(separator))) }
+            const item = rtOffset(rtHdrData(h), i * 24)
+            rtStrPush(rtAddrOf(out), rtHdrData(item), rtHdrLen(item))
+            i += 1
+        }
+        out
+    }
+}

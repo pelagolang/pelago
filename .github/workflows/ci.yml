@@ -12,13 +12,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      # The AArch64 backend (card A-10): its programs run under qemu here, and its encoder is checked
+      # The AArch64 backend its programs run under qemu here, and its encoder is checked
       # against the real assembler.
       - run: sudo apt-get update && sudo apt-get install -y qemu-user binutils-aarch64-linux-gnu
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all
       - run: cargo run -- fmt --check examples
+      - run: python3 tools/release/test_release.py
 
   # The native backend runs its programs for real: Linux ones above, Windows ones here (no WSL, no Wine).
   windows:
@@ -46,7 +47,7 @@ jobs:
       - run: cargo test --all
 
   macos:
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

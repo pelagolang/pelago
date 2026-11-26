@@ -1,8 +1,10 @@
 //! Lists, text and printing: literals, loops over lists, joining and comparing text, `print`.
 //!
-//! The work is done by library functions written in the language (`rt_str_push`, `rt_show_int`, ...)
+//! The work is done by library functions written in the language (`rtStrPush`, `rtShowInt`, ...)
 //! that the lowering calls by name.
 
+use super::call::ArgSource;
+use super::expr::strip_parens;
 use super::*;
 
 /// The buffer `print` of one integer uses: the digits, a sign and a newline, right-aligned.
@@ -67,7 +69,7 @@ impl<'a> Lowerer<'a> {
     // ---- Text ----------------------------------------------------------------------------------------------------------
 
     /// The bytes of a string literal part, with escapes resolved.
-    fn unescape(&self, text: &str) -> Vec<u8> {
+    pub(crate) fn unescape(&self, text: &str) -> Vec<u8> {
         let mut out = Vec::new();
         let mut cs = text.chars().peekable();
         while let Some(c) = cs.next() {
@@ -122,7 +124,7 @@ impl<'a> Lowerer<'a> {
             return;
         }
         let (p, n) = self.static_bytes(bytes);
-        self.call_core("rt_str_push", vec![out, p, n]);
+        self.call_core("rtStrPush", vec![out, p, n]);
     }
 
     pub(crate) fn string_lit(
@@ -212,29 +214,30 @@ impl<'a> Lowerer<'a> {
             TyKind::Int(k) => {
                 let signed = k.signed();
                 let w = self.resize(v, IrTy::I64, signed, Span::new(0, 0));
-                self.call_core("rt_show_int", vec![out, w]);
+                let f = if signed { "rtShowInt" } else { "rtShowUInt" };
+                self.call_core(f, vec![out, w]);
                 true
             }
-            TyKind::Float(_) => {
-                let w = if self.vty(v) == IrTy::F32 {
-                    self.emit(
-                        Op::Cast(CastKind::FloatResize, v, IrTy::F64),
-                        Some(IrTy::F64),
-                        Span::new(0, 0),
-                    )
-                    .unwrap_or(v)
-                } else {
-                    v
-                };
-                self.call_core("rt_show_float", vec![out, w]);
+            TyKind::Float(k) => {
+                // The shortest round-trip printer (`rtFloatShow`) is shared with the soft floats: the bits go
+                // into a zeroed word and it is told the format (`float` is 11/52, `float32` is 8/23).
+                let slot = self.slot_bytes(8, 8);
+                let z = self.i64c(0);
+                self.store_at(slot, 0, z);
+                self.store_at(slot, 0, v);
+                let (eb, mb) = k.format();
+                let n = self.i64c(1);
+                let eb = self.i64c(eb as i64);
+                let mb = self.i64c(mb as i64);
+                self.call_core("rtFloatShow", vec![out, slot, n, eb, mb]);
                 true
             }
             TyKind::Bool => {
-                self.call_core("rt_show_bool", vec![out, v]);
+                self.call_core("rtShowBool", vec![out, v]);
                 true
             }
             TyKind::Char => {
-                self.call_core("rt_push_char", vec![out, v]);
+                self.call_core("rtPushChar", vec![out, v]);
                 true
             }
             _ => {
@@ -249,6 +252,12 @@ impl<'a> Lowerer<'a> {
     /// Appends the text of the value at `p` (a scalar is loaded). `quoted` wraps text in quotes, as
     /// inside a list.
     pub(crate) fn show_at(&mut self, p: Value, t: Ty, out: Value, quoted: bool) -> bool {
+        if let Some((n, signed)) = self.wide_of(t) {
+            return self.wide_show(p, n, signed, out);
+        }
+        if let Some(k) = self.soft_of(t) {
+            return self.soft_show(p, k, out);
+        }
         match self.kind(t) {
             TyKind::String | TyKind::Str => {
                 if quoted {
@@ -256,7 +265,7 @@ impl<'a> Lowerer<'a> {
                 }
                 let d = self.load_at(p, 0, IrTy::Ptr);
                 let n = self.load_at(p, 8, IrTy::I64);
-                self.call_core("rt_str_push", vec![out, d, n]);
+                self.call_core("rtStrPush", vec![out, d, n]);
                 if quoted {
                     self.push_static(out, b"\"");
                 }
@@ -265,7 +274,7 @@ impl<'a> Lowerer<'a> {
             TyKind::Char if quoted => {
                 self.push_static(out, b"'");
                 let c = self.load_at(p, 0, IrTy::Int(32));
-                self.call_core("rt_push_char", vec![out, c]);
+                self.call_core("rtPushChar", vec![out, c]);
                 self.push_static(out, b"'");
                 true
             }
@@ -296,6 +305,9 @@ impl<'a> Lowerer<'a> {
             if let Some(res) = self.print_int_line(e, &a.value) {
                 return res;
             }
+        }
+        if let Some(res) = self.print_texts(e, args) {
+            return res;
         }
         // Each value is shown into one line.
         let line = self.slot_bytes(24, 8);
@@ -329,12 +341,44 @@ impl<'a> Lowerer<'a> {
         Res::Unit
     }
 
+    /// `print` of text values only (`string` or `str`): every value is evaluated, then each is written
+    /// as it is, with a space between and a newline at the end, so the line needs no temporary string
+    /// (and a program that only prints text needs no allocator in its executable). `None` when any
+    /// argument is another type.
+    fn print_texts(&mut self, e: &'a Expr, args: &'a [Arg]) -> Option<Res> {
+        for a in args {
+            let t = self.ty_of(&a.value)?;
+            if !matches!(self.kind(t), TyKind::String | TyKind::Str)
+                || !matches!(self.repr(t), Repr::Mem(_))
+            {
+                return None;
+            }
+        }
+        let mut parts = Vec::new();
+        for a in args {
+            let Res::Val(p) = self.expr(&a.value) else {
+                return Some(Res::Never);
+            };
+            let d = self.load_at(p, 0, IrTy::Ptr);
+            let n = self.load_at(p, 8, IrTy::I64);
+            parts.push((d, n));
+        }
+        for (i, (d, n)) in parts.into_iter().enumerate() {
+            if i > 0 {
+                self.print_static(b" ");
+            }
+            self.emit(Op::Print(d, n), None, e.span);
+        }
+        self.print_newline();
+        Some(Res::Unit)
+    }
+
     /// `print(n)` of one integer: the digits are made in a buffer on the stack and printed, so the
     /// program needs no heap for it (and no allocator in its executable). `None` for other values.
     fn print_int_line(&mut self, e: &'a Expr, x: &'a Expr) -> Option<Res> {
         let t = self.ty_of(x)?;
         let k = match self.kind(t) {
-            TyKind::Int(k) => k,
+            TyKind::Int(k) if k.words() == 0 => k,
             _ => return None,
         };
         let Some(v) = self.scalar(x) else {
@@ -342,7 +386,12 @@ impl<'a> Lowerer<'a> {
         };
         let w = self.resize(v, IrTy::I64, k.signed(), Span::new(0, 0));
         let buf = self.slot_bytes(INT_LINE, 8);
-        let at = self.call_core("rt_fmt_int_line", vec![buf, w])?;
+        let f = if k.signed() {
+            "rtFmtIntLine"
+        } else {
+            "rtFmtUIntLine"
+        };
+        let at = self.call_core(f, vec![buf, w])?;
         let d = self
             .emit(Op::PtrAdd(buf, at), Some(IrTy::Ptr), e.span)
             .unwrap_or(buf);
@@ -360,7 +409,7 @@ impl<'a> Lowerer<'a> {
         let Res::Val(b) = self.expr(r) else {
             return Res::Never;
         };
-        self.call_core("rt_str_concat", vec![dst, a, b]);
+        self.call_core("rtStrConcat", vec![dst, a, b]);
         Res::Unit
     }
 
@@ -414,7 +463,7 @@ impl<'a> Lowerer<'a> {
             };
             let d = self.load_at(b, 0, IrTy::Ptr);
             let n = self.load_at(b, 8, IrTy::I64);
-            self.call_core("rt_str_push", vec![p, d, n]);
+            self.call_core("rtStrPush", vec![p, d, n]);
         }
         Some(Res::Unit)
     }
@@ -496,7 +545,7 @@ impl<'a> Lowerer<'a> {
             };
             let d = self.load_at(b, 0, IrTy::Ptr);
             let n = self.load_at(b, 8, IrTy::I64);
-            self.call_core("rt_str_push", vec![p, d, n]);
+            self.call_core("rtStrPush", vec![p, d, n]);
             return Res::Unit;
         }
         self.unsupported(e.span, "this assignment")
@@ -513,7 +562,7 @@ impl<'a> Lowerer<'a> {
         let Res::Val(l) = self.expr(lit) else {
             return None;
         };
-        self.call_core("rt_str_eq", vec![ptr, l])
+        self.call_core("rtStrEq", vec![ptr, l])
     }
 
     // ---- Comparison of memory values ----------------------------------------------------------------------------------------
@@ -554,7 +603,7 @@ impl<'a> Lowerer<'a> {
         let _ = cmp_val;
         if !ordering {
             let eq = if text {
-                self.call_core("rt_str_eq", vec![a, b])
+                self.call_core("rtStrEq", vec![a, b])
             } else {
                 match self.glue_fn(GlueKind::Eq, lt) {
                     Some(g) => self.emit(Op::Call(g, vec![a, b]), Some(IrTy::Bool), e.span),
@@ -568,7 +617,7 @@ impl<'a> Lowerer<'a> {
             return Res::Val(eq);
         }
         let c = if text {
-            self.call_core("rt_str_cmp", vec![a, b])
+            self.call_core("rtStrCmp", vec![a, b])
         } else {
             match self.glue_fn(GlueKind::Cmp, lt) {
                 Some(g) => self.emit(Op::Call(g, vec![a, b]), Some(IrTy::I64), e.span),
@@ -587,7 +636,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// The address of an operand's value; a scalar (a box) is first stored in a temporary.
-    fn operand_addr(&mut self, e: &'a Expr, t: Ty) -> Option<Value> {
+    pub(crate) fn operand_addr(&mut self, e: &'a Expr, t: Ty) -> Option<Value> {
         if let Repr::Scalar(_) = self.repr(t) {
             let v = self.scalar(e)?;
             let slot = self.slot_for(t);
@@ -701,7 +750,7 @@ impl<'a> Lowerer<'a> {
                 let Res::Val(src) = self.expr(&it.value) else {
                     return Res::Never;
                 };
-                self.call_core_g("rt_list_spread", &[elem], vec![dst, src]);
+                self.call_core_g("rtListSpread", &[elem], vec![dst, src]);
                 continue;
             }
             // Push one element.
@@ -711,7 +760,7 @@ impl<'a> Lowerer<'a> {
                 .emit(Op::Bin(BinOp::Add, len, one), Some(IrTy::I64), e.span)
                 .unwrap_or(len);
             let sz = self.i64c(esize);
-            self.call_core("rt_grow", vec![dst, sz, need]);
+            self.call_core("rtGrow", vec![dst, sz, need]);
             let data = self.load_at(dst, 0, IrTy::Ptr);
             let off = self
                 .emit(Op::Bin(BinOp::Mul, len, sz), Some(IrTy::I64), e.span)
@@ -757,12 +806,41 @@ impl<'a> Lowerer<'a> {
         };
         let esize = self.layout(elem).size as i64;
         let sz = self.i64c(esize.max(1));
+        // A negative count, or one whose bytes could never be allocated, stops the program.
+        let zero = self.i64c(0);
+        if let Some(neg) = self.emit(Op::Cmp(CmpOp::Lt, n, zero), Some(IrTy::Bool), e.span) {
+            self.stop_if(neg, "negative list length");
+        }
+        let most = self.i64c((1i64 << 40) / esize.max(1));
+        if let Some(big) = self.emit(Op::Cmp(CmpOp::Gt, n, most), Some(IrTy::Bool), e.span) {
+            self.stop_if(big, "list length too large");
+        }
         let bytes = self
             .emit(Op::Bin(BinOp::Mul, n, sz), Some(IrTy::I64), e.span)
             .unwrap_or(n);
-        let buf = self
+        // No elements, no buffer: an empty list owns nothing, as with `[]`.
+        let join = self.new_block(&[IrTy::Ptr]);
+        let some = self.new_block(&[]);
+        let nothing = self.new_block(&[]);
+        if let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, n, zero), Some(IrTy::Bool), e.span) {
+            self.branch(c, nothing, some);
+        }
+        self.start(some);
+        let fresh = self
             .emit(Op::Alloc(bytes), Some(IrTy::Ptr), e.span)
             .unwrap_or(dst);
+        self.jump(join, vec![fresh]);
+        self.start(nothing);
+        let np = self
+            .emit(
+                Op::Cast(CastKind::IntToPtr, zero, IrTy::Ptr),
+                Some(IrTy::Ptr),
+                e.span,
+            )
+            .unwrap_or(dst);
+        self.jump(join, vec![np]);
+        self.start(join);
+        let buf = self.f.func.block_params(join)[0];
         // The value is built once and cloned into each place.
         let tmp = self.slot_for(elem);
         if let Res::Never = self.into(value, tmp, elem) {
@@ -820,12 +898,21 @@ impl<'a> Lowerer<'a> {
         let esize = match self.kind(bt) {
             TyKind::String | TyKind::Str => 1,
             TyKind::List(x) | TyKind::Iter(x) => self.layout(x).size as i64,
+            TyKind::Array(x, _) => self.layout(x).size as i64,
             _ => return self.unsupported(e.span, "slicing this type"),
         };
         let Res::Val(h) = self.expr(base) else {
             return Res::Never;
         };
-        let len = self.load_at(h, 8, IrTy::I64);
+        // An array is its elements in place: its address is the data and its length is in the type.
+        let array_len = match self.kind(bt) {
+            TyKind::Array(_, n) => Some(self.array_len(n)),
+            _ => None,
+        };
+        let len = match array_len {
+            Some(n) => self.i64c(n),
+            None => self.load_at(h, 8, IrTy::I64),
+        };
         let lo = match start {
             Some(s) => match self.scalar(s) {
                 Some(v) => v,
@@ -855,7 +942,10 @@ impl<'a> Lowerer<'a> {
         if let Some(bad) = self.emit(Op::Cmp(CmpOp::UGt, lo, hi), Some(IrTy::Bool), e.span) {
             self.stop_if(bad, "slice out of range");
         }
-        let data = self.load_at(h, 0, IrTy::Ptr);
+        let data = match array_len {
+            Some(_) => h,
+            None => self.load_at(h, 0, IrTy::Ptr),
+        };
         let sz = self.i64c(esize);
         let off = self
             .emit(Op::Bin(BinOp::Mul, lo, sz), Some(IrTy::I64), e.span)
@@ -890,13 +980,31 @@ impl<'a> Lowerer<'a> {
         body: &mut LoopBody<'a, '_>,
         keys_only: bool,
     ) -> Res {
+        let (iter, adapters) = match (pats, keys_only) {
+            ([_], false) => self.peel_adapters(iter),
+            _ => (iter, Vec::new()),
+        };
+        if let ([p], false) = (pats, keys_only) {
+            if let Some(src) = self.fused_source(iter) {
+                return self.for_fused(label, p, src, adapters, iter.span, body);
+            }
+        }
         let Some(it) = self.ty_of(iter) else {
             return self.unsupported(iter.span, "looping over a value of unknown type");
         };
         let mut val_ty = None;
         let mut array_len = None;
         let mut soa_elem = None;
+        let mut strand = false;
         let elem = match self.kind(it) {
+            // A strand view (`core.braid`): the elements are `stride` bytes apart, starting at `addr`.
+            TyKind::Adt(d, args)
+                if args.len() == 1
+                    && matches!(self.res.def(d).name.as_str(), "strand" | "strand_mut") =>
+            {
+                strand = true;
+                args[0]
+            }
             TyKind::Soa(x, _) => {
                 soa_elem = Some(x);
                 x
@@ -918,10 +1026,20 @@ impl<'a> Lowerer<'a> {
             return Res::Never;
         };
         let esize = self.layout(elem).size as i64;
+        let mut stride = None;
         let (len, data) = match array_len {
             Some(n) => (self.i64c(n), h),
+            None if strand => {
+                let fs = self.struct_fields(it);
+                stride = Some(self.load_at(h, fs[1].off, IrTy::I64));
+                (
+                    self.load_at(h, fs[2].off, IrTy::I64),
+                    self.load_at(h, fs[0].off, IrTy::Ptr),
+                )
+            }
             None => (self.load_at(h, 8, IrTy::I64), self.load_at(h, 0, IrTy::Ptr)),
         };
+        let fns = self.eval_adapters(&adapters, iter.span);
         let head = self.new_block(&[IrTy::I64]);
         let body_b = self.new_block(&[]);
         let step = self.new_block(&[]);
@@ -934,7 +1052,7 @@ impl<'a> Lowerer<'a> {
             self.branch(c, body_b, exit);
         }
         self.start(body_b);
-        let sz = self.i64c(esize);
+        let sz = stride.unwrap_or_else(|| self.i64c(esize));
         let off = self
             .emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), iter.span)
             .unwrap_or(i);
@@ -984,6 +1102,9 @@ impl<'a> Lowerer<'a> {
         };
         match (pats, vp) {
             ([p], None) => {
+                let Some((ep, elem)) = self.apply_adapters(&fns, ep, elem, step, iter.span) else {
+                    return Res::Never;
+                };
                 if !self.pat_test(p, ep, elem, bind_fail) {
                     return Res::Never;
                 }
@@ -1054,5 +1175,384 @@ impl<'a> Lowerer<'a> {
         self.start(exit);
         self.pop_scope();
         Res::Unit
+    }
+}
+
+/// A producer a `for` loop pulls from in place, without building a list.
+#[derive(Clone, Copy)]
+pub(crate) enum Fused<'a> {
+    /// `s.chars()`
+    Chars(&'a Expr),
+    /// `s.bytes()`
+    Bytes(&'a Expr),
+    /// `s.split(sep)`
+    Split(&'a Expr, &'a Expr),
+}
+
+impl<'a> Lowerer<'a> {
+    /// `s.chars()`, `s.bytes()` or `s.split(sep)` on a `str` or `string`.
+    fn fused_source(&mut self, e: &'a Expr) -> Option<Fused<'a>> {
+        let ExprKind::Call { callee, args, .. } = &e.kind else {
+            return None;
+        };
+        let ExprKind::Field {
+            base,
+            name,
+            optional: false,
+        } = &strip_parens(callee).kind
+        else {
+            return None;
+        };
+        let bt = self.ty_of(base)?;
+        if !matches!(self.kind(bt), TyKind::Str | TyKind::String) {
+            return None;
+        }
+        let plain = args
+            .iter()
+            .all(|a| a.mode.is_none() && a.label.is_none() && !a.spread);
+        match (self.src_text(name.span), args.len()) {
+            ("chars", 0) => Some(Fused::Chars(base)),
+            ("bytes", 0) => Some(Fused::Bytes(base)),
+            ("split", 1) if plain => {
+                let st = self.ty_of(&args[0].value)?;
+                matches!(self.kind(st), TyKind::Str | TyKind::String)
+                    .then_some(Fused::Split(base, &args[0].value))
+            }
+            _ => None,
+        }
+    }
+
+    /// `for x of <source> { body }`: one element per turn, taken from the text itself, so no list is built.
+    /// `chars` keeps the width of the character in a slot for the step; `split` keeps the next search position.
+    fn for_fused(
+        &mut self,
+        label: Option<String>,
+        pat: &'a Pattern,
+        src: Fused<'a>,
+        adapters: Vec<Adapter<'a>>,
+        span: Span,
+        body: &mut LoopBody<'a, '_>,
+    ) -> Res {
+        let (base, sep) = match src {
+            Fused::Chars(b) | Fused::Bytes(b) => (b, None),
+            Fused::Split(b, s) => (b, Some(s)),
+        };
+        self.push_scope();
+        let Res::Val(h) = self.expr(base) else {
+            self.f.scopes.pop();
+            return Res::Never;
+        };
+        let sh = match sep {
+            Some(s) => {
+                let Res::Val(sh) = self.expr(s) else {
+                    self.f.scopes.pop();
+                    return Res::Never;
+                };
+                Some(sh)
+            }
+            None => None,
+        };
+        let len = self.load_at(h, 8, IrTy::I64);
+        let data = self.load_at(h, 0, IrTy::Ptr);
+        let int = self.types.int;
+        let (elem_ty, one_more) = match src {
+            Fused::Chars(_) => (self.types.char_, false),
+            Fused::Bytes(_) => (self.types.mk(TyKind::Int(crate::types::IntKind::U8)), false),
+            Fused::Split(..) => (self.types.str_, true),
+        };
+        let nslot = self.slot_for(int);
+        let eslot = self.slot_for(elem_ty);
+        // `split` runs while the position is at most the length (the position after the last piece is length + 1).
+        let limit = if one_more {
+            let one = self.i64c(1);
+            self.emit(Op::Bin(BinOp::Add, len, one), Some(IrTy::I64), span)
+                .unwrap_or(len)
+        } else {
+            len
+        };
+        let fns = self.eval_adapters(&adapters, span);
+        let head = self.new_block(&[IrTy::I64]);
+        let body_b = self.new_block(&[]);
+        let step = self.new_block(&[]);
+        let exit = self.new_block(&[]);
+        let zero = self.i64c(0);
+        self.jump(head, vec![zero]);
+        self.start(head);
+        let i = self.f.func.block_params(head)[0];
+        if let Some(c) = self.emit(Op::Cmp(CmpOp::Lt, i, limit), Some(IrTy::Bool), span) {
+            self.branch(c, body_b, exit);
+        }
+        self.start(body_b);
+        match src {
+            Fused::Chars(_) => {
+                // ASCII is the common case: one load, one compare, no decoding. Anything else calls `rtCharAtSlow`.
+                let p = self
+                    .emit(Op::PtrAdd(data, i), Some(IrTy::Ptr), span)
+                    .unwrap_or(data);
+                let Some(b) = self.emit(Op::Load(IrTy::Int(8), p), Some(IrTy::Int(8)), span) else {
+                    self.f.scopes.pop();
+                    return Res::Never;
+                };
+                let b64 = self
+                    .emit(
+                        Op::Cast(CastKind::ZExt, b, IrTy::I64),
+                        Some(IrTy::I64),
+                        span,
+                    )
+                    .unwrap_or(b);
+                let limit128 = self.i64c(128);
+                let ascii_b = self.new_block(&[]);
+                let wide_b = self.new_block(&[]);
+                let join_b = self.new_block(&[]);
+                if let Some(c) =
+                    self.emit(Op::Cmp(CmpOp::Lt, b64, limit128), Some(IrTy::Bool), span)
+                {
+                    self.branch(c, ascii_b, wide_b);
+                }
+                self.start(ascii_b);
+                let one = self.i64c(1);
+                let next = self
+                    .emit(Op::Bin(BinOp::Add, i, one), Some(IrTy::I64), span)
+                    .unwrap_or(i);
+                self.store_scalar_ty(nslot, next);
+                let ch = self
+                    .emit(
+                        Op::Cast(CastKind::Trunc, b64, IrTy::Int(32)),
+                        Some(IrTy::Int(32)),
+                        span,
+                    )
+                    .unwrap_or(b64);
+                self.store_scalar_ty(eslot, ch);
+                self.jump(join_b, vec![]);
+                self.start(wide_b);
+                let Some(r) = self.call_core("rtCharAtSlow", vec![data, i, len]) else {
+                    self.f.scopes.pop();
+                    return Res::Never;
+                };
+                let three = self.i64c(3);
+                let seven = self.i64c(7);
+                let code = self
+                    .emit(Op::Bin(BinOp::Shr, r, three), Some(IrTy::I64), span)
+                    .unwrap_or(r);
+                let width = self
+                    .emit(Op::Bin(BinOp::And, r, seven), Some(IrTy::I64), span)
+                    .unwrap_or(r);
+                let next = self
+                    .emit(Op::Bin(BinOp::Add, i, width), Some(IrTy::I64), span)
+                    .unwrap_or(i);
+                self.store_scalar_ty(nslot, next);
+                let ch = self
+                    .emit(
+                        Op::Cast(CastKind::Trunc, code, IrTy::Int(32)),
+                        Some(IrTy::Int(32)),
+                        span,
+                    )
+                    .unwrap_or(code);
+                self.store_scalar_ty(eslot, ch);
+                self.jump(join_b, vec![]);
+                self.start(join_b);
+            }
+            Fused::Bytes(_) => {
+                let p = self
+                    .emit(Op::PtrAdd(data, i), Some(IrTy::Ptr), span)
+                    .unwrap_or(data);
+                let b = self.emit(Op::Load(IrTy::Int(8), p), Some(IrTy::Int(8)), span);
+                if let Some(b) = b {
+                    self.store_scalar_ty(eslot, b);
+                }
+                let one = self.i64c(1);
+                let next = self
+                    .emit(Op::Bin(BinOp::Add, i, one), Some(IrTy::I64), span)
+                    .unwrap_or(i);
+                self.store_scalar_ty(nslot, next);
+            }
+            Fused::Split(..) => {
+                let sh = sh.unwrap_or(h);
+                let sn = self.load_at(sh, 8, IrTy::I64);
+                let sp = self.load_at(sh, 0, IrTy::Ptr);
+                let Some(end) = self.call_core("rtSplitEnd", vec![data, len, sp, sn, i]) else {
+                    self.f.scopes.pop();
+                    return Res::Never;
+                };
+                let Some(next) = self.call_core("rtSplitAfter", vec![end, len, sn]) else {
+                    self.f.scopes.pop();
+                    return Res::Never;
+                };
+                self.store_scalar_ty(nslot, next);
+                let piece = self
+                    .emit(Op::PtrAdd(data, i), Some(IrTy::Ptr), span)
+                    .unwrap_or(data);
+                let plen = self
+                    .emit(Op::Bin(BinOp::Sub, end, i), Some(IrTy::I64), span)
+                    .unwrap_or(end);
+                self.store_at(eslot, 0, piece);
+                self.store_at(eslot, 8, plen);
+            }
+        }
+        let bind_fail = self.stop_block("pattern did not match");
+        let depth = self.f.scopes.len();
+        let Some((eslot, elem_ty)) = self.apply_adapters(&fns, eslot, elem_ty, step, span) else {
+            return Res::Never;
+        };
+        if !self.pat_test(pat, eslot, elem_ty, bind_fail) {
+            return Res::Never;
+        }
+        self.f.loops.push(LoopCtx {
+            label,
+            cont: step,
+            exit,
+            break_ty: None,
+            break_dst: None,
+            scope_depth: depth,
+        });
+        let void = self.types.void;
+        let r = self.run_body(body, void);
+        if !matches!(r, Res::Never) {
+            self.jump(step, vec![]);
+        }
+        self.f.loops.pop();
+        self.start(step);
+        let next = self.load_at(nslot, 0, IrTy::I64);
+        self.jump(head, vec![next]);
+        self.start(exit);
+        self.pop_scope();
+        Res::Unit
+    }
+}
+
+/// A `map` or `filter` step of a chain a `for` loop runs element by element.
+#[derive(Clone, Copy)]
+pub(crate) enum Adapter<'a> {
+    Map(&'a Expr),
+    Filter(&'a Expr),
+}
+
+/// An adapter whose function value has been made once, before the loop.
+pub(crate) struct AdapterFn {
+    map: bool,
+    ft: Ty,
+    fv: Value,
+}
+
+impl<'a> Lowerer<'a> {
+    /// `src.map(f).filter(p)...` over an iterator of plain values (no drop glue, so no element needs an owner):
+    /// the source and the steps in the order they apply. Anything else is the source itself.
+    fn peel_adapters(&mut self, e: &'a Expr) -> (&'a Expr, Vec<Adapter<'a>>) {
+        let mut steps = Vec::new();
+        let mut cur = e;
+        while let ExprKind::Call { callee, args, .. } = &strip_parens(cur).kind {
+            let ExprKind::Field {
+                base,
+                name,
+                optional: false,
+            } = &strip_parens(callee).kind
+            else {
+                break;
+            };
+            let [a] = args.as_slice() else {
+                break;
+            };
+            if a.mode.is_some() || a.label.is_some() || a.spread {
+                break;
+            }
+            let map = match self.src_text(name.span) {
+                "map" => true,
+                "filter" => false,
+                _ => break,
+            };
+            let f = &a.value;
+            if !matches!(
+                strip_parens(f).kind,
+                ExprKind::Closure(_) | ExprKind::Name(_)
+            ) {
+                break;
+            }
+            let (Some(bt), Some(rt)) = (self.ty_of(base), self.ty_of(cur)) else {
+                break;
+            };
+            let (TyKind::Iter(from), TyKind::Iter(to)) = (self.kind(bt), self.kind(rt)) else {
+                break;
+            };
+            if self.needs_drop(from) || self.needs_drop(to) {
+                break;
+            }
+            steps.push(if map {
+                Adapter::Map(f)
+            } else {
+                Adapter::Filter(f)
+            });
+            cur = base;
+        }
+        steps.reverse();
+        (cur, steps)
+    }
+
+    /// Makes the function value of each step once, before the loop (so a closure is built once, as in the eager chain).
+    fn eval_adapters(&mut self, steps: &[Adapter<'a>], span: Span) -> Vec<AdapterFn> {
+        let mut out = Vec::new();
+        for s in steps {
+            let (map, f) = match s {
+                Adapter::Map(f) => (true, *f),
+                Adapter::Filter(f) => (false, *f),
+            };
+            let Some(ft) = self.ty_of(f) else {
+                self.unsupported(span, "a function of unknown type");
+                break;
+            };
+            if let ExprKind::Closure(_) = &strip_parens(f).kind {
+                let sp = strip_parens(f).span;
+                self.f.stack_env = Some((sp.start, sp.end));
+            }
+            let Res::Val(fv) = self.expr(f) else {
+                break;
+            };
+            // The value must outlive the loop's turns: copy the two words into a slot.
+            let slot = self.slot_for(ft);
+            let code = self.load_at(fv, 0, IrTy::Ptr);
+            let env = self.load_at(fv, 8, IrTy::Ptr);
+            self.store_at(slot, 0, code);
+            self.store_at(slot, 8, env);
+            out.push(AdapterFn { map, ft, fv: slot });
+        }
+        out
+    }
+
+    /// Runs the steps on the element at `ep` (type `elem`): a `filter` that says no goes to `step`; a `map`
+    /// replaces the element with its result. Returns where the final element is and its type.
+    fn apply_adapters(
+        &mut self,
+        fns: &[AdapterFn],
+        mut ep: Value,
+        mut elem: Ty,
+        step: BlockId,
+        span: Span,
+    ) -> Option<(Value, Ty)> {
+        for f in fns {
+            let Some(sig) = self.fn_value_sig(f.ft) else {
+                self.unsupported(span, "calling something that is not a function");
+                return None;
+            };
+            if f.map {
+                let slot = self.slot_for(sig.ret);
+                let r = self.call_fn_at(span, f.ft, f.fv, vec![ArgSource::Addr(ep)], Some(slot));
+                match r {
+                    Res::Val(v) => self.store_scalar_ty(slot, v),
+                    Res::Never => return None,
+                    _ => {}
+                }
+                ep = slot;
+                elem = sig.ret;
+            } else {
+                let Res::Val(keep) =
+                    self.call_fn_at(span, f.ft, f.fv, vec![ArgSource::Addr(ep)], None)
+                else {
+                    return None;
+                };
+                let next = self.new_block(&[]);
+                self.branch(keep, next, step);
+                self.start(next);
+            }
+        }
+        Some((ep, elem))
     }
 }

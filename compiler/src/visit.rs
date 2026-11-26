@@ -201,7 +201,9 @@ pub fn walk_type<V: Visitor>(v: &mut V, t: &Type) {
             }
         }
         TypeKind::SelfType | TypeKind::Error => {}
-        TypeKind::List(e) | TypeKind::Option(e) | TypeKind::Any(e) => v.visit_type(e),
+        TypeKind::List(e) | TypeKind::Option(e) | TypeKind::Any(e) | TypeKind::Slice(e, _) => {
+            v.visit_type(e)
+        }
         TypeKind::Array(e, n) => {
             v.visit_type(e);
             v.visit_expr(n);
@@ -211,7 +213,7 @@ pub fn walk_type<V: Visitor>(v: &mut V, t: &Type) {
                 v.visit_type(t);
             }
         }
-        TypeKind::FixedTuple(ts, n) => {
+        TypeKind::FixedTuple(ts, n, _) => {
             for t in ts {
                 v.visit_type(t);
             }
@@ -325,6 +327,12 @@ pub fn walk_expr<V: Visitor>(v: &mut V, e: &Expr) {
             for e in es {
                 v.visit_expr(e);
             }
+        }
+        ExprKind::BraidRepeat { items, count } => {
+            for e in items {
+                v.visit_expr(e);
+            }
+            v.visit_expr(count);
         }
         ExprKind::List(items) | ExprKind::Set(items) | ExprKind::Soa(items) => {
             for i in items {

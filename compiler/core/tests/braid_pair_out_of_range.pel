@@ -1,0 +1,10 @@
+/// A pair number outside the braid stops the program with the number and the count.
+
+fn main() {
+    const t: (int, string; 5) = (7, "seven", 8, "eight", 9)
+    var p = 1
+    print(t.first(p))
+    p += 1
+    print(t.first(p))
+    print("not reached")
+}

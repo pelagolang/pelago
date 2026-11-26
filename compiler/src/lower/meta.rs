@@ -1,4 +1,4 @@
-//! `meta expr` (card A-05, stage M3): code that runs while compiling.
+//! `meta expr`: code that runs while compiling.
 //!
 //! The expression becomes a small function of its own; everything it reaches is lowered, the module
 //! built so far is run in the IR interpreter under a step budget, and the value left in memory is read
@@ -141,7 +141,10 @@ impl<'a> Lowerer<'a> {
         let name = self.unique_name("meta".to_string());
         let mut func = Func::new(&name, &params, ret);
         let entry = func.entry();
-        func.terminate(entry, Term::Stop("not lowered yet".to_string()));
+        func.terminate(
+            entry,
+            Term::Stop("not lowered yet".to_string(), Span::default()),
+        );
         let id = self.module.add(func);
         self.jobs.push(Job::Meta(MetaJob {
             id,
@@ -179,7 +182,7 @@ impl<'a> Lowerer<'a> {
         let cap = crate::ir::run_capture(&self.module, &name, size, limit);
         let panicked = matches!(&cap.outcome.result, Err(m) if m == "panic");
         let lines: Vec<&str> = cap.outcome.output.lines().collect();
-        // A `panic` (and so `meta_error`) prints its message; that message is the error.
+        // A `panic` (and so `metaError`) prints its message; that message is the error.
         let shown = if panicked {
             &lines[..lines.len().saturating_sub(1)]
         } else {
@@ -210,7 +213,7 @@ impl<'a> Lowerer<'a> {
                 .trace
                 .iter()
                 .map(String::as_str)
-                .filter(|n| *n != name && !n.starts_with("rt_"))
+                .filter(|n| *n != name && !super::intr::is_rt_name(n))
                 .collect();
             let what = if chain.is_empty() {
                 what
@@ -333,7 +336,7 @@ impl<'a> Lowerer<'a> {
                 }
                 Some(Cv::Fields(out))
             }
-            TyKind::Tuple(_) => self.read_fields(img, at, t),
+            TyKind::Tuple(_) | TyKind::AltTuple(..) => self.read_fields(img, at, t),
             TyKind::Box(e) => {
                 let p = Self::read_n(img, at, 8)? as usize;
                 Some(Cv::Boxed(Box::new(self.read_cv(img, p, e)?)))
@@ -511,10 +514,10 @@ impl<'a> Lowerer<'a> {
                         (Some(v), Some(val)) => {
                             let vt = self.slot_for(v);
                             self.emit_cv(val, vt, v, span);
-                            self.call_core_g("rt_map_put", &[k, v], vec![dst, kt, vt]);
+                            self.call_core_g("rtMapPut", &[k, v], vec![dst, kt, vt]);
                         }
                         _ => {
-                            self.call_core_g("rt_set_put", &[k], vec![dst, kt]);
+                            self.call_core_g("rtSetPut", &[k], vec![dst, kt]);
                         }
                     }
                 }

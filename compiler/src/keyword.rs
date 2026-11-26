@@ -4,7 +4,7 @@
 //! keyword, and the lookup. The lookup is a `match` on the string, which the
 //! compiler turns into efficient code, so there is no hash map to build at start-up.
 //!
-//! Source of truth for the design is `docs/design/keywords.md`. Keep them in step.
+//! Keep this list and the website's keyword reference in step.
 //!
 //! # Hard and soft keywords
 //!
@@ -22,7 +22,7 @@
 //! # Not in this table
 //!
 //! * Operators written as words (`and`, `or`, `not`): the language uses symbols.
-//! * Attribute names (`@inline`, `@derive`, `@packed`): they follow an `@`.
+//! * Attribute names (`@inline_always`, `@derive`, `@leaf`): they follow an `@`.
 //! * Built-in type names (`int`, `string`, ...): see [`PRELUDE_TYPES`].
 //! * Built-in functions (`print`, `assert`, ...): see [`PRELUDE_FUNCTIONS`].
 
@@ -230,8 +230,9 @@ impl Keyword {
 /// Names of the built-in types. Not keywords, but reserved by the standard library.
 pub const PRELUDE_TYPES: &[&str] = &[
     "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64",
-    "byte", "float", "float32", "float64", "bool", "char", "string", "str", "map", "set", "range",
-    "option", "result", "box", "soa", "rc", "ptr", "void", "never", "error",
+    "int128", "uint128", "int256", "uint256", "byte", "float", "float16", "float32", "float64",
+    "float128", "float256", "bool", "char", "string", "str", "map", "set", "range", "option",
+    "result", "box", "soa", "rc", "ptr", "void", "never", "error",
 ];
 
 /// Names of the built-in functions. Not keywords.
@@ -339,7 +340,7 @@ mod tests {
 
     #[test]
     fn decided_words_exist() {
-        // Spot checks against docs/design/keywords.md.
+        // Spot checks against the documented keyword list.
         for word in [
             "var", "const", "fn", "obj", "meta", "inout", "sink", "become", "unless", "of",
         ] {

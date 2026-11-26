@@ -1,0 +1,430 @@
+/// `str` and `string` methods.
+
+//~ Decodes the character at byte `i` of `n` bytes at `p`: its code point shifted left by 3, plus its width in bytes.
+//~ `for c of s.chars()` calls it in place, so the loop builds no list.
+pub fn rtCharAtSlow(p: ptr, i: int, n: int) -> int {
+    const b = rtLoadByte(rtOffset(p, i)) to int
+    var c = b
+    var width = 1
+    if b >= 240 {
+        c = b & 7
+        width = 4
+    } else if b >= 224 {
+        c = b & 15
+        width = 3
+    } else if b >= 192 {
+        c = b & 31
+        width = 2
+    }
+    var k = 1
+    while k < width && i + k < n {
+        c = (c << 6) | ((rtLoadByte(rtOffset(p, i + k)) to int) & 63)
+        k += 1
+    }
+    (c << 3) | width
+}
+
+//~ Where the piece of `n` bytes at `p` that starts at `pos` ends: at the next `sep` (`sn` bytes at `sp`), or at `n`.
+//~ An empty separator never matches. `for w of s.split(sep)` calls it in place, so the loop builds no list.
+pub fn rtSplitEnd(p: ptr, n: int, sp: ptr, sn: int, pos: int) -> int {
+    if sn == 0 { return n }
+    /// One byte is compared per position; the rest of the separator only when that byte matches (for a one-byte separator, never).
+    const first = rtLoadByte(sp)
+    const last = n - sn
+    var i = pos
+    while i <= last {
+        if rtLoadByte(rtOffset(p, i)) == first {
+            if sn == 1 || rtBytesEq(rtOffset(p, i + 1), rtOffset(sp, 1), sn - 1) { return i }
+        }
+        i += 1
+    }
+    n
+}
+
+//~ Where the search for the next piece starts once the piece ended at `end`: after the separator, or `n + 1` for "no more".
+pub fn rtSplitAfter(end: int, n: int, sn: int) -> int {
+    if end < n { end + sn } else { n + 1 }
+}
+
+impl str {
+    fn len(self) -> int = rtHdrLen(rtAddrOf(self))
+    fn isEmpty(self) -> bool = rtHdrLen(rtAddrOf(self)) == 0
+
+    //~ The characters, decoded from UTF-8.
+    fn chars(self) -> iter<char> {
+        var out: [char] = []
+        const h = rtAddrOf(self)
+        const p = rtHdrData(h)
+        const n = rtHdrLen(h)
+        var i = 0
+        while i < n {
+            const r = rtCharAtSlow(p, i, n)
+            out.push!(rtToChar(r >> 3))
+            i += r & 7
+        }
+        rtCast<list<char>, iter<char>>(sink out)
+    }
+
+    //~ The bytes of the UTF-8 encoding.
+    fn bytes(self) -> iter<byte> {
+        var out: [byte] = []
+        const h = rtAddrOf(self)
+        const p = rtHdrData(h)
+        const n = rtHdrLen(h)
+        var i = 0
+        while i < n {
+            out.push!(rtLoadByte(rtOffset(p, i)))
+            i += 1
+        }
+        rtCast<list<byte>, iter<byte>>(sink out)
+    }
+
+    //~ The byte at `index`; stops the program when the index is out of range.
+    fn byteAt(self, index: int) -> byte {
+        const h = rtAddrOf(self)
+        if index < 0 || index >= rtHdrLen(h) { panic("byteAt: index out of range") }
+        rtLoadByte(rtOffset(rtHdrData(h), index))
+    }
+
+    fn split(self, separator: str) -> iter<str> {
+        var out: [str] = []
+        const n = self.len()
+        const sn = separator.len()
+        const p = rtHdrData(rtAddrOf(self))
+        const sp = rtHdrData(rtAddrOf(separator))
+        var pos = 0
+        while pos <= n {
+            const end = rtSplitEnd(p, n, sp, sn, pos)
+            out.push!(self[pos..end])
+            pos = rtSplitAfter(end, n, sn)
+        }
+        rtCast<list<str>, iter<str>>(sink out)
+    }
+
+    fn trim(self) -> str {
+        const p = rtHdrData(rtAddrOf(self))
+        var a = 0
+        var b = self.len()
+        while a < b && rtIsSpace(rtLoadByte(rtOffset(p, a)) to int) { a += 1 }
+        while b > a && rtIsSpace(rtLoadByte(rtOffset(p, b - 1)) to int) { b -= 1 }
+        self[a..b]
+    }
+
+    fn startsWith(self, prefix: str) -> bool {
+        const pn = prefix.len()
+        if pn > self.len() { return false }
+        rtBytesEq(rtHdrData(rtAddrOf(self)), rtHdrData(rtAddrOf(prefix)), pn)
+    }
+
+    fn endsWith(self, suffix: str) -> bool {
+        const sn = suffix.len()
+        const n = self.len()
+        if sn > n { return false }
+        rtBytesEq(
+            rtOffset(rtHdrData(rtAddrOf(self)), n - sn),
+            rtHdrData(rtAddrOf(suffix)),
+            sn,
+        )
+    }
+
+    fn contains(self, part: str) -> bool = rtFind(self, part) >= 0
+
+    fn toUpper(self) -> string {
+        var out = ""
+        const p = rtHdrData(rtAddrOf(self))
+        var i = 0
+        const n = self.len()
+        while i < n {
+            const b = rtLoadByte(rtOffset(p, i)) to int
+            rtPushByte(rtAddrOf(out), b >= 97 && b <= 122 ? b - 32 : b)
+            i += 1
+        }
+        out
+    }
+
+    fn toLower(self) -> string {
+        var out = ""
+        const p = rtHdrData(rtAddrOf(self))
+        var i = 0
+        const n = self.len()
+        while i < n {
+            const b = rtLoadByte(rtOffset(p, i)) to int
+            rtPushByte(rtAddrOf(out), b >= 65 && b <= 90 ? b + 32 : b)
+            i += 1
+        }
+        out
+    }
+
+    fn replace(self, from: str, to: str) -> string {
+        var out = ""
+        const fnn = from.len()
+        const n = self.len()
+        const p = rtHdrData(rtAddrOf(self))
+        var i = 0
+        while i < n {
+            if fnn > 0 && i + fnn <= n && rtBytesEq(
+                rtOffset(p, i),
+                rtHdrData(rtAddrOf(from)),
+                fnn,
+            ) {
+                rtStrPush(rtAddrOf(out), rtHdrData(rtAddrOf(to)), to.len())
+                i += fnn
+            } else {
+                rtPushByte(rtAddrOf(out), rtLoadByte(rtOffset(p, i)) to int)
+                i += 1
+            }
+        }
+        out
+    }
+
+    //~ The byte offset of the first `part`, or `none`.
+    fn find(self, part: str) -> int? {
+        const i = rtFind(self, part)
+        if i < 0 { return none }
+        return i
+    }
+
+    //~ The byte offset of the last `part`, or `none`.
+    fn findLast(self, part: str) -> int? {
+        const n = self.len()
+        const pn = part.len()
+        var i = n - pn
+        const p = rtHdrData(rtAddrOf(self))
+        while i >= 0 {
+            if rtBytesEq(rtOffset(p, i), rtHdrData(rtAddrOf(part)), pn) { return i }
+            i -= 1
+        }
+        return none
+    }
+
+    //~ How many characters (not bytes) the text has.
+    fn charCount(self) -> int {
+        const p = rtHdrData(rtAddrOf(self))
+        const n = self.len()
+        var count = 0
+        var i = 0
+        while i < n {
+            if (rtLoadByte(rtOffset(p, i)) to int) & 192 != 128 { count += 1 }
+            i += 1
+        }
+        count
+    }
+
+    fn trimStart(self) -> str {
+        const p = rtHdrData(rtAddrOf(self))
+        var a = 0
+        const b = self.len()
+        while a < b && rtIsSpace(rtLoadByte(rtOffset(p, a)) to int) { a += 1 }
+        self[a..b]
+    }
+
+    fn trimEnd(self) -> str {
+        const p = rtHdrData(rtAddrOf(self))
+        var b = self.len()
+        while b > 0 && rtIsSpace(rtLoadByte(rtOffset(p, b - 1)) to int) { b -= 1 }
+        self[0..b]
+    }
+
+    //~ The text after `prefix`, or `none` when it does not start with it.
+    fn stripPrefix(self, prefix: str) -> str? {
+        if !self.startsWith(prefix) { return none }
+        return self[prefix.len()..self.len()]
+    }
+
+    //~ The text before `suffix`, or `none` when it does not end with it.
+    fn stripSuffix(self, suffix: str) -> str? {
+        if !self.endsWith(suffix) { return none }
+        return self[0..self.len() - suffix.len()]
+    }
+
+    //~ Splits at the first `separator`: `"a=b=c".splitOnce("=")` is `("a", "b=c")`.
+    fn splitOnce(self, separator: str) -> (str, str)? {
+        const i = rtFind(self, separator)
+        if i < 0 { return none }
+        return (self[0..i], self[i + separator.len()..self.len()])
+    }
+
+    //~ The lines, split at `\n` (a `\r` before it is dropped); a final newline does not add an empty line.
+    fn lines(self) -> iter<str> {
+        var out: [str] = []
+        const n = self.len()
+        const p = rtHdrData(rtAddrOf(self))
+        var start = 0
+        var i = 0
+        while i < n {
+            if rtLoadByte(rtOffset(p, i)) == 10 {
+                const end = i > start && rtLoadByte(rtOffset(p, i - 1)) == 13 ? i - 1 : i
+                out.push!(self[start..end])
+                start = i + 1
+            }
+            i += 1
+        }
+        if start < n { out.push!(self[start..n]) }
+        rtCast<list<str>, iter<str>>(sink out)
+    }
+
+    //~ The text `count` times in a row (`count` of 0 or less gives an empty string).
+    fn repeat(self, count: int) -> string {
+        var out = ""
+        var i = 0
+        while i < count {
+            rtStrPush(rtAddrOf(out), rtHdrData(rtAddrOf(self)), self.len())
+            i += 1
+        }
+        out
+    }
+
+    //~ Pads on the left with `fill` up to `width` characters.
+    fn padLeft(self, width: int, fill: char) -> string {
+        var out = ""
+        var k = self.charCount()
+        while k < width {
+            rtPushChar(rtAddrOf(out), fill)
+            k += 1
+        }
+        rtStrPush(rtAddrOf(out), rtHdrData(rtAddrOf(self)), self.len())
+        out
+    }
+
+    //~ Pads on the right with `fill` up to `width` characters.
+    fn padRight(self, width: int, fill: char) -> string {
+        var out = ""
+        rtStrPush(rtAddrOf(out), rtHdrData(rtAddrOf(self)), self.len())
+        var k = self.charCount()
+        while k < width {
+            rtPushChar(rtAddrOf(out), fill)
+            k += 1
+        }
+        out
+    }
+
+    fn parseInt(self) -> int ! parse_error {
+        const p = rtHdrData(rtAddrOf(self))
+        const n = self.len()
+        if n == 0 { return err(parse_error { message: "empty text is not a number" }) }
+        var i = 0
+        var negative = false
+        if rtLoadByte(p) == 45 {
+            negative = true
+            i = 1
+        } else if rtLoadByte(p) == 43 {
+            i = 1
+        }
+        if i == n { return err(parse_error { message: "no digits" }) }
+        /// Accumulated as a negative number, so the smallest int fits.
+        var value = 0
+        while i < n {
+            const d = (rtLoadByte(rtOffset(p, i)) to int) - 48
+            if d < 0 || d > 9 { return err(parse_error { message: "bad digit at position #i" }) }
+            if value < (-9223372036854775808 + d) / 10 { return err(parse_error { message: "the number is too large" }) }
+            value = value * 10 - d
+            i += 1
+        }
+        if !negative {
+            if value == -9223372036854775808 { return err(parse_error { message: "the number is too large" }) }
+            return ok(0 - value)
+        }
+        ok(value)
+    }
+
+    //~ A `float` from decimal text (`1.5`, `-2e-3`, `1e400`, `inf`, `-inf`, `nan`), rounded once to nearest
+    //~ (the same routine as the wide floats, so subnormals and huge exponents are right too).
+    fn parseFloat(self) -> float ! parse_error {
+        const dst = rtAlloc(8)
+        wZero(dst, 1)
+        if !rtFloatParse(dst, rtHdrData(rtAddrOf(self)), self.len(), 1, 11, 52) {
+            rtFree(dst)
+            return err(parse_error { message: "bad number" })
+        }
+        const r = rtRead<float>(dst)
+        rtFree(dst)
+        ok(r)
+    }
+}
+
+pub fn rtIsSpace(b: int) -> bool = b == 32 || b == 9 || b == 10 || b == 13
+pub fn rtIsDigit(b: int) -> bool = b >= 48 && b <= 57
+
+//~ The position of the first occurrence of `part` in `text`, or -1.
+pub fn rtFind(text: str, part: str) -> int {
+    const n = text.len()
+    const pn = part.len()
+    if pn == 0 { return 0 }
+    var i = 0
+    while i + pn <= n {
+        if rtBytesEq(
+            rtOffset(rtHdrData(rtAddrOf(text)), i),
+            rtHdrData(rtAddrOf(part)),
+            pn,
+        ) { return i }
+        i += 1
+    }
+    -1
+}
+
+impl string {
+    fn pushStr(inout self, text: str) {
+        rtStrPush(rtAddrOf(self), rtHdrData(rtAddrOf(text)), rtHdrLen(rtAddrOf(text)))
+    }
+
+    //~ Appends a character, encoded as UTF-8.
+    fn pushChar(inout self, c: char) {
+        rtPushChar(rtAddrOf(self), c)
+    }
+
+    //~ Appends one byte as it is.
+    fn pushByte(inout self, b: byte) {
+        rtPushByte(rtAddrOf(self), b to int)
+    }
+
+    fn clear(inout self) {
+        rtHdrSetLen(rtAddrOf(self), 0)
+    }
+}
+
+impl list<byte> {
+    //~ The text these UTF-8 bytes spell. The bytes are not checked.
+    fn toText(self) -> string {
+        var out = ""
+        const h = rtAddrOf(self)
+        rtStrPush(rtAddrOf(out), rtHdrData(h), rtHdrLen(h))
+        out
+    }
+}
+
+//~ Joins text pieces with a separator: `["a", "b"].join(", ")` is `"a, b"`.
+impl list<string> {
+    fn join(self, separator: str) -> string {
+        var out = ""
+        var i = 0
+        const n = self.len()
+        while i < n {
+            if i > 0 { out.pushStr!(separator) }
+            out.pushStr!(self[i])
+            i += 1
+        }
+        out
+    }
+}
+
+impl list<str> {
+    fn join(self, separator: str) -> string {
+        var out = ""
+        var i = 0
+        const n = self.len()
+        while i < n {
+            if i > 0 { out.pushStr!(separator) }
+            out.pushStr!(self[i])
+            i += 1
+        }
+        out
+    }
+}
+
+impl iter<str> {
+    fn join(self, separator: str) -> string = self.toList().join(separator)
+}
+
+impl iter<string> {
+    fn join(self, separator: str) -> string = self.toList().join(separator)
+}

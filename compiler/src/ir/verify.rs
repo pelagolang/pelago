@@ -4,6 +4,7 @@
 //! - every block has one terminator, and every block can be reached from the entry;
 //! - a value is made once, and every use is of a value made earlier: in the same block above it, or in
 //!   a block that dominates this one;
+//! - every frozen mark names a load that is still in the function;
 //! - operand types fit the operation; jumps hand the right number and types of values to the
 //!   block parameters; calls match the callee's signature; `return` matches the function's type.
 
@@ -65,6 +66,18 @@ fn check(f: &Func, m: Option<&Module>) -> Vec<String> {
     if f.blocks.is_empty() {
         err!("has no blocks".to_string());
         return errs;
+    }
+    // A frozen mark names a load that is still in the function.
+    let placed: std::collections::HashSet<usize> = f
+        .blocks
+        .iter()
+        .flat_map(|b| b.insts.iter().copied())
+        .collect();
+    for &i in &f.frozen {
+        match f.insts.get(i) {
+            Some(inst) if matches!(inst.op, Op::Load(..)) && placed.contains(&i) => {}
+            _ => err!(format!("frozen mark {} is not a load in the function", i)),
+        }
     }
     let ptys: Vec<IrTy> = f.blocks[0].params.iter().map(|p| f.ty(*p)).collect();
     if ptys != f.params {
@@ -227,6 +240,7 @@ fn inputs(op: &Op) -> Vec<Value> {
             vec![*a, *b]
         }
         Op::CtxInit(a, b, c, d) => vec![*a, *b, *c, *d],
+        Op::Os(k, a, b, c) => [*a, *b, *c][..k.arity()].to_vec(),
         Op::Neg(a)
         | Op::FUn(_, a)
         | Op::Not(a)
@@ -554,6 +568,17 @@ fn check_inst(f: &Func, m: Option<&Module>, inst: &Inst) -> Vec<String> {
                 e.push("`ctxinit` makes a ptr".to_string());
             }
         }
+        Op::Os(k, a, b, c) => {
+            if [*a, *b, *c][..k.arity()]
+                .iter()
+                .any(|x| t(*x) != Some(IrTy::I64))
+            {
+                e.push(format!("`{}` needs i64 operands", k.name()));
+            }
+            if result_ty != Some(IrTy::I64) {
+                e.push(format!("`{}` makes an i64", k.name()));
+            }
+        }
         Op::CtxSwitch(s, to) => {
             if t(*s) != Some(IrTy::Ptr) || t(*to) != Some(IrTy::Ptr) {
                 e.push("`ctxswitch` needs two ptrs".to_string());
@@ -613,7 +638,7 @@ fn check_term(f: &Func, term: &Term) -> Vec<String> {
                 }
             }
         },
-        Term::Stop(_) | Term::Unreachable => {}
+        Term::Stop(..) | Term::Unreachable => {}
     }
     e
 }

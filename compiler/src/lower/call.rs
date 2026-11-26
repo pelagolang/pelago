@@ -25,6 +25,48 @@ impl<'a> Lowerer<'a> {
         Some((def, map))
     }
 
+    /// An argument for a window parameter (`xs: [T..]`, `xs!: [T..]`): a list header that owns nothing. A
+    /// window expression, a list or another window already has that layout; an array gets a header made
+    /// from its address and length.
+    fn window_arg(&mut self, arg: &'a Expr, ty: Ty, mode: Option<Mode>) -> Option<Value> {
+        let have = self.ty_of(arg)?;
+        let have = self.peel_box(have);
+        let is_range = matches!(&strip_parens(arg).kind, ExprKind::Index { index, .. } if matches!(index.kind, ExprKind::Range { .. }));
+        if let TyKind::Array(_, n) = self.types.kind_of(self.types.shallow(have)).clone() {
+            if !is_range {
+                let addr = if mode == Some(Mode::Inout) {
+                    self.place(arg)?
+                } else {
+                    match self.expr(arg) {
+                        Res::Val(p) => p,
+                        _ => return None,
+                    }
+                };
+                let len = self.array_len(n);
+                let tmp = self.slot_for(ty);
+                let n = self.i64c(len);
+                let z = self.i64c(0);
+                self.store_at(tmp, 0, addr);
+                self.store_at(tmp, 8, n);
+                self.store_at(tmp, 16, z);
+                return Some(tmp);
+            }
+        }
+        if is_range || mode == Some(Mode::Inout) {
+            if let Some(p) = self.place(arg) {
+                return Some(p);
+            }
+            if !self.failed() {
+                self.unsupported(arg.span, "a window argument that is not a place");
+            }
+            return None;
+        }
+        match self.expr(arg) {
+            Res::Val(p) => Some(p),
+            _ => None,
+        }
+    }
+
     pub(crate) fn call(
         &mut self,
         e: &'a Expr,
@@ -125,12 +167,51 @@ impl<'a> Lowerer<'a> {
         mark: CallMark,
         dst: Option<Value>,
     ) -> Res {
+        if let Some(res) = self.push_interpolated(base, name, args) {
+            return res;
+        }
         let Some((target, map)) = self.call_target(e.span) else {
             // A field that holds a function: `self.callback(x)`.
             let _ = name;
             return self.unsupported(e.span, "calling a field that holds a function");
         };
         self.emit_call(e, target, map, Some(base), args, mark, dst)
+    }
+
+    /// `text.pushStr!("a#(x)b")` on a `string` variable: the pieces are appended straight to the variable's
+    /// buffer, so no temporary string is built, copied and freed. `None` for anything else.
+    fn push_interpolated(&mut self, base: &'a Expr, name: &Ident, args: &'a [Arg]) -> Option<Res> {
+        let [a] = args else {
+            return None;
+        };
+        let ExprKind::Str(parts) = &a.value.kind else {
+            return None;
+        };
+        if self.src_text(name.span) != "pushStr"
+            || !matches!(base.kind, ExprKind::Name(_))
+            || !parts.iter().any(|p| matches!(p, StrPart::Interp(_)))
+        {
+            return None;
+        }
+        let bt = self.ty_of(base)?;
+        if !matches!(self.kind(bt), TyKind::String) {
+            return None;
+        }
+        let out = self.place(base)?;
+        for p in parts {
+            match p {
+                StrPart::Text(sp) => {
+                    let bytes = self.unescape(self.src_text(*sp));
+                    self.push_static(out, &bytes);
+                }
+                StrPart::Interp(x) => {
+                    if !self.show_expr(x, out) {
+                        return Some(Res::Never);
+                    }
+                }
+            }
+        }
+        Some(Res::Unit)
     }
 
     /// `.circle(2.0)`: the case comes from the type the context expects.
@@ -157,6 +238,9 @@ impl<'a> Lowerer<'a> {
     ) -> Res {
         let _ = mark;
         let (def, map) = self.resolve_dispatch(def, map);
+        if let Some(r) = self.glue_method_call(e, def, &map, recv, args, dst) {
+            return r;
+        }
         if self.is_intrinsic(def) {
             return self.intrinsic_call(e, def, &map, recv, args, dst);
         }
@@ -183,6 +267,70 @@ impl<'a> Lowerer<'a> {
             None => return Res::Never,
         }
         self.call_with(e, def, &map, sources, dst)
+    }
+
+    /// `x.eq(y)`, `x.cmp(y)`, `x.hash()` and `x.clone()` on a type that has no code of its own for
+    /// them (a number, text, a list, a derived struct or obj): the glue for the type does the work.
+    fn glue_method_call(
+        &mut self,
+        e: &'a Expr,
+        def: DefId,
+        map: &HashMap<DefId, Ty>,
+        recv: Option<&'a Expr>,
+        args: &'a [Arg],
+        dst: Option<Value>,
+    ) -> Option<Res> {
+        let parent = self.res.def(def).parent?;
+        if self.res.def(parent).kind != DefKind::Interface
+            || !matches!(
+                self.res.def(parent).name.as_str(),
+                "eq" | "order" | "hash" | "clone"
+            )
+            || self
+                .fns
+                .get(&def)
+                .is_none_or(|f| !matches!(f.decl.body, FnBody::None))
+        {
+            return None;
+        }
+        let in_core = self.fns.get(&def).is_some_and(|f| {
+            self.program
+                .package(self.program.module(f.file).package)
+                .name
+                == "core"
+        });
+        if !in_core {
+            return None;
+        }
+        let ty = self.types.zonk(*map.get(&parent)?);
+        let r = recv?;
+        let name = self.res.def(def).name.clone();
+        if name == "clone" {
+            return Some(self.copy_expr(e, r, dst));
+        }
+        let a = self.operand_addr(r, ty)?;
+        let r = match name.as_str() {
+            "hash" => {
+                let g = self.glue_fn(GlueKind::Hash, ty)?;
+                self.emit(Op::Call(g, vec![a]), Some(IrTy::I64), e.span)
+            }
+            "eq" | "cmp" => {
+                let other = &args.first()?.value;
+                let b = self.operand_addr(other, ty)?;
+                if name == "eq" {
+                    let g = self.glue_fn(GlueKind::Eq, ty)?;
+                    self.emit(Op::Call(g, vec![a, b]), Some(IrTy::Bool), e.span)
+                } else {
+                    let g = self.glue_fn(GlueKind::Cmp, ty)?;
+                    self.emit(Op::Call(g, vec![a, b]), Some(IrTy::I64), e.span)
+                }
+            }
+            _ => return None,
+        };
+        Some(match r {
+            Some(v) => Res::Val(v),
+            None => Res::Never,
+        })
     }
 
     /// A receiver that is a `box` whose method belongs to the value inside: the address of that
@@ -259,7 +407,9 @@ impl<'a> Lowerer<'a> {
             ir_args.push(d);
         }
         for ((pass, ty, mode), src) in sig.params.iter().zip(sources) {
+            let saved_free = std::mem::replace(&mut self.f.free_call, !info.has_self);
             let v = self.lower_arg(*pass, *ty, *mode, src, e.span);
+            self.f.free_call = saved_free;
             match (pass, v) {
                 (Pass::Skip, _) => {}
                 (_, Some(v)) => ir_args.push(v),
@@ -302,34 +452,7 @@ impl<'a> Lowerer<'a> {
             self.terminate(Term::Unreachable);
             return Res::Never;
         }
-        // A call of an `async fn` gives a `future<T>`, which has the layout of a `T`: a scalar result
-        // is put in memory, and nothing else changes.
-        let future = if self.typed.async_fns.contains(&def) {
-            self.ty_of(e)
-        } else {
-            None
-        };
         match sig.ret_pass {
-            RetPass::Val(_) if future.is_some() => match (result, future) {
-                (Some(v), Some(ft)) => {
-                    let slot = match dst {
-                        Some(d) => d,
-                        None => self.slot_for(ft),
-                    };
-                    self.store_scalar_ty(slot, v);
-                    if dst.is_none() {
-                        self.own(slot, ft, false);
-                        return Res::Val(slot);
-                    }
-                    Res::Unit
-                }
-                _ => Res::Never,
-            },
-            RetPass::Void if future.is_some() => match (future, dst) {
-                (Some(_), Some(_)) => Res::Unit,
-                (Some(ft), None) => Res::Val(self.slot_for(ft)),
-                _ => Res::Never,
-            },
             RetPass::Val(_) => match result {
                 Some(v) => {
                     self.fresh_scalar(v, sig.ret);
@@ -362,10 +485,12 @@ impl<'a> Lowerer<'a> {
     ) -> Option<Value> {
         let arg = match src {
             ArgSource::Expr(arg) => {
-                if mode != Some(Mode::Sink) {
-                    if let ExprKind::Closure(_) = &strip_parens(arg).kind {
-                        let sp = strip_parens(arg).span;
+                if let ExprKind::Closure(_) = &strip_parens(arg).kind {
+                    let sp = strip_parens(arg).span;
+                    if mode != Some(Mode::Sink) {
                         self.f.stack_env = Some((sp.start, sp.end));
+                    } else if self.f.free_call {
+                        self.f.no_borrow = Some((sp.start, sp.end));
                     }
                 }
                 arg
@@ -395,6 +520,23 @@ impl<'a> Lowerer<'a> {
                 return Some(tmp);
             }
         };
+        if matches!(pass, Pass::Ptr) {
+            if self.is_window(ty) {
+                return self.window_arg(arg, ty, mode);
+            }
+            // A window where a read-only list is wanted (a method of `list` called on a window): the same
+            // header, passed by address. Nothing is copied and nothing is dropped.
+            let window_has = self.ty_of(arg).is_some_and(|h| self.is_window(h));
+            if window_has && mode != Some(Mode::Sink) {
+                return match mode {
+                    Some(Mode::Inout) => self.place(arg),
+                    _ => match self.expr(arg) {
+                        Res::Val(p) => Some(p),
+                        _ => None,
+                    },
+                };
+            }
+        }
         match pass {
             Pass::Skip => {
                 self.expr(arg);

@@ -1,11 +1,11 @@
 /// The same program with the nodes in an arena: a node is a bump, and freeing a tree is one reset.
 struct node {
-    l: aref<node>?
-    r: aref<node>?
+    l: aref<node>
+    r: aref<node>
 }
 
 fn make(inout a: arena, d: int) -> aref<node> {
-    if d == 0 { return a.new!(node { l: none, r: none }) }
+    if d == 0 { return a.new!(node { l: a.noRef(), r: a.noRef() }) }
     const l = make(inout a, d - 1)
     const r = make(inout a, d - 1)
     a.new!(node { l: l, r: r })
@@ -14,8 +14,8 @@ fn make(inout a: arena, d: int) -> aref<node> {
 fn check(a: arena, t: aref<node>) -> int {
     const n = a.get(t)
     var c = 0
-    if n.l is some(l) { c += 1 + check(a, l) }
-    if n.r is some(r) { c += check(a, r) }
+    if !a.isNone(n.l) { c += 1 + check(a, n.l) }
+    if !a.isNone(n.r) { c += check(a, n.r) }
     c
 }
 

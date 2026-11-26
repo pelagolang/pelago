@@ -57,8 +57,18 @@ impl<'a> Lowerer<'a> {
         self.types.zonk(t)
     }
 
+    /// The kind of a type, with a window (`[T..]`) seen as the list it has the layout of.
     pub(crate) fn kind(&self, t: Ty) -> TyKind {
-        self.types.kind_of(t).clone()
+        match self.types.kind_of(t) {
+            TyKind::Slice(e) => TyKind::List(*e),
+            k => k.clone(),
+        }
+    }
+
+    /// Is this type a window (`[T..]`)?
+    pub(crate) fn is_window(&mut self, t: Ty) -> bool {
+        let t = self.types.shallow(t);
+        matches!(self.types.kind_of(t), TyKind::Slice(_))
     }
 
     pub(crate) fn mk_ptr(&mut self) -> Ty {
@@ -80,7 +90,17 @@ impl<'a> Lowerer<'a> {
     pub(crate) fn repr(&mut self, t: Ty) -> Repr {
         let t = self.types.shallow(t);
         match self.kind(t) {
+            // A wide integer is a few 64-bit words in memory (`wide.rs`).
+            TyKind::Int(k) if k.words() > 0 => Repr::Mem(Layout {
+                size: k.bits() / 8,
+                align: 8,
+            }),
             TyKind::Int(k) => Repr::Scalar(IrTy::Int(k.bits() as u8)),
+            // Floats without machine instructions are memory values done in software (`softf.rs`).
+            TyKind::Float(k) if k.soft() => Repr::Mem(Layout {
+                size: k.bytes(),
+                align: k.bytes().min(8),
+            }),
             TyKind::Float(FloatKind::F32) => Repr::Scalar(IrTy::F32),
             TyKind::Float(FloatKind::F64) => Repr::Scalar(IrTy::F64),
             TyKind::Bool => Repr::Scalar(IrTy::Bool),
@@ -116,6 +136,14 @@ impl<'a> Lowerer<'a> {
 
     fn compute_layout(&mut self, t: Ty) -> Layout {
         match self.kind(t) {
+            TyKind::Int(k) if k.words() > 0 => Layout {
+                size: k.bits() / 8,
+                align: 8,
+            },
+            TyKind::Float(k) if k.soft() => Layout {
+                size: k.bytes(),
+                align: k.bytes().min(8),
+            },
             TyKind::Int(_)
             | TyKind::Float(_)
             | TyKind::Bool
@@ -207,7 +235,12 @@ impl<'a> Lowerer<'a> {
         let int = self.mk_int();
         let tys: Vec<Ty> = match self.kind(t) {
             TyKind::Tuple(ts) => ts,
-            TyKind::AltTuple(ts, _) => ts,
+            // A braid: one field per slot, the cycle repeated up to its length.
+            TyKind::AltTuple(ts, n) => {
+                let n = self.array_len(n).max(0) as usize;
+                let k = ts.len().max(1);
+                (0..n).map(|i| ts[i % k]).collect()
+            }
             TyKind::Adt(d, args) => {
                 let map = self.adt_subst(d, &args);
                 let fields = self
@@ -327,6 +360,10 @@ impl<'a> Lowerer<'a> {
         }
         // Break cycles: a recursive type through a `box` is dropped by its box.
         self.drop_cache.insert(t, false);
+        // A window owns nothing.
+        if matches!(self.types.kind_of(t), TyKind::Slice(_)) {
+            return false;
+        }
         let r = match self.kind(t) {
             TyKind::String
             | TyKind::List(_)
@@ -361,6 +398,9 @@ impl<'a> Lowerer<'a> {
                 tys.into_iter().any(|x| self.needs_drop(x))
             }
             TyKind::Tuple(ts) => ts.into_iter().any(|x| self.needs_drop(x)),
+            TyKind::AltTuple(ts, n) => {
+                self.array_len(n) > 0 && ts.into_iter().any(|x| self.needs_drop(x))
+            }
             TyKind::Array(e, _) => self.needs_drop(e),
             _ => false,
         };

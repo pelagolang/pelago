@@ -1,0 +1,18 @@
+fn main() {
+    const w: uint64 = 18000000000000000000
+    print(w)
+    print(w, "#w", w + 1)
+    const x: uint = 18446744073709551615
+    print(x)
+    const h: uint64 = 9223372036854775808
+    print(h)
+    var s = "v=#w #h"
+    print(s)
+    const small: uint64 = 42
+    print(small)
+    const z: uint64 = 0
+    print(z)
+    print([w, small])
+    const b: uint8 = 255
+    print(b)
+}

@@ -306,7 +306,10 @@ impl<'a> Lowerer<'a> {
                         },
                     };
                     self.clone_into(src, slot, t);
-                    Res::Val(self.load_at(slot, 0, sc))
+                    let v = self.load_at(slot, 0, sc);
+                    // Like a literal, the copy is owed a drop unless a consumer takes it.
+                    self.fresh_scalar(v, t);
+                    Res::Val(v)
                 } else {
                     match self.scalar(inner) {
                         Some(v) => Res::Val(v),
@@ -402,7 +405,7 @@ impl<'a> Lowerer<'a> {
                 let Some(eq) = self.glue_addr(GlueKind::Eq, el) else {
                     return Res::Never;
                 };
-                match self.call_core("rt_list_contains", vec![h, probe, sz, eq]) {
+                match self.call_core("rtListContains", vec![h, probe, sz, eq]) {
                     Some(v) => Res::Val(v),
                     None => Res::Never,
                 }
@@ -414,7 +417,7 @@ impl<'a> Lowerer<'a> {
                 let Res::Val(p) = self.expr(lhs) else {
                     return Res::Never;
                 };
-                match self.call_core("rt_str_contains", vec![h, p]) {
+                match self.call_core("rtStrContains", vec![h, p]) {
                     Some(v) => Res::Val(v),
                     None => Res::Never,
                 }

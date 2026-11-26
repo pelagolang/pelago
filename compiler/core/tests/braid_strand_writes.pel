@@ -1,0 +1,18 @@
+/// A view made from an `inout` braid can change its slots; the braid shows the change, and the dropped values are freed.
+fn bump(s: strand_mut<int>) {
+    for inout x of s { x += 100 }
+}
+
+fn main() {
+    var b: (int, string; 5) = (1, "a", 2, "b", 3)
+    const s = b.secondStrandMut!()
+    s.set(0, "A")
+    s.set(-1, "B")
+    bump(b.firstStrandMut!())
+    print(b)
+    var t: (int, string, bool; 6) = (1, "a", true, 2, "b", false)
+    t.thirdStrandMut!().set(1, true)
+    for inout x of t.firstStrandMut!() { x *= 10 }
+    print(t)
+    for x of b.secondStrand() { print(x) }
+}

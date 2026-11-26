@@ -1,0 +1,9 @@
+src/main.pel src/main.pel x a /b
+b.txt b   y.pel
+some("a/b") some("") some("/") none none some("a")
+b.tar .bashrc noext
+some("gz") none none none
+a/b.md a/b.md a/b
+true true false false
+["a", "b", ".", "c"]
+a/c ../.. / . a/b/c

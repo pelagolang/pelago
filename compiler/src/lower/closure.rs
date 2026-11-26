@@ -155,7 +155,7 @@ impl<'a> Lowerer<'a> {
                     (CapKind::Val(s), ty, ty)
                 }
                 Some(Local::Slot { ty, .. }) => {
-                    if *mode == Some(Mode::Sink) {
+                    if *mode == Some(Mode::Sink) || self.f.async_wrap {
                         (CapKind::Sink, ty, ty)
                     } else {
                         (CapKind::Ref, ptr_ty, ty)
@@ -163,6 +163,16 @@ impl<'a> Lowerer<'a> {
                 }
                 None => continue,
             };
+            if matches!(kind, CapKind::Ref) && self.f.no_borrow == Some((e.span.start, e.span.end))
+            {
+                let name = self.res.def(*d).name.clone();
+                return self.unsupported(
+                    e.span,
+                    &format!(
+                        "error: this closure outlives the function that makes it, but uses `{name}` in place; write `[sink {name}]` to move it in"
+                    ),
+                );
+            }
             tys.push(field_ty);
             caps.push(CapInfo {
                 def: *d,
@@ -227,7 +237,10 @@ impl<'a> Lowerer<'a> {
         let name = self.unique_name(format!("closure in {}", self.f.func.name));
         let mut func = Func::new(&name, &sig.ir_params, sig.ir_ret);
         let entry = func.entry();
-        func.terminate(entry, Term::Stop("not lowered yet".to_string()));
+        func.terminate(
+            entry,
+            Term::Stop("not lowered yet".to_string(), Span::default()),
+        );
         let id = self.module.add(func);
         let it = self
             .res
@@ -256,7 +269,10 @@ impl<'a> Lowerer<'a> {
         let name = self.unique_name(format!("env drop in {}", self.f.func.name));
         let mut func = Func::new(&name, &[IrTy::Ptr], IrTy::Void);
         let entry = func.entry();
-        func.terminate(entry, Term::Stop("not lowered yet".to_string()));
+        func.terminate(
+            entry,
+            Term::Stop("not lowered yet".to_string(), Span::default()),
+        );
         let id = self.module.add(func);
         let owned: Vec<(u32, Ty)> = caps
             .iter()
@@ -441,12 +457,7 @@ impl<'a> Lowerer<'a> {
                 func.compact();
                 self.module.funcs[job.id.0 as usize] = func;
             }
-            Some((span, msg)) => self.diags.push(Diagnostic {
-                module: job.file,
-                span,
-                message: format!("not lowered yet: {msg} (in `{name}`)"),
-                warning: true,
-            }),
+            Some((span, msg)) => self.diags.push(fail_diag(job.file, span, &msg, &name)),
         }
     }
 
@@ -477,7 +488,10 @@ impl<'a> Lowerer<'a> {
         ));
         let mut func = Func::new(&name, &vsig.ir_params, vsig.ir_ret);
         let entry = func.entry();
-        func.terminate(entry, Term::Stop("not lowered yet".to_string()));
+        func.terminate(
+            entry,
+            Term::Stop("not lowered yet".to_string(), Span::default()),
+        );
         let id = self.module.add(func);
         self.thunks.push(ThunkJob {
             id,
@@ -549,11 +563,26 @@ impl<'a> Lowerer<'a> {
         let Some(ft) = self.ty_of(callee) else {
             return self.unsupported(e.span, "calling a value of unknown type");
         };
-        let Some(sig) = self.fn_value_sig(ft) else {
+        if self.fn_value_sig(ft).is_none() {
             return self.unsupported(e.span, "calling something that is not a function");
-        };
+        }
         let Res::Val(fv) = self.expr(callee) else {
             return Res::Never;
+        };
+        self.call_fn_at(e.span, ft, fv, srcs, dst)
+    }
+
+    /// Calls the function value stored at `fv` (type `ft`) with the pieces already matched to its parameters.
+    pub(crate) fn call_fn_at(
+        &mut self,
+        span: Span,
+        ft: Ty,
+        fv: Value,
+        srcs: Vec<ArgSource<'a>>,
+        dst: Option<Value>,
+    ) -> Res {
+        let Some(sig) = self.fn_value_sig(ft) else {
+            return self.unsupported(span, "calling something that is not a function");
         };
         let code = self.load_at(fv, 0, IrTy::Ptr);
         let env = self.load_at(fv, 8, IrTy::Ptr);
@@ -569,10 +598,10 @@ impl<'a> Lowerer<'a> {
         }
         ir_args.push(env);
         if srcs.len() != sig.params.len() {
-            return self.unsupported(e.span, "a call with a different number of arguments");
+            return self.unsupported(span, "a call with a different number of arguments");
         }
         for ((pass, ty, mode), src) in sig.params.iter().zip(srcs) {
-            let v = self.lower_arg(*pass, *ty, *mode, src, e.span);
+            let v = self.lower_arg(*pass, *ty, *mode, src, span);
             match (pass, v) {
                 (Pass::Skip, _) => {}
                 (_, Some(v)) => ir_args.push(v),
@@ -584,11 +613,7 @@ impl<'a> Lowerer<'a> {
             RetPass::Val(t) => (t, Some(t)),
             _ => (IrTy::Void, None),
         };
-        let result = self.emit(
-            Op::CallPtr(param_tys, ret_ir, code, ir_args),
-            res_ty,
-            e.span,
-        );
+        let result = self.emit(Op::CallPtr(param_tys, ret_ir, code, ir_args), res_ty, span);
         if matches!(self.kind(sig.ret), TyKind::Never) {
             self.terminate(Term::Unreachable);
             return Res::Never;
@@ -605,6 +630,73 @@ impl<'a> Lowerer<'a> {
                         self.own(slot, sig.ret, false);
                         return Res::Val(slot);
                     }
+                }
+                Res::Unit
+            }
+        }
+    }
+}
+
+impl<'a> Lowerer<'a> {
+    /// The body of an `async fn`: a closure over the parameters, started as a task. The call gives the future (the
+    /// task's address). A `let` parameter that owns something is copied first, so the task has its own.
+    pub(crate) fn async_fn_body(
+        &mut self,
+        decl: &'a FnDecl,
+        sig: &Sig,
+        inner: Ty,
+        params: &[Option<DefId>],
+    ) -> Res {
+        for (i, (pass, ty, mode)) in sig.params.iter().enumerate() {
+            let Some(def) = params.get(i).copied().flatten() else {
+                continue;
+            };
+            if *pass == Pass::Ptr && *mode != Some(Mode::Sink) && self.needs_drop(*ty) {
+                if let Some(Local::Slot { ptr, ty, .. }) = self.f.locals.get(&def).copied() {
+                    let slot = self.slot_for(ty);
+                    self.clone_into(ptr, slot, ty);
+                    let flag = self.own(slot, ty, true);
+                    self.f.locals.insert(
+                        def,
+                        Local::Slot {
+                            ptr: slot,
+                            ty,
+                            flag,
+                        },
+                    );
+                }
+            }
+        }
+        let body = match &decl.body {
+            FnBody::Block(b) => Expr {
+                kind: ExprKind::Block(b.clone()),
+                span: b.span,
+            },
+            FnBody::Expr(e) => e.clone(),
+            FnBody::None => return Res::Unit,
+        };
+        let c: &'a Closure = Box::leak(Box::new(Closure {
+            captures: Vec::new(),
+            params: Vec::new(),
+            ret: None,
+            body,
+        }));
+        let t = self.types.mk(TyKind::Fn(Vec::new(), inner, true));
+        let dst = self.slot_for(t);
+        self.f.async_wrap = true;
+        let r = self.closure_value(&c.body, c, dst, t);
+        self.f.async_wrap = false;
+        if matches!(r, Res::Never) {
+            return r;
+        }
+        let Some(fut) = self.call_core_g("rtAsyncSpawn", &[inner], vec![dst]) else {
+            return Res::Never;
+        };
+        match sig.ret_pass {
+            RetPass::Val(_) => Res::Val(fut),
+            _ => {
+                if let Some(sret) = self.f.sret {
+                    self.store_at(sret, 0, fut);
                 }
                 Res::Unit
             }

@@ -1,0 +1,10 @@
+ok 7 Ann false
+error 1:1: $: missing field "user_id"
+ok 7 Ann false
+{"user_id":3,"display-name":"Bo","admin":true}
+ok 4
+error 1:26: $.extra: unknown field "extra"
+error 2:14: $.max_conn: duplicate field "max_conn"
+error 1:27: $: the text is not valid UTF-8
+ok
+error 1:40: $.run.x: unknown field "x"

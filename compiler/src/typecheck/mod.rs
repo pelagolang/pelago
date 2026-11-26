@@ -1,4 +1,4 @@
-//! The type checker (stage 2 of `docs/design/checker.md`): a type for every expression.
+//! The type checker (stage 2 of checking): a type for every expression.
 //!
 //! The shape of the work:
 //!
@@ -103,8 +103,8 @@ pub struct Typed {
     pub owning: std::collections::HashSet<DefId>,
     /// The types declared `linear`: they must be consumed exactly once.
     pub linear: std::collections::HashSet<DefId>,
-    /// The `async fn` functions: they are lowered returning their value, and a call wraps it in a `future`.
-    pub async_fns: std::collections::HashSet<DefId>,
+    /// The `async fn` functions and what their bodies give: a call returns a `future` of it, started as a task.
+    pub async_fns: HashMap<DefId, Ty>,
     /// The return type of each function with a body.
     pub fn_rets: HashMap<DefId, Ty>,
     pub fn_infos: HashMap<DefId, FnInfo>,
@@ -253,6 +253,7 @@ enum Head {
     Array,
     Soa,
     Tuple,
+    Braid,
     Option,
     Result,
     Map,
@@ -308,6 +309,8 @@ pub(crate) struct LoopCtx {
 struct LitCheck {
     ty: Ty,
     magnitude: u128,
+    /// The four words of a literal that is too large for a `u128` (only a 256-bit type can hold it).
+    big: Option<[u64; 4]>,
     negative: bool,
     file: ModuleId,
     span: Span,
@@ -391,6 +394,37 @@ pub(crate) struct Checker<'p> {
     owning_cache: Option<std::collections::HashSet<DefId>>,
     linear: std::collections::HashSet<DefId>,
     pending_nonlinear: Vec<(ModuleId, Span, Ty, DefId)>,
+}
+
+/// A literal as four 64-bit words, least significant first: for the numbers a `u128` cannot hold (`int256`).
+pub fn literal_words(text: &str) -> Option<[u64; 4]> {
+    let t: String = text.chars().filter(|c| *c != '_').collect();
+    let (digits, radix) = if let Some(h) = t.strip_prefix("0x").or_else(|| t.strip_prefix("0X")) {
+        (h, 16u64)
+    } else if let Some(b) = t.strip_prefix("0b").or_else(|| t.strip_prefix("0B")) {
+        (b, 2)
+    } else if let Some(o) = t.strip_prefix("0o").or_else(|| t.strip_prefix("0O")) {
+        (o, 8)
+    } else {
+        (t.as_str(), 10)
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let mut w = [0u64; 4];
+    for c in digits.chars() {
+        let d = c.to_digit(radix as u32)? as u64;
+        let mut carry = d as u128;
+        for x in w.iter_mut() {
+            let v = (*x as u128) * radix as u128 + carry;
+            *x = v as u64;
+            carry = v >> 64;
+        }
+        if carry != 0 {
+            return None;
+        }
+    }
+    Some(w)
 }
 
 fn int_text(text: &str) -> Option<u128> {
@@ -491,9 +525,7 @@ impl<'p> Checker<'p> {
         for (d, owner) in fn_defs {
             let Some(sig) = self.fn_sig(d) else { continue };
             let self_ty = self.owner_self_ty(owner);
-            let ret = self
-                .tt
-                .zonk(self.async_inner.get(&d).copied().unwrap_or(sig.ret));
+            let ret = self.tt.zonk(sig.ret);
             let params = sig
                 .params
                 .iter()
@@ -599,7 +631,14 @@ impl<'p> Checker<'p> {
         Typed {
             owning,
             linear,
-            async_fns: self.async_inner.keys().copied().collect(),
+            async_fns: {
+                let inner: Vec<(DefId, Ty)> =
+                    self.async_inner.iter().map(|(d, t)| (*d, *t)).collect();
+                inner
+                    .into_iter()
+                    .map(|(d, t)| (d, self.tt.zonk(t)))
+                    .collect()
+            },
             fn_rets,
             fn_infos,
             adts,
@@ -1054,6 +1093,7 @@ impl<'p> Checker<'p> {
             TyKind::Array(..) => Head::Array,
             TyKind::Soa(..) => Head::Soa,
             TyKind::Tuple(_) => Head::Tuple,
+            TyKind::AltTuple(..) => Head::Braid,
             TyKind::Option(_) => Head::Option,
             TyKind::Result(..) => Head::Result,
             TyKind::Map(..) => Head::Map,
@@ -1205,6 +1245,22 @@ impl<'p> Checker<'p> {
                 Some(t) => c.lower_type(t),
                 None => c.tt.void,
             };
+            if matches!(c.kind_of(ret), TyKind::Slice(_)) {
+                if let Some(t) = &f.ret {
+                    c.err(
+                        t.span,
+                        "a window cannot be returned: it points into something that is gone when the function ends; return a list (`copy w`)",
+                    );
+                }
+            }
+            for (p, sp) in f.params.iter().zip(params.iter()) {
+                if p.mode == Some(Mode::Sink) && matches!(c.kind_of(sp.ty), TyKind::Slice(_)) {
+                    c.err(
+                        p.name.span,
+                        "a window does not own what it covers, so it cannot be taken with `sink`; take a list, or `copy w`",
+                    );
+                }
+            }
             FnSig {
                 generics,
                 params,
@@ -1320,6 +1376,10 @@ impl<'p> Checker<'p> {
                 let len = self.array_len(n);
                 self.tt.mk(TyKind::Array(e, len))
             }
+            TypeKind::Slice(e, _) => {
+                let e = self.lower_type(e);
+                self.tt.mk(TyKind::Slice(e))
+            }
             TypeKind::Tuple(ts) => {
                 if ts.is_empty() {
                     return self.tt.void;
@@ -1327,7 +1387,7 @@ impl<'p> Checker<'p> {
                 let v = ts.iter().map(|t| self.lower_type(t)).collect();
                 self.tt.tuple(v)
             }
-            TypeKind::FixedTuple(ts, n) => {
+            TypeKind::FixedTuple(ts, n, _) => {
                 let v = ts.iter().map(|t| self.lower_type(t)).collect();
                 let len = self.array_len(n);
                 self.tt.mk(TyKind::AltTuple(v, len))
@@ -1405,6 +1465,8 @@ impl<'p> Checker<'p> {
                     Punct::Plus => b'+',
                     Punct::Minus => b'-',
                     Punct::Star => b'*',
+                    Punct::Slash => b'/',
+                    Punct::Percent => b'%',
                     _ => return None,
                 };
                 let a = self.const_term(lhs)?;
@@ -1543,11 +1605,18 @@ impl<'p> Checker<'p> {
             "int16" => tt.mk(TyKind::Int(IntKind::I16)),
             "int32" => tt.mk(TyKind::Int(IntKind::I32)),
             "uint" | "uint64" => tt.mk(TyKind::Int(IntKind::U64)),
+            "int128" => tt.mk(TyKind::Int(IntKind::I128)),
+            "uint128" => tt.mk(TyKind::Int(IntKind::U128)),
+            "int256" => tt.mk(TyKind::Int(IntKind::I256)),
+            "uint256" => tt.mk(TyKind::Int(IntKind::U256)),
             "uint8" | "byte" => tt.mk(TyKind::Int(IntKind::U8)),
             "uint16" => tt.mk(TyKind::Int(IntKind::U16)),
             "uint32" => tt.mk(TyKind::Int(IntKind::U32)),
             "float" | "float64" => tt.float,
             "float32" => tt.mk(TyKind::Float(FloatKind::F32)),
+            "float16" => tt.mk(TyKind::Float(FloatKind::F16)),
+            "float128" => tt.mk(TyKind::Float(FloatKind::F128)),
+            "float256" => tt.mk(TyKind::Float(FloatKind::F256)),
             "bool" => tt.bool_,
             "char" => tt.char_,
             "string" => tt.string,
@@ -1557,6 +1626,7 @@ impl<'p> Checker<'p> {
             "error" => tt.error,
             "ptr" => tt.mk(TyKind::Ptr),
             "list" if want(self, 1) => self.tt.list(lowered[0]),
+            "slice" if want(self, 1) => self.tt.mk(TyKind::Slice(lowered[0])),
             "soa" if lowered.len() == 1 || lowered.len() == 2 => {
                 let len = match lowered.get(1).map(|t| self.tt.kind(*t).clone()) {
                     None => ArrayLen::Unknown,
@@ -1691,7 +1761,17 @@ impl<'p> Checker<'p> {
         let lits = std::mem::take(&mut self.lits);
         for l in lits {
             if let Some(k) = self.tt.int_kind(l.ty) {
-                if !k.fits(l.magnitude, l.negative) {
+                let fits = match l.big {
+                    Some(w) => {
+                        k.bits() == 256
+                            && (!k.signed()
+                                || w[3] >> 63 == 0
+                                || (l.negative && w == [0, 0, 0, 1 << 63]))
+                            && (k.signed() || !l.negative)
+                    }
+                    None => k.fits(l.magnitude, l.negative),
+                };
+                if !fits {
                     let text = if l.negative {
                         format!("-{}", l.magnitude)
                     } else {
@@ -1729,9 +1809,18 @@ impl<'p> Checker<'p> {
         let Some(mut sig) = self.fn_sig(def) else {
             return;
         };
-        // The body of an `async fn` gives the value itself; the call wraps it.
+        // The body of an `async fn` gives the value itself; the call starts it as a task and gives a `future`.
         if let Some(inner) = self.async_inner.get(&def) {
             sig.ret = *inner;
+            // The body runs on a stack of its own, so what it takes must move in: a borrow cannot cross.
+            for p in &f.params {
+                if p.mode == Some(Mode::Inout) {
+                    self.err(
+                        p.name.span,
+                        "an `async fn` runs as a task, so it cannot borrow `inout`: take it with `sink` and return what changed",
+                    );
+                }
+            }
         }
         let self_ty = self.owner_self_ty(owner);
         let saved_meta = self.meta_depth;
@@ -1787,7 +1876,12 @@ impl<'p> Checker<'p> {
         let found = match &f.body {
             FnBody::Block(b) => {
                 span = b.span;
-                self.check_block(b, exp)
+                let t = self.check_block(b, exp);
+                // The body of an `async fn` becomes the body of a closure, which is lowered as an expression.
+                if self.async_inner.contains_key(&def) {
+                    self.expr_tys.push((file, b.span.start, b.span.end, t));
+                }
+                t
             }
             FnBody::Expr(e) => {
                 span = e.span;
@@ -1913,7 +2007,7 @@ pub(crate) fn linear_in(tt: &TypeTable, linear: &std::collections::HashSet<DefId
 pub(crate) fn holds_view(tt: &TypeTable, t: Ty) -> bool {
     let t = tt.shallow(t);
     match tt.kind(t) {
-        TyKind::Str | TyKind::Fn(..) => true,
+        TyKind::Str | TyKind::Slice(_) | TyKind::Fn(..) => true,
         TyKind::List(e)
         | TyKind::Array(e, _)
         | TyKind::Soa(e, _)

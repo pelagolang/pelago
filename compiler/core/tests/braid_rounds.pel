@@ -1,0 +1,10 @@
+/// A cycle of three types has rounds, three strand views, and the same layout as an array of triples.
+fn main() {
+    const px: (int, string, bool; 7) = (1, "a", true, 2, "b", false, 3)
+    print(px.len(), px.rounds())
+    print(px.first(1), px.second(1), px.third(1), px.first(-1))
+    print(px.firstStrand().toList(), px.secondStrand().toList(), px.thirdStrand().toList())
+    const q: (int, string, bool; 6) = (1, "a", true, 2, "b", false)
+    const rs = q.asRounds()
+    print(rs.len(), rs[1])
+}

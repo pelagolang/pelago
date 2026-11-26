@@ -1,4 +1,4 @@
-//! An x86-64 instruction encoder: only the forms the code generator uses (card A-09).
+//! An x86-64 instruction encoder: only the forms the code generator uses.
 //!
 //! `Asm` collects bytes and labels. Jumps and calls to labels are always `rel32`; references to
 //! the data sections are patched when the final layout is known ([`Asm::finish`]). Every encoding
@@ -229,6 +229,13 @@ impl Asm {
         self.last_bound = self.code.len();
     }
 
+    /// Whether any jump, call or address so far names the label.
+    pub fn is_referenced(&self, l: Label) -> bool {
+        self.fixups
+            .iter()
+            .any(|f| matches!(f.kind, FixKind::Label(x) if x == l))
+    }
+
     pub fn label_offset(&self, l: Label) -> Option<usize> {
         self.labels[l.0 as usize]
     }
@@ -442,6 +449,23 @@ impl Asm {
     pub fn store(&mut self, m: Mem, src: Reg, size: u8) {
         let op = if size == 1 { 0x88 } else { 0x89 };
         self.int_op(size, &[op], src.0, Rm::Mem(m), &[src], 0);
+    }
+
+    /// `lock cmpxchg [m], src`: compares `rax` with the memory; equal stores `src`, else loads it into `rax`.
+    pub fn lock_cmpxchg(&mut self, m: Mem, src: Reg) {
+        self.byte(0xF0);
+        self.int_op(8, &[0x0F, 0xB1], src.0, Rm::Mem(m), &[src], 0);
+    }
+
+    /// `lock xadd [m], src`: adds `src` to the memory and puts the old value in `src`.
+    pub fn lock_xadd(&mut self, m: Mem, src: Reg) {
+        self.byte(0xF0);
+        self.int_op(8, &[0x0F, 0xC1], src.0, Rm::Mem(m), &[src], 0);
+    }
+
+    /// `xchg [m], src` (locked by the processor): swaps the register and the memory.
+    pub fn xchg_mem(&mut self, m: Mem, src: Reg) {
+        self.int_op(8, &[0x87], src.0, Rm::Mem(m), &[src], 0);
     }
 
     /// Stores a sign-extended 32-bit constant.

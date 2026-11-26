@@ -81,9 +81,22 @@ impl<'a> Lowerer<'a> {
         if self.f.cur.is_none() || self.failed() {
             return Res::Never;
         }
+        // What stops inside this expression says where it is; the outer expression's place comes back after.
+        let saved = self.f.loc;
+        self.f.loc = self.loc_of(e.span);
+        let r = self.expr_kind(e);
+        self.f.loc = saved;
+        r
+    }
+
+    #[inline(never)]
+    fn expr_kind(&mut self, e: &'a Expr) -> Res {
         match &e.kind {
             ExprKind::Int => self.int_literal(e),
             ExprKind::Float => {
+                if self.ty_of(e).is_some_and(|t| self.soft_of(t).is_some()) {
+                    return self.rvalue_expr(e);
+                }
                 let Some(ty) = self.scalar_ty_of(e) else {
                     return self.unsupported(e.span, "a float of this type");
                 };
@@ -124,12 +137,16 @@ impl<'a> Lowerer<'a> {
             ExprKind::Select(arms) => self.select_expr(e, arms),
             ExprKind::Become(call) => self.become_expr(e, call),
             ExprKind::Scope { name, body } => {
+                let mut handle = None;
                 if let Some(d) = self.res.decls.get(&(self.f.file, name.span.start)).copied() {
                     if let Some(ht) = self.typed.local_tys.get(&d).copied() {
                         let ht = self.conc(ht);
                         let ptr = self.slot_for(ht);
-                        let zero = self.i64c(0);
-                        self.store_scalar_ty(ptr, zero);
+                        let Some(id) = self.call_core("rtScopeEnter", Vec::new()) else {
+                            return Res::Never;
+                        };
+                        self.store_scalar_ty(ptr, id);
+                        handle = Some(ptr);
                         self.f.locals.insert(
                             d,
                             Local::Slot {
@@ -144,7 +161,10 @@ impl<'a> Lowerer<'a> {
                 let r = self.block(body, None, void);
                 // Every task started in the scope is finished when it ends.
                 if !matches!(r, Res::Never) {
-                    self.call_core("rt_run_pending", Vec::new());
+                    if let Some(ptr) = handle {
+                        let id = self.load_at(ptr, 0, IrTy::Int(64));
+                        self.call_core("rtScopeLeave", vec![id]);
+                    }
                 }
                 r
             }
@@ -349,6 +369,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Try(inner) => self.try_expr(e, inner, Some(dst)),
             ExprKind::Copy(inner) => self.copy_expr(e, inner, Some(dst)),
             ExprKind::Tuple(es) => self.tuple_lit(e, es, dst, t),
+            ExprKind::BraidRepeat { items, .. } => self.braid_repeat_lit(e, items, dst, t),
             ExprKind::StructLit { fields, .. } => self.struct_lit(e, fields, dst, t),
             ExprKind::Str(parts) => self.string_lit(e, parts, dst, t),
             ExprKind::List(items) => self.list_lit(e, items, dst, t),
@@ -379,6 +400,15 @@ impl<'a> Lowerer<'a> {
             ExprKind::Set(items) => self.set_lit(e, items, dst, t),
             ExprKind::Repeat { value, count } => self.repeat_lit(e, value, count, dst, t),
             ExprKind::Binary { .. } => self.binary_mem(e, dst, t),
+            ExprKind::Int | ExprKind::Float => match (self.wide_of(t), self.soft_of(t)) {
+                (Some((n, _)), _) => self.wide_int_literal(e, dst, n),
+                (_, Some(k)) => self.soft_literal(e, dst, k),
+                _ => self.unsupported(e.span, "a number of this type"),
+            },
+            ExprKind::Unary { op, operand } => match self.soft_of(t) {
+                Some(k) => self.soft_unary(e, *op, operand, dst, k),
+                None => self.wide_unary(e, *op, operand, dst, t),
+            },
             ExprKind::Range { .. } => self.range_value(e, dst, t),
             ExprKind::Guard { .. }
             | ExprKind::Return(_)
@@ -390,7 +420,10 @@ impl<'a> Lowerer<'a> {
 
     // ---- Literals -----------------------------------------------------------------------------------------
 
-    fn int_literal(&mut self, e: &Expr) -> Res {
+    fn int_literal(&mut self, e: &'a Expr) -> Res {
+        if self.ty_of(e).is_some_and(|t| self.wide_of(t).is_some()) {
+            return self.rvalue_expr(e);
+        }
         let Some(ty) = self.scalar_ty_of(e) else {
             return self.unsupported(e.span, "an integer of this type");
         };
@@ -515,7 +548,19 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Index { base, index } => {
                 if matches!(index.kind, ExprKind::Range { .. }) {
-                    return None;
+                    // A window of a list or array that the callee may change: a list header that owns
+                    // nothing, in a temporary, pointing into the original elements.
+                    let bt = self.ty_of(base)?;
+                    let bt = self.peel_box(bt);
+                    if !matches!(self.kind(bt), TyKind::List(_) | TyKind::Array(..)) {
+                        return None;
+                    }
+                    let t = self.ty_of(e)?;
+                    let tmp = self.slot_for(t);
+                    return match self.slice_expr(e, tmp, t) {
+                        Res::Never => None,
+                        _ => Some(tmp),
+                    };
                 }
                 self.index_place(e, base, index)
             }
@@ -732,6 +777,32 @@ impl<'a> Lowerer<'a> {
                 let off = self.emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), e.span)?;
                 self.emit(Op::PtrAdd(data, off), Some(IrTy::Ptr), e.span)
             }
+            // A braid: a constant position is the field of that slot; a run-time position is only
+            // accepted by the checker when every slot has one type, so the slots lie like an array.
+            TyKind::AltTuple(_, len) => {
+                let p = match inside {
+                    Some(p) => p,
+                    None => match self.expr(base) {
+                        Res::Val(p) => p,
+                        _ => return None,
+                    },
+                };
+                if matches!(index.kind, ExprKind::Int) {
+                    let text = self.src_text(index.span).replace('_', "");
+                    let i: usize = text.parse().ok()?;
+                    let fs = self.struct_fields(bt);
+                    let f = fs.get(i)?;
+                    return Some(self.addr(p, f.off));
+                }
+                let i = self.scalar(index)?;
+                let n = self.array_len(len);
+                let len = self.i64c(n);
+                let bad = self.emit(Op::Cmp(CmpOp::UGe, i, len), Some(IrTy::Bool), e.span)?;
+                self.stop_if(bad, "index out of range");
+                let sz = self.i64c(size as i64);
+                let off = self.emit(Op::Bin(BinOp::Mul, i, sz), Some(IrTy::I64), e.span)?;
+                self.emit(Op::PtrAdd(p, off), Some(IrTy::Ptr), e.span)
+            }
             TyKind::Array(_, len) => {
                 let p = match inside {
                     Some(p) => p,
@@ -779,7 +850,7 @@ impl<'a> Lowerer<'a> {
                     return None;
                 }
                 self.own(ks, k, false);
-                self.call_core_g("rt_map_at", &[k, v], vec![hdr, ks])
+                self.call_core_g("rtMapAt", &[k, v], vec![hdr, ks])
             }
             _ => {
                 self.unsupported(e.span, "indexing this kind of value");
@@ -793,6 +864,12 @@ impl<'a> Lowerer<'a> {
     fn unary(&mut self, e: &'a Expr, op: Punct, operand: &'a Expr) -> Res {
         if let Some(r) = self.user_operator(e, e.span) {
             return r;
+        }
+        if self
+            .ty_of(e)
+            .is_some_and(|t| self.wide_of(t).is_some() || self.soft_of(t).is_some())
+        {
+            return self.rvalue_expr(e);
         }
         let Some(ty) = self.scalar_ty_of(e) else {
             return self.unsupported(e.span, "this operand type");
@@ -871,6 +948,14 @@ impl<'a> Lowerer<'a> {
 
     /// Operators on memory types: joining text.
     fn binary_mem(&mut self, e: &'a Expr, dst: Value, t: Ty) -> Res {
+        if let ExprKind::Binary { op, lhs, rhs } = &e.kind {
+            if self.wide_of(t).is_some() && self.call_target(e.span).is_none() {
+                return self.wide_binary(e, *op, lhs, rhs, dst, t);
+            }
+            if let (Some(k), true) = (self.soft_of(t), self.call_target(e.span).is_none()) {
+                return self.soft_binary(e, *op, lhs, rhs, dst, k);
+            }
+        }
         if let ExprKind::Binary {
             op: Punct::Plus,
             lhs,
@@ -936,6 +1021,24 @@ impl<'a> Lowerer<'a> {
                 if let Some(z) = self.emit(Op::Cmp(CmpOp::Eq, b, zero), Some(IrTy::Bool), span) {
                     self.stop_if(z, "division by zero");
                 }
+                if signed {
+                    // `MIN / -1` and `MIN % -1` overflow, like every other integer overflow.
+                    let neg1 = self.konst(ty, Const::Int(-1), span);
+                    let is_neg1 = self.emit(Op::Cmp(CmpOp::Eq, b, neg1), Some(IrTy::Bool), span);
+                    if let Some(n) = is_neg1 {
+                        let (check, go) = (self.new_block(&[]), self.new_block(&[]));
+                        self.branch(n, check, go);
+                        self.start(check);
+                        let min = self.konst(ty, Const::Int(-(1i128 << (bits - 1))), span);
+                        if let Some(m) =
+                            self.emit(Op::Cmp(CmpOp::Eq, a, min), Some(IrTy::Bool), span)
+                        {
+                            let stop = self.stop_block("arithmetic overflow");
+                            self.branch(m, stop, go);
+                        }
+                        self.start(go);
+                    }
+                }
                 let o = match (op, signed) {
                     (Punct::Slash, true) => BinOp::Div,
                     (Punct::Slash, false) => BinOp::UDiv,
@@ -964,7 +1067,15 @@ impl<'a> Lowerer<'a> {
         let Some(lt) = self.ty_of(lhs) else {
             return self.unsupported(e.span, "comparing values of unknown type");
         };
-        if !self.is_scalar(lt) || matches!(self.kind(lt), TyKind::Box(_)) {
+        if self.wide_of(lt).is_some() && self.call_target(e.span).is_none() {
+            return self.wide_compare(e, op, lhs, rhs, lt);
+        }
+        if let (Some(k), true) = (self.soft_of(lt), self.call_target(e.span).is_none()) {
+            return self.soft_compare(e, op, lhs, rhs, k);
+        }
+        let is_obj =
+            matches!(self.kind(lt), TyKind::Adt(d, _) if self.res.def(d).kind == DefKind::Obj);
+        if !self.is_scalar(lt) || matches!(self.kind(lt), TyKind::Box(_)) || is_obj {
             return self.compare_mem(e, op, lhs, rhs, lt);
         }
         let signed = self.is_signed(lt);
@@ -990,8 +1101,65 @@ impl<'a> Lowerer<'a> {
         self.wrap(Op::Cmp(o, a, b), IrTy::Bool, e.span)
     }
 
+    /// The value of a number or character literal, when `e` is one.
+    fn literal_int(&self, e: &Expr) -> Option<i128> {
+        match &strip_parens(e).kind {
+            ExprKind::Int => literal_value(self.src_text(strip_parens(e).span)).map(|n| n as i128),
+            ExprKind::Char => Some(self.char_value(strip_parens(e).span) as i128),
+            _ => None,
+        }
+    }
+
+    /// `x >= lo && x <= hi` with literal bounds on one variable: a single test, `(x - lo) <= (hi - lo)` read
+    /// as unsigned. It has no side effect and cannot trap, so it is the same answer as the two compares
+    /// (a character class such as `c >= 'a' && c <= 'z'` is the typical use).
+    fn range_test(&mut self, lhs: &'a Expr, rhs: &'a Expr) -> Option<Res> {
+        let (
+            ExprKind::Binary {
+                op: Punct::GtEq,
+                lhs: x1,
+                rhs: lo,
+            },
+            ExprKind::Binary {
+                op: Punct::LtEq,
+                lhs: x2,
+                rhs: hi,
+            },
+        ) = (&strip_parens(lhs).kind, &strip_parens(rhs).kind)
+        else {
+            return None;
+        };
+        let (ExprKind::Name(a), ExprKind::Name(b)) =
+            (&strip_parens(x1).kind, &strip_parens(x2).kind)
+        else {
+            return None;
+        };
+        let d1 = self.res.use_at(self.f.file, a.span.start)?;
+        let d2 = self.res.use_at(self.f.file, b.span.start)?;
+        let t = self.ty_of(x1)?;
+        if d1 != d2 || !matches!(self.kind(t), TyKind::Int(_) | TyKind::Char) {
+            return None;
+        }
+        let (lo, hi) = (self.literal_int(lo)?, self.literal_int(hi)?);
+        if lo > hi || hi - lo > i32::MAX as i128 {
+            return None;
+        }
+        let ty = self.scalar_of(t)?;
+        let x = self.scalar(x1)?;
+        let span = strip_parens(lhs).span;
+        let lo_v = self.konst(ty, Const::Int(lo), span);
+        let width = self.konst(ty, Const::Int(hi - lo), span);
+        let d = self.emit(Op::Bin(BinOp::Sub, x, lo_v), Some(ty), span)?;
+        Some(self.wrap(Op::Cmp(CmpOp::ULe, d, width), IrTy::Bool, span))
+    }
+
     fn short_circuit(&mut self, e: &'a Expr, and: bool, lhs: &'a Expr, rhs: &'a Expr) -> Res {
         let _ = e;
+        if and {
+            if let Some(r) = self.range_test(lhs, rhs) {
+                return r;
+            }
+        }
         let eval_rhs = self.new_block(&[]);
         let join = self.new_block(&[IrTy::Bool]);
         let a = match self.scalar(lhs) {
@@ -1098,6 +1266,28 @@ impl<'a> Lowerer<'a> {
             return Res::Unit;
         }
         // `a op= b`: numbers (and text for `+=`).
+        if self.wide_of(lt).is_some() || self.soft_of(lt).is_some() {
+            let base = match op {
+                Punct::PlusEq => Punct::Plus,
+                Punct::MinusEq => Punct::Minus,
+                Punct::StarEq => Punct::Star,
+                Punct::SlashEq => Punct::Slash,
+                Punct::PercentEq => Punct::Percent,
+                Punct::AmpEq => Punct::Amp,
+                Punct::PipeEq => Punct::Pipe,
+                Punct::CaretEq => Punct::Caret,
+                Punct::ShlEq => Punct::Shl,
+                Punct::ShrEq => Punct::Shr,
+                Punct::PlusPercentEq => Punct::PlusPercent,
+                Punct::MinusPercentEq => Punct::MinusPercent,
+                Punct::StarPercentEq => Punct::StarPercent,
+                _ => return self.unsupported(e.span, "this assignment operator"),
+            };
+            if self.soft_of(lt).is_some() {
+                return self.soft_assign(e, base, p, lt, rhs);
+            }
+            return self.wide_assign(e, base, p, lt, rhs);
+        }
         let Repr::Scalar(ty) = self.repr(lt) else {
             return self.append_assign(e, op, p, lt, rhs);
         };
@@ -1225,6 +1415,12 @@ impl<'a> Lowerer<'a> {
         let Some(t) = self.ty_of(operand) else {
             return self.unsupported(e.span, "`++` on a value of unknown type");
         };
+        if self.wide_of(t).is_some() {
+            let Some(p) = self.place(operand) else {
+                return self.unsupported(e.span, "`++` on this kind of place");
+            };
+            return self.wide_incdec(e, op, p, t);
+        }
         let Some(ty) = self.scalar_of(t) else {
             return self.unsupported(e.span, "`++` on this type");
         };
@@ -1258,6 +1454,24 @@ impl<'a> Lowerer<'a> {
         }
         if !self.is_scalar(to) {
             return self.rvalue_expr(e);
+        }
+        if let Some(fk) = self.soft_of(from) {
+            let Some(ti) = self.scalar_of(to) else {
+                return self.unsupported(e.span, "this conversion");
+            };
+            if ti.is_float() {
+                return self.soft_to_native(e, value, fk, ti);
+            }
+            return self.unsupported(e.span, "this conversion");
+        }
+        if self.wide_of(from).is_some() {
+            let Some(ti) = self.scalar_of(to) else {
+                return self.unsupported(e.span, "this conversion");
+            };
+            if ti.is_float() {
+                return self.wide_to_float(e, value, from, ti);
+            }
+            return self.unsupported(e.span, "this conversion");
         }
         let (Some(fi), Some(ti)) = (self.scalar_of(from), self.scalar_of(to)) else {
             return self.unsupported(e.span, "this conversion");
@@ -1331,7 +1545,7 @@ impl<'a> Lowerer<'a> {
         let r = match &b.tail {
             Some(t) if self.f.cur.is_some() => match dst {
                 Some(d) => self.into(t, d, want),
-                None => self.expr(t),
+                None => self.tail_value(t),
             },
             Some(_) => Res::Never,
             None if self.f.cur.is_none() => Res::Never,
@@ -1341,6 +1555,28 @@ impl<'a> Lowerer<'a> {
         self.pop_scope_carrying(&r);
         if self.f.cur.is_none() {
             return Res::Never;
+        }
+        r
+    }
+
+    /// The value of a block's tail with no destination. A tail that names a local owning scalar (a
+    /// `box`, say) moves it out, so the local's drop flag is cleared; a plain load would leave the
+    /// flag set and the block's scope would free what the caller now holds.
+    fn tail_value(&mut self, t: &'a Expr) -> Res {
+        let r = self.expr(t);
+        if let (Res::Val(v), ExprKind::Name(id)) = (&r, &strip_parens(t).kind) {
+            let moved = matches!(
+                self.res
+                    .use_at(self.f.file, id.span.start)
+                    .and_then(|d| self.f.locals.get(&d).copied()),
+                Some(Local::Slot { flag: Some(_), .. })
+            );
+            if let (true, Some(ty)) = (moved, self.ty_of(t)) {
+                if self.needs_drop(ty) {
+                    self.mark_moved(t);
+                    self.fresh_scalar(*v, ty);
+                }
+            }
         }
         r
     }
@@ -1377,6 +1613,11 @@ impl<'a> Lowerer<'a> {
     fn stmt(&mut self, s: &'a Stmt) {
         match &s.kind {
             StmtKind::Decl(d) => self.decl(d),
+            // `defer` registers with the enclosing block, not with the statement's own temporary
+            // scope (which ends at once and would run the deferred code on the spot).
+            StmtKind::Expr(e) if matches!(e.kind, ExprKind::Defer(_)) => {
+                self.expr(e);
+            }
             StmtKind::Expr(e) => {
                 self.push_scope();
                 self.expr(e);
@@ -1478,6 +1719,7 @@ impl<'a> Lowerer<'a> {
         let repr = self.arm_ty(rt);
         let then_b = self.new_block(&[]);
         let else_b = self.new_block(&[]);
+        let outer = self.f.scopes.len().checked_sub(1);
         self.push_scope();
         if unless {
             self.cond_branch(&i.cond, else_b, then_b);
@@ -1502,10 +1744,12 @@ impl<'a> Lowerer<'a> {
         );
         reached |= self.finish_arm(r, join, repr);
         self.start(else_b);
+        let saved_hoist = std::mem::replace(&mut self.f.hoist, outer);
         let r = match &i.else_ {
             Some(el) => self.arm_expr(el, repr, dst, want),
             None => Res::Unit,
         };
+        self.f.hoist = saved_hoist;
         reached |= self.finish_arm(r, join, repr);
         // The condition's temporaries end where the arms join.
         if !reached {
@@ -1580,6 +1824,7 @@ impl<'a> Lowerer<'a> {
         let repr = self.arm_ty(rt);
         let then_b = self.new_block(&[]);
         let else_b = self.new_block(&[]);
+        let outer = self.f.scopes.len().checked_sub(1);
         self.push_scope();
         self.cond_branch(cond, then_b, else_b);
         let params: Vec<IrTy> = match repr {
@@ -1588,12 +1833,14 @@ impl<'a> Lowerer<'a> {
         };
         let join = self.new_block(&params);
         let mut reached = false;
+        let saved_hoist = std::mem::replace(&mut self.f.hoist, outer);
         self.start(then_b);
         let r = self.arm_expr(then, repr, dst, want);
         reached |= self.finish_arm(r, join, repr);
         self.start(else_b);
         let r = self.arm_expr(else_, repr, dst, want);
         reached |= self.finish_arm(r, join, repr);
+        self.f.hoist = saved_hoist;
         if !reached {
             self.f.scopes.pop();
             self.f.cur = None;
@@ -1848,6 +2095,19 @@ impl<'a> Lowerer<'a> {
         let Some(sty) = self.ty_of(start) else {
             return self.unsupported(span, "a range of unknown type");
         };
+        if let Some(r) = self.for_range_mem(
+            label.clone(),
+            var,
+            sty,
+            start,
+            end,
+            inclusive,
+            step_e,
+            body,
+            span,
+        ) {
+            return r;
+        }
         let Some(ty) = self.scalar_of(sty) else {
             return self.unsupported(span, "a range of this type");
         };
