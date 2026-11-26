@@ -56,6 +56,27 @@ class Pruning(unittest.TestCase):
         self.assertTrue(all("20261101" in n or "20261102" in n or "20261103" in n for n in drop))
 
 
+class Packages(unittest.TestCase):
+    def test_versions_sort_before_the_stable_release(self):
+        v = r.package_versions("0.2.0-nightly.20261126+abc1234")
+        self.assertEqual(v["deb"], "0.2.0~nightly.20261126.abc1234")
+        self.assertEqual((v["rpm_version"], v["rpm_release"]), ("0.2.0", "0.nightly.20261126.abc1234"))
+        v = r.package_versions("0.2.0")
+        self.assertEqual((v["deb"], v["rpm_release"]), ("0.2.0", "1"))
+
+    def test_deb_is_an_ar_archive_with_control_and_data(self):
+        with tempfile.TemporaryDirectory() as d:
+            exe = os.path.join(d, "pelago")
+            with open(exe, "wb") as f:
+                f.write(b"x" * 10)
+            path = r.deb(exe, "aarch64-linux", "0.1.0", d)
+            data = open(path, "rb").read()
+            self.assertTrue(data.startswith(b"!<arch>\n"))
+            self.assertIn(b"control.tar.gz", data)
+            self.assertIn(b"data.tar.gz", data)
+            self.assertTrue(path.endswith("pelago-0.1.0-aarch64-linux.deb"))
+
+
 class Mentions(unittest.TestCase):
     def test_at_words_become_code(self):
         self.assertEqual(

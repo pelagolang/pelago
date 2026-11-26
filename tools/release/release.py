@@ -7,6 +7,7 @@ Standard library only. Subcommands:
   tag-info TAG                                              channel, prerelease and latest flags of a tag
   check-tag TAG                                             the tag's base version equals compiler/Cargo.toml
   package --binary B --target T --version V --out DIR       one archive (tar.gz, or zip on Windows)
+  linux-packages --binary B --target T --version V --out DIR   a .deb, and an .rpm when rpmbuild exists
   sums DIR                                                  write DIR/SHA256SUMS over every archive
   notes --to REF [--from TAG]                               changelog from Conventional Commits
   prune-nightlies --names FILE --keep N                     asset names to delete, oldest versions first
@@ -92,6 +93,112 @@ def package(binary, target, version, out):
     return path
 
 
+DEB_ARCH = {"x86_64-linux": "amd64", "aarch64-linux": "arm64"}
+RPM_ARCH = {"x86_64-linux": "x86_64", "aarch64-linux": "aarch64"}
+SUMMARY = "Pelago, a self-hosting systems language"
+
+
+def package_versions(version):
+    """Package managers sort 1.0.0~nightly before 1.0.0; the rpm release carries the pre-release part."""
+    base, _, pre = version.partition("-")
+    pre = pre.replace("+", ".")
+    return {
+        "deb": f"{base}~{pre}" if pre else base,
+        "rpm_version": base,
+        "rpm_release": f"0.{pre}" if pre else "1",
+    }
+
+
+def _ar(members):
+    out = b"!<arch>\n"
+    for name, data in members:
+        out += f"{name:<16}{0:<12}{0:<6}{0:<6}{'100644':<8}{len(data):<10}`\n".encode()
+        out += data + (b"\n" if len(data) % 2 else b"")
+    return out
+
+
+def _tar_gz(entries):
+    import io
+
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz", format=tarfile.GNU_FORMAT) as t:
+        for name, data, mode in entries:
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            info.mode = mode
+            info.mtime = 0
+            with io.BytesIO(data) as f:
+                t.addfile(info, f)
+    return buf.getvalue()
+
+
+def deb(binary, target, version, out):
+    arch = DEB_ARCH[target]
+    with open(binary, "rb") as f:
+        exe = f.read()
+    licence = open(os.path.join(ROOT, "LICENSE-MIT"), "rb").read()
+    control = (
+        "Package: pelago\n"
+        f"Version: {package_versions(version)['deb']}\n"
+        f"Architecture: {arch}\n"
+        "Maintainer: Pelago <https://github.com/pelagolang/pelago>\n"
+        f"Installed-Size: {(len(exe) + 1023) // 1024}\n"
+        "Section: devel\nPriority: optional\n"
+        "Homepage: https://pelagolang.github.io/\n"
+        f"Description: {SUMMARY}\n"
+        " One static binary: compiler, formatter, language server and self update.\n"
+    ).encode()
+    data = _tar_gz([
+        ("./usr/bin/pelago", exe, 0o755),
+        ("./usr/share/doc/pelago/copyright", licence, 0o644),
+    ])
+    path = os.path.join(out, f"pelago-{version}-{target}.deb")
+    with open(path, "wb") as f:
+        f.write(_ar([
+            ("debian-binary", b"2.0\n"),
+            ("control.tar.gz", _tar_gz([("./control", control, 0o644)])),
+            ("data.tar.gz", data),
+        ]))
+    return path
+
+
+def rpm(binary, target, version, out):
+    arch = RPM_ARCH[target]
+    v = package_versions(version)
+    work = os.path.abspath(os.path.join(out, "rpmwork"))
+    os.makedirs(work, exist_ok=True)
+    spec = os.path.join(work, "pelago.spec")
+    with open(spec, "w", encoding="utf-8") as f:
+        f.write(
+            f"Name: pelago\nVersion: {v['rpm_version']}\nRelease: {v['rpm_release']}\n"
+            f"Summary: {SUMMARY}\nLicense: MIT OR Apache-2.0\nURL: https://pelagolang.github.io/\n"
+            "AutoReqProv: no\n%global debug_package %{nil}\n%global __strip /bin/true\n"
+            f"%description\n{SUMMARY}. One static binary.\n"
+            "%install\nmkdir -p %{buildroot}/usr/bin\n"
+            f"install -m 0755 {os.path.abspath(binary)} %{{buildroot}}/usr/bin/pelago\n"
+            "%files\n/usr/bin/pelago\n"
+        )
+    subprocess.run(
+        ["rpmbuild", "-bb", "--target", arch, "--define", f"_topdir {work}", spec],
+        check=True,
+    )
+    built = [os.path.join(d, n) for d, _, ns in os.walk(os.path.join(work, "RPMS")) for n in ns if n.endswith(".rpm")]
+    if len(built) != 1:
+        sys.exit(f"rpmbuild made {len(built)} packages, expected 1")
+    path = os.path.join(out, f"pelago-{version}-{target}.rpm")
+    shutil.copyfile(built[0], path)
+    shutil.rmtree(work)
+    return path
+
+
+def linux_packages(binary, target, version, out):
+    os.makedirs(out, exist_ok=True)
+    made = [deb(binary, target, version, out)]
+    if shutil.which("rpmbuild"):
+        made.append(rpm(binary, target, version, out))
+    return made
+
+
 def sha256(path):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -101,7 +208,7 @@ def sha256(path):
 
 
 def write_sums(directory):
-    names = sorted(n for n in os.listdir(directory) if n.endswith((".tar.gz", ".zip")))
+    names = sorted(n for n in os.listdir(directory) if n.endswith((".tar.gz", ".zip", ".deb", ".rpm")))
     if not names:
         sys.exit(f"{directory}: no archives")
     with open(os.path.join(directory, "SHA256SUMS"), "w", encoding="utf-8", newline="\n") as f:
@@ -196,6 +303,11 @@ def main():
     a.add_argument("--target", required=True)
     a.add_argument("--version", required=True)
     a.add_argument("--out", required=True)
+    a = sub.add_parser("linux-packages")
+    a.add_argument("--binary", required=True)
+    a.add_argument("--target", required=True)
+    a.add_argument("--version", required=True)
+    a.add_argument("--out", required=True)
     a = sub.add_parser("sums")
     a.add_argument("dir")
     a = sub.add_parser("notes")
@@ -219,6 +331,9 @@ def main():
         print("ok")
     elif args.cmd == "package":
         print(package(args.binary, args.target, args.version, args.out))
+    elif args.cmd == "linux-packages":
+        for n in linux_packages(args.binary, args.target, args.version, args.out):
+            print(n)
     elif args.cmd == "sums":
         for n in write_sums(args.dir):
             print(n)
