@@ -13,7 +13,9 @@
 //! * modifiers fit the declaration (`open` only on `obj` and its methods, `linear` only on types, ...);
 //! * a pattern binds each name once, and the alternatives of a `case` bind the same names;
 //! * `switch` has at most one `default`, and it comes last; map builders give `key : value`;
-//!   struct literals and calls do not repeat a field or argument name.
+//!   struct literals and calls do not repeat a field or argument name;
+//! * attributes are known ones (`@derive`, `@json`, `@regex`, `@checkfree`, `@inline_always`,
+//!   `@leaf`, `@meta_limit`) and `@derive` names derivable interfaces, so a misspelling is an error, not a silent no-op.
 
 use crate::ast::*;
 use crate::parser::ParseError;
@@ -31,6 +33,30 @@ pub fn check_file(file: &File, src: &str) -> Vec<ParseError> {
     };
     c.visit_file(file);
     c.errors
+}
+
+/// The attributes the compiler reads. Anything else is an error.
+const KNOWN_ATTRS: [&str; 7] = [
+    "derive",
+    "json",
+    "regex",
+    "checkfree",
+    "inline_always",
+    "leaf",
+    "meta_limit",
+];
+
+/// The words `@derive(...)` accepts.
+const DERIVABLE: [&str; 7] = ["clone", "eq", "hash", "order", "show", "fromJson", "toJson"];
+
+/// The candidate closest to `want`, when it is close enough to be a typo.
+fn closest<'a>(want: &str, candidates: impl Iterator<Item = &'a str>) -> Option<String> {
+    let limit = if want.chars().count() <= 4 { 1 } else { 2 };
+    candidates
+        .map(|c| (crate::resolve::edit_distance(want, c), c))
+        .filter(|(d, c)| *d > 0 && *d <= limit && *c != want)
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, c)| c.to_string())
 }
 
 /// The kind of type body a declaration sits directly inside.
@@ -446,6 +472,53 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Reports an attribute nobody reads, or a `derive` of something that cannot be derived.
+    fn check_attrs(&mut self, attrs: &[Attr]) {
+        for a in attrs {
+            let name = self.name(&a.name);
+            if !KNOWN_ATTRS.contains(&name) {
+                let mut msg = format!("unknown attribute `@{name}`");
+                if let Some(s) = closest(name, KNOWN_ATTRS.iter().copied()) {
+                    msg.push_str(&format!("; did you mean `@{s}`?"));
+                } else {
+                    msg.push_str(&format!(
+                        "; the attributes are {}",
+                        KNOWN_ATTRS.map(|k| format!("`@{k}`")).join(", ")
+                    ));
+                }
+                self.error(a.name.span, msg);
+                continue;
+            }
+            if name != "derive" {
+                continue;
+            }
+            for e in &a.args {
+                let word = self.src[e.span.start as usize..e.span.end as usize].trim();
+                if DERIVABLE.contains(&word) {
+                    continue;
+                }
+                let mut msg = format!("`{word}` cannot be derived");
+                if let Some(s) = closest(word, DERIVABLE.iter().copied()) {
+                    msg.push_str(&format!("; did you mean `{s}`?"));
+                } else {
+                    msg.push_str(&format!(
+                        "; the derivable words are {}",
+                        DERIVABLE.join(", ")
+                    ));
+                }
+                self.error(e.span, msg);
+            }
+        }
+    }
+
+    fn check_field_attrs(&mut self, members: &[Member]) {
+        for m in members {
+            if let Member::Field(f) = m {
+                self.check_attrs(&f.attrs);
+            }
+        }
+    }
+
     fn check_members(&mut self, members: &[Member], what: &str) {
         for m in members {
             if let Member::Field(f) = m {
@@ -459,6 +532,13 @@ impl Visitor for Checker<'_> {
     fn visit_item(&mut self, i: &Item) {
         let outer = self.owner;
         self.check_modifiers(i, outer);
+        self.check_attrs(&i.attrs);
+        match &i.kind {
+            ItemKind::Struct(d) | ItemKind::Obj(d) | ItemKind::Interface(d) => {
+                self.check_field_attrs(&d.members)
+            }
+            _ => {}
+        }
         let child_owner = match &i.kind {
             ItemKind::Struct(_) => Some(Owner::Struct),
             ItemKind::Obj(_) => Some(Owner::Obj),

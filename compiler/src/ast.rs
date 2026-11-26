@@ -62,7 +62,7 @@ impl Mode {
 
 // ---- Attributes and modifiers ------------------------------------------------
 
-/// `@inline`, `@derive(eq, order)`.
+/// `@inline_always`, `@derive(eq, order)`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Attr {
     pub name: Ident,

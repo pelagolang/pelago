@@ -81,7 +81,7 @@ fn parseInt(s: string) -> int ! parse_error {
 fn find(xs: [string], name: string) -> int? { none }
 const index = find(names, "Dennis") ?? -1
 
-@inline fn square(x: int) -> int = x * x
+@inline_always fn square(x: int) -> int = x * x
 
 @checkfree
 fn dot(a: [int], b: [int]) -> int {
