@@ -3301,6 +3301,22 @@ fn sorting_integers_past_the_insertion_sort_limit() {
     );
 }
 
+/// `[value; n]` with a run-time count makes a list; a negative or absurd count stops.
+#[test]
+fn repeated_list_counts_that_cannot_be_built_stop() {
+    let src = "fn f(n: int) -> int {\n const xs = [false; n]\n xs.len()\n}";
+    assert_eq!(eval(src, "f", &[4]), Ok(4));
+    assert_eq!(eval(src, "f", &[0]), Ok(0));
+    assert_eq!(
+        eval(src, "f", &[-1]),
+        Err("negative list length".to_string())
+    );
+    assert_eq!(
+        eval(src, "f", &[i64::MAX]),
+        Err("list length too large".to_string())
+    );
+}
+
 /// The library's own tests: every `name.pel` in a `tests/` directory next to the library sources is a
 /// program with its expected output in `name.out`. A file `name.stops` says the program must stop.
 #[test]
