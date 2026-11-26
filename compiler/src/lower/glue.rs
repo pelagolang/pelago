@@ -601,13 +601,28 @@ impl<'a> Lowerer<'a> {
     /// The copy function of one concrete object type: the type's own `clone`.
     fn obj_clone_body(&mut self, o: Value, d: Value, ty: Ty) {
         let sp = Span::new(0, 0);
-        let Some((m, map)) = self.find_impl_method(ty, "clone") else {
-            // Only reachable through a `copy` the checker would have rejected.
-            self.terminate(Term::Stop(
-                "this object has no `clone`".to_string(),
-                Span::default(),
-            ));
-            self.f.cur = Some(self.f.func.entry());
+        let own = self.find_impl_method(ty, "clone").filter(|(m, _)| {
+            self.fns
+                .get(m)
+                .is_some_and(|e| !matches!(e.decl.body, FnBody::None))
+        });
+        let Some((m, map)) = own else {
+            // `@derive(clone)`: a new block of this type with every field copied.
+            let Some(n) = self.obj_new(ty) else {
+                return;
+            };
+            let size = self.obj_size(ty) - super::obj::OBJ_HEADER;
+            let src = self.addr(o, super::obj::OBJ_HEADER);
+            let dst = self.addr(n, super::obj::OBJ_HEADER);
+            self.copy_bytes(dst, src, size);
+            for f in self.struct_fields(ty) {
+                if self.needs_drop(f.ty) {
+                    let s = self.addr(src, f.off);
+                    let t = self.addr(dst, f.off);
+                    self.clone_into(s, t, f.ty);
+                }
+            }
+            self.store_at(d, 0, n);
             return;
         };
         let Some(f) = self.request_fn(m, &map) else {

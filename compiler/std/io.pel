@@ -3,20 +3,19 @@
 /// ```
 /// import std.io
 ///
-/// fn main() {
+/// fn main() -> void ! io_error {
 ///     io.eprintln("warning: no input")
-///     const text = io.readAll()
+///     const text = io.readAll()?
 ///     print(text.len())
 /// }
 /// ```
 ///
 /// Standard output is `print`, in the prelude. A `file` is an owned value: the descriptor is closed when the
 /// value goes out of scope (`deinit`), so there is no `close` to forget. Every operation that can fail on the
-/// outside world gives a `result` with an `io_error` (design note input). `io.readLine`, `io.readAll` and
-/// `io.readBytes` are the short forms for standard input: a failed read is an error, never the end of the
-/// input. Text is checked to be UTF-8 (`readLine`, `readAll`: an `io_error` of kind `invalidUtf8`); `readBytes`
-/// is the raw form. Writing and `eprint` go through
-/// the operating system layer (`design note runtime`); standard output is flushed first, so the lines of the
+/// outside world gives a `result` with an `io_error`. `io.readLine`, `io.readAll` and `io.readBytes` are the
+/// short forms for standard input: a failed read is an error, never the end of the input. Text is checked to
+/// be UTF-8 (`readLine`, `readAll`: an `io_error` of kind `invalidUtf8`); `readBytes` is the raw form. Writing
+/// and `eprint` go through the operating system layer; standard output is flushed first, so the lines of the
 /// two streams come out in the order the program wrote them.
 
 const chunk: int = 4096

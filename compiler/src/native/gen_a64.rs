@@ -1,7 +1,6 @@
 //! The AArch64 code generator driver: it lays out the runtime and the data, then hands each function to
-//! the machine IR (`a64_select.rs`, `ralloc.rs`, `a64_emit.rs`; see `design note mir`) and writes the
-//! executable. The rules for division, shifts, overflow and NaN are in `design note backend` and are
-//! the same as on x86-64.
+//! the machine IR (`a64_select.rs`, `ralloc.rs`, `a64_emit.rs`) and writes the
+//! executable. The rules for division, shifts, overflow and NaN are the same as on x86-64.
 
 use super::a64::*;
 use super::elf::{self, Blob, Symbol};

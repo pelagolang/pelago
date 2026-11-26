@@ -501,7 +501,7 @@ fn printing_basic_values() {
     );
     assert_eq!(
         output_of("fn main() { print(0.1 + 0.2, 100.0, 1.0 / 3.0) }"),
-        "0.3 100 0.333333\n"
+        "0.30000000000000004 100 0.3333333333333333\n"
     );
 }
 
@@ -1597,7 +1597,7 @@ fn main() {
     assert_eq!(output_of(src), "some(4) 4 true false 5\n11\n");
 }
 
-// ---- The native build on the edge cases of `design note backend` -------------------------------------
+// ---- The native build on the edge cases -------------------------------------
 
 #[test]
 fn appending_with_plus_assign_keeps_its_meaning() {
@@ -1684,23 +1684,41 @@ fn native_clock_on_macos() {
     assert_eq!((r.out, r.code), (o.output, 0), "{}", r.err);
 }
 
-/// Sleeping on macOS (AArch64 only, so it runs on the macOS CI job): the system call waits, the clock sees it.
+/// Sleeping natively, on every target that can run here: the system call waits and the clock sees it.
 #[test]
-fn native_sleep_on_macos() {
+fn native_sleep_waits() {
     use crate::native::{exec, gen, Arch, Os};
-    if !exec::can_run_a64_on(Os::MacOs) {
-        return;
-    }
     let src = "import std.time\n\nfn main() -> void ! io_error {\n    const t0 = time.now()?\n    time.sleep(time.millis(30))\n    print((t0.elapsed()?).asMillis() >= 30)\n}";
     let l = lowered(src);
-    let opts = gen::Options {
-        leak_check: false,
-        target: Os::MacOs,
-        symbols: false,
-    };
-    let image = crate::native::gen_a64::compile(&l.module, "main", &opts).unwrap();
-    let r = exec::run_image_arch(Arch::Aarch64, Os::MacOs, &image).unwrap();
-    assert_eq!((r.out.as_str(), r.code), ("true\n", 0), "{}", r.err);
+    for (arch, os) in [
+        (Arch::X86_64, Os::Linux),
+        (Arch::X86_64, Os::Windows),
+        (Arch::Aarch64, Os::Linux),
+        (Arch::Aarch64, Os::Windows),
+        (Arch::Aarch64, Os::MacOs),
+    ] {
+        let a64 = arch == Arch::Aarch64;
+        if (a64 && !exec::can_run_a64_on(os)) || (!a64 && !exec::can_run(os)) {
+            continue;
+        }
+        let opts = gen::Options {
+            leak_check: false,
+            target: os,
+            symbols: false,
+        };
+        let image = if a64 {
+            crate::native::gen_a64::compile(&l.module, "main", &opts).unwrap()
+        } else {
+            gen::compile(&l.module, "main", &opts).unwrap()
+        };
+        let r = exec::run_image_arch(arch, os, &image).unwrap();
+        assert_eq!(
+            (r.out.as_str(), r.code),
+            ("true\n", 0),
+            "{arch:?} {os:?}: {}",
+            r.err
+        );
+    }
 }
 
 /// A native stop message without its place (`file:line: `) and the `stopped: ` before the message.
@@ -2914,11 +2932,11 @@ fn float32_rounds_after_every_operation() {
 
 #[test]
 fn float_to_int_saturates() {
-    // `floor` and `ceil` are exact now (NaN stays NaN); only printing a huge float saturates.
+    // `floor` and `ceil` are exact (NaN stays NaN); a huge float prints in exponent form.
     let src = "fn main() { const z = 0.0\n const big = 1e30\n print(big.floor(), (-big).floor(), (z / z).floor(), 2.9.floor(), (-2.9).floor(), 1e19.ceil(), (-1e19).ceil()) }";
     assert_eq!(
         output_of(src),
-        "9223372036854775807 -9223372036854775807 nan 2 -3 9223372036854775807 -9223372036854775807\n"
+        "1e+30 -1e+30 nan 2 -3 10000000000000000000 -10000000000000000000\n"
     );
 }
 
@@ -4076,6 +4094,30 @@ fn wide_integers_stop_like_the_narrow_ones() {
         stop("fn main() { const x: uint128 = 1\n print(x << 128) }"),
         Err("shifted by the width or more".to_string())
     );
+}
+
+/// `MIN / -1` and `MIN % -1` overflow at every width, like every other overflow; the interpreter, the
+/// optimised IR and the native code all stop, and every neighbour of that case still divides.
+#[test]
+fn min_divided_by_minus_one_stops() {
+    let over = Err("arithmetic overflow".to_string());
+    for (ty, min) in [
+        ("int8", "-128"),
+        ("int16", "-32768"),
+        ("int32", "-2147483648"),
+        ("int64", "-9223372036854775807 - 1"),
+        ("int", "-9223372036854775807 - 1"),
+        ("int128", "-170141183460469231731687303715884105727 - 1"),
+    ] {
+        for op in ["/", "%"] {
+            let src = format!(
+                "fn f(a: {ty}, b: {ty}) -> {ty} = a {op} b\n\
+                 fn main() {{\n print(f(7, 2))\n print(f(-7, -1))\n print(f({min} + 1, -1))\n print(f({min}, 1))\n print(f({min}, -1))\n}}"
+            );
+            assert_eq!(run_main(&src).result, over, "{ty} {op}");
+            agree(&src);
+        }
+    }
 }
 
 /// A large `main` with many values alive at once, checked arithmetic against values the optimiser

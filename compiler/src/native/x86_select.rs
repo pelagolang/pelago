@@ -1,4 +1,4 @@
-//! From the IR to x86-64 MIR (design in `design note mir`, opcodes in [`super::x86_mir`]).
+//! From the IR to x86-64 MIR (opcodes in [`super::x86_mir`]).
 //!
 //! Every IR value that is not a constant or a folded address becomes a virtual register. All integers,
 //! booleans and pointers are 64 bits wide in a register and zero-extended from their type, as in
