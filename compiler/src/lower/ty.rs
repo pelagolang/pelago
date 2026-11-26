@@ -57,8 +57,18 @@ impl<'a> Lowerer<'a> {
         self.types.zonk(t)
     }
 
+    /// The kind of a type, with a window (`[T..]`) seen as the list it has the layout of.
     pub(crate) fn kind(&self, t: Ty) -> TyKind {
-        self.types.kind_of(t).clone()
+        match self.types.kind_of(t) {
+            TyKind::Slice(e) => TyKind::List(*e),
+            k => k.clone(),
+        }
+    }
+
+    /// Is this type a window (`[T..]`)?
+    pub(crate) fn is_window(&mut self, t: Ty) -> bool {
+        let t = self.types.shallow(t);
+        matches!(self.types.kind_of(t), TyKind::Slice(_))
     }
 
     pub(crate) fn mk_ptr(&mut self) -> Ty {
@@ -350,6 +360,10 @@ impl<'a> Lowerer<'a> {
         }
         // Break cycles: a recursive type through a `box` is dropped by its box.
         self.drop_cache.insert(t, false);
+        // A window owns nothing.
+        if matches!(self.types.kind_of(t), TyKind::Slice(_)) {
+            return false;
+        }
         let r = match self.kind(t) {
             TyKind::String
             | TyKind::List(_)

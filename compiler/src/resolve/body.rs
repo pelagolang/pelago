@@ -431,7 +431,7 @@ impl<'p> Resolver<'p> {
                     None
                 }
             },
-            TypeKind::List(e) | TypeKind::Option(e) | TypeKind::Any(e) => {
+            TypeKind::List(e) | TypeKind::Option(e) | TypeKind::Any(e) | TypeKind::Slice(e, _) => {
                 self.resolve_type(e);
                 None
             }

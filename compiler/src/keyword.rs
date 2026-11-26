@@ -22,7 +22,7 @@
 //! # Not in this table
 //!
 //! * Operators written as words (`and`, `or`, `not`): the language uses symbols.
-//! * Attribute names (`@inline`, `@derive`, `@packed`): they follow an `@`.
+//! * Attribute names (`@inline_always`, `@derive`, `@leaf`): they follow an `@`.
 //! * Built-in type names (`int`, `string`, ...): see [`PRELUDE_TYPES`].
 //! * Built-in functions (`print`, `assert`, ...): see [`PRELUDE_FUNCTIONS`].
 

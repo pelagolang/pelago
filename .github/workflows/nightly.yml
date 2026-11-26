@@ -34,24 +34,28 @@ jobs:
           fetch-depth: 0
       - id: decide
         run: |
-          sha="$(git rev-parse HEAD)"
+          # CI here can take an hour or more, so main's newest commit is often still being tested.
+          # Build the newest of the last 10 commits on main whose five ci jobs all succeeded.
+          sha=""
+          for c in $(git rev-list --first-parent -n 10 HEAD); do
+            ok="$(gh api "repos/$GITHUB_REPOSITORY/commits/$c/check-runs?per_page=100" --jq '[.check_runs[] | select(.name | IN("check","windows","arm","windows-arm","macos"))] | if length >= 5 and all(.status == "completed" and .conclusion == "success") then "yes" else "no" end')"
+            if [ "$ok" = yes ]; then sha="$c"; break; fi
+          done
+          if [ -z "$sha" ]; then
+            echo "none of the last 10 commits on main has green CI, skipping"
+            echo "build=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           last="$(gh release view nightly --json body --jq .body 2>/dev/null | sed -n 's/^commit: //p' | head -n1 || true)"
           if [ "$last" = "$sha" ] && [ "${{ inputs.force }}" != true ]; then
-            echo "main has not changed since the last nightly ($sha)"
-            echo "build=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          # CI must be green on this exact commit: all five ci jobs finished and succeeded.
-          ok="$(gh api "repos/$GITHUB_REPOSITORY/commits/$sha/check-runs?per_page=100" --jq '[.check_runs[] | select(.name | IN("check","windows","arm","windows-arm","macos"))] | if length >= 5 and all(.status == "completed" and .conclusion == "success") then "yes" else "no" end')"
-          if [ "$ok" != yes ]; then
-            echo "CI is not green (or not finished) on $sha, skipping tonight"
+            echo "no new green commit since the last nightly ($sha)"
             echo "build=false" >> "$GITHUB_OUTPUT"; exit 0
           fi
           git tag --list 'v*' > "$RUNNER_TEMP/tags.txt"
           version="$(python3 tools/release/release.py nightly-version --date "$(date -u +%Y%m%d)" --sha "$sha" --tags "$RUNNER_TEMP/tags.txt")"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "build=true" >> "$GITHUB_OUTPUT"
-          echo "building $version"
+          echo "building $version from $sha"
 
   build:
     needs: plan
