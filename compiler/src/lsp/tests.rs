@@ -332,6 +332,43 @@ fn a_workspace_package_sees_other_files() {
 }
 
 #[test]
+fn debounced_edits_show_syntax_errors_now_and_check_the_package_on_flush() {
+    let mut s = started();
+    s.debounce = true;
+    let change = |s: &mut Server, text_: &str| {
+        s.handle(&note(
+            "textDocument/didChange",
+            obj(vec![
+                ("textDocument", doc(URI)),
+                (
+                    "contentChanges",
+                    Json::Arr(vec![obj(vec![("text", text(text_))])]),
+                ),
+            ]),
+        ))
+    };
+    // A type error waits for the check; nothing is published by the edit itself.
+    let type_error = "fn main() {\n    const a: int = \"x\"\n}\n";
+    assert!(change(&mut s, type_error).is_empty());
+    assert!(s.has_pending());
+    // A syntax error is shown at once.
+    let d = diagnostics(&change(&mut s, "fn main( {\n"));
+    assert!(d.iter().any(|(_, m)| !m.is_empty()), "{d:?}");
+    // Two more edits, one check: the last text is what gets checked.
+    change(&mut s, type_error);
+    let d = diagnostics(&s.flush());
+    assert!(
+        d.iter().any(|(_, m)| m.iter().any(|x| x.contains("int"))),
+        "{d:?}"
+    );
+    assert!(!s.has_pending());
+    // Fixing the text clears the diagnostics on the next flush.
+    change(&mut s, "fn main() {\n}\n");
+    let d = diagnostics(&s.flush());
+    assert!(d.iter().all(|(_, m)| m.is_empty()), "{d:?}");
+}
+
+#[test]
 fn unknown_requests_get_an_error_and_exit_works() {
     let mut s = started();
     let r = s.handle(&request(9, "workspace/whatever", Json::Null));
