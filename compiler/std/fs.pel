@@ -55,7 +55,8 @@ pub fn create(path: str) -> io.file ! io_error = openMode(path, 1)
 //~ Opens the file for writing at its end, creating it if it does not exist.
 pub fn append(path: str) -> io.file ! io_error = openMode(path, 2)
 
-//~ The whole file as text (the bytes are not checked to be UTF-8).
+//~ The whole file as text; a file that is not UTF-8 is an `io_error` of kind `invalidUtf8` (`readBytes` reads
+//~ any file).
 pub fn readText(path: str) -> string ! io_error {
     var f = open(path)?
     f.readAll!()

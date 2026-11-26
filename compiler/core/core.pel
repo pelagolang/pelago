@@ -71,6 +71,7 @@ pub enum io_kind {
     notFound
     denied
     invalid
+    invalidUtf8
     other
 }
 
