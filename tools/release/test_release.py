@@ -56,5 +56,14 @@ class Pruning(unittest.TestCase):
         self.assertTrue(all("20261101" in n or "20261102" in n or "20261103" in n for n in drop))
 
 
+class Mentions(unittest.TestCase):
+    def test_at_words_become_code(self):
+        self.assertEqual(
+            r.defuse("add the @inline_always and @leaf attributes, `@json` stays"),
+            "add the `@inline_always` and `@leaf` attributes, `@json` stays",
+        )
+        self.assertEqual(r.defuse("mail a@b.c"), "mail a@b.c")
+
+
 if __name__ == "__main__":
     unittest.main()

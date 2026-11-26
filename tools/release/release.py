@@ -124,6 +124,14 @@ SECTIONS = [
 CC = re.compile(r"^(\w+)(?:\(([^)]+)\))?(!)?:\s*(.+)$")
 
 
+MENTION = re.compile(r"(?<![`\w])@(\w+)")
+
+
+def defuse(text):
+    """Put @words (attributes such as @leaf) in code spans so GitHub does not read them as user mentions."""
+    return MENTION.sub(r"`@\1`", text)
+
+
 def notes(to_ref, from_tag):
     rng = f"{from_tag}..{to_ref}" if from_tag else to_ref
     out = subprocess.run(
@@ -136,6 +144,7 @@ def notes(to_ref, from_tag):
         if not rec:
             continue
         h, subject, body = (rec.split("\x1f") + ["", ""])[:3]
+        subject = defuse(subject)
         m = CC.match(subject)
         if not m:
             groups.setdefault("other", []).append(f"- {subject} ({h})")
