@@ -20,6 +20,29 @@ pub enum Val {
     Unit,
 }
 
+/// The Linux error number for a failed host operation, so a program sees the same numbers on every host (the
+/// native Linux and macOS back ends return the system's own, which agree for these). Kinds with no number
+/// here give the host's, or 5 (`EIO`) where the host has none.
+fn os_errno(e: &std::io::Error) -> i64 {
+    use std::io::ErrorKind as K;
+    match e.kind() {
+        K::NotFound => 2,
+        K::PermissionDenied => 13,
+        K::AlreadyExists => 17,
+        K::NotADirectory => 20,
+        K::IsADirectory => 21,
+        K::InvalidInput => 22,
+        K::StorageFull => 28,
+        K::DirectoryNotEmpty => 39,
+        K::BrokenPipe => 32,
+        K::Interrupted => 4,
+        K::WouldBlock => 11,
+        K::TimedOut => 110,
+        _ if cfg!(unix) => e.raw_os_error().map_or(5, i64::from),
+        _ => 5,
+    }
+}
+
 impl Val {
     /// An integer read as signed, for the given width.
     pub fn signed(self, bits: u32) -> i128 {
@@ -825,7 +848,7 @@ impl Machine<'_> {
                             Some(f) if a >= 3 => {
                                 return Ok(match f.write_all(&bytes) {
                                     Ok(()) => n as i64,
-                                    Err(e) => -(e.raw_os_error().unwrap_or(5) as i64),
+                                    Err(e) => -os_errno(&e),
                                 })
                             }
                             _ => return Ok(-9),
@@ -849,7 +872,7 @@ impl Machine<'_> {
                             self.mem[p..p + k].copy_from_slice(&chunk[..k]);
                             k as i64
                         }
-                        Err(e) => -(e.raw_os_error().unwrap_or(5) as i64),
+                        Err(e) => -os_errno(&e),
                     });
                 }
                 if a != 0 {
@@ -863,7 +886,7 @@ impl Machine<'_> {
                             self.mem[p..p + k].copy_from_slice(&chunk[..k]);
                             k as i64
                         }
-                        Err(e) => -(e.raw_os_error().unwrap_or(5) as i64),
+                        Err(e) => -os_errno(&e),
                     });
                 }
                 let left = self.os.stdin.len() - self.os.stdin_pos;
@@ -914,7 +937,7 @@ impl Machine<'_> {
                     Err(e) => match e.kind() {
                         std::io::ErrorKind::NotFound => OS_NOENT,
                         std::io::ErrorKind::PermissionDenied => OS_ACCES,
-                        _ => OS_FAIL,
+                        _ => -os_errno(&e),
                     },
                 }
             }
@@ -986,7 +1009,7 @@ impl Machine<'_> {
                 let fail = |e: std::io::Error| match e.kind() {
                     std::io::ErrorKind::NotFound => OS_NOENT,
                     std::io::ErrorKind::PermissionDenied => OS_ACCES,
-                    _ => OS_FAIL,
+                    _ => -os_errno(&e),
                 };
                 let r = match a {
                     0 => std::fs::symlink_metadata(&path).map(|_| ()),

@@ -1676,7 +1676,7 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.load(RAX, mem(RAX, 0), 8);
         a.ret();
         // open(path = rdi, mode = rsi): 0 reads, 1 writes (create, truncate), else appends; permissions 0666
-        // before the umask. The descriptor, or -4 (no such file), -5 (denied) or -3 (anything else).
+        // before the umask. The descriptor, or -4 (no such file), -5 (denied) or the negative errno (anything else).
         a.bind(rt.os[9]);
         let (ro, wr, go) = (a.new_label(), a.new_label(), a.new_label());
         a.test_rr(RSI, RSI, 8);
@@ -1701,8 +1701,7 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.jcc(Cc::E, noent);
         a.alu_ri(Alu::Cmp, RAX, -13, 8);
         a.jcc(Cc::E, acces);
-        a.mov_ri(RAX, -3);
-        a.ret();
+        a.ret(); // any other error: the negative errno stays in `rax`
         a.bind(noent);
         a.mov_ri(RAX, -4);
         a.ret();
@@ -1722,7 +1721,7 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.syscall();
         a.ret();
         // fs(op = rdi, path = rsi, aux = rdx): the path calls of `OsKind::Fs`, by `op`. 0, a size and kind
-        // written at `aux` for `stat`, or -4 (no such file), -5 (denied), -3 (anything else).
+        // written at `aux` for `stat`, or -4 (no such file), -5 (denied), the negative errno (anything else).
         let (acc, unl, rmd, mkd, ren, sta, res) = (
             a.new_label(),
             a.new_label(),
@@ -1802,8 +1801,7 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.jcc(Cc::E, noent);
         a.alu_ri(Alu::Cmp, RAX, -13, 8);
         a.jcc(Cc::E, acces);
-        a.mov_ri(RAX, -3);
-        a.ret();
+        a.ret(); // any other error: the negative errno stays in `rax`
         a.bind(noent);
         a.mov_ri(RAX, -4);
         a.ret();

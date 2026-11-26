@@ -2164,8 +2164,7 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         a.mov_ri(X15, -13);
         a.cmp_rr(X0, X15);
         a.b_cond(Cond::Eq, acces);
-        a.mov_ri(X0, -3);
-        a.ret();
+        a.ret(); // any other error: the negative errno stays in `x0`
         a.bind(noent);
         a.mov_ri(X0, -4);
         a.ret();
@@ -2621,8 +2620,7 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         a.mov_ri(X15, -13);
         a.cmp_rr(X0, X15);
         a.b_cond(Cond::Eq, acces);
-        a.mov_ri(X0, -3);
-        a.ret();
+        a.ret(); // any other error: the negative errno stays in `x0`
         a.bind(noent);
         a.mov_ri(X0, -4);
         a.ret();
