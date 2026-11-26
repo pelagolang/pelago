@@ -768,7 +768,13 @@ impl Analysis {
             let d = self.resolved.def(def);
             let (name, mods) = match d.kind {
                 DefKind::Module => ("namespace", 0),
-                DefKind::Fn if d.parent.is_some() => ("method", 0),
+                // A method is a function written with `self`, in a type or in an `impl`.
+                DefKind::Fn
+                    if d.parent.is_some()
+                        || self.typed.fn_infos.get(&def).is_some_and(|i| i.has_self) =>
+                {
+                    ("method", 0)
+                }
                 DefKind::Fn => ("function", 0),
                 DefKind::BuiltinFn => ("function", 4),
                 DefKind::Const => ("variable", 8),

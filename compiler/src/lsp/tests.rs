@@ -558,6 +558,40 @@ fn rename_params(uri: &str, line: i64, ch: i64, new: &str) -> Json {
 }
 
 #[test]
+fn semantic_tokens_call_library_methods_methods() {
+    let mut s = started();
+    let src =
+        "fn main() {\n    const xs = [1]\n    const n = xs.len()\n    const m = max(1, 2)\n}\n";
+    open(&mut s, URI, src);
+    let r = result(s.handle(&request(
+        2,
+        "textDocument/semanticTokens/full",
+        obj(vec![("textDocument", doc(URI))]),
+    )));
+    let data: Vec<i64> = r
+        .get("data")
+        .and_then(Json::arr)
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(Json::int)
+        .collect();
+    let (mut line, mut col) = (0, 0);
+    let mut kinds = Vec::new();
+    for t in data.chunks(5) {
+        line += t[0];
+        col = if t[0] == 0 { col + t[1] } else { t[1] };
+        let word =
+            &src.lines().nth(line as usize).unwrap_or("")[col as usize..(col + t[2]) as usize];
+        kinds.push((word.to_string(), TOKEN_TYPES[t[3] as usize]));
+    }
+    assert!(kinds.contains(&("len".to_string(), "method")), "{kinds:?}");
+    assert!(
+        kinds.contains(&("max".to_string(), "function")),
+        "{kinds:?}"
+    );
+}
+
+#[test]
 fn rename_changes_declaration_and_uses() {
     let mut s = started();
     open(&mut s, URI, SRC);
