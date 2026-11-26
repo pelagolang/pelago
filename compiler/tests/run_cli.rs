@@ -110,6 +110,15 @@ fn os_modes() -> Vec<&'static [&'static str]> {
     v
 }
 
+/// The modes whose operating system errors are the system's own numbers: the interpreter everywhere and native
+/// code except on Windows, where the error table is not built yet.
+fn errno_modes() -> Vec<&'static [&'static str]> {
+    os_modes()
+        .into_iter()
+        .filter(|m| m.contains(&"--interp") || !cfg!(target_os = "windows"))
+        .collect()
+}
+
 /// The modes that also run `main(args)`: the start block is built on x86-64 Linux only.
 fn args_modes() -> Vec<&'static [&'static str]> {
     let mut v: Vec<&'static [&'static str]> = vec![&["--interp"]];
@@ -479,6 +488,25 @@ fn standard_input_checks_utf8() {
             "{flags:?}"
         );
     }
+}
+
+/// Failed path and file calls give the system's error number and the matching kind.
+#[test]
+fn file_errors_carry_the_system_error_number() {
+    let src = "import std.fs\nimport std.io\nfn show(what: str, r: void ! io_error) {\n    switch r {\n        case ok(_): print(what, \"ok\")\n        case err(e): print(what, e.code, e.kind == io_kind.alreadyExists, e.kind == io_kind.notDirectory, e.kind == io_kind.notFound)\n    }\n}\nfn main() -> void ! io_error {\n    const d = io.readLine()? ?? \"\"\n    fs.writeText(\"#d/f\", \"x\")?\n    show(\"exists\", fs.createDir(d))\n    show(\"missing\", fs.removeDir(\"#d/nope\"))\n    show(\"notdir\", fs.createDir(\"#d/f/x\"))\n    switch fs.readText(d) {\n        case ok(_): print(\"dir ok\")\n        case err(e): print(\"dir\", e.code, e.kind == io_kind.isDirectory)\n    }\n}\n";
+    let dir = std::env::temp_dir().join(format!("pelago-errno-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = format!("{}\n", dir.display());
+    for flags in errno_modes() {
+        let (out, err, code) = run_with(flags, src, &[], &input);
+        assert_eq!(code, 0, "{flags:?}: {err}");
+        assert_eq!(
+            out,
+            "exists 17 true false false\nmissing 2 false false true\nnotdir 20 false true false\ndir 21 true\n",
+            "{flags:?}"
+        );
+    }
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 /// `fs.readText` refuses a file that is not UTF-8; `fs.readBytes` reads it.
