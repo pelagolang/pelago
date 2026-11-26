@@ -479,3 +479,28 @@ fn a_closure_parameter_is_read_only_like_a_function_parameter() {
     clean("fn t() { const f = (s: string) ~> copy s }");
     clean("fn t() { const f = (n: int) ~> n + 1 }");
 }
+
+#[test]
+fn a_kept_str_view_stops_being_usable_when_its_text_changes() {
+    let stale = "points into `s`";
+    // Reassigning, changing in place and moving the source all end the view.
+    flagged(
+        "fn t() { var s = \"a\" + \"b\"\n const w = s[0..1]\n s = \"x\"\n print(w) }",
+        stale,
+    );
+    flagged(
+        "fn t() { var s = \"a\" + \"b\"\n const w = s[0..1]\n s.clear!()\n print(w) }",
+        stale,
+    );
+    flagged("fn take(sink s: string) { }\nfn t() { var s = \"ab\" + \"c\"\n const w = s.trim()\n take(sink s)\n print(w) }", stale);
+    // A view of a view follows the same text.
+    flagged("fn t() { var s = \"a\" + \"b\"\n const w = s[0..1]\n const v = w[0..1]\n s = \"x\"\n print(v) }", stale);
+    // A loop carries the change to the next round.
+    flagged("fn t() { var s = \"a\" + \"b\"\n const w = s[0..1]\n for i of 0..2 { print(w)\n s = \"x\" } }", stale);
+    // Using the view before the change, rebinding it, or changing other text is fine.
+    clean("fn t() { var s = \"a\" + \"b\"\n var w = s[0..1]\n print(w)\n s = \"x\"\n w = s[0..1]\n print(w) }");
+    clean("fn t() { var s = \"a\" + \"b\"\n var o = \"c\"\n const w = s[0..1]\n o = \"d\"\n print(w, o) }");
+    clean("struct p { a: string\n b: string }\nfn t() { var x = p { a: \"a\", b: \"b\" }\n const w = x.a[0..1]\n x.b = \"z\"\n print(w) }");
+    // Copying out a `string` keeps the text.
+    clean("fn t() { var s = \"a\" + \"b\"\n const w = copy s[0..1]\n s = \"x\"\n print(w) }");
+}
