@@ -10,8 +10,10 @@
 /// ```
 
 //~ Ends the program at once with this status: standard output is flushed, `defer` and `deinit` do not run
-//~ (like a panic, but without a message).
+//~ (like a panic, but without a message). The status is 0 to 255, which every system keeps whole (a larger one would
+//~ be cut to its low byte on Linux and macOS); any other value stops the program with a message.
 pub fn exit(code: int) -> never {
+    if code < 0 || code > 255 { panic("os.exit: the status must be 0 to 255") }
     rtOsExit(code)
     unreachable()
 }

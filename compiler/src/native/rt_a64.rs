@@ -105,11 +105,11 @@ fn number(os: Os, call: Sys) -> i64 {
         Sys::Close => (57, 6),
         // macOS has no such call (its clocks are in the commpage); `OsKind::Clock` answers -3 there.
         Sys::ClockGettime => (113, 0),
-        // `nanosleep`; macOS has none in this table, `OsKind::Sleep` answers -3 there.
+        // `nanosleep`; macOS sleeps with `select` instead (below), Windows answers -3 for now.
         Sys::Nanosleep => (101, 0),
         // `getrandom` on Linux, `getentropy` on macOS (the buffer and at most 256 bytes).
         Sys::Getrandom => (278, 500),
-        // The file-system calls are Linux only here (`OsKind::Fs` and `Dents` answer -3 on the others).
+        // The file-system calls: the `*at` forms on Linux, the plain forms on macOS (Windows has its own routines).
         // macOS has no `*at` forms in use here: the plain `access`, `unlink`, `mkdir`, `rename`, `stat64`, and
         // `getdirentries64`, `rmdir`, and `select` (a sleep with a timeout and no descriptors).
         Sys::Faccessat => (48, 33),
@@ -2202,7 +2202,7 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         sys(a, os, Sys::ClockGettime);
         a.ret();
     }
-    // sleep(seconds, nanoseconds): `nanosleep` on Linux, from a timespec on the stack; -3 on Windows and macOS.
+    // sleep(seconds, nanoseconds): `nanosleep` on Linux, from a timespec on the stack; `select` on macOS; -3 on Windows for now.
     start(a, rt.os[15]);
     if win {
         a.mov_ri(X0, -3);
