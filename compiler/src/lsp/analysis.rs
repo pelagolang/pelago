@@ -550,28 +550,45 @@ impl Analysis {
         let mut out: Vec<(String, u32)> = Vec::new();
         if after_dot {
             let dot = start - 1;
-            // The expression just before the dot.
-            let owner = self
+            // The type of the expression just before the dot.
+            let owner_ty = self
                 .typed
                 .tys
                 .iter()
                 .filter(|((f, _, e), _)| *f == m && *e as usize == dot)
                 .min_by_key(|((_, s, e), _)| e - s)
-                .and_then(
-                    |(_, t)| match self.typed.types.kind(self.typed.types.shallow(*t)) {
-                        TyKind::Adt(d, _) => Some(*d),
-                        _ => None,
-                    },
-                );
-            for (i, d) in self.resolved.defs.iter().enumerate() {
-                let member = d.parent.is_some()
-                    && matches!(d.kind, DefKind::Field | DefKind::Fn | DefKind::Variant);
-                let wanted = match owner {
-                    Some(o) => d.parent == Some(o) || self.impl_method_of(o, DefId(i as u32)),
-                    None => true,
-                };
-                if member && wanted {
-                    out.push((d.name.clone(), kind_num(d.kind)));
+                .map(|(_, t)| self.typed.types.shallow(*t));
+            let owner = owner_ty.and_then(|t| match self.typed.types.kind(t) {
+                TyKind::Adt(d, _) => Some(*d),
+                _ => None,
+            });
+            match (owner, owner_ty) {
+                (None, Some(t)) if !matches!(self.typed.types.kind(t), TyKind::Error) => {
+                    // A built-in type (list, string, number, ...): the methods of the `impl`
+                    // blocks written for that kind of type, and of blanket impls.
+                    for i in &self.typed.impls {
+                        if self.same_head(i.self_ty, t) {
+                            for (name, f) in &i.methods {
+                                let kind = self.resolved.def(*f).kind;
+                                out.push((name.clone(), kind_num(kind)));
+                            }
+                        }
+                    }
+                }
+                _ => {
+                    for (i, d) in self.resolved.defs.iter().enumerate() {
+                        let member = d.parent.is_some()
+                            && matches!(d.kind, DefKind::Field | DefKind::Fn | DefKind::Variant);
+                        let wanted = match owner {
+                            Some(o) => {
+                                d.parent == Some(o) || self.impl_method_of(o, DefId(i as u32))
+                            }
+                            None => true,
+                        };
+                        if member && wanted {
+                            out.push((d.name.clone(), kind_num(d.kind)));
+                        }
+                    }
                 }
             }
         } else {
@@ -608,6 +625,25 @@ impl Analysis {
         out.sort();
         out.dedup();
         out
+    }
+
+    /// Does an `impl` for `impl_ty` apply to values of the type `value`? Compares the kind of type
+    /// (list, string, int of one width, ...), not the type arguments; a generic `impl<T> for T`
+    /// applies to everything and `str` methods apply to `string`.
+    fn same_head(&self, impl_ty: crate::types::Ty, value: crate::types::Ty) -> bool {
+        use std::mem::discriminant;
+        let types = &self.typed.types;
+        let (a, b) = (
+            types.kind(types.shallow(impl_ty)),
+            types.kind(types.shallow(value)),
+        );
+        match (a, b) {
+            (TyKind::Param(_), _) => true,
+            (TyKind::Int(x), TyKind::Int(y)) => x == y,
+            (TyKind::Float(x), TyKind::Float(y)) => x == y,
+            (TyKind::Str, TyKind::String) => true,
+            _ => discriminant(a) == discriminant(b),
+        }
     }
 
     /// Is `f` a method written in an `impl` for the type `owner`?

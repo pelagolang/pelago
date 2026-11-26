@@ -332,6 +332,27 @@ fn a_workspace_package_sees_other_files() {
 }
 
 #[test]
+fn completion_after_a_dot_on_built_in_types_lists_only_their_methods() {
+    let labels = |src: &str, line: i64, ch: i64| -> Vec<String> {
+        let mut s = started();
+        open(&mut s, URI, src);
+        let r = result(s.handle(&request(2, "textDocument/completion", at(URI, line, ch))));
+        let items = r.arr().or_else(|| r.get("items").and_then(Json::arr));
+        items
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|i| i.get("label").and_then(Json::str).map(str::to_string))
+            .collect()
+    };
+    let list = labels("fn main() {\n    var xs = [1]\n    xs.\n}\n", 2, 7);
+    assert!(list.contains(&"push".to_string()) && list.contains(&"len".to_string()));
+    assert!(!list.contains(&"trim".to_string()), "{list:?}");
+    let text = labels("fn main() {\n    const s = \"a\"\n    s.\n}\n", 2, 6);
+    assert!(text.contains(&"trim".to_string()) && !text.contains(&"push".to_string()));
+    assert!(text.len() < 80, "{}", text.len());
+}
+
+#[test]
 fn unknown_requests_get_an_error_and_exit_works() {
     let mut s = started();
     let r = s.handle(&request(9, "workspace/whatever", Json::Null));
