@@ -1,4 +1,4 @@
-//! The heap written in the language (`core/heap.pel`, design note heap stage H6): `Alloc`, `Free` and `Realloc`
+//! The heap written in the language (`core/heap.pel`): `Alloc`, `Free` and `Realloc`
 //! become calls to `heap_alloc`, `heap_free` and `heap_realloc`, with a cast between the pointer and the whole number
 //! the library functions use. Run after the optimiser (which knows `Alloc` and `Free`, for example to move a small
 //! local block to the stack) and before `prune`, so the heap functions and what they call stay.

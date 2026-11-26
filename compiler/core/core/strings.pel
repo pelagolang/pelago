@@ -327,72 +327,18 @@ impl str {
         ok(value)
     }
 
+    //~ A `float` from decimal text (`1.5`, `-2e-3`, `1e400`, `inf`, `-inf`, `nan`), rounded once to nearest
+    //~ (the same routine as the wide floats, so subnormals and huge exponents are right too).
     fn parseFloat(self) -> float ! parse_error {
-        const p = rtHdrData(rtAddrOf(self))
-        const n = self.len()
-        if n == 0 { return err(parse_error { message: "empty text is not a number" }) }
-        var i = 0
-        var negative = false
-        if rtLoadByte(p) == 45 {
-            negative = true
-            i = 1
+        const dst = rtAlloc(8)
+        wZero(dst, 1)
+        if !rtFloatParse(dst, rtHdrData(rtAddrOf(self)), self.len(), 1, 11, 52) {
+            rtFree(dst)
+            return err(parse_error { message: "bad number" })
         }
-        /// Digits are gathered as one integer (the first 18) and a power of ten; for up to 15
-        /// digits and a small power the result is the correctly rounded float.
-        var mantissa = 0
-        var kept = 0
-        var scale10 = 0
-        var digits = 0
-        while i < n && rtIsDigit(rtLoadByte(rtOffset(p, i)) to int) {
-            if kept < 18 {
-                mantissa = mantissa * 10 + ((rtLoadByte(rtOffset(p, i)) to int) - 48)
-                if mantissa > 0 { kept += 1 }
-            } else {
-                scale10 += 1
-            }
-            digits += 1
-            i += 1
-        }
-        if i < n && rtLoadByte(rtOffset(p, i)) == 46 {
-            i += 1
-            while i < n && rtIsDigit(rtLoadByte(rtOffset(p, i)) to int) {
-                if kept < 18 {
-                    mantissa = mantissa * 10 + ((rtLoadByte(rtOffset(p, i)) to int) - 48)
-                    if mantissa > 0 { kept += 1 }
-                    scale10 -= 1
-                }
-                digits += 1
-                i += 1
-            }
-        }
-        if digits == 0 { return err(parse_error { message: "bad number" }) }
-        if i < n && (rtLoadByte(rtOffset(p, i)) == 101 || rtLoadByte(rtOffset(p, i)) == 69) {
-            i += 1
-            var expNegative = false
-            if i < n && (rtLoadByte(rtOffset(p, i)) == 43 || rtLoadByte(rtOffset(p, i)) == 45) {
-                expNegative = rtLoadByte(rtOffset(p, i)) == 45
-                i += 1
-            }
-            var exp = 0
-            var expDigits = 0
-            while i < n && rtIsDigit(rtLoadByte(rtOffset(p, i)) to int) {
-                if exp < 100000 { exp = exp * 10 + ((rtLoadByte(rtOffset(p, i)) to int) - 48) }
-                expDigits += 1
-                i += 1
-            }
-            if expDigits == 0 { return err(parse_error { message: "bad number" }) }
-            scale10 += expNegative ? 0 - exp : exp
-        }
-        if i != n { return err(parse_error { message: "bad number" }) }
-        var value = mantissa to float
-        var k = scale10 < 0 ? 0 - scale10 : scale10
-        var power = 1.0
-        while k > 0 {
-            power *= 10.0
-            k -= 1
-        }
-        value = scale10 < 0 ? value / power : value * power
-        ok(negative ? 0.0 - value : value)
+        const r = rtRead<float>(dst)
+        rtFree(dst)
+        ok(r)
     }
 }
 

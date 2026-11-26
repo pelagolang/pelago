@@ -1,4 +1,4 @@
-//! From allocated AArch64 MIR to bytes (design in `design note mir`).
+//! From allocated AArch64 MIR to bytes.
 //!
 //! The frame has no frame pointer. From `sp` up: the outgoing argument area, the saved registers (`x30`
 //! when the function calls, then the callee-saved ones it uses), the other frame objects. The stack
@@ -598,7 +598,7 @@ impl Em<'_, '_> {
         let z = self.stop(super::a64_mir::SYM_DIV0);
         let a = &mut *self.env.a;
         a.cbz(y, z);
-        // `MIN / -1` does not trap here: the quotient wraps, like the interpreter's.
+        // The IR division wraps for `MIN / -1`; the lowering stops it before this.
         let q = if rem { hw::X9 } else { d };
         if signed {
             a.sdiv(q, x, y);
@@ -772,9 +772,9 @@ impl Em<'_, '_> {
             op::CALLRT => {
                 let rt = self.env.rt;
                 let l = match imm(&ops[0]) {
-                    op::RT_ALLOC => rt.alloc,
-                    op::RT_FREE => rt.free,
-                    op::RT_REALLOC => rt.realloc,
+                    op::RT_ALLOC => rt.alloc_x,
+                    op::RT_FREE => rt.free_x,
+                    op::RT_REALLOC => rt.realloc_x,
                     op::RT_CTX_INIT => rt.ctx_init,
                     op::RT_CTX_SWITCH => rt.ctx_switch,
                     k if (op::RT_OS..op::RT_OS + 22).contains(&k) => {
@@ -782,7 +782,7 @@ impl Em<'_, '_> {
                     }
                     op::RT_MEMCPY => rt.memcpy,
                     op::RT_FMOD | op::RT_FMOD32 => rt.fmod,
-                    _ => rt.print,
+                    _ => rt.print_x,
                 };
                 let narrow = imm(&ops[0]) == op::RT_FMOD32;
                 if narrow {

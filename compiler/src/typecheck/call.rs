@@ -65,7 +65,37 @@ impl<'p> Checker<'p> {
         }
         // Promised and default methods of the interfaces the type provides.
         let r = self.tt.shallow(recv);
-        self.iface_method(r, name)
+        if let Some(m) = self.iface_method(r, name) {
+            return Some(m);
+        }
+        self.core_glue_method(r, name)
+    }
+
+    /// `eq`, `cmp`, `hash` and `clone` as method calls on a type that provides the interface
+    /// without writing code for it (a number, text, a list, a derived struct or obj).
+    fn core_glue_method(&mut self, r: Ty, name: &str) -> Option<Method> {
+        let iface_name = match name {
+            "eq" => "eq",
+            "cmp" => "order",
+            "hash" => "hash",
+            "clone" => "clone",
+            _ => return None,
+        };
+        if matches!(
+            self.kind_of(r),
+            TyKind::Unknown | TyKind::Var(_) | TyKind::Param(_) | TyKind::Any(_)
+        ) {
+            return None;
+        }
+        let i = self.core_iface(iface_name)?;
+        if !self.provides(r, i) {
+            return None;
+        }
+        let m = self.res.member(i, name)?;
+        let sig = self.fn_sig(m)?;
+        let mut map = HashMap::new();
+        map.insert(i, r);
+        Some(Method { def: m, sig, map })
     }
 
     /// A method the type itself has: in its declaration, its `obj` bases or an `impl` block.
@@ -1079,10 +1109,17 @@ impl<'p> Checker<'p> {
             let mut msg = format!("`{s}` has no method `{n}`");
             if let TyKind::AltTuple(ts, _) = &rk {
                 if ts.len() != 2 && BRAID_METHODS.contains(&n) {
-                    msg = format!(
-                        "`{s}` has a cycle of {} types; `{n}` is written for a cycle of two. Use a constant position like `x[3]`",
-                        ts.len()
-                    );
+                    msg = if ts.len() <= 6 {
+                        format!(
+                            "`{s}` has a cycle of {} types; `{n}` is written for a cycle of two. Use `first(r)`, `second(r)`, ... for rounds, or a constant position like `x[3]`",
+                            ts.len()
+                        )
+                    } else {
+                        format!(
+                            "`{s}` has a cycle of {} types; the methods are written for cycles of two to six. Use a constant position like `x[3]`",
+                            ts.len()
+                        )
+                    };
                 } else if ts.len() == 2 && n == "toArray" {
                     msg = format!("`toArray` needs every slot to have one type, but `{s}` has two; use `split()` or `evens()`");
                 }
@@ -1139,7 +1176,7 @@ impl<'p> Checker<'p> {
         }
     }
 
-    /// What a braid method's signature cannot say (design note alternating, section 3 and 4): `tail` needs an
+    /// What a braid method's signature cannot say: `tail` needs an
     /// odd length, `swap` an even one, `mapPairs` keeps the tail so its type may not change, and a pair number
     /// written as a constant must be inside the braid.
     fn braid_rules(&mut self, e: &'p Expr, recv: Ty, name: &str, args: &'p [Arg], ret: Ty) {

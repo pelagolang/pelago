@@ -1472,7 +1472,7 @@ fn naming_styles_find_each_other() {
     flagged("fn t() -> int = nothing_here()", "cannot find");
 }
 
-// ---- braids (design note alternating) -----------------------------------------------------------
+// ---- braids -----------------------------------------------------------
 
 #[test]
 fn a_braid_literal_is_decided_by_its_annotation() {
@@ -1519,6 +1519,12 @@ fn a_strand_view_is_read_only_unless_made_with_inout() {
 fn braid_methods_follow_the_length_and_the_cycle() {
     clean("fn t(x: (int, string; 5)) { x.tail()\n x.first(1)\n x.second(-1)\n x.split()\n x.evens() }");
     clean("fn t(x: (int, string, bool; 6)) { x.first(0)\n x.third(1)\n x.rounds() }");
+    clean("fn t(x: (int, string, bool, float; 8)) { x.fourth(1)\n x.rounds()\n x.fourthStrand()\n x.asRounds() }");
+    clean("fn t(x: (int, string, bool, float, int, string; 6)) { x.sixth(0)\n x.fifthStrand() }");
+    flagged(
+        "fn t(x: (int, string, bool, float; 8)) { x.fifth(0) }",
+        "has no",
+    );
     flagged("fn t(x: (int, string; 4)) { x.tail() }", "has no tail");
     flagged(
         "fn t(x: (int, string; 3)) { x.swap() }",

@@ -181,44 +181,6 @@ pub fn rtShowBool(out: ptr, b: bool) {
     }
 }
 
-//~ Prints a float with up to six decimals and no trailing zeros.
-pub fn rtShowFloat(out: ptr, x: float) {
-    if x != x {
-        rtPushChar(out, 'n')
-        rtPushChar(out, 'a')
-        rtPushChar(out, 'n')
-        return
-    }
-    var v = x
-    if v < 0.0 {
-        rtPushChar(out, '-')
-        v = 0.0 - v
-    }
-    if v >= 9.0e18 {
-        rtShowInt(out, 9223372036854775807)
-        return
-    }
-    var whole = rtToInt(v)
-    var frac = v - (whole to float)
-    /// Six decimals, rounded.
-    var scaled = rtToInt((frac * 1000000.0) + 0.5)
-    if scaled >= 1000000 {
-        whole += 1
-        scaled -= 1000000
-    }
-    rtShowInt(out, whole)
-    if scaled > 0 {
-        rtPushChar(out, '.')
-        var place = 100000
-        while place > 0 && scaled > 0 {
-            const d = scaled / place
-            rtPushByte(out, 48 + d)
-            scaled -= d * place
-            place /= 10
-        }
-    }
-}
-
 impl list<string> {
     fn join(self, separator: str) -> string {
         var out = ""
