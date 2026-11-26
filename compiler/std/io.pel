@@ -3,18 +3,19 @@
 /// ```
 /// import std.io
 ///
-/// fn main() {
+/// fn main() -> void ! io_error {
 ///     io.eprintln("warning: no input")
-///     const text = io.readAll()
+///     const text = io.readAll()?
 ///     print(text.len())
 /// }
 /// ```
 ///
 /// Standard output is `print`, in the prelude. A `file` is an owned value: the descriptor is closed when the
 /// value goes out of scope (`deinit`), so there is no `close` to forget. Every operation that can fail on the
-/// outside world gives a `result` with an `io_error`. `io.readLine` and `io.readAll`
-/// are the short forms for standard input: a failed read ends the input there. Writing and `eprint` go through
-/// the operating system layer; standard output is flushed first, so the lines of the
+/// outside world gives a `result` with an `io_error`. `io.readLine`, `io.readAll` and `io.readBytes` are the
+/// short forms for standard input: a failed read is an error, never the end of the input. Text is checked to
+/// be UTF-8 (`readLine`, `readAll`: an `io_error` of kind `invalidUtf8`); `readBytes` is the raw form. Writing
+/// and `eprint` go through the operating system layer; standard output is flushed first, so the lines of the
 /// two streams come out in the order the program wrote them.
 
 const chunk: int = 4096
@@ -43,7 +44,63 @@ pub fn eprintln(text: str) {
     writeAll(2, "\n")
 }
 
+/// The code `failure` reads as "the bytes are not UTF-8" (no operating system error is this large).
+const badUtf8: int = -1000
+
+/// Whether `n` bytes at `data` are well-formed UTF-8: no stray or missing continuation bytes, no overlong
+/// forms, no surrogates, nothing above U+10FFFF.
+fn utf8Ok(data: ptr, n: int) -> bool {
+    var i = 0
+    while i < n {
+        const b = rtLoadByte(rtOffset(data, i))
+        if b < 128 {
+            i += 1
+        } else {
+            var more = 0
+            var lo = 128
+            var hi = 191
+            if b >= 194 && b <= 223 {
+                more = 1
+            } else if b == 224 {
+                more = 2
+                lo = 160
+            } else if b >= 225 && b <= 236 {
+                more = 2
+            } else if b == 237 {
+                more = 2
+                hi = 159
+            } else if b >= 238 && b <= 239 {
+                more = 2
+            } else if b == 240 {
+                more = 3
+                lo = 144
+            } else if b >= 241 && b <= 243 {
+                more = 3
+            } else if b == 244 {
+                more = 3
+                hi = 143
+            } else {
+                return false
+            }
+            if i + more >= n { return false }
+            const c = rtLoadByte(rtOffset(data, i + 1))
+            if c < lo || c > hi { return false }
+            var k = 2
+            while k <= more {
+                const d = rtLoadByte(rtOffset(data, i + k))
+                if d < 128 || d > 191 { return false }
+                k += 1
+            }
+            i += more + 1
+        }
+    }
+    true
+}
+
+fn textOk(text: str) -> bool = utf8Ok(rtHdrData(rtAddrOf(text)), text.len())
+
 fn kindOf(code: int) -> io_kind {
+    if code == badUtf8 { return io_kind.invalidUtf8 }
     if code == -4 { return io_kind.notFound }
     if code == -5 { return io_kind.denied }
     io_kind.other
@@ -63,6 +120,8 @@ pub fn failure(code: int, verb: str, name: str) -> io_error {
         message.pushStr!(": permission denied")
     } else if code == -21 {
         message.pushStr!(": is a directory")
+    } else if code == badUtf8 {
+        message.pushStr!(": the data is not valid UTF-8")
     } else {
         message.pushStr!(": the operating system reported an error")
     }
@@ -205,17 +264,23 @@ impl file {
     }
 
     //~ The next line without its line ending (`\n` or `\r\n`), `none` at the end of the input, or the error
-    //~ that stopped the read. A last line with no ending still counts as a line.
+    //~ that stopped the read (`invalidUtf8` when the line is not UTF-8). A last line with no ending still
+    //~ counts as a line.
     fn readLine(inout self) -> string? ! io_error {
         const line = self.nextLine!()
         if self.code < 0 { return err(failure(self.code, "reading", self.name)) }
+        if line is some(text) {
+            if !textOk(text) { return err(failure(badUtf8, "reading", self.name)) }
+        }
         ok(line)
     }
 
-    //~ Everything left, as text (the bytes are not checked to be UTF-8), or the error that stopped the read.
+    //~ Everything left, as text, or the error that stopped the read (`invalidUtf8` when the bytes are not
+    //~ UTF-8: use `readBytes` for raw data).
     fn readAll(inout self) -> string ! io_error {
         const text = self.rest!()
         if self.code < 0 { return err(failure(self.code, "reading", self.name)) }
+        if !textOk(text) { return err(failure(badUtf8, "reading", self.name)) }
         ok(text)
     }
 
@@ -235,20 +300,12 @@ impl file {
 
 var stdin: file = file(0, sink "standard input")
 
-//~ The next line of standard input without its line ending, or `none` at the end of the input.
-pub fn readLine() -> string? = stdin.nextLine!()
+//~ The next line of standard input without its line ending, `none` at the end of the input, or the error
+//~ that stopped the read.
+pub fn readLine() -> string? ! io_error = stdin.readLine!()
 
-//~ Everything left on standard input, as text.
-pub fn readAll() -> string = stdin.rest!()
+//~ Everything left on standard input, as text (checked to be UTF-8).
+pub fn readAll() -> string ! io_error = stdin.readAll!()
 
 //~ Everything left on standard input, as bytes.
-pub fn readBytes() -> [byte] {
-    const text = stdin.rest!()
-    stdin.toBytes(text)
-}
-
-//~ The same as `readLine`, but a failed read is an error instead of the end of the input.
-pub fn tryReadLine() -> string? ! io_error = stdin.readLine!()
-
-//~ The same as `readAll`, but a failed read is an error.
-pub fn tryReadAll() -> string ! io_error = stdin.readAll!()
+pub fn readBytes() -> [byte] ! io_error = stdin.readBytes!()
