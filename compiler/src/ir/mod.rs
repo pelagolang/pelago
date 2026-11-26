@@ -1,4 +1,4 @@
-//! The intermediate representation (`design note ir`): SSA in basic blocks.
+//! The intermediate representation: SSA in basic blocks.
 //!
 //! A [`Func`] is a list of blocks. A block has parameters (instead of phi nodes), a list of
 //! instructions and one terminator. Every value is assigned once. The entry block's parameters are
@@ -318,7 +318,7 @@ impl FUn {
     }
 }
 
-/// The operating system memory calls (`design note os-memory`). Each takes up to three `i64` or `ptr`
+/// The operating system memory calls. Each takes up to three `i64` or `ptr`
 /// operands and gives an `i64`: an address or `0` for success, a negative error otherwise
 /// (`OS_NOMEM`, `OS_BAD`, `OS_FAIL`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -617,7 +617,7 @@ pub struct Func {
     /// no stack slot, so the code generator needs no frame for it; the build fails otherwise.
     pub leaf: Option<(u32, Span)>,
     /// The pointer parameters that are `let` parameters passed in memory: what they reach is not written during
-    /// the call (design note mir 8.1). Set by lowering.
+    /// the call. Set by lowering.
     pub let_ptrs: Vec<Value>,
     /// The loads (instruction numbers) whose address comes from a `let` pointer parameter through `ptradd` and
     /// other such loads: frozen for the whole call. Set by `opt::frozen`; an inlined copy never has the mark.

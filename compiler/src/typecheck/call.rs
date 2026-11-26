@@ -1079,10 +1079,17 @@ impl<'p> Checker<'p> {
             let mut msg = format!("`{s}` has no method `{n}`");
             if let TyKind::AltTuple(ts, _) = &rk {
                 if ts.len() != 2 && BRAID_METHODS.contains(&n) {
-                    msg = format!(
-                        "`{s}` has a cycle of {} types; `{n}` is written for a cycle of two. Use a constant position like `x[3]`",
-                        ts.len()
-                    );
+                    msg = if ts.len() <= 6 {
+                        format!(
+                            "`{s}` has a cycle of {} types; `{n}` is written for a cycle of two. Use `first(r)`, `second(r)`, ... for rounds, or a constant position like `x[3]`",
+                            ts.len()
+                        )
+                    } else {
+                        format!(
+                            "`{s}` has a cycle of {} types; the methods are written for cycles of two to six. Use a constant position like `x[3]`",
+                            ts.len()
+                        )
+                    };
                 } else if ts.len() == 2 && n == "toArray" {
                     msg = format!("`toArray` needs every slot to have one type, but `{s}` has two; use `split()` or `evens()`");
                 }
@@ -1139,7 +1146,7 @@ impl<'p> Checker<'p> {
         }
     }
 
-    /// What a braid method's signature cannot say (design note alternating, section 3 and 4): `tail` needs an
+    /// What a braid method's signature cannot say: `tail` needs an
     /// odd length, `swap` an even one, `mapPairs` keeps the tail so its type may not change, and a pair number
     /// written as a constant must be inside the braid.
     fn braid_rules(&mut self, e: &'p Expr, recv: Ty, name: &str, args: &'p [Arg], ret: Ty) {

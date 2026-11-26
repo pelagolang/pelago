@@ -81,7 +81,7 @@ for pattern, text in CASES:
     ms = list(re.finditer(py(pattern), text))
     src.append('    t("%s", "%s").or(1)' % (esc(pattern), esc(text)))
     out.append("true %d %s" % (len(ms), " ".join("%d-%d" % m.span() for m in ms)))
-# Refused on purpose (the reversed lookahead scan cannot read a capture): see design note regex.
+# Refused on purpose (the reversed lookahead scan cannot read a capture).
 src.append('    print(regex.compileWithBackrefs("(x)(?=\\\\1)").isOk(), regex.compile("(a)\\\\1").isOk(), regex.compile("\\\\1(a)").isOk(), regex.compile("(a\\\\1)").isOk())')
 out.append("false false false false")
 # The budget: a deterministic count of states, never a clock.

@@ -1137,7 +1137,7 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-/// A producer a `for` loop pulls from in place, without building a list (design note iter).
+/// A producer a `for` loop pulls from in place, without building a list.
 #[derive(Clone, Copy)]
 pub(crate) enum Fused<'a> {
     /// `s.chars()`
@@ -1379,7 +1379,7 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-/// A `map` or `filter` step of a chain a `for` loop runs element by element (design note iter, section 4).
+/// A `map` or `filter` step of a chain a `for` loop runs element by element.
 #[derive(Clone, Copy)]
 pub(crate) enum Adapter<'a> {
     Map(&'a Expr),

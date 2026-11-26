@@ -8,11 +8,11 @@
 <p align="center"><strong>A systems language that compiles straight to machine code.</strong><br>No garbage collector. No runtime. No linker. Integer overflow stops the program.</p>
 
 <p align="center">
-  <a href="https://pelagolang.github.io/website/">Website</a> ·
-  <a href="https://pelagolang.github.io/website/en-US/docs/">Documentation</a> ·
-  <a href="https://pelagolang.github.io/website/en-US/docs/getting-started/install/">Install</a> ·
-  <a href="https://pelagolang.github.io/website/en-US/docs/tour/">Tour</a> ·
-  <a href="https://pelagolang.github.io/website/benchmarks/">Benchmarks</a>
+  <a href="https://pelagolang.github.io/">Website</a> ·
+  <a href="https://pelagolang.github.io/en-US/docs/">Documentation</a> ·
+  <a href="https://pelagolang.github.io/en-US/docs/getting-started/install/">Install</a> ·
+  <a href="https://pelagolang.github.io/en-US/docs/tour/">Tour</a> ·
+  <a href="https://pelagolang.github.io/benchmarks/">Benchmarks</a>
 </p>
 
 # Pelago
@@ -81,7 +81,7 @@ More programs are in [`examples/programs/`](examples/programs) (they type check 
 
 ## Install
 
-There are no prebuilt downloads yet. Until the first release, build `pelago` from source with a [Rust toolchain](https://rustup.rs); the steps for Windows (PowerShell), Linux and macOS are on the [install page](https://pelagolang.github.io/website/en-US/docs/getting-started/install/), and release channels will be announced there too.
+There are no prebuilt downloads yet. Until the first release, build `pelago` from source with a [Rust toolchain](https://rustup.rs); the steps for Windows (PowerShell), Linux and macOS are on the [install page](https://pelagolang.github.io/en-US/docs/getting-started/install/), and release channels will be announced there too.
 
 From a checkout, `cargo build --release` puts the tool at `target/release/pelago` (`pelago.exe` on Windows).
 
@@ -95,7 +95,7 @@ pelago check src                    # parse, resolve names and check types of a 
 pelago fmt --check .                # check formatting; drop --check to format in place
 ```
 
-`pelago run` and `pelago build` take a file or a directory, and both take `--no-opt`, `--leak-check` (report memory that was never freed) and `--timings` (milliseconds per phase). The [run and build guide](https://pelagolang.github.io/website/en-US/docs/getting-started/run-and-build/) has the details.
+`pelago run` and `pelago build` take a file or a directory, and both take `--no-opt`, `--leak-check` (report memory that was never freed) and `--timings` (milliseconds per phase). The [run and build guide](https://pelagolang.github.io/en-US/docs/getting-started/run-and-build/) has the details.
 
 | Command | What it does |
 |---|---|
@@ -123,10 +123,10 @@ The output is a static executable that talks to the operating system directly (s
 
 ## What is in the box
 
-Pelago ships with a standard library written in Pelago. The full list, grouped, is `pelago std`; the site documents each module in the [library reference](https://pelagolang.github.io/website/en-US/docs/library/).
+Pelago ships with a standard library written in Pelago. The full list, grouped, is `pelago std`; the site documents each module in the [library reference](https://pelagolang.github.io/en-US/docs/library/).
 
 - **Core types.** Integers from `int8` to `int256` and unsigned twins, `byte`, `float16` to `float256`, `str` and `string` with UTF-8 text, lists, maps, sets, options, results, iterators, boxes and arenas.
-- **Braids.** Fixed-size sequences of alternating types, `(int, string; 3)`, with pair and strand views. See the [braids guide](https://pelagolang.github.io/website/en-US/docs/guide/braids/). This feature is experimental.
+- **Braids.** Fixed-size sequences of alternating types, `(int, string; 3)`, with pair and strand views. See the [braids guide](https://pelagolang.github.io/en-US/docs/guide/braids/). This feature is experimental.
 - **Concurrency.** `spawn` returns a task that you `join`; tasks run on their own small stacks, and Linux x86-64 uses real operating system threads with futexes and atomics. AArch64 and the other systems are catching up.
 - **Text and data.** `std.json` (with `@derive(fromJson)` for your own types) and `std.regex` (an own engine, with Unicode classes).
 - **Files and system.** `std.io`, `std.fs`, `std.path`, `std.os`, `std.env`.
@@ -157,7 +157,7 @@ A plain `//` or `/* */` is a lexer error with a hint.
 | Zed | [pelagolang/zed-pelago](https://github.com/pelagolang/zed-pelago) | highlighting and the language server (`pelago` must be on your `PATH`) |
 | Neovim, Helix and others | [pelagolang/tree-sitter-pelago](https://github.com/pelagolang/tree-sitter-pelago) | the Tree-sitter grammar |
 
-Setup steps for each are on the [editors page](https://pelagolang.github.io/website/en-US/docs/getting-started/editors/). The TextMate grammar in `editors/textmate/` is generated from the compiler's keyword table and kept in step by a test.
+Setup steps for each are on the [editors page](https://pelagolang.github.io/en-US/docs/getting-started/editors/). The TextMate grammar in `editors/textmate/` is generated from the compiler's keyword table and kept in step by a test.
 
 ## Packages: Islet
 
@@ -165,7 +165,7 @@ Setup steps for each are on the [editors page](https://pelagolang.github.io/webs
 
 ## Speed
 
-The target is every program of the benchmark suite at or below C at `-O2` and Rust at `-O`, without giving up overflow traps. The suite is in [`bench/`](bench): each Pelago program sits next to C, C++ and Rust versions that print the same output. Numbers move with every performance change, so the current ones are on the [benchmarks page](https://pelagolang.github.io/website/benchmarks/).
+The target is every program of the benchmark suite at or below C at `-O2` and Rust at `-O`, without giving up overflow traps. The suite is in [`bench/`](bench): each Pelago program sits next to C, C++ and Rust versions that print the same output. Numbers move with every performance change, so the current ones are on the [benchmarks page](https://pelagolang.github.io/benchmarks/).
 
 ```
 python3 bench/harness/run.py [--runs N] [--size small,medium,large] [name ...]   # needs python 3.11+, gcc; optionally g++, clang, tcc, rustc

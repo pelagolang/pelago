@@ -15,8 +15,7 @@
 ///
 /// Three kinds of value, never mixed by accident: a `duration` (a length), an `instant` (a point on the monotonic
 /// clock, only differences mean anything) and a `moment` (a point on the UTC timeline, from the wall clock). The
-/// calendar (`date`, `date_time`) is `std.calendar`, zones are `std.zone`, text forms are `std.timefmt`; the plan is
-/// `design note time`.
+/// calendar (`date`, `date_time`) is `std.calendar`, zones are `std.zone`, text forms are `std.timefmt`.
 ///
 /// A clock can fail (`io_error`) where the system refuses. A `duration` is whole nanoseconds in an `int` (about 292
 /// years either way), and arithmetic on it stops the program on overflow like any other integer arithmetic; where
