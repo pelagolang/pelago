@@ -332,6 +332,24 @@ fn a_workspace_package_sees_other_files() {
 }
 
 #[test]
+fn definition_reaches_library_and_modules() {
+    let mut s = started();
+    let src = "const m = max(1, 2)\nconst t = \"a\".replace(\"a\", \"b\")\n";
+    open(&mut s, URI, src);
+    // `max` is declared in the library: the answer is a readable file that holds it.
+    let r = result(s.handle(&request(2, "textDocument/definition", at(URI, 0, 11))));
+    let uri = r.get("uri").and_then(Json::str).expect("a uri").to_string();
+    assert!(uri.ends_with("/core/core/math.pel"), "{uri}");
+    let path = uri_to_path(&uri).expect("a path");
+    let file = std::fs::read_to_string(path).expect("the library file");
+    assert!(file.contains("fn max"));
+    // A method of a library type.
+    let r = result(s.handle(&request(3, "textDocument/definition", at(URI, 1, 17))));
+    let uri = r.get("uri").and_then(Json::str).expect("a uri");
+    assert!(uri.ends_with("/core/core/strings.pel"), "{uri}");
+}
+
+#[test]
 fn unknown_requests_get_an_error_and_exit_works() {
     let mut s = started();
     let r = s.handle(&request(9, "workspace/whatever", Json::Null));
