@@ -1737,12 +1737,42 @@ fn emit_os(a: &mut Asm, rt: &Runtime, win: bool, flush: Label, print: bool, heap
         a.mov_rr(RCX, RDI, 8);
         a.mov_rr(RDI, RSI, 8);
         a.mov_rr(RSI, RDX, 8);
-        for (k, l) in [(0, acc), (1, unl), (2, rmd), (3, mkd), (4, ren), (5, sta)] {
+        let (cwd, chd, pid, utsn) = (a.new_label(), a.new_label(), a.new_label(), a.new_label());
+        for (k, l) in [
+            (0, acc),
+            (1, unl),
+            (2, rmd),
+            (3, mkd),
+            (4, ren),
+            (5, sta),
+            (6, cwd),
+            (7, chd),
+            (8, pid),
+            (9, utsn),
+        ] {
             a.alu_ri(Alu::Cmp, RCX, k, 8);
             a.jcc(Cc::E, l);
         }
         a.mov_ri(RAX, -2);
         a.ret();
+        // getcwd(buffer = path, size = aux): the kernel gives the length with the zero; the result leaves it out.
+        a.bind(cwd);
+        a.mov_ri(RAX, 79);
+        a.syscall();
+        a.test_rr(RAX, RAX, 8);
+        a.jcc(Cc::S, res);
+        a.alu_ri(Alu::Sub, RAX, 1, 8);
+        a.ret();
+        a.bind(chd);
+        a.mov_ri(RAX, 80); // chdir
+        a.jmp(go);
+        a.bind(pid);
+        a.mov_ri(RAX, 39); // getpid
+        a.syscall();
+        a.ret();
+        a.bind(utsn);
+        a.mov_ri(RAX, 63); // uname: the record of 390 bytes at the buffer
+        a.jmp(go);
         a.bind(acc);
         a.mov_ri(RSI, 0); // F_OK
         a.mov_ri(RAX, 21); // access

@@ -87,6 +87,12 @@ enum Sys {
     Getdents64,
     Rmdir,
     Select,
+    /// `getcwd`, `chdir`, `getpid` and `uname` (Linux only: macOS has no `getcwd` call, and `OsKind::Fs` answers
+    /// -3 there for these operations).
+    Getcwd,
+    Chdir,
+    Getpid,
+    Uname,
 }
 
 /// The call numbers: the generic Linux ones, and the BSD ones of macOS (`mremap` and `madvise`
@@ -128,6 +134,10 @@ fn number(os: Os, call: Sys) -> i64 {
         Sys::Getdents64 => (61, 344),
         Sys::Rmdir => (0, 137),
         Sys::Select => (0, 93),
+        Sys::Getcwd => (17, 0),
+        Sys::Chdir => (49, 0),
+        Sys::Getpid => (172, 0),
+        Sys::Uname => (160, 0),
     };
     if os == Os::MacOs {
         mac
@@ -2503,12 +2513,67 @@ fn emit_os(a: &mut Asm, rt: &Runtime, os: Os, flush: Label, print: bool, heap: b
         );
         a.mov_rr(X9, X0); // the operation
         a.mov_rr(X10, X2); // aux
-        for (k, l) in [(0, acc), (1, unl), (2, rmd), (3, mkd), (4, ren), (5, sta)] {
+        let (cwd, chd, pid, utsn) = (a.new_label(), a.new_label(), a.new_label(), a.new_label());
+        for (k, l) in [
+            (0, acc),
+            (1, unl),
+            (2, rmd),
+            (3, mkd),
+            (4, ren),
+            (5, sta),
+            (6, cwd),
+            (7, chd),
+            (8, pid),
+            (9, utsn),
+        ] {
             a.cmp_ri(X9, k);
             a.b_cond(Cond::Eq, l);
         }
         a.mov_ri(X0, -2);
         a.ret();
+        // The current directory, process id and host name: Linux only (-3 on macOS). `getcwd(buffer, size)` and
+        // `uname(record)` take the path operand as their first argument; the kernel's length for `getcwd` counts
+        // the zero, the result does not.
+        a.bind(cwd);
+        if mac {
+            a.mov_ri(X0, -3);
+            a.ret();
+        } else {
+            a.mov_rr(X0, X1);
+            a.mov_rr(X1, X10);
+            sys(a, os, Sys::Getcwd);
+            let neg = a.new_label();
+            a.cmp_ri(X0, 0);
+            a.b_cond(Cond::Lt, neg);
+            a.sub_ri(X0, X0, 1);
+            a.bind(neg);
+            a.ret();
+        }
+        a.bind(chd);
+        if mac {
+            a.mov_ri(X0, -3);
+            a.ret();
+        } else {
+            a.mov_rr(X0, X1);
+            sys(a, os, Sys::Chdir);
+            a.b(res);
+        }
+        a.bind(pid);
+        if mac {
+            a.mov_ri(X0, -3);
+        } else {
+            sys(a, os, Sys::Getpid);
+        }
+        a.ret();
+        a.bind(utsn);
+        if mac {
+            a.mov_ri(X0, -3);
+            a.ret();
+        } else {
+            a.mov_rr(X0, X1);
+            sys(a, os, Sys::Uname);
+            a.b(res);
+        }
         // Linux: every call starts with `dirfd = AT_FDCWD` and the path in `x1`. macOS: the plain calls, the path
         // moved to `x0` (the system call overwrites `x1`, so the operation's other argument is set after).
         a.bind(acc);

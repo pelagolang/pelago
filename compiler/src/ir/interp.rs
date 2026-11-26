@@ -148,6 +148,20 @@ struct OsState {
     /// The entries of a directory opened for reading, by descriptor: (name, type) and how many were handed
     /// out by `Dents`.
     dirs: std::collections::HashMap<i64, (Vec<(String, u8)>, usize)>,
+    /// The program's current directory once it has changed it. The real one is left alone, because the
+    /// interpreter can run inside a process that other programs share (the tests); relative paths are
+    /// resolved against this in `Open` and `Fs`.
+    cwd: Option<std::path::PathBuf>,
+}
+
+impl OsState {
+    /// `path` as the program means it: relative to its own current directory.
+    fn resolve(&self, path: &str) -> std::path::PathBuf {
+        match &self.cwd {
+            Some(dir) => dir.join(path),
+            None => std::path::PathBuf::from(path),
+        }
+    }
 }
 
 /// The process the interpreter pretends to be in: its arguments (the first is the program's name), its
@@ -307,6 +321,7 @@ fn run_inner(
             block: 0,
             files: Vec::new(),
             dirs: std::collections::HashMap::new(),
+            cwd: None,
         },
         steps: 0,
         max_steps,
@@ -904,6 +919,7 @@ impl Machine<'_> {
                 }
                 self.check(a as usize, end - a as usize + 1)?;
                 let path = String::from_utf8_lossy(&self.mem[a as usize..end]).into_owned();
+                let path = self.os.resolve(&path);
                 let mut o = std::fs::OpenOptions::new();
                 match b {
                     0 => o.read(true),
@@ -1000,12 +1016,54 @@ impl Machine<'_> {
                 0
             }
             OsKind::Fs => {
+                // The calls that take no path: the current directory (6), the process id (8) and the system's
+                // identification record, whose second field is the host name (9).
+                if matches!(a, 6 | 8 | 9) {
+                    return Ok(match a {
+                        6 => {
+                            let dir = match &self.os.cwd {
+                                Some(d) => Ok(d.clone()),
+                                None => std::env::current_dir(),
+                            };
+                            match dir {
+                                Ok(d) => {
+                                    let text = d.to_string_lossy().into_owned();
+                                    let n = text.len();
+                                    if (c as usize) < n + 1 {
+                                        -34 // ERANGE
+                                    } else {
+                                        self.check(b as usize, n + 1)?;
+                                        let p = b as usize;
+                                        self.mem[p..p + n].copy_from_slice(text.as_bytes());
+                                        self.mem[p + n] = 0;
+                                        n as i64
+                                    }
+                                }
+                                Err(e) => -os_errno(&e),
+                            }
+                        }
+                        8 => i64::from(std::process::id()),
+                        _ => {
+                            self.check(b as usize, 390)?;
+                            let name = std::fs::read_to_string("/proc/sys/kernel/hostname")
+                                .map(|s| s.trim().to_string())
+                                .or_else(|_| std::env::var("HOSTNAME"))
+                                .unwrap_or_else(|_| "localhost".to_string());
+                            let p = b as usize;
+                            self.mem[p..p + 390].fill(0);
+                            let n = name.len().min(64);
+                            self.mem[p + 65..p + 65 + n].copy_from_slice(&name.as_bytes()[..n]);
+                            0
+                        }
+                    });
+                }
                 let mut end = b as usize;
                 while self.mem.get(end).is_some_and(|&x| x != 0) {
                     end += 1;
                 }
                 self.check(b as usize, end - b as usize + 1)?;
                 let path = String::from_utf8_lossy(&self.mem[b as usize..end]).into_owned();
+                let path = self.os.resolve(&path).to_string_lossy().into_owned();
                 let fail = |e: std::io::Error| match e.kind() {
                     std::io::ErrorKind::NotFound => OS_NOENT,
                     std::io::ErrorKind::PermissionDenied => OS_ACCES,
@@ -1023,8 +1081,24 @@ impl Machine<'_> {
                         }
                         self.check(c as usize, e2 - c as usize + 1)?;
                         let to = String::from_utf8_lossy(&self.mem[c as usize..e2]).into_owned();
-                        std::fs::rename(&path, to)
+                        std::fs::rename(&path, self.os.resolve(&to))
                     }
+                    // chdir: only the program's own idea of the current directory changes.
+                    7 => std::fs::canonicalize(&path).and_then(|full| {
+                        // Windows gives the `\\?\C:\...` form; the program should see the usual `C:\...`.
+                        let full = match full.to_str().and_then(|t| t.strip_prefix(r"\\?\")) {
+                            Some(plain) if !plain.starts_with("UNC\\") => {
+                                std::path::PathBuf::from(plain)
+                            }
+                            _ => full,
+                        };
+                        if full.is_dir() {
+                            self.os.cwd = Some(full);
+                            Ok(())
+                        } else {
+                            Err(std::io::Error::from(std::io::ErrorKind::NotADirectory))
+                        }
+                    }),
                     5 => match std::fs::metadata(&path) {
                         Ok(m) => {
                             self.check(c as usize, 16)?;

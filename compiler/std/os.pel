@@ -17,3 +17,27 @@ pub fn exit(code: int) -> never {
     rtOsExit(code)
     unreachable()
 }
+
+//~ The number the system gave this process (stays the same for the whole run).
+pub fn pid() -> int = rtOsFs(8, rtIntAddr(0), 0)
+
+//~ The name this machine calls itself (at most 64 bytes, as the system keeps it).
+pub fn hostname() -> string ! io_error {
+    const rec = rtAlloc(390)
+    const rc = rtOsFs(9, rec, 0)
+    if rc < 0 {
+        rtFree(rec)
+        if rc == -2 || rc == -3 {
+            return err(io_error { kind: io_kind.other, code: 0, message: "reading the host name: not supported on this target yet" })
+        }
+        return err(io_error { kind: io_kind.other, code: 0 - rc, message: "reading the host name failed" })
+    }
+    /// The host name is the second field of the record: 65 bytes in, zero-terminated.
+    const name = rtOffset(rec, 65)
+    var n = 0
+    while n < 64 && rtLoadByte(rtOffset(name, n)) != 0 { n += 1 }
+    var out = ""
+    rtStrPush(rtAddrOf(out), name, n)
+    rtFree(rec)
+    ok(out)
+}
