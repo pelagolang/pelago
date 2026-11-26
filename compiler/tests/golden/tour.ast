@@ -49,6 +49,11 @@
   (call clear2 (arg inout scores))
   (call finish2 (arg sink scores))
   (fn
+    shift
+    ((inout xs : (slice int)) (by : int))
+    (block (tail (for-of ((inout x)) xs (block (tail (+= x by)))))))
+  (call shift (arg inout (index scores (.. 1 3))) 10)
+  (fn
     sum_to
     ((n : int) (acc : int = 0))
     ->
