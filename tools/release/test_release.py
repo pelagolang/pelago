@@ -77,5 +77,14 @@ class Packages(unittest.TestCase):
             self.assertTrue(path.endswith("pelago-0.1.0-aarch64-linux.deb"))
 
 
+class Mentions(unittest.TestCase):
+    def test_at_words_become_code(self):
+        self.assertEqual(
+            r.defuse("add the @inline_always and @leaf attributes, `@json` stays"),
+            "add the `@inline_always` and `@leaf` attributes, `@json` stays",
+        )
+        self.assertEqual(r.defuse("mail a@b.c"), "mail a@b.c")
+
+
 if __name__ == "__main__":
     unittest.main()
