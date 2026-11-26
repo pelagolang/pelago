@@ -1,0 +1,21 @@
+/// `fs.createDirs` makes missing folders, accepts ones that are already there, and refuses a path that is a file.
+import std.fs
+
+fn main() -> void ! io_error {
+    const top = "pelago_create_dirs_test"
+    const deep = "pelago_create_dirs_test/a/b/c"
+    fs.createDirs(deep)?
+    fs.createDirs(deep)?
+    fs.createDirs(top)?
+    const info = fs.metadata(deep)?
+    print(info.kind is fs.file_kind.dir)
+    fs.writeText("pelago_create_dirs_test/file", "x")?
+    print(fs.createDirs("pelago_create_dirs_test/file") is err(_))
+    print(fs.createDirs("pelago_create_dirs_test/file/under") is err(_))
+    fs.removeFile("pelago_create_dirs_test/file")?
+    fs.removeDir(deep)?
+    fs.removeDir("pelago_create_dirs_test/a/b")?
+    fs.removeDir("pelago_create_dirs_test/a")?
+    fs.removeDir(top)?
+    print(fs.exists(top))
+}

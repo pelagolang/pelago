@@ -142,7 +142,7 @@ impl<'p> Checker<'p> {
 
     fn list_pattern(&mut self, p: &'p Pattern, items: &'p [ListPatItem], ty: Ty) {
         let elem = match self.kind_of(ty) {
-            TyKind::List(e) | TyKind::Array(e, _) => e,
+            TyKind::List(e) | TyKind::Array(e, _) | TyKind::Slice(e) => e,
             TyKind::Unknown => self.tt.unknown,
             TyKind::Var(_) => {
                 let e = self.var(p.span);

@@ -332,24 +332,21 @@ fn a_workspace_package_sees_other_files() {
 }
 
 #[test]
-fn hover_shows_field_types_and_signature_help_handles_bang_calls() {
+fn definition_reaches_library_and_modules() {
     let mut s = started();
-    let src = "struct p {\n    x: int\n}\nfn main() {\n    var xs = [1]\n    xs.push!(2)\n    const q = p { x: 1 }\n    const y = q.x\n}\n";
+    let src = "const m = max(1, 2)\nconst t = \"a\".replace(\"a\", \"b\")\n";
     open(&mut s, URI, src);
-    let r = result(s.handle(&request(2, "textDocument/hover", at(URI, 7, 17))));
-    let v = r
-        .get("contents")
-        .and_then(|c| c.get("value"))
-        .and_then(Json::str);
-    assert!(v.is_some_and(|v| v.contains("(field) x: int")), "{v:?}");
-    let r = result(s.handle(&request(3, "textDocument/signatureHelp", at(URI, 5, 13))));
-    let label = r
-        .get("signatures")
-        .and_then(Json::arr)
-        .and_then(|a| a.first())
-        .and_then(|x| x.get("label"))
-        .and_then(Json::str);
-    assert!(label.is_some_and(|l| l.contains("push")), "{label:?}");
+    // `max` is declared in the library: the answer is a readable file that holds it.
+    let r = result(s.handle(&request(2, "textDocument/definition", at(URI, 0, 11))));
+    let uri = r.get("uri").and_then(Json::str).expect("a uri").to_string();
+    assert!(uri.ends_with("/core/core/math.pel"), "{uri}");
+    let path = uri_to_path(&uri).expect("a path");
+    let file = std::fs::read_to_string(path).expect("the library file");
+    assert!(file.contains("fn max"));
+    // A method of a library type.
+    let r = result(s.handle(&request(3, "textDocument/definition", at(URI, 1, 17))));
+    let uri = r.get("uri").and_then(Json::str).expect("a uri");
+    assert!(uri.ends_with("/core/core/strings.pel"), "{uri}");
 }
 
 #[test]
@@ -719,4 +716,25 @@ fn formatting_replaces_the_document_or_returns_nothing() {
     open(&mut s, URI, "fn main() {\n    print(1)\n}\n");
     let r = result(s.handle(&request(6, "textDocument/formatting", params)));
     assert!(r.arr().unwrap().is_empty());
+}
+
+#[test]
+fn hover_shows_field_types_and_signature_help_handles_bang_calls() {
+    let mut s = started();
+    let src = "struct p {\n    x: int\n}\nfn main() {\n    var xs = [1]\n    xs.push!(2)\n    const q = p { x: 1 }\n    const y = q.x\n}\n";
+    open(&mut s, URI, src);
+    let r = result(s.handle(&request(2, "textDocument/hover", at(URI, 7, 17))));
+    let v = r
+        .get("contents")
+        .and_then(|c| c.get("value"))
+        .and_then(Json::str);
+    assert!(v.is_some_and(|v| v.contains("(field) x: int")), "{v:?}");
+    let r = result(s.handle(&request(3, "textDocument/signatureHelp", at(URI, 5, 13))));
+    let label = r
+        .get("signatures")
+        .and_then(Json::arr)
+        .and_then(|a| a.first())
+        .and_then(|x| x.get("label"))
+        .and_then(Json::str);
+    assert!(label.is_some_and(|l| l.contains("push")), "{label:?}");
 }

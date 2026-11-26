@@ -1,0 +1,21 @@
+/// The `io_error` built from the operating system layer's codes: the kind, the system's error number and the
+/// message, for the path calls (`failure`) and for reads and writes (`failureOs`).
+import std.io
+
+fn show(e: io_error) {
+    print(e.kind == io_kind.notFound, e.kind == io_kind.denied, e.kind == io_kind.alreadyExists, e.kind == io_kind.brokenPipe, e.code, e.message)
+}
+
+fn main() {
+    show(io.failure(-4, "opening", "a.txt"))
+    show(io.failure(-5, "opening", "a.txt"))
+    show(io.failure(-17, "creating", "d"))
+    show(io.failureOs(-5, "reading", "standard input"))
+    show(io.failureOs(-32, "writing", "standard output"))
+    show(io.failureOs(-3, "reading", "x"))
+    print(io.failureOs(-21, "reading", "d").kind == io_kind.isDirectory)
+    print(io.failureOs(-28, "writing", "f").kind == io_kind.outOfSpace)
+    print(io.failureOs(-110, "reading", "s").kind == io_kind.timedOut)
+    print(io.failureOs(-11, "reading", "s").kind == io_kind.wouldBlock)
+    print(io.failureOs(-9999, "reading", "s").message)
+}

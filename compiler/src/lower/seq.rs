@@ -898,12 +898,21 @@ impl<'a> Lowerer<'a> {
         let esize = match self.kind(bt) {
             TyKind::String | TyKind::Str => 1,
             TyKind::List(x) | TyKind::Iter(x) => self.layout(x).size as i64,
+            TyKind::Array(x, _) => self.layout(x).size as i64,
             _ => return self.unsupported(e.span, "slicing this type"),
         };
         let Res::Val(h) = self.expr(base) else {
             return Res::Never;
         };
-        let len = self.load_at(h, 8, IrTy::I64);
+        // An array is its elements in place: its address is the data and its length is in the type.
+        let array_len = match self.kind(bt) {
+            TyKind::Array(_, n) => Some(self.array_len(n)),
+            _ => None,
+        };
+        let len = match array_len {
+            Some(n) => self.i64c(n),
+            None => self.load_at(h, 8, IrTy::I64),
+        };
         let lo = match start {
             Some(s) => match self.scalar(s) {
                 Some(v) => v,
@@ -933,7 +942,10 @@ impl<'a> Lowerer<'a> {
         if let Some(bad) = self.emit(Op::Cmp(CmpOp::UGt, lo, hi), Some(IrTy::Bool), e.span) {
             self.stop_if(bad, "slice out of range");
         }
-        let data = self.load_at(h, 0, IrTy::Ptr);
+        let data = match array_len {
+            Some(_) => h,
+            None => self.load_at(h, 0, IrTy::Ptr),
+        };
         let sz = self.i64c(esize);
         let off = self
             .emit(Op::Bin(BinOp::Mul, lo, sz), Some(IrTy::I64), e.span)

@@ -62,7 +62,7 @@ impl Mode {
 
 // ---- Attributes and modifiers ------------------------------------------------
 
-/// `@inline`, `@derive(eq, order)`.
+/// `@inline_always`, `@derive(eq, order)`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Attr {
     pub name: Ident,
@@ -128,6 +128,8 @@ pub enum TypeKind {
     List(Box<Type>),
     /// `[T; N]`
     Array(Box<Type>, Box<Expr>),
+    /// `[T..]` or `slice<T>` (the flag is true for the second spelling): a window onto part of a list or array.
+    Slice(Box<Type>, bool),
     /// `(A, B)`; `()` is the empty tuple.
     Tuple(Vec<Type>),
     /// `(A, B; N)` or `braid<A, B; N>` (the flag is true for the second spelling): a braid, a fixed run of

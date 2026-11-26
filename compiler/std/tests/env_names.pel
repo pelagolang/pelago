@@ -1,0 +1,13 @@
+/// `env.get` and `env.vars` agree with each other, and a listed name is never empty.
+import std.env
+
+fn main() {
+    var empty = 0
+    var mismatch = 0
+    for p of env.vars() {
+        if p.0.len() == 0 { empty += 1 }
+        if env.get(p.0) is none { mismatch += 1 }
+    }
+    print(empty, mismatch)
+    print(env.get("PELAGO_SURELY_NOT_SET_VAR") is none)
+}
