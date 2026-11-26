@@ -5,4 +5,4 @@ error 1:7: $.x: expected a whole number, found a number
 error 1:1: $: missing field "x"
 error 1:1: $: expected an object, found an array
 error 1:17: $: a key must be a string
-9223372036854775807 9007199254740993
+12345678901234567000 9007199254740993

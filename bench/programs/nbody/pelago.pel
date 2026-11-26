@@ -34,7 +34,7 @@ fn main() {
     vx[0] = -px / sm
     vy[0] = -py / sm
     vz[0] = -pz / sm
-    print(energy(x, y, z, vx, vy, vz, m))
+    print(fixed6(energy(x, y, z, vx, vy, vz, m)))
     for step in 0..200000 {
         for i in 0..5 {
             for j in i + 1..5 {
@@ -57,5 +57,34 @@ fn main() {
             z[i] += 0.01 * vz[i]
         }
     }
-    print(energy(x, y, z, vx, vy, vz, m))
+    print(fixed6(energy(x, y, z, vx, vy, vz, m)))
+}
+
+/// The text of `x` rounded to six decimals, trailing zeros dropped: what the C twin prints with `%f`
+/// (the library prints the shortest text that reads back, which is not what this test compares).
+fn fixed6(x: float) -> string {
+    var out = ""
+    var v = x
+    if v < 0.0 {
+        out.pushChar!('-')
+        v = 0.0 - v
+    }
+    var whole = v.truncInt()
+    var scaled = ((v - (whole to float)) * 1000000.0 + 0.5).truncInt()
+    if scaled >= 1000000 {
+        whole += 1
+        scaled -= 1000000
+    }
+    out.pushStr!("#whole")
+    if scaled > 0 {
+        out.pushChar!('.')
+        var place = 100000
+        while place > 0 && scaled > 0 {
+            const d = scaled / place
+            out.pushStr!("#d")
+            scaled -= d * place
+            place /= 10
+        }
+    }
+    out
 }

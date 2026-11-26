@@ -501,7 +501,7 @@ fn printing_basic_values() {
     );
     assert_eq!(
         output_of("fn main() { print(0.1 + 0.2, 100.0, 1.0 / 3.0) }"),
-        "0.3 100 0.333333\n"
+        "0.30000000000000004 100 0.3333333333333333\n"
     );
 }
 
@@ -2932,11 +2932,11 @@ fn float32_rounds_after_every_operation() {
 
 #[test]
 fn float_to_int_saturates() {
-    // `floor` and `ceil` are exact now (NaN stays NaN); only printing a huge float saturates.
+    // `floor` and `ceil` are exact (NaN stays NaN); a huge float prints in exponent form.
     let src = "fn main() { const z = 0.0\n const big = 1e30\n print(big.floor(), (-big).floor(), (z / z).floor(), 2.9.floor(), (-2.9).floor(), 1e19.ceil(), (-1e19).ceil()) }";
     assert_eq!(
         output_of(src),
-        "9223372036854775807 -9223372036854775807 nan 2 -3 9223372036854775807 -9223372036854775807\n"
+        "1e+30 -1e+30 nan 2 -3 10000000000000000000 -10000000000000000000\n"
     );
 }
 
