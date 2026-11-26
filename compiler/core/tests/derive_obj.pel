@@ -1,0 +1,91 @@
+/// `@derive(clone)`, `@derive(eq)` and `@derive(hash)` on an `obj`: fields, nested objects, lists,
+/// options and braids; and the derived `eq` and `hash` agree with hand-written ones.
+@derive(clone, eq, order, hash)
+obj point { x: int, y: int }
+
+@derive(clone, eq, hash)
+obj shape {
+    name: string
+    at: point
+    tags: [string]
+    size: int?
+    pair: (int, string; 4)
+}
+
+obj hand : eq, hash {
+    x: int
+    y: int
+    fn eq(self, other: hand) -> bool { self.x == other.x && self.y == other.y }
+    fn hash(self) -> int { self.x * 31 + self.y }
+}
+
+@derive(clone)
+obj plain { a: int, b: [int] }
+
+@derive(clone, eq, hash)
+obj animal { name: string }
+
+@derive(clone, eq, hash)
+obj dog : animal { age: int }
+
+fn make(name: string, x: int, tag: string) -> shape {
+    shape { name: copy name, at: point { x: x, y: 2 }, tags: [copy tag], size: 3, pair: (1, "a", 2, "b") }
+}
+
+fn main() {
+    /// clone: a deep, independent copy
+    const a = make("s", 1, "t")
+    var b = copy a
+    b.name = "other"
+    b.at.x = 9
+    b.tags.push!("u")
+    print(a.name, a.at.x, a.tags, b.name, b.at.x, b.tags, b.size, b.pair)
+    var p = plain { a: 1, b: [1, 2] }
+    var q = copy p
+    q.b.push!(3)
+    q.a = 7
+    print(p.a, p.b, q.a, q.b)
+
+    /// eq: field by field, through nesting
+    print(a == make("s", 1, "t"), a == b, a != b)
+    print(a == make("s", 2, "t"), a == make("s", 1, "v"), a == make("z", 1, "t"))
+    var c = make("s", 1, "t")
+    c.size = none
+    print(a == c)
+    var d = make("s", 1, "t")
+    d.pair = (1, "a", 2, "c")
+    print(a == d, a == copy a)
+
+    /// hash: equal values hash alike; as map and set keys
+    var seen: set<point> = set {}
+    seen.insert!(point { x: 1, y: 2 })
+    seen.insert!(point { x: 1, y: 2 })
+    seen.insert!(point { x: 2, y: 1 })
+    print(seen.len(), point { x: 2, y: 1 } in seen, point { x: 3, y: 1 } in seen)
+    var m: map<shape, int> = {:}
+    m.insert!(make("s", 1, "t"), 10)
+    m.insert!(make("s", 1, "t"), 20)
+    m.insert!(make("s", 2, "t"), 30)
+    print(m.len(), m.get(make("s", 1, "t")), m.get(make("s", 2, "t")))
+
+    /// the same behaviour as hand-written `eq` and `hash`
+    var hs: set<hand> = set {}
+    hs.insert!(hand { x: 1, y: 2 })
+    hs.insert!(hand { x: 1, y: 2 })
+    hs.insert!(hand { x: 2, y: 1 })
+    print(hs.len(), hand { x: 1, y: 2 } == hand { x: 1, y: 2 }, hand { x: 1, y: 2 } == hand { x: 2, y: 1 })
+
+    /// an object with a base: the base's fields count too
+    const rex = dog { name: "rex", age: 3 }
+    var rex2 = copy rex
+    rex2.age = 4
+    print(rex == rex2, rex == copy rex, rex.name, rex2.name, rex2.age)
+    var dogs: set<dog> = set {}
+    dogs.insert!(copy rex)
+    dogs.insert!(copy rex)
+    dogs.insert!(sink rex2)
+    print(dogs.len())
+
+    /// order: field by field, first field first
+    print(point { x: 1, y: 5 } < point { x: 2, y: 0 }, point { x: 2, y: 1 } < point { x: 2, y: 0 }, point { x: 2, y: 0 } <= point { x: 2, y: 0 })
+}
