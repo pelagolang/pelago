@@ -332,6 +332,27 @@ fn a_workspace_package_sees_other_files() {
 }
 
 #[test]
+fn hover_shows_field_types_and_signature_help_handles_bang_calls() {
+    let mut s = started();
+    let src = "struct p {\n    x: int\n}\nfn main() {\n    var xs = [1]\n    xs.push!(2)\n    const q = p { x: 1 }\n    const y = q.x\n}\n";
+    open(&mut s, URI, src);
+    let r = result(s.handle(&request(2, "textDocument/hover", at(URI, 7, 17))));
+    let v = r
+        .get("contents")
+        .and_then(|c| c.get("value"))
+        .and_then(Json::str);
+    assert!(v.is_some_and(|v| v.contains("(field) x: int")), "{v:?}");
+    let r = result(s.handle(&request(3, "textDocument/signatureHelp", at(URI, 5, 13))));
+    let label = r
+        .get("signatures")
+        .and_then(Json::arr)
+        .and_then(|a| a.first())
+        .and_then(|x| x.get("label"))
+        .and_then(Json::str);
+    assert!(label.is_some_and(|l| l.contains("push")), "{label:?}");
+}
+
+#[test]
 fn unknown_requests_get_an_error_and_exit_works() {
     let mut s = started();
     let r = s.handle(&request(9, "workspace/whatever", Json::Null));
