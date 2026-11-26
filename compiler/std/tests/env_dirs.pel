@@ -1,0 +1,15 @@
+import std.env
+
+fn main() {
+    print(env.tempDir().len() > 0)
+    /// Whatever the environment holds, a directory that is given is never empty.
+    print(env.homeDir().unwrapOr("x").len() > 0)
+    print(env.configDir().unwrapOr("x").len() > 0)
+    print(env.cacheDir().unwrapOr("x").len() > 0)
+    /// Without a home directory there is no config or cache directory on Linux; with one there is.
+    if env.homeDir() is some(_) {
+        print(env.configDir() is some(_) || env.has("APPDATA") == false)
+    } else {
+        print(true)
+    }
+}
