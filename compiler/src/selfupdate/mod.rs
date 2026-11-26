@@ -17,8 +17,12 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Public keys the release signatures are checked with. A release signed by any of them is trusted.
-/// It stays empty until the first signed release exists; until then an update needs `--allow-unsigned`.
-pub const RELEASE_KEYS: &[[u8; 32]] = &[];
+/// The first entry is the key in `docs/release/pelago-release.pub`. A rotation adds a key here; `--allow-unsigned`
+/// still lets an update go on with the checksum alone when a key change goes wrong.
+pub const RELEASE_KEYS: &[[u8; 32]] = &[[
+    0x65, 0x09, 0x72, 0xe3, 0xf5, 0x40, 0xd7, 0x2a, 0xa1, 0x99, 0x20, 0x5a, 0x6b, 0x18, 0xc6, 0xea,
+    0x2f, 0xed, 0xe3, 0xc7, 0x2b, 0x0b, 0x71, 0x1d, 0xf5, 0x07, 0xc5, 0x60, 0xf1, 0x5b, 0x5d, 0x01,
+]];
 
 /// The platform name used in archive names, for example `x86_64-linux`.
 pub fn target() -> String {
@@ -440,5 +444,33 @@ mod tests {
         assert!(o.check);
         assert!(parse_options(&a(&["--channel", "dev"])).is_err());
         assert!(parse_options(&a(&["--nope"])).is_err());
+    }
+
+    #[test]
+    fn the_embedded_key_is_the_committed_public_key() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../docs/release/pelago-release.pub"
+        );
+        let pem = std::fs::read_to_string(path).unwrap();
+        let b64: String = pem.lines().filter(|l| !l.starts_with("-----")).collect();
+        let mut bits = 0u32;
+        let mut n = 0;
+        let mut out = Vec::new();
+        for c in b64.bytes().filter(|&c| c != b'=') {
+            let v = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+                .iter()
+                .position(|&x| x == c)
+                .unwrap() as u32;
+            bits = (bits << 6) | v;
+            n += 6;
+            if n >= 8 {
+                n -= 8;
+                out.push((bits >> n) as u8);
+                bits &= (1 << n) - 1;
+            }
+        }
+        assert_eq!(out.len(), 44);
+        assert_eq!(&out[12..], &RELEASE_KEYS[0][..]);
     }
 }
