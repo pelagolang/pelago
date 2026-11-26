@@ -31,7 +31,7 @@ fn hasZero(path: str) -> bool {
 
 fn openMode(path: str, mode: int) -> io.file ! io_error {
     if hasZero(path) {
-        return err(io_error { kind: io_kind.invalid, message: "opening #path: the path contains a zero byte" })
+        return err(io_error { kind: io_kind.invalid, code: 0, message: "opening #path: the path contains a zero byte" })
     }
     /// The path as a zero-terminated block for the system call.
     const n = path.len()
@@ -55,7 +55,8 @@ pub fn create(path: str) -> io.file ! io_error = openMode(path, 1)
 //~ Opens the file for writing at its end, creating it if it does not exist.
 pub fn append(path: str) -> io.file ! io_error = openMode(path, 2)
 
-//~ The whole file as text (the bytes are not checked to be UTF-8).
+//~ The whole file as text; a file that is not UTF-8 is an `io_error` of kind `invalidUtf8` (`readBytes` reads
+//~ any file).
 pub fn readText(path: str) -> string ! io_error {
     var f = open(path)?
     f.readAll!()
@@ -80,7 +81,7 @@ pub fn appendText(path: str, text: str) -> void ! io_error {
 }
 
 fn zeroError(verb: str, path: str) -> io_error {
-    io_error { kind: io_kind.invalid, message: "#verb #path: the path contains a zero byte" }
+    io_error { kind: io_kind.invalid, code: 0, message: "#verb #path: the path contains a zero byte" }
 }
 
 /// The path as a zero-terminated block for the system call; the caller frees it.

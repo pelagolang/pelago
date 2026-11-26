@@ -1,0 +1,26 @@
+/// `[value; n]` with a count only known at run time is a list of `n` independent copies.
+
+struct pt { x: int, y: int }
+
+fn count() -> int = 3
+
+fn main() {
+    const n = count()
+    var flags = [false; n]
+    flags[1] = true
+    print(flags)
+    var words = ["ab"; n]
+    words[0] = "zz"
+    print(words)
+    var points = [pt { x: 1, y: 2 }; n]
+    points[1].x = 9
+    print(points[0].x, points[1].x)
+    var grid = [[1, 2]; n]
+    grid[0][0] = 7
+    print(grid)
+    var typed: [int] = [5; n]
+    typed.push!(6)
+    print(typed)
+    var empty = [0; n - 3]
+    print(empty.len())
+}

@@ -826,8 +826,11 @@ impl<'p> Checker<'p> {
             None => self.check_expr(value, Exp::Any),
         };
         self.check_coerce(count, self.tt.int);
-        let len = self.len_of(count);
-        self.tt.mk(TyKind::Array(t, len))
+        // A length known at compile time makes a fixed array; any other count makes a list.
+        match self.len_of(count) {
+            ArrayLen::Unknown => self.tt.mk(TyKind::List(t)),
+            len => self.tt.mk(TyKind::Array(t, len)),
+        }
     }
 
     fn map_expr(&mut self, e: &'p Expr, items: &'p [MapItem], exp: Exp) -> Ty {

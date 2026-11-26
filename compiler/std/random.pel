@@ -30,7 +30,7 @@ const top = 9223372036854775807
 fn fill(words: [int]) -> void ! io_error {
     const r = rtOsRandom(rtHdrData(rtAddrOf(words)), 8 * words.len())
     if r < 0 {
-        return err(io_error { kind: io_kind.other, message: "random numbers: not supported on this target" })
+        return err(io_error { kind: io_kind.other, code: 0, message: "random numbers: not supported on this target" })
     }
 }
 

@@ -23,7 +23,10 @@ fn readFile(path: str) -> void ! io_error {
 
 fn main(args: [string]) {
     if args.len() < 2 {
-        report("standard input", io.readAll())
+        switch io.readAll() {
+            case ok(text): report("standard input", text)
+            case err(e): io.eprintln(e.message)
+        }
         return
     }
     var i = 1

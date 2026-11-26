@@ -53,7 +53,12 @@ fn modes_agree_on_a_stop() {
 }
 
 /// Like `run`, with program arguments (after `--`) and text on standard input.
-fn run_with(flags: &[&str], src: &str, args: &[&str], stdin: &str) -> (String, String, i32) {
+fn run_with(
+    flags: &[&str],
+    src: &str,
+    args: &[&str],
+    stdin: impl AsRef<[u8]>,
+) -> (String, String, i32) {
     use std::io::Write;
     let dir = std::env::temp_dir().join(format!(
         "pelago-run-cli-{}-{}",
@@ -78,7 +83,7 @@ fn run_with(flags: &[&str], src: &str, args: &[&str], stdin: &str) -> (String, S
         .stdin
         .take()
         .unwrap()
-        .write_all(stdin.as_bytes())
+        .write_all(stdin.as_ref())
         .unwrap();
     let out = child.wait_with_output().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
@@ -354,7 +359,7 @@ fn exit_ends_the_program_with_its_status() {
 
 #[test]
 fn standard_input_and_standard_error() {
-    let src = "import std.io\nfn main() {\n    print(\"a\")\n    io.eprintln(\"warn\")\n    const first = io.readLine()\n    print(first)\n    const rest = io.readAll()\n    print(rest.len())\n    print(io.readLine())\n}\n";
+    let src = "import std.io\nfn main() -> void ! io_error {\n    print(\"a\")\n    io.eprintln(\"warn\")\n    const first = io.readLine()?\n    print(first)\n    const rest = io.readAll()?\n    print(rest.len())\n    print(io.readLine()?)\n}\n";
     for flags in os_modes() {
         let (out, err, code) = run_with(flags, src, &[], "one\r\ntwo\nthree");
         assert_eq!(out, "a\nsome(\"one\")\n9\nnone\n", "{flags:?}");
@@ -426,8 +431,8 @@ fn run(dir: str) -> void ! io_error {
     print(h.readLine!()?)
 }
 
-fn main() {
-    const dir = io.readLine() ?? ""
+fn main() -> void ! io_error {
+    const dir = io.readLine()? ?? ""
     print(run(dir))
     var missing = ""
     missing.pushStr!(dir)
@@ -447,7 +452,7 @@ fn main() {
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let d = dir.to_str().unwrap().replace('\\', "/");
-        let (out, err, code) = run_with(flags, src, &[], &format!("{d}\n"));
+        let (out, err, code) = run_with(flags, src, &[], format!("{d}\n"));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(code, 0, "{flags:?}: {err}");
         let want = format!(
@@ -457,11 +462,47 @@ fn main() {
     }
 }
 
+/// Standard input that is not UTF-8: `readLine` and `readAll` give an `io_error` of kind `invalidUtf8` (and keep
+/// reading afterwards), `readBytes` hands the raw bytes over.
+#[test]
+fn standard_input_checks_utf8() {
+    let src = "import std.io\nfn main() -> void ! io_error {\n    print(io.readLine()?)\n    switch io.readLine() {\n        case err(e): print(e.kind == io_kind.invalidUtf8, e.message)\n        case ok(l): print(\"ok\", l)\n    }\n    switch io.readAll() {\n        case err(e): print(e.kind == io_kind.invalidUtf8)\n        case ok(t): print(\"ok\", t)\n    }\n    print((io.readBytes()?).len())\n}\n";
+    let mut input: Vec<u8> = b"h\xc3\xa9llo\n".to_vec();
+    input.extend_from_slice(b"bad \xff\xfe line\n");
+    input.extend_from_slice(b"\xed\xa0\x80\xc0\xaf\xf4\x90\x80\x80 tail");
+    for flags in os_modes() {
+        let (out, err, code) = run_with(flags, src, &[], &input);
+        assert_eq!(code, 0, "{flags:?}: {err}");
+        assert_eq!(
+            out,
+            "some(\"h\u{e9}llo\")\ntrue reading standard input: the data is not valid UTF-8\ntrue\n0\n",
+            "{flags:?}"
+        );
+    }
+}
+
+/// `fs.readText` refuses a file that is not UTF-8; `fs.readBytes` reads it.
+#[test]
+fn read_text_checks_utf8() {
+    let src = "import std.fs\nimport std.io\nfn main() -> void ! io_error {\n    const path = io.readLine()? ?? \"\"\n    switch fs.readText(path) {\n        case err(e): print(e.kind == io_kind.invalidUtf8)\n        case ok(t): print(\"ok\", t.len())\n    }\n    print((fs.readBytes(path)?).len())\n}\n";
+    let dir = std::env::temp_dir().join(format!("pelago-utf8-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("bad.txt");
+    std::fs::write(&file, b"ok \xe2\x82 broken").unwrap();
+    let input = format!("{}\n", file.display());
+    for flags in os_modes() {
+        let (out, err, code) = run_with(flags, src, &[], &input);
+        assert_eq!(code, 0, "{flags:?}: {err}");
+        assert_eq!(out, "true\n12\n", "{flags:?}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// Standard input read through the buffer: lines that straddle the 4096-byte chunks, a last line without an
 /// ending, `\r\n`, and the rest of the input in one piece.
 #[test]
 fn standard_input_crosses_buffer_chunks() {
-    let src = "import std.io\nfn count() -> int ! io_error {\n    var n = 0\n    var total = 0\n    loop {\n        switch io.tryReadLine()? {\n            case some(line):\n                n += 1\n                total += line.len()\n            case none: break\n        }\n    }\n    print(n, total)\n    ok(n)\n}\nfn main() {\n    const first = io.readLine()\n    print(first)\n    print(count())\n    print(io.readAll().len(), io.readBytes().len())\n}\n";
+    let src = "import std.io\nfn count() -> int ! io_error {\n    var n = 0\n    var total = 0\n    loop {\n        switch io.readLine()? {\n            case some(line):\n                n += 1\n                total += line.len()\n            case none: break\n        }\n    }\n    print(n, total)\n    ok(n)\n}\nfn main() -> void ! io_error {\n    const first = io.readLine()?\n    print(first)\n    print(count())\n    print((io.readAll()?).len(), (io.readBytes()?).len())\n}\n";
     let mut input = String::from("head\r\n");
     let mut total = 0;
     for i in 0..3000 {

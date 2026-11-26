@@ -70,14 +70,26 @@ impl show for parse_error {
 pub enum io_kind {
     notFound
     denied
+    alreadyExists
+    notDirectory
+    isDirectory
     invalid
+    invalidUtf8
+    unexpectedEof
+    writeZero
+    outOfSpace
+    brokenPipe
+    interrupted
+    wouldBlock
+    timedOut
     other
 }
 
 //~ A failed file or stream operation: `kind` for the cases a program tells apart, `message` for the person
-//~ (it names the path when there is one).
+//~ (it names the path when there is one). `code` is the operating system's error number, 0 when there is none.
 pub struct io_error {
     pub kind: io_kind
+    pub code: int
     pub message: string
 }
 
