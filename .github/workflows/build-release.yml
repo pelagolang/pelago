@@ -64,6 +64,23 @@ jobs:
           exe=target/${{ matrix.rust }}/release/pelago
           case "${{ matrix.target }}" in *windows) exe="$exe.exe" ;; esac
           python3 tools/release/release.py package --binary "$exe" --target ${{ matrix.target }} --version "${{ inputs.version }}" --out dist
+      - name: Linux packages (.deb and .rpm)
+        if: matrix.musl
+        shell: bash
+        run: |
+          sudo apt-get install -y rpm
+          python3 tools/release/release.py linux-packages --binary target/${{ matrix.rust }}/release/pelago --target ${{ matrix.target }} --version "${{ inputs.version }}" --out dist
+          ls dist/*.deb dist/*.rpm
+      - name: Install the .deb and run it
+        if: matrix.musl
+        shell: bash
+        run: |
+          sudo dpkg -i dist/*.deb
+          out="$(pelago --version)"
+          echo "$out"
+          case "$out" in "pelago ${{ inputs.version }}"*) ;; *) echo "wrong version"; exit 1 ;; esac
+          sudo dpkg -r pelago
+          rpm -qpi dist/*.rpm
       - uses: actions/upload-artifact@v4
         with:
           name: archive-${{ matrix.target }}
