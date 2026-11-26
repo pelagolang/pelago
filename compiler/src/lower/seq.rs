@@ -636,7 +636,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// The address of an operand's value; a scalar (a box) is first stored in a temporary.
-    fn operand_addr(&mut self, e: &'a Expr, t: Ty) -> Option<Value> {
+    pub(crate) fn operand_addr(&mut self, e: &'a Expr, t: Ty) -> Option<Value> {
         if let Repr::Scalar(_) = self.repr(t) {
             let v = self.scalar(e)?;
             let slot = self.slot_for(t);
@@ -806,12 +806,41 @@ impl<'a> Lowerer<'a> {
         };
         let esize = self.layout(elem).size as i64;
         let sz = self.i64c(esize.max(1));
+        // A negative count, or one whose bytes could never be allocated, stops the program.
+        let zero = self.i64c(0);
+        if let Some(neg) = self.emit(Op::Cmp(CmpOp::Lt, n, zero), Some(IrTy::Bool), e.span) {
+            self.stop_if(neg, "negative list length");
+        }
+        let most = self.i64c((1i64 << 40) / esize.max(1));
+        if let Some(big) = self.emit(Op::Cmp(CmpOp::Gt, n, most), Some(IrTy::Bool), e.span) {
+            self.stop_if(big, "list length too large");
+        }
         let bytes = self
             .emit(Op::Bin(BinOp::Mul, n, sz), Some(IrTy::I64), e.span)
             .unwrap_or(n);
-        let buf = self
+        // No elements, no buffer: an empty list owns nothing, as with `[]`.
+        let join = self.new_block(&[IrTy::Ptr]);
+        let some = self.new_block(&[]);
+        let nothing = self.new_block(&[]);
+        if let Some(c) = self.emit(Op::Cmp(CmpOp::Eq, n, zero), Some(IrTy::Bool), e.span) {
+            self.branch(c, nothing, some);
+        }
+        self.start(some);
+        let fresh = self
             .emit(Op::Alloc(bytes), Some(IrTy::Ptr), e.span)
             .unwrap_or(dst);
+        self.jump(join, vec![fresh]);
+        self.start(nothing);
+        let np = self
+            .emit(
+                Op::Cast(CastKind::IntToPtr, zero, IrTy::Ptr),
+                Some(IrTy::Ptr),
+                e.span,
+            )
+            .unwrap_or(dst);
+        self.jump(join, vec![np]);
+        self.start(join);
+        let buf = self.f.func.block_params(join)[0];
         // The value is built once and cloned into each place.
         let tmp = self.slot_for(elem);
         if let Res::Never = self.into(value, tmp, elem) {
