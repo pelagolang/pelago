@@ -364,7 +364,15 @@ impl Analysis {
                 _ => {}
             }
         }
-        let callee = toks.get(open?.checked_sub(1)?)?;
+        // `xs.push!(4)` and `c.close!!()`: the `!` or `!!` belongs to the call.
+        let mut before = open?.checked_sub(1)?;
+        if matches!(
+            toks.get(before)?.kind,
+            TokenKind::Punct(Punct::Bang | Punct::BangBang)
+        ) {
+            before = before.checked_sub(1)?;
+        }
+        let callee = toks.get(before)?;
         if callee.kind != TokenKind::Ident {
             return None;
         }
@@ -402,8 +410,8 @@ impl Analysis {
         }
         let info_has_self = self.typed.fn_infos.get(&def).is_some_and(|i| i.has_self);
         // A method called with a dot does not pass `self`: skip that piece of the label.
-        let called_on_value = open
-            .and_then(|o| o.checked_sub(2))
+        let called_on_value = Some(before)
+            .and_then(|o| o.checked_sub(1))
             .and_then(|k| toks.get(k))
             .is_some_and(|t| t.kind == TokenKind::Punct(Punct::Dot));
         let skip = usize::from(info_has_self && called_on_value);
@@ -516,7 +524,13 @@ impl Analysis {
                     DefKind::Field => "(field) ".to_string(),
                     _ => "(local) ".to_string(),
                 };
-                match self.typed.local_tys.get(&def) {
+                // A field's type is recorded with its struct or obj.
+                let field_ty = d
+                    .parent
+                    .and_then(|p| self.typed.adts.get(&p))
+                    .and_then(|a| a.fields.iter().find(|(f, _)| *f == def))
+                    .map(|(_, t)| t);
+                match self.typed.local_tys.get(&def).or(field_ty) {
                     Some(t) => format!("{tag}{}: {}", d.name, ty(*t)),
                     None => format!("{tag}{}", d.name),
                 }
