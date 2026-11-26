@@ -49,6 +49,11 @@
   (call clear2 (arg inout scores))
   (call finish2 (arg sink scores))
   (fn
+    shift
+    ((inout xs : (slice int)) (by : int))
+    (block (tail (for-of ((inout x)) xs (block (tail (+= x by)))))))
+  (call shift (arg inout (index scores (.. 1 3))) 10)
+  (fn
     sum_to
     ((n : int) (acc : int = 0))
     ->
@@ -64,7 +69,7 @@
     (block (const n (try (call digits s))) (tail (call ok n))))
   (fn find ((xs : (list string)) (name : string)) -> (option int) (block (tail none)))
   (const index (?? (call find names (str "Dennis")) (neg 1)))
-  (fn (@ inline) square ((x : int)) -> int = (* x x))
+  (fn (@ inline_always) square ((x : int)) -> int = (* x x))
   (fn
     (@ checkfree)
     dot

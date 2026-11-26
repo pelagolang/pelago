@@ -262,6 +262,12 @@ impl Analysis {
     pub fn definition(&self, m: ModuleId, off: usize) -> Option<(ModuleId, Span)> {
         let id = self.ident_at(m, off)?;
         let def = self.resolved.def(self.def_of_name(m, id.start)?);
+        if def.file.is_none() && def.kind == DefKind::Module {
+            // A module that is a file: its scope has the module's index. Jump to the top of it.
+            let idx = def.scope?;
+            let module = self.program.modules.get(idx)?;
+            return (!module.synthetic).then_some((module.id, Span::new(0, 0)));
+        }
         Some((def.file?, def.span))
     }
 

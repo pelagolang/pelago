@@ -1574,3 +1574,20 @@ fn wide_literals_must_fit() {
     let c = run("fn t() { const x: uint256 = 115792089237316195423570985008687907853269984665640564039457584007913129639935 }");
     assert!(c.errors().is_empty(), "{:?}", c.errors());
 }
+
+#[test]
+fn window_types_borrow_part_of_a_list() {
+    clean("fn f(w: [int..]) -> int = w[0]\nfn t() { var xs = [1, 2]\n f(xs)\n f(xs[0..1]) }");
+    clean("fn f(w: slice<int>) -> int = w.len()\nfn t() { var a: [int; 2] = [1, 2]\n f(a) }");
+    clean("fn f(w: [int..]) -> [int] = copy w");
+    flagged(
+        "fn f(w: [int..]) -> [int..] { return w }",
+        "cannot be returned",
+    );
+    flagged("fn f(w!!: [int..]) { }", "cannot be taken with `sink`");
+    flagged(
+        "fn g(xs!: [int]) { xs.push!(1) }\nfn f(w!: [int..]) { g(w!) }",
+        "may change the list's length",
+    );
+    flagged("fn f(w: [int..]) { }\nfn t() { f([\"a\"]) }", "");
+}

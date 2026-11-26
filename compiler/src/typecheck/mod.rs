@@ -1245,6 +1245,22 @@ impl<'p> Checker<'p> {
                 Some(t) => c.lower_type(t),
                 None => c.tt.void,
             };
+            if matches!(c.kind_of(ret), TyKind::Slice(_)) {
+                if let Some(t) = &f.ret {
+                    c.err(
+                        t.span,
+                        "a window cannot be returned: it points into something that is gone when the function ends; return a list (`copy w`)",
+                    );
+                }
+            }
+            for (p, sp) in f.params.iter().zip(params.iter()) {
+                if p.mode == Some(Mode::Sink) && matches!(c.kind_of(sp.ty), TyKind::Slice(_)) {
+                    c.err(
+                        p.name.span,
+                        "a window does not own what it covers, so it cannot be taken with `sink`; take a list, or `copy w`",
+                    );
+                }
+            }
             FnSig {
                 generics,
                 params,
@@ -1359,6 +1375,10 @@ impl<'p> Checker<'p> {
                 let e = self.lower_type(e);
                 let len = self.array_len(n);
                 self.tt.mk(TyKind::Array(e, len))
+            }
+            TypeKind::Slice(e, _) => {
+                let e = self.lower_type(e);
+                self.tt.mk(TyKind::Slice(e))
             }
             TypeKind::Tuple(ts) => {
                 if ts.is_empty() {
@@ -1606,6 +1626,7 @@ impl<'p> Checker<'p> {
             "error" => tt.error,
             "ptr" => tt.mk(TyKind::Ptr),
             "list" if want(self, 1) => self.tt.list(lowered[0]),
+            "slice" if want(self, 1) => self.tt.mk(TyKind::Slice(lowered[0])),
             "soa" if lowered.len() == 1 || lowered.len() == 2 => {
                 let len = match lowered.get(1).map(|t| self.tt.kind(*t).clone()) {
                     None => ArrayLen::Unknown,
@@ -1986,7 +2007,7 @@ pub(crate) fn linear_in(tt: &TypeTable, linear: &std::collections::HashSet<DefId
 pub(crate) fn holds_view(tt: &TypeTable, t: Ty) -> bool {
     let t = tt.shallow(t);
     match tt.kind(t) {
-        TyKind::Str | TyKind::Fn(..) => true,
+        TyKind::Str | TyKind::Slice(_) | TyKind::Fn(..) => true,
         TyKind::List(e)
         | TyKind::Array(e, _)
         | TyKind::Soa(e, _)

@@ -1137,6 +1137,32 @@ fn interfaces_and_impls_have_no_fields() {
 }
 
 #[test]
+fn unknown_attributes_are_errors() {
+    assert_flagged("@inline fn f() = 1", "unknown attribute `@inline`");
+    assert_flagged("@checkfre fn f() = 1", "did you mean `@checkfree`?");
+    assert_flagged("@inline_alway fn f() = 1", "did you mean `@inline_always`?");
+    assert_flagged("struct s { @jsn(\"a\") x: int }", "did you mean `@json`?");
+    assert_flagged("@bogus struct s { x: int }", "the attributes are");
+    assert_clean("@checkfree fn f() = 1");
+    assert_clean("@inline_always fn f() = 1");
+    assert_clean("@leaf fn f() = 1");
+    assert_clean("@derive(eq, clone) struct s { @json(\"a\") x: int }");
+}
+
+#[test]
+fn unknown_derive_words_are_errors() {
+    assert_flagged(
+        "@derive(nothing) struct s { x: int }",
+        "`nothing` cannot be derived",
+    );
+    assert_flagged(
+        "@derive(eq, clon) struct s { x: int }",
+        "did you mean `clone`?",
+    );
+    assert_clean("@derive(eq, hash, order, show, fromJson, toJson) struct s { x: int }");
+}
+
+#[test]
 fn pattern_bindings() {
     assert_flagged("switch v { case (a, a): 0 }", "bound twice");
     assert_flagged("for a, a of xs {}", "bound twice");

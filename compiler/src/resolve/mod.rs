@@ -347,7 +347,10 @@ impl<'p> Resolver<'p> {
             r.prelude.insert(name.to_string(), id);
         };
         // `braid` is the namespace of the braid's constructors: `braid.zip(xs, ys)`.
-        for t in PRELUDE_TYPES.iter().chain(["list", "iter", "braid"].iter()) {
+        for t in PRELUDE_TYPES
+            .iter()
+            .chain(["list", "slice", "iter", "braid"].iter())
+        {
             add(self, t, DefKind::BuiltinType);
         }
         for f in PRELUDE_FUNCTIONS.iter().chain(["ok", "err"].iter()) {

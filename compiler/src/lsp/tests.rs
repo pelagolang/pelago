@@ -332,37 +332,21 @@ fn a_workspace_package_sees_other_files() {
 }
 
 #[test]
-fn semantic_tokens_call_library_methods_methods() {
+fn definition_reaches_library_and_modules() {
     let mut s = started();
-    let src =
-        "fn main() {\n    const xs = [1]\n    const n = xs.len()\n    const m = max(1, 2)\n}\n";
+    let src = "const m = max(1, 2)\nconst t = \"a\".replace(\"a\", \"b\")\n";
     open(&mut s, URI, src);
-    let r = result(s.handle(&request(
-        2,
-        "textDocument/semanticTokens/full",
-        obj(vec![("textDocument", doc(URI))]),
-    )));
-    let data: Vec<i64> = r
-        .get("data")
-        .and_then(Json::arr)
-        .unwrap_or(&[])
-        .iter()
-        .filter_map(Json::int)
-        .collect();
-    let (mut line, mut col) = (0, 0);
-    let mut kinds = Vec::new();
-    for t in data.chunks(5) {
-        line += t[0];
-        col = if t[0] == 0 { col + t[1] } else { t[1] };
-        let word =
-            &src.lines().nth(line as usize).unwrap_or("")[col as usize..(col + t[2]) as usize];
-        kinds.push((word.to_string(), TOKEN_TYPES[t[3] as usize]));
-    }
-    assert!(kinds.contains(&("len".to_string(), "method")), "{kinds:?}");
-    assert!(
-        kinds.contains(&("max".to_string(), "function")),
-        "{kinds:?}"
-    );
+    // `max` is declared in the library: the answer is a readable file that holds it.
+    let r = result(s.handle(&request(2, "textDocument/definition", at(URI, 0, 11))));
+    let uri = r.get("uri").and_then(Json::str).expect("a uri").to_string();
+    assert!(uri.ends_with("/core/core/math.pel"), "{uri}");
+    let path = uri_to_path(&uri).expect("a path");
+    let file = std::fs::read_to_string(path).expect("the library file");
+    assert!(file.contains("fn max"));
+    // A method of a library type.
+    let r = result(s.handle(&request(3, "textDocument/definition", at(URI, 1, 17))));
+    let uri = r.get("uri").and_then(Json::str).expect("a uri");
+    assert!(uri.ends_with("/core/core/strings.pel"), "{uri}");
 }
 
 #[test]
@@ -550,6 +534,40 @@ fn rename_params(uri: &str, line: i64, ch: i64, new: &str) -> Json {
         f.push(("newName".to_string(), text(new)));
     }
     p
+}
+
+#[test]
+fn semantic_tokens_call_library_methods_methods() {
+    let mut s = started();
+    let src =
+        "fn main() {\n    const xs = [1]\n    const n = xs.len()\n    const m = max(1, 2)\n}\n";
+    open(&mut s, URI, src);
+    let r = result(s.handle(&request(
+        2,
+        "textDocument/semanticTokens/full",
+        obj(vec![("textDocument", doc(URI))]),
+    )));
+    let data: Vec<i64> = r
+        .get("data")
+        .and_then(Json::arr)
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(Json::int)
+        .collect();
+    let (mut line, mut col) = (0, 0);
+    let mut kinds = Vec::new();
+    for t in data.chunks(5) {
+        line += t[0];
+        col = if t[0] == 0 { col + t[1] } else { t[1] };
+        let word =
+            &src.lines().nth(line as usize).unwrap_or("")[col as usize..(col + t[2]) as usize];
+        kinds.push((word.to_string(), TOKEN_TYPES[t[3] as usize]));
+    }
+    assert!(kinds.contains(&("len".to_string(), "method")), "{kinds:?}");
+    assert!(
+        kinds.contains(&("max".to_string(), "function")),
+        "{kinds:?}"
+    );
 }
 
 #[test]

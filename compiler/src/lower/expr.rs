@@ -548,7 +548,19 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::Index { base, index } => {
                 if matches!(index.kind, ExprKind::Range { .. }) {
-                    return None;
+                    // A window of a list or array that the callee may change: a list header that owns
+                    // nothing, in a temporary, pointing into the original elements.
+                    let bt = self.ty_of(base)?;
+                    let bt = self.peel_box(bt);
+                    if !matches!(self.kind(bt), TyKind::List(_) | TyKind::Array(..)) {
+                        return None;
+                    }
+                    let t = self.ty_of(e)?;
+                    let tmp = self.slot_for(t);
+                    return match self.slice_expr(e, tmp, t) {
+                        Res::Never => None,
+                        _ => Some(tmp),
+                    };
                 }
                 self.index_place(e, base, index)
             }

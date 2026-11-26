@@ -128,6 +128,7 @@ impl Printer<'_> {
             TypeKind::SelfType => atom("Self"),
             TypeKind::List(e) => list("list", vec![self.ty(e)]),
             TypeKind::Array(e, n) => list("array", vec![self.ty(e), self.expr(n)]),
+            TypeKind::Slice(e, _) => list("slice", vec![self.ty(e)]),
             TypeKind::Tuple(ts) => list("tuple", ts.iter().map(|t| self.ty(t)).collect()),
             TypeKind::FixedTuple(ts, n, spelled) => {
                 let mut v: Vec<Sexp> = ts.iter().map(|t| self.ty(t)).collect();
