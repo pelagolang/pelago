@@ -218,18 +218,18 @@ impl<'a> Lowerer<'a> {
                 self.call_core(f, vec![out, w]);
                 true
             }
-            TyKind::Float(_) => {
-                let w = if self.vty(v) == IrTy::F32 {
-                    self.emit(
-                        Op::Cast(CastKind::FloatResize, v, IrTy::F64),
-                        Some(IrTy::F64),
-                        Span::new(0, 0),
-                    )
-                    .unwrap_or(v)
-                } else {
-                    v
-                };
-                self.call_core("rtShowFloat", vec![out, w]);
+            TyKind::Float(k) => {
+                // The shortest round-trip printer (`rtFloatShow`) is shared with the soft floats: the bits go
+                // into a zeroed word and it is told the format (`float` is 11/52, `float32` is 8/23).
+                let slot = self.slot_bytes(8, 8);
+                let z = self.i64c(0);
+                self.store_at(slot, 0, z);
+                self.store_at(slot, 0, v);
+                let (eb, mb) = k.format();
+                let n = self.i64c(1);
+                let eb = self.i64c(eb as i64);
+                let mb = self.i64c(mb as i64);
+                self.call_core("rtFloatShow", vec![out, slot, n, eb, mb]);
                 true
             }
             TyKind::Bool => {
@@ -1137,7 +1137,7 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-/// A producer a `for` loop pulls from in place, without building a list (design note iter).
+/// A producer a `for` loop pulls from in place, without building a list.
 #[derive(Clone, Copy)]
 pub(crate) enum Fused<'a> {
     /// `s.chars()`
@@ -1379,7 +1379,7 @@ impl<'a> Lowerer<'a> {
     }
 }
 
-/// A `map` or `filter` step of a chain a `for` loop runs element by element (design note iter, section 4).
+/// A `map` or `filter` step of a chain a `for` loop runs element by element.
 #[derive(Clone, Copy)]
 pub(crate) enum Adapter<'a> {
     Map(&'a Expr),

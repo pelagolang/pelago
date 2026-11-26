@@ -1,4 +1,4 @@
-//! The x86-64 side of the machine IR (design in `design note mir`): the opcodes, the register file
+//! The x86-64 side of the machine IR: the opcodes, the register file
 //! the shared allocator sees, and the spill moves. [`super::x86_select`] makes MIR from the IR and
 //! [`super::x86_emit`] turns allocated MIR into bytes.
 //!

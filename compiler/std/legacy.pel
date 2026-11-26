@@ -16,7 +16,7 @@
 /// different inputs with the same digest. Do not use them for signatures, certificates, password hashing or integrity
 /// against an attacker; use `std.sha2`, `std.sha3` (and soon `std.blake2` or `std.blake3`). As a MAC, HMAC-MD5 and
 /// HMAC-SHA1 are still unbroken, which is why they work with `std.mac`. Checked against Python's `hashlib`.
-/// Planned here too: MD2 (`design note crypto`).
+/// Planned here too: MD2.
 
 import std.hash
 import { hasher } = std.hash

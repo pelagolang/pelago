@@ -1,6 +1,6 @@
 //! Packages and modules: the source files of a program, parsed.
 //!
-//! A file is a module and its file name is the module name (`design note modules`). A directory
+//! A file is a module and its file name is the module name. A directory
 //! is a parent module: `geometry.pel` is `geometry`, `geometry/shapes.pel` is `geometry.shapes`,
 //! and a front file `geometry.pel` next to the directory `geometry/` is the parent of what is
 //! inside it. A parent without a front file is an empty module made up for the occasion.

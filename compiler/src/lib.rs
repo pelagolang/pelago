@@ -32,5 +32,6 @@ pub mod token;
 pub mod typecheck;
 pub mod types;
 pub mod values;
+pub mod version;
 pub mod visit;
 pub mod yaml;
