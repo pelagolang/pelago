@@ -500,11 +500,20 @@ fn file_errors_carry_the_system_error_number() {
     for flags in errno_modes() {
         let (out, err, code) = run_with(flags, src, &[], &input);
         assert_eq!(code, 0, "{flags:?}: {err}");
-        assert_eq!(
-            out,
-            "exists 17 true false false\nmissing 2 false false true\nnotdir 20 false true false\ndir 21 true\n",
-            "{flags:?}"
+        // Windows reports a path under a file as "not found" and a directory read as "denied", so those two
+        // lines are only checked where the system gives the Linux and macOS numbers.
+        let want = if cfg!(windows) {
+            "exists 17 true false false\nmissing 2 false false true\n"
+        } else {
+            "exists 17 true false false\nmissing 2 false false true\nnotdir 20 false true false\ndir 21 true\n"
+        };
+        assert!(
+            out.starts_with(want.lines().take(2).collect::<Vec<_>>().join("\n").as_str()),
+            "{flags:?}: {out}"
         );
+        if !cfg!(windows) {
+            assert_eq!(out, want, "{flags:?}");
+        }
     }
     std::fs::remove_dir_all(&dir).ok();
 }
