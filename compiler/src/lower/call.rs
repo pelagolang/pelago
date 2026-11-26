@@ -25,6 +25,48 @@ impl<'a> Lowerer<'a> {
         Some((def, map))
     }
 
+    /// An argument for a window parameter (`xs: [T..]`, `xs!: [T..]`): a list header that owns nothing. A
+    /// window expression, a list or another window already has that layout; an array gets a header made
+    /// from its address and length.
+    fn window_arg(&mut self, arg: &'a Expr, ty: Ty, mode: Option<Mode>) -> Option<Value> {
+        let have = self.ty_of(arg)?;
+        let have = self.peel_box(have);
+        let is_range = matches!(&strip_parens(arg).kind, ExprKind::Index { index, .. } if matches!(index.kind, ExprKind::Range { .. }));
+        if let TyKind::Array(_, n) = self.types.kind_of(self.types.shallow(have)).clone() {
+            if !is_range {
+                let addr = if mode == Some(Mode::Inout) {
+                    self.place(arg)?
+                } else {
+                    match self.expr(arg) {
+                        Res::Val(p) => p,
+                        _ => return None,
+                    }
+                };
+                let len = self.array_len(n);
+                let tmp = self.slot_for(ty);
+                let n = self.i64c(len);
+                let z = self.i64c(0);
+                self.store_at(tmp, 0, addr);
+                self.store_at(tmp, 8, n);
+                self.store_at(tmp, 16, z);
+                return Some(tmp);
+            }
+        }
+        if is_range || mode == Some(Mode::Inout) {
+            if let Some(p) = self.place(arg) {
+                return Some(p);
+            }
+            if !self.failed() {
+                self.unsupported(arg.span, "a window argument that is not a place");
+            }
+            return None;
+        }
+        match self.expr(arg) {
+            Res::Val(p) => Some(p),
+            _ => None,
+        }
+    }
+
     pub(crate) fn call(
         &mut self,
         e: &'a Expr,
@@ -478,6 +520,23 @@ impl<'a> Lowerer<'a> {
                 return Some(tmp);
             }
         };
+        if matches!(pass, Pass::Ptr) {
+            if self.is_window(ty) {
+                return self.window_arg(arg, ty, mode);
+            }
+            // A window where a read-only list is wanted (a method of `list` called on a window): the same
+            // header, passed by address. Nothing is copied and nothing is dropped.
+            let window_has = self.ty_of(arg).is_some_and(|h| self.is_window(h));
+            if window_has && mode != Some(Mode::Sink) {
+                return match mode {
+                    Some(Mode::Inout) => self.place(arg),
+                    _ => match self.expr(arg) {
+                        Res::Val(p) => Some(p),
+                        _ => None,
+                    },
+                };
+            }
+        }
         match pass {
             Pass::Skip => {
                 self.expr(arg);

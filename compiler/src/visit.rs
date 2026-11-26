@@ -201,7 +201,9 @@ pub fn walk_type<V: Visitor>(v: &mut V, t: &Type) {
             }
         }
         TypeKind::SelfType | TypeKind::Error => {}
-        TypeKind::List(e) | TypeKind::Option(e) | TypeKind::Any(e) => v.visit_type(e),
+        TypeKind::List(e) | TypeKind::Option(e) | TypeKind::Any(e) | TypeKind::Slice(e, _) => {
+            v.visit_type(e)
+        }
         TypeKind::Array(e, n) => {
             v.visit_type(e);
             v.visit_expr(n);

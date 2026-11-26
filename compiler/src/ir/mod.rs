@@ -497,7 +497,9 @@ impl OsKind {
 pub const OS_NOMEM: i64 = -1;
 pub const OS_BAD: i64 = -2;
 pub const OS_FAIL: i64 = -3;
-/// `Open` only: no such file or directory, and permission denied. (A directory opens for reading on Linux and
+/// `Open` and `Fs` (and `Dents`): no such file or directory, and permission denied. Any other failure is the
+/// system's error number, negated (`-17` for "exists"; the interpreter gives the Linux numbers on every host).
+/// Windows still gives `OS_FAIL` for the others. (A directory opens for reading on Linux and
 /// fails at the first read with `EISDIR` (-21); on Windows it fails to open with `OS_ACCES`.)
 pub const OS_NOENT: i64 = -4;
 pub const OS_ACCES: i64 = -5;

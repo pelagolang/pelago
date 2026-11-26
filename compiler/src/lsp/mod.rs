@@ -512,8 +512,11 @@ impl Server {
             ))
         };
         let location = |fm: crate::package::ModuleId, s: crate::span::Span| -> Option<Json> {
-            let (u, _) = a.modules.iter().find(|(_, x)| *x == fm)?;
-            let shown = self.docs.get(u).map_or(u.clone(), |(orig, _)| orig.clone());
+            let shown = match a.modules.iter().find(|(_, x)| *x == fm) {
+                Some((u, _)) => self.docs.get(u).map_or(u.clone(), |(orig, _)| orig.clone()),
+                // A library module: its source is written to a cache folder so the editor can open it.
+                None => library_uri(&a.program, fm)?,
+            };
             let text = &a.program.module(fm).src;
             let lm = LineMap::new(text);
             Some(obj(vec![
@@ -733,6 +736,29 @@ impl Server {
 }
 
 /// A refused rename: a sentinel the dispatcher turns into a JSON-RPC error.
+/// The file the source of a library module is written to (once), so that go to definition can
+/// open it. The folder is per compiler version; the files are only for reading.
+fn library_uri(program: &crate::package::Program, m: crate::package::ModuleId) -> Option<String> {
+    let module = program.module(m);
+    if module.synthetic {
+        return None;
+    }
+    let package = program.package(module.package);
+    let mut path = std::env::temp_dir()
+        .join("pelago-lsp")
+        .join(env!("CARGO_PKG_VERSION"))
+        .join(&package.name);
+    for part in module.path.split('.') {
+        path.push(part);
+    }
+    path.set_extension("pel");
+    if !path.exists() {
+        std::fs::create_dir_all(path.parent()?).ok()?;
+        std::fs::write(&path, &module.src).ok()?;
+    }
+    Some(path_to_uri(&path))
+}
+
 fn rename_refused(msg: &str) -> Json {
     obj(vec![("renameRefused", text(msg))])
 }

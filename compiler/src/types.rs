@@ -184,6 +184,9 @@ pub enum TyKind {
     /// Arithmetic on compile-time numbers (`N + 1`, `N * 2`); folds to a `Const` once both sides are known.
     ConstOp(u8, Ty, Ty),
     List(Ty),
+    /// `[T..]` or `slice<T>`: a window onto part of a list or array. It owns nothing and cannot be stored
+    /// or returned; it has the layout of a list header, and its length cannot change.
+    Slice(Ty),
     Array(Ty, ArrayLen),
     /// `soa<T>`: one column per field of `T` (the length is the block size of `soa<T, N>`, or unknown).
     Soa(Ty, ArrayLen),
@@ -370,6 +373,7 @@ impl TypeTable {
                 args.iter().any(|a| self.occurs(v, *a))
             }
             TyKind::List(a)
+            | TyKind::Slice(a)
             | TyKind::Option(a)
             | TyKind::Set(a)
             | TyKind::Range(a)
@@ -452,6 +456,7 @@ impl TypeTable {
             (_, TyKind::Var(w)) => self.bind_var(*w, a),
             (TyKind::Adt(d1, a1), TyKind::Adt(d2, a2)) => d1 == d2 && self.unify_all(a1, a2),
             (TyKind::List(x), TyKind::List(y))
+            | (TyKind::Slice(x), TyKind::Slice(y))
             | (TyKind::Option(x), TyKind::Option(y))
             | (TyKind::Set(x), TyKind::Set(y))
             | (TyKind::Range(x), TyKind::Range(y))
@@ -586,6 +591,7 @@ impl TypeTable {
                 TyKind::AltTuple(ts.into_iter().map(|a| self.zonk(a)).collect(), n)
             }
             TyKind::List(a) => TyKind::List(self.zonk(a)),
+            TyKind::Slice(a) => TyKind::Slice(self.zonk(a)),
             TyKind::Array(a, n) => {
                 let n = self.norm_len(n, |c, t| c.zonk(t));
                 TyKind::Array(self.zonk(a), n)
@@ -640,6 +646,7 @@ impl TypeTable {
                 TyKind::AltTuple(ts.into_iter().map(|a| self.subst(a, map)).collect(), n)
             }
             TyKind::List(a) => TyKind::List(self.subst(a, map)),
+            TyKind::Slice(a) => TyKind::Slice(self.subst(a, map)),
             TyKind::Array(a, n) => {
                 let n = self.norm_len(n, |c, t| c.subst(t, map));
                 TyKind::Array(self.subst(a, map), n)
@@ -679,6 +686,7 @@ impl TypeTable {
                 args.iter().any(|a| self.has_vars(*a))
             }
             TyKind::List(a)
+            | TyKind::Slice(a)
             | TyKind::Option(a)
             | TyKind::Set(a)
             | TyKind::Range(a)
@@ -769,6 +777,7 @@ impl TypeTable {
             TyKind::Const(k) => k.to_string(),
             TyKind::ConstOp(op, a, b) => format!("{} {} {}", d(*a), *op as char, d(*b)),
             TyKind::List(e) => format!("[{}]", d(*e)),
+            TyKind::Slice(e) => format!("[{}..]", d(*e)),
             TyKind::Array(e, n) => match n {
                 ArrayLen::Known(n) => format!("[{}; {n}]", d(*e)),
                 ArrayLen::Term(t) => format!("[{}; {}]", d(*e), d(*t)),

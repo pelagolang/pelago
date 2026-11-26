@@ -332,40 +332,21 @@ fn a_workspace_package_sees_other_files() {
 }
 
 #[test]
-fn debounced_edits_show_syntax_errors_now_and_check_the_package_on_flush() {
+fn definition_reaches_library_and_modules() {
     let mut s = started();
-    s.debounce = true;
-    let change = |s: &mut Server, text_: &str| {
-        s.handle(&note(
-            "textDocument/didChange",
-            obj(vec![
-                ("textDocument", doc(URI)),
-                (
-                    "contentChanges",
-                    Json::Arr(vec![obj(vec![("text", text(text_))])]),
-                ),
-            ]),
-        ))
-    };
-    // A type error waits for the check; nothing is published by the edit itself.
-    let type_error = "fn main() {\n    const a: int = \"x\"\n}\n";
-    assert!(change(&mut s, type_error).is_empty());
-    assert!(s.has_pending());
-    // A syntax error is shown at once.
-    let d = diagnostics(&change(&mut s, "fn main( {\n"));
-    assert!(d.iter().any(|(_, m)| !m.is_empty()), "{d:?}");
-    // Two more edits, one check: the last text is what gets checked.
-    change(&mut s, type_error);
-    let d = diagnostics(&s.flush());
-    assert!(
-        d.iter().any(|(_, m)| m.iter().any(|x| x.contains("int"))),
-        "{d:?}"
-    );
-    assert!(!s.has_pending());
-    // Fixing the text clears the diagnostics on the next flush.
-    change(&mut s, "fn main() {\n}\n");
-    let d = diagnostics(&s.flush());
-    assert!(d.iter().all(|(_, m)| m.is_empty()), "{d:?}");
+    let src = "const m = max(1, 2)\nconst t = \"a\".replace(\"a\", \"b\")\n";
+    open(&mut s, URI, src);
+    // `max` is declared in the library: the answer is a readable file that holds it.
+    let r = result(s.handle(&request(2, "textDocument/definition", at(URI, 0, 11))));
+    let uri = r.get("uri").and_then(Json::str).expect("a uri").to_string();
+    assert!(uri.ends_with("/core/core/math.pel"), "{uri}");
+    let path = uri_to_path(&uri).expect("a path");
+    let file = std::fs::read_to_string(path).expect("the library file");
+    assert!(file.contains("fn max"));
+    // A method of a library type.
+    let r = result(s.handle(&request(3, "textDocument/definition", at(URI, 1, 17))));
+    let uri = r.get("uri").and_then(Json::str).expect("a uri");
+    assert!(uri.ends_with("/core/core/strings.pel"), "{uri}");
 }
 
 #[test]
@@ -617,6 +598,43 @@ fn rename_reaches_other_files_of_the_package() {
     assert_eq!(util.map(|u| u.len()), Some(1), "{r:?}");
     assert!(changes.get(&main_uri).and_then(Json::arr).unwrap().len() >= 2);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn debounced_edits_show_syntax_errors_now_and_check_the_package_on_flush() {
+    let mut s = started();
+    s.debounce = true;
+    let change = |s: &mut Server, text_: &str| {
+        s.handle(&note(
+            "textDocument/didChange",
+            obj(vec![
+                ("textDocument", doc(URI)),
+                (
+                    "contentChanges",
+                    Json::Arr(vec![obj(vec![("text", text(text_))])]),
+                ),
+            ]),
+        ))
+    };
+    // A type error waits for the check; nothing is published by the edit itself.
+    let type_error = "fn main() {\n    const a: int = \"x\"\n}\n";
+    assert!(change(&mut s, type_error).is_empty());
+    assert!(s.has_pending());
+    // A syntax error is shown at once.
+    let d = diagnostics(&change(&mut s, "fn main( {\n"));
+    assert!(d.iter().any(|(_, m)| !m.is_empty()), "{d:?}");
+    // Two more edits, one check: the last text is what gets checked.
+    change(&mut s, type_error);
+    let d = diagnostics(&s.flush());
+    assert!(
+        d.iter().any(|(_, m)| m.iter().any(|x| x.contains("int"))),
+        "{d:?}"
+    );
+    assert!(!s.has_pending());
+    // Fixing the text clears the diagnostics on the next flush.
+    change(&mut s, "fn main() {\n}\n");
+    let d = diagnostics(&s.flush());
+    assert!(d.iter().all(|(_, m)| m.is_empty()), "{d:?}");
 }
 
 #[test]

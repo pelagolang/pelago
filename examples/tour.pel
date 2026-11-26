@@ -68,6 +68,13 @@ fn finish2(xs!!: [int]) -> int = xs.len()
 clear2(scores!)
 finish2(scores!!)
 
+/// A window `[T..]` (long spelling `slice<T>`) borrows part of a list or array.
+fn shift(xs!: [int..], by: int) {
+    for inout x of xs { x += by }
+}
+
+shift(scores[1..3]!, 10)
+
 fn sum_to(n: int, acc: int = 0) -> int {
     if n == 0 { return acc }
     become sum_to(n - 1, acc + n)
@@ -81,7 +88,7 @@ fn parseInt(s: string) -> int ! parse_error {
 fn find(xs: [string], name: string) -> int? { none }
 const index = find(names, "Dennis") ?? -1
 
-@inline fn square(x: int) -> int = x * x
+@inline_always fn square(x: int) -> int = x * x
 
 @checkfree
 fn dot(a: [int], b: [int]) -> int {

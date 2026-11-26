@@ -145,7 +145,7 @@ impl<'p> Checker<'p> {
                 let s = self.tt.str_;
                 self.lookup_method(s, name, span)
             }
-            TyKind::Array(e, _) => {
+            TyKind::Array(e, _) | TyKind::Slice(e) => {
                 let l = self.tt.list(e);
                 self.lookup_method(l, name, span)
             }
@@ -230,6 +230,25 @@ impl<'p> Checker<'p> {
             }
         }
         names
+    }
+
+    /// A window (`xs[1..3]`, or a `[T..]` value) may not go where a list that can grow is changed: the callee
+    /// could push to a buffer it does not own. Such a parameter is written `[T..]`.
+    fn window_to_changing_list(&mut self, mode: Option<Mode>, arg: &'p Expr, found: Ty, want: Ty) {
+        if mode != Some(Mode::Inout) || !matches!(self.kind_of(want), TyKind::List(_)) {
+            return;
+        }
+        let mut inner = arg;
+        while let ExprKind::Paren(i) = &inner.kind {
+            inner = i;
+        }
+        let range = matches!(&inner.kind, ExprKind::Index { index, .. } if matches!(index.kind, ExprKind::Range { .. }));
+        if range || matches!(self.kind_of(found), TyKind::Slice(_)) {
+            self.err(
+                arg.span,
+                "a window only borrows part of a list, so it cannot go to a parameter that may change the list's length; declare the parameter as `[T..]`, or pass the whole list",
+            );
+        }
     }
 
     /// Is this expression something that can be changed or moved out of (a place)?
@@ -604,7 +623,9 @@ impl<'p> Checker<'p> {
                     );
                 }
                 filled[i] = true;
-                self.check_coerce(&a.value, ptys[i]);
+                let found = self.check_expr(&a.value, Exp::Is(ptys[i]));
+                self.coerce_at(found, ptys[i], a.value.span, "this");
+                self.window_to_changing_list(p.mode, &a.value, found, ptys[i]);
             }
         }
         let missing: Vec<String> = params
