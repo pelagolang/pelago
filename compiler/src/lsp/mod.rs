@@ -33,6 +33,11 @@ pub struct Server {
     published: HashSet<String>,
     shutting_down: bool,
     pub exited: bool,
+    /// When set, an edit does not re-check the package at once: the document is marked as
+    /// waiting and [`Server::flush`] checks later, once the edits stop coming.
+    pub debounce: bool,
+    /// The uris whose diagnostics wait for the package check.
+    pending: Vec<String>,
 }
 
 impl Default for Server {
@@ -85,6 +90,8 @@ impl Server {
             published: HashSet::new(),
             shutting_down: false,
             exited: false,
+            debounce: false,
+            pending: Vec::new(),
         }
     }
 
@@ -142,7 +149,16 @@ impl Server {
                     self.docs
                         .insert(norm(uri), (uri.to_string(), src.to_string()));
                     self.cache.clear();
-                    out.extend(self.diagnostics_for(uri));
+                    if self.debounce {
+                        // Syntax errors of this file are cheap: show them now. The whole
+                        // package is checked in `flush`, when the edits stop.
+                        out.extend(self.syntax_diagnostics(uri));
+                        if !self.pending.contains(&norm(uri)) {
+                            self.pending.push(norm(uri));
+                        }
+                    } else {
+                        out.extend(self.diagnostics_for(uri));
+                    }
                 }
             }
             ("textDocument/didClose", _) => {
@@ -175,6 +191,58 @@ impl Server {
             _ => {}
         }
         out
+    }
+
+    /// Is a package check waiting for the edits to stop?
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Checks the packages of the edited documents and gives their diagnostics.
+    pub fn flush(&mut self) -> Vec<Json> {
+        let mut out = Vec::new();
+        for uri in std::mem::take(&mut self.pending) {
+            // Documents of one package share one check (the cache holds it).
+            out.extend(self.diagnostics_for(&uri));
+        }
+        out
+    }
+
+    /// The lexer and parser errors of one open document, without checking the package. Empty when
+    /// the file has none (the diagnostics already shown stay until the package check).
+    fn syntax_diagnostics(&mut self, uri: &str) -> Vec<Json> {
+        let Some(src) = self.text_of(uri) else {
+            return Vec::new();
+        };
+        let (out, lex) =
+            crate::parser::parse_and_check_with(&src, crate::parser::ParseOptions::compile());
+        let map = LineMap::new(&src);
+        let spans = lex
+            .iter()
+            .map(|e| (e.span, e.kind.message().to_string()))
+            .chain(out.errors.iter().map(|e| (e.span, e.message.clone())));
+        let list: Vec<Json> = spans
+            .map(|(span, message)| {
+                obj(vec![
+                    (
+                        "range",
+                        range_json(&map, span.start as usize, span.end as usize),
+                    ),
+                    ("severity", num(1)),
+                    ("source", text("pelago")),
+                    ("message", text(message)),
+                ])
+            })
+            .collect();
+        if list.is_empty() {
+            return Vec::new();
+        }
+        let shown = self
+            .docs
+            .get(&norm(uri))
+            .map_or(uri.to_string(), |(orig, _)| orig.clone());
+        self.published.insert(norm(uri));
+        vec![publish(&shown, list)]
     }
 
     fn capabilities(&self) -> Json {
@@ -750,18 +818,52 @@ pub fn write_frame(out: &mut impl Write, msg: &Json) -> std::io::Result<()> {
     out.flush()
 }
 
+/// How long the server waits after the last edit before it checks the package.
+const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
+
 /// Runs the server on standard input and output; the process exit code.
+///
+/// A thread reads the messages so that edits that arrive while a check runs wait in a queue and
+/// are all applied before the next check: a check never runs for text that is already stale.
 pub fn run_stdio() -> i32 {
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
+    use std::sync::mpsc::{channel, RecvTimeoutError};
+    let (tx, rx) = channel::<String>();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut input = stdin.lock();
+        while let Some(body) = read_frame(&mut input) {
+            if tx.send(body).is_err() {
+                break;
+            }
+        }
+    });
     let stdout = std::io::stdout();
     let mut output = stdout.lock();
     let mut server = Server::new();
-    while let Some(body) = read_frame(&mut input) {
-        let Ok(msg) = Json::parse(&body) else {
-            continue;
+    server.debounce = true;
+    loop {
+        let body = if server.has_pending() {
+            match rx.recv_timeout(DEBOUNCE) {
+                Ok(b) => Some(b),
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => return 1,
+            }
+        } else {
+            match rx.recv() {
+                Ok(b) => Some(b),
+                Err(_) => return 1,
+            }
         };
-        for reply in server.handle(&msg) {
+        let replies = match body {
+            None => server.flush(),
+            Some(body) => {
+                let Ok(msg) = Json::parse(&body) else {
+                    continue;
+                };
+                server.handle(&msg)
+            }
+        };
+        for reply in replies {
             if write_frame(&mut output, &reply).is_err() {
                 return 1;
             }
@@ -770,5 +872,4 @@ pub fn run_stdio() -> i32 {
             return if server.shutting_down { 0 } else { 1 };
         }
     }
-    1
 }
