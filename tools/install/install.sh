@@ -13,8 +13,10 @@ set -eu
 REPO="pelagolang/pelago"
 API="${PELAGO_UPDATE_API:-https://api.github.com/repos/$REPO}"
 DOWNLOAD="${PELAGO_DOWNLOAD_BASE:-https://github.com/$REPO/releases/download}"
-# The release public key (PEM). Filled in when the first signed release is cut; see docs/release/README.md.
-PUBKEY=""
+# The release public key (PEM), the same as docs/release/pelago-release.pub.
+PUBKEY="-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAZQly4/VA1yqhmSBaaxjG6i/t48crC3Ed9QfFYPFbXQE=
+-----END PUBLIC KEY-----"
 
 channel="stable"; version=""; dir="$HOME/.pelago/bin"; allow_unsigned=0
 while [ $# -gt 0 ]; do

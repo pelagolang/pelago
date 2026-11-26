@@ -35,8 +35,12 @@ $ProgressPreference = 'SilentlyContinue'
 $Repo = 'pelagolang/pelago'
 $Api = if ($env:PELAGO_UPDATE_API) { $env:PELAGO_UPDATE_API } else { "https://api.github.com/repos/$Repo" }
 $Download = if ($env:PELAGO_DOWNLOAD_BASE) { $env:PELAGO_DOWNLOAD_BASE } else { "https://github.com/$Repo/releases/download" }
-# The release public key (PEM). Filled in when the first signed release is cut.
-$PubKey = ''
+# The release public key (PEM), the same as docs/release/pelago-release.pub.
+$PubKey = @'
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAZQly4/VA1yqhmSBaaxjG6i/t48crC3Ed9QfFYPFbXQE=
+-----END PUBLIC KEY-----
+'@
 
 # `throw`, not `exit`: with `irm | iex` an `exit` would close the user's terminal window.
 function Fail($m) { throw "pelago install: $m" }

@@ -2,7 +2,7 @@
 
 Releases are signed with Ed25519. The workflows sign `SHA256SUMS` (or `SHA256SUMS-<version>` for nightlies) with the private key in the GitHub Actions secret `RELEASE_SIGNING_KEY` (a PKCS#8 PEM). The public key goes in `docs/release/pelago-release.pub` (a PEM `PUBLIC KEY`), which the workflows use to check their own signature, and which `pelago self update` will embed.
 
-Until the secret exists, nightlies publish checksums with no signature (a warning in the run), and a tagged release fails closed.
+The secret exists, so nightlies and releases are signed. If the secret is ever missing, a nightly publishes checksums with no signature (a warning in the run) and a tagged release fails closed.
 
 ## Create the key (once, PowerShell)
 
@@ -15,7 +15,7 @@ $ssl = "C:\Program Files\Git\usr\bin\openssl.exe"
 Get-Content pelago-release.key -Raw | gh secret set RELEASE_SIGNING_KEY --repo pelagolang/pelago
 ```
 
-Then commit `pelago-release.pub` as `docs/release/pelago-release.pub`, and store `pelago-release.key` somewhere safe and offline (a password manager). Losing it means rotating the key (a release signed by the old key announces the new one).
+The public key is committed as `docs/release/pelago-release.pub`. Store `pelago-release.key` somewhere safe and offline (a password manager). Losing it means rotating the key (a release signed by the old key announces the new one).
 
 ## Verify a download by hand
 
@@ -38,6 +38,6 @@ curl -fsSL https://pelagolang.github.io/install.sh | sh                  # Linux
 curl -fsSL https://pelagolang.github.io/install.sh | sh -s -- --channel nightly
 ```
 
-The scripts live in `tools/install/` and are copied to the website. `pelago self update [--channel stable|beta|rc|nightly] [--version X.Y.Z] [--check]` updates an installed binary and remembers the channel in `pelago.channel` next to it. Until the first signed release both need `--allow-unsigned` (`-AllowUnsigned`), which still checks the SHA-256.
+The scripts live in `tools/install/` and are copied to the website. `pelago self update [--channel stable|beta|rc|nightly] [--version X.Y.Z] [--check]` updates an installed binary and remembers the channel in `pelago.channel` next to it. `--allow-unsigned` (`-AllowUnsigned`) goes on with the SHA-256 check alone, for a key rotation that goes wrong.
 
-The release public key is compiled into `pelago` (`RELEASE_KEYS` in `compiler/src/selfupdate/mod.rs`) and pasted into both scripts (`PUBKEY`) when the key exists.
+The release public key is compiled into `pelago` (`RELEASE_KEYS` in `compiler/src/selfupdate/mod.rs`) and pasted into both scripts (`PUBKEY`). A test keeps the compiled key equal to `pelago-release.pub`.
