@@ -122,7 +122,7 @@ fn read(which: int) -> duration ! io_error {
     const buf = [0, 0]
     const r = rtOsClock(which, rtHdrData(rtAddrOf(buf)))
     if r < 0 {
-        return err(io_error { kind: io_kind.other, message: "reading the clock: not supported on this target" })
+        return err(io_error { kind: io_kind.other, code: 0, message: "reading the clock: not supported on this target" })
     }
     ok(duration { nanos: buf[0] * 1000000000 + buf[1] })
 }
@@ -455,7 +455,7 @@ pub fn wallNow() -> moment ! io_error {
     const buf = [0, 0]
     const r = rtOsClock(0, rtHdrData(rtAddrOf(buf)))
     if r < 0 {
-        return err(io_error { kind: io_kind.other, message: "reading the clock: not supported on this target" })
+        return err(io_error { kind: io_kind.other, code: 0, message: "reading the clock: not supported on this target" })
     }
     ok(moment { secs: buf[0], nanos: buf[1] })
 }

@@ -100,33 +100,66 @@ fn utf8Ok(data: ptr, n: int) -> bool {
 
 fn textOk(text: str) -> bool = utf8Ok(rtHdrData(rtAddrOf(text)), text.len())
 
-fn kindOf(code: int) -> io_kind {
-    if code == badUtf8 { return io_kind.invalidUtf8 }
-    if code == -4 { return io_kind.notFound }
-    if code == -5 { return io_kind.denied }
+/// The kind for an operating system error number (the Linux and macOS numbers; the two differ only in the
+/// ones for "would block" and "timed out", and both are listed).
+fn kindOfErrno(e: int) -> io_kind {
+    if e == 2 { return io_kind.notFound }
+    if e == 1 || e == 13 { return io_kind.denied }
+    if e == 17 { return io_kind.alreadyExists }
+    if e == 20 { return io_kind.notDirectory }
+    if e == 21 { return io_kind.isDirectory }
+    if e == 22 { return io_kind.invalid }
+    if e == 28 { return io_kind.outOfSpace }
+    if e == 32 { return io_kind.brokenPipe }
+    if e == 4 { return io_kind.interrupted }
+    if e == 11 || e == 35 { return io_kind.wouldBlock }
+    if e == 110 || e == 60 { return io_kind.timedOut }
     io_kind.other
 }
 
-//~ The `io_error` for a negative code from the operating system layer: `verb` and `name` say what was being
-//~ done to what ("reading", "standard input").
-pub fn failure(code: int, verb: str, name: str) -> io_error {
-    const kind = kindOf(code)
+fn describe(kind: io_kind) -> str {
+    if kind == io_kind.notFound { return ": no such file or directory" }
+    if kind == io_kind.denied { return ": permission denied" }
+    if kind == io_kind.alreadyExists { return ": already exists" }
+    if kind == io_kind.notDirectory { return ": not a directory" }
+    if kind == io_kind.isDirectory { return ": is a directory" }
+    if kind == io_kind.invalid { return ": invalid argument" }
+    if kind == io_kind.invalidUtf8 { return ": the data is not valid UTF-8" }
+    if kind == io_kind.unexpectedEof { return ": unexpected end of input" }
+    if kind == io_kind.writeZero { return ": the sink accepted no bytes" }
+    if kind == io_kind.outOfSpace { return ": no space left on the device" }
+    if kind == io_kind.brokenPipe { return ": broken pipe" }
+    if kind == io_kind.interrupted { return ": interrupted" }
+    if kind == io_kind.wouldBlock { return ": would block" }
+    if kind == io_kind.timedOut { return ": timed out" }
+    ": the operating system reported an error"
+}
+
+fn build(kind: io_kind, os: int, verb: str, name: str) -> io_error {
     var message = ""
     message.pushStr!(verb)
     message.pushStr!(" ")
     message.pushStr!(name)
-    if kind == io_kind.notFound {
-        message.pushStr!(": no such file or directory")
-    } else if kind == io_kind.denied {
-        message.pushStr!(": permission denied")
-    } else if code == -21 {
-        message.pushStr!(": is a directory")
-    } else if code == badUtf8 {
-        message.pushStr!(": the data is not valid UTF-8")
-    } else {
-        message.pushStr!(": the operating system reported an error")
-    }
-    io_error { kind: kind, message: message }
+    message.pushStr!(describe(kind))
+    io_error { kind: kind, code: os, message: message }
+}
+
+//~ The `io_error` for a negative code from a path call of the operating system layer (`open`, `fs`): `verb`
+//~ and `name` say what was being done to what ("opening", "a.txt"). The codes -4 and -5 are "no such file"
+//~ and "denied"; any other negative code is the system's error number, negated.
+pub fn failure(code: int, verb: str, name: str) -> io_error {
+    if code == -4 { return build(io_kind.notFound, 2, verb, name) }
+    if code == -5 { return build(io_kind.denied, 13, verb, name) }
+    failureOs(code, verb, name)
+}
+
+//~ The `io_error` for a negative result of `read` or `write`: the system's error number, negated (-3 is an
+//~ error the layer could not name, as on Windows today).
+pub fn failureOs(code: int, verb: str, name: str) -> io_error {
+    if code == badUtf8 { return build(io_kind.invalidUtf8, 0, verb, name) }
+    if code == -3 { return build(io_kind.other, 0, verb, name) }
+    const e = 0 - code
+    build(kindOfErrno(e), e, verb, name)
 }
 
 //~ A byte source or sink: standard input, or a file from `fs.open`, `fs.create` or `fs.append`. Reading goes
@@ -269,9 +302,9 @@ impl file {
     //~ counts as a line.
     fn readLine(inout self) -> string? ! io_error {
         const line = self.nextLine!()
-        if self.code < 0 { return err(failure(self.code, "reading", self.name)) }
+        if self.code < 0 { return err(failureOs(self.code, "reading", self.name)) }
         if line is some(text) {
-            if !textOk(text) { return err(failure(badUtf8, "reading", self.name)) }
+            if !textOk(text) { return err(failureOs(badUtf8, "reading", self.name)) }
         }
         ok(line)
     }
@@ -280,22 +313,22 @@ impl file {
     //~ UTF-8: use `readBytes` for raw data).
     fn readAll(inout self) -> string ! io_error {
         const text = self.rest!()
-        if self.code < 0 { return err(failure(self.code, "reading", self.name)) }
-        if !textOk(text) { return err(failure(badUtf8, "reading", self.name)) }
+        if self.code < 0 { return err(failureOs(self.code, "reading", self.name)) }
+        if !textOk(text) { return err(failureOs(badUtf8, "reading", self.name)) }
         ok(text)
     }
 
     //~ Everything left, as bytes.
     fn readBytes(inout self) -> [byte] ! io_error {
         const text = self.rest!()
-        if self.code < 0 { return err(failure(self.code, "reading", self.name)) }
+        if self.code < 0 { return err(failureOs(self.code, "reading", self.name)) }
         ok(self.toBytes(text))
     }
 
     //~ Writes all of the text (no buffering: build the text first, then write it once).
     fn write(inout self, text: str) -> void ! io_error {
         const k = writeAll(self.fd, text)
-        if k < 0 { return err(failure(k, "writing", self.name)) }
+        if k < 0 { return err(failureOs(k, "writing", self.name)) }
     }
 }
 

@@ -1,0 +1,11 @@
+true false false false 2 opening a.txt: no such file or directory
+false true false false 13 opening a.txt: permission denied
+false false true false 17 creating d: already exists
+false false false false 5 reading standard input: the operating system reported an error
+false false false true 32 writing standard output: broken pipe
+false false false false 0 reading x: the operating system reported an error
+true
+true
+true
+true
+reading s: the operating system reported an error
